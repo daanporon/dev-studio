@@ -54,8 +54,9 @@
 // U70: an open operator question about a PR (`pr` on its entry, ask-operator.sh --pr) whose PR stops being
 // ready for a human is closed via `reality`, and its Lead hears once (episode `lifecycle:qclose`, retried
 // until the poke lands). After a Builder's second pr-stale poke, a PR still not ready stale_lead_min later
-// (default 30; 0 = off) gets its Lead one request (episode `lifecycle:stale-lead`, one per stale stretch).
-// U178: a PR still blocked stale_alert_min (default 120; 0 = off) after that request raises one Studio
+// (default 30; 0 = off) gets its Lead one request (episode `lifecycle:stale-lead`, one per stale stretch);
+// a second poke due (stale_repoke_min after the first) but never sent starts that timer at its due time.
+// U178: a PR still blocked stale_alert_min (default 60; 0 = off) after that request raises one Studio
 // alert for the stretch; nothing re-pokes the Builder or the Lead on a timer.
 // The step-11 ready poke is U7's (the plan's "merge-unblock poke" wording names it; see the PR).
 import { recordLane } from "../capacity/unit-lanes.ts";
@@ -333,6 +334,7 @@ export function run(ctx: TickCtx): Action[] {
         end(row); end(mr); end(slr); end(nr); end(rwr);
         continue;
       }
+      const staleRepoke = envOr(store, project, "DS_LOOP_STALE_REPOKE_MIN", "stale_repoke_min", 30);
       // The sweep's stale_prs pokes: ready or a wait on required:* alone ends the episode, any other
       // waiting arms a second poke.
       if (pr.verdict === "ready" || (pr.verdict === "waiting" && requiredOnly(all.filter(Boolean)))) { end(row); end(slr); } // the full list, as github.ts's carrySince reads it
@@ -344,7 +346,6 @@ export function run(ctx: TickCtx): Action[] {
           ? `Fix it — rebase/resolve conflicts, fix the red check, address the open review threads — push, and stop at your prompt: the loop pokes you again when the PR changes (merge-ready included). If a blocker needs a reviewer or the Lead (changes requested, a thread you disputed), orch.sh ask your Lead instead of changing code. Don't send worker_done again.`
           : `Fix it — merge the base in and resolve conflicts, fix the red check, address the open review threads — push, and stop at your prompt: the loop pokes you again when the PR changes (merge-ready included). If a blocker needs a reviewer or the Lead (changes requested, a thread you disputed), orch.sh ask your Lead instead of changing code. Don't send worker_done again.`;
         // U160: a sent pr-stale poke told the Builder about the PR as it is now; the pr-news poke below fires only for a later change.
-        const staleRepoke = envOr(store, project, "DS_LOOP_STALE_REPOKE_MIN", "stale_repoke_min", 30);
         // Quiet: no check running, the Builder idle at its prompt (idle/done, or Orca's `working` that
         // atPrompt reads as at its prompt: a still transcript with only a background task open), its
         // worktree under 5% CPU, and staleRepoke min since the latest of the first poke, the last news
@@ -389,22 +390,30 @@ export function run(ctx: TickCtx): Action[] {
         }
       }
       // U70: the Builder's two pokes did not fix it; its Lead hears once per stale stretch.
+      // board-empty-state-and-port U4: the ladder never freezes on a poke that can't be sent. With one
+      // poke sent, the second is due stale_repoke_min after it; if wake() never sent it (limited, a
+      // draft, paused, really working, not quiet), the Lead's timer runs from that due time.
       const staleLead = envOr(store, project, "DS_LOOP_STALE_LEAD_MIN", "stale_lead_min", 30), skey = `${pr.pr}|${pr.since ?? ""}`;
+      const pokesSent = row?.episode_key === skey ? Number(row.count ?? 0) : 0;
+      const leadFrom = pokesSent >= 2 ? (row!.next_at != null ? Number(row!.next_at) : null)
+        : pokesSent === 1 && staleRepoke > 0 ? Number(row!.observed_at ?? 0) + staleRepoke * 60 : null;
       if (slr && slr.episode_key !== skey) end(slr);
-      if (blocked && !gateFailOnly && lead && staleLead > 0 && row?.episode_key === skey && Number(row.count ?? 0) >= 2 && row.next_at != null
-        && t >= Number(row.next_at) + staleLead * 60 && !(slr && slr.episode_key === skey)) {
+      if (blocked && !gateFailOnly && lead && staleLead > 0 && leadFrom != null
+        && t >= leadFrom + staleLead * 60 && !(slr && slr.episode_key === skey)) {
         const ws = bwt ? String(worker(bwt)?.state ?? "gone") : "gone";
-        const text = `dev-studio loop: PR #${pr.pr} for unit ${slug} is still not merge-ready (${reasons}) ${staleLead} min after its Builder's second pr-stale poke; the Builder is ${ws}. Look at it, re-dispatch the unit, or ask the operator. (One request per stale stretch.)`;
+        const after = pokesSent >= 2 ? `${staleLead} min after its Builder's second pr-stale poke`
+          : `${staleRepoke + staleLead} min after its Builder's first pr-stale poke (the second, due ${staleRepoke} min after it, could not be sent)`;
+        const text = `dev-studio loop: PR #${pr.pr} for unit ${slug} is still not merge-ready (${reasons}) ${after}; the Builder is ${ws}. Look at it, re-dispatch the unit, or ask the operator. (One request per stale stretch.)`;
         const w = wake(ctx, lead, text, "pr-stale-lead", `${pr.pr}|${pr.since ?? ""}#lead`);
         out.push(...w.actions);
         if (w.status === "sent") store.upsert("episodes", sl, { squad: topic, episode_key: skey, count: 1, state: "sent", source: "loop", started_at: t, observed_at: t });
       }
       // U178: still blocked stale_alert_min after the Lead's request: one Studio alert per stretch, no further poke.
-      const staleAlert = envOr(store, project, "DS_LOOP_STALE_ALERT_MIN", "stale_alert_min", 120);
+      const staleAlert = envOr(store, project, "DS_LOOP_STALE_ALERT_MIN", "stale_alert_min", 60);
       if (blocked && !gateFailOnly && lead && staleAlert > 0 && slr?.episode_key === skey && slr.state === "sent" && t >= Number(slr.started_at ?? 0) + staleAlert * 60) {
         out.push({ project, squad: topic, member: lead, subject: lead, kind: "alert", episode: `pr-stale:${pr.ref}|${pr.since ?? ""}`,
           payload: { title: "Red PR still blocked", card: "pr_stale", fields: { ref: pr.ref, pr: pr.pr, url: pr.url ?? null, blocked_since: pr.since ?? null },
-            text: `PR #${pr.pr}${pr.url ? ` ${pr.url}` : ""} (${topic}/${slug}) is still not merge-ready (${reasons}) ${staleAlert} min after its Lead was told, and its Builder was poked twice. The loop pokes no one again for this stretch. Its Lead can re-dispatch the unit or ask the operator; this card goes when the PR merges, closes or is no longer blocked.` } });
+            text: `PR #${pr.pr}${pr.url ? ` ${pr.url}` : ""} (${topic}/${slug}) is still not merge-ready (${reasons}) ${staleAlert} min after its Lead was told, and its Builder was poked ${pokesSent >= 2 ? "twice" : "once (a second poke could not be sent)"}. The loop pokes no one again for this stretch. Its Lead can re-dispatch the unit or ask the operator; this card goes when the PR merges, closes or is no longer blocked.` } });
         store.upsert("episodes", sl, { state: "alerted", observed_at: t });
       }
       // U179: a PR waiting on required:<context> alone, none a human gate (those take the pr-question
