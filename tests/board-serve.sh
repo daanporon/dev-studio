@@ -535,6 +535,11 @@ jt "import: auto_merge is unticked but tickable" "$TMP/ip.json" '.rows[] | selec
 jt "import: cleanup_on_close is shell only" "$TMP/ip.json" '.rows[] | select(.key=="cleanup_on_close") | .why=="shell only" and .can_pick==false'
 eq "import: preview from a text that is no export is 400" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"text\":\"hello\"}")" "400"
 has "import: the 400 names why" "$(cat "$TMP/post.out")" "not a settings export"
+eq "import: preview with an unknown section is 400" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"text\":\"#! ds-settings 1 from=x\\n#== nosuch.conf\\nfoo 1\\n\"}")" "400"
+has "import: the 400 names the section" "$(cat "$TMP/post.out")" "nosuch.conf"
+eq "import: apply with an unknown section is 400" "$(ip "$IU" "{\"project\":\"$LBL\",\"text\":\"#! ds-settings 1 from=x\\n#== nosuch.conf\\nfoo 1\\n\",\"picks\":[{\"file\":\"limits.conf\",\"key\":\"a\"}]}")" "400"
+jt "import: auto_merge's skip row carries the incoming value" "$TMP/ip.json" '.rows[] | select(.key=="auto_merge") | .value=="merge"'
+jt "import: hooks_ts carries its raw source text" "$TMP/ip.json" '.rows[] | select(.key=="hooks_ts") | .raw=="1"'
 eq "import: preview with both sources is 400" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"text\":\"x\"}")" "400"
 eq "import: foreign Origin is 403" "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[{\"file\":\"limits.conf\",\"key\":\"limit_pct\"}]}" "$IU")" "403"
 eq "import: apply without picks is 400" "$(ip "$IU" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[]}")" "400"

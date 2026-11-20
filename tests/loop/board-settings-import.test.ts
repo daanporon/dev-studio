@@ -72,6 +72,7 @@ test("Settings → Import: pick a project, read the plan, tick, Apply files the 
     // hooks_ts: unknown key, greyed and can't be ticked; auto_merge: project-specific, unticked but tickable;
     // cleanup_on_close: shell only, greyed; limit_pct: an add, ticked.
     expect(t.hooks_ts.textContent).toContain("unknown key");
+    expect(t.auto_merge.textContent).toContain("merge");   // u4: the incoming value shows on a skip row
     expect(t.hooks_ts.className).toContain("dim");
     expect(t.hooks_ts.querySelector("input").disabled).toBe(true);
     expect(t.auto_merge.textContent).toContain("project-specific");

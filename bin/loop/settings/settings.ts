@@ -113,7 +113,7 @@ function inCatalog(cat: Set<string>, agent: string, model: string): boolean {
 // does: an omitted spawn is the current row's, the default's, else always; omitted fallbacks are the
 // current row's (else the default's) and an omitted plan the current row's, `-` clearing either.
 // Normalized to single spaces with `-` for an empty field before a later one.
-function rosterValue(store: Store, project: string, role: string, value: string, o: Opts): string {
+function rosterValue(store: Store, project: string, role: string, value: string, o: Opts, exact = false): string {
   const def = shipped("roles.conf", o).get(role)?.value, cur = rowOf(store, project, "roles.conf", role)?.value ?? undefined;
   if (def === undefined && cur === undefined) fail(`unknown role '${role}' (not in the default roster or ${project}'s)`);
   const [agent = "", model = "", spawn0 = "", effort0 = "", fb0 = "", plan0 = ""] = value.trim().split(/\s+/);
@@ -122,7 +122,7 @@ function rosterValue(store: Store, project: string, role: string, value: string,
   const spawn = spawn0 || cur?.split(/\s+/)[2] || def?.split(/\s+/)[2] || "always";
   if (!SPAWNS.includes(spawn)) fail("spawn must be always|ondemand|elevate");
   const dash = (v: string): string => (v === "-" ? "" : v), field = (v: string | undefined, i: number): string => v?.split(/\s+/)[i] ?? "";
-  const effort = dash(effort0), fb = dash(fb0 || field(cur ?? def, 4)), plan = dash(plan0 || field(cur, 5));
+  const effort = dash(effort0), fb = dash(fb0 || (exact ? "" : field(cur ?? def, 4))), plan = dash(plan0 || (exact ? "" : field(cur, 5)));
   if (effort && !NAME.test(effort)) fail(`bad effort '${effort}'`);
   if (fb && !new RegExp(`^${FALLBACK}(,${FALLBACK})*$`).test(fb)) fail(`fallbacks must be agent:model[:effort[:plan]][,agent:model[:effort[:plan]]...] (got '${fb}')`);
   if (plan && !NAME.test(plan)) fail(`bad plan '${plan}'`);
@@ -328,7 +328,7 @@ export function exportSections(text: string): Partial<Record<ImportFile, string>
   return out;
 }
 
-export interface ParsedExport { header: boolean; from: string | null; rev: string | null; at: string | null; files: Partial<Record<ImportFile, string>> }
+export interface ParsedExport { unknown: string[]; header: boolean; from: string | null; rev: string | null; at: string | null; files: Partial<Record<ImportFile, string>> }
 
 // An export's text read for an import: its header's fields (when it has one) and its sections. A text
 // that is neither (no header, no `#== <file>` line, not a backup's first line) or whose format is newer
@@ -344,7 +344,8 @@ export function parseExport(text: string): ParsedExport {
     header = true;
   } else if (!first.startsWith("# settings.export") && !lines.some((l) => l.startsWith(EXPORT_SECTION)))
     fail(`not a settings export: no '${TRANSFER_HEAD}' header and no '${EXPORT_SECTION}<file>' section`);
-  return { header, from: meta.from ?? null, rev: meta.rev ?? null, at: meta.at ?? null, files: exportSections(text) };
+  const unknown = lines.filter((l) => l.startsWith(EXPORT_SECTION)).map((l) => l.slice(EXPORT_SECTION.length).trim()).filter((f) => !(IMPORT_FILES as readonly string[]).includes(f));
+  return { unknown, header, from: meta.from ?? null, rev: meta.rev ?? null, at: meta.at ?? null, files: exportSections(text) };
 }
 
 export function writeExport(store: Store, project: string): string {
@@ -376,6 +377,8 @@ export interface PlanRow {
   file: ImportFile; key: string;
   /** what the target would hold: the row value after set's checks, null for a remove */
   value: string | null;
+  /** the trimmed source text of a skip row whose checks did not run or failed (unknown key, refused, shell only) */
+  raw?: string;
   /** the target's row now (null: no row) — a pick's `expect` */
   current: string | null;
   action: ImportAction;
@@ -397,6 +400,14 @@ type SrcRow = { key: string; value: string; comment: string | null };
 // The source's rows per file, and the files whose every row it carries (a target row they lack is a
 // remove under `replace`): all of them for a project; for an export its settings files, and skills.conf
 // only when it has that section or the transfer header (an old backup never exported skills).
+// An import's pasted or file text read and refused, naming why, when it is no export or has a section this
+// dev-studio does not import.
+export function checkExportText(text: string): ParsedExport {
+  const parsed = parseExport(text);
+  if (parsed.unknown.length) fail(`not a settings export this dev-studio reads: unknown section ${parsed.unknown.map((f) => `'${f}'`).join(", ")} (one of: ${IMPORT_FILES.join(" ")})`);
+  return parsed;
+}
+
 function sourceRows(store: Store, target: string, src: ImportSource): { files: Map<ImportFile, SrcRow[]>; full: Set<ImportFile> } {
   const files = new Map<ImportFile, SrcRow[]>();
   if ("project" in src) {
@@ -407,7 +418,7 @@ function sourceRows(store: Store, target: string, src: ImportSource): { files: M
     if (!n && !existsSync(join(store.root, src.project))) fail(`no project '${src.project}' on this host`);
     return { files, full: new Set(IMPORT_FILES) };
   }
-  const parsed = parseExport(src.text);
+  const parsed = checkExportText(src.text);
   for (const f of IMPORT_FILES) files.set(f, confText(target, f, parsed.files[f] ?? "", 0).map((r) => ({ key: String(r.key.key), value: String(r.set.value ?? ""), comment: (r.set.comment as string | null) ?? null })));
   const full = new Set<ImportFile>(SETTINGS_FILES);
   if (parsed.header || parsed.files["skills.conf"] !== undefined) full.add("skills.conf");
@@ -417,6 +428,8 @@ function sourceRows(store: Store, target: string, src: ImportSource): { files: M
 // The value the target would store for one source row, after the checks `set` (or the Skills tab) runs.
 function targetValue(store: Store, target: string, file: ImportFile, key: string, raw: string, o: PlanOpts): string {
   if (shellOnly(file, key)) return raw.trim();   // as the restore writes it: set refuses its spaces
+  // A copy is exact: a source roster row without effort, fallbacks or plan clears them on the target.
+  if (file === "roles.conf") return rosterValue(store, target, key, raw.trim(), o, true);
   if (file !== "skills.conf") return checked(store, target, file, key, raw, o);
   const [role, name] = key.split(" "), level = raw.trim();
   const problem = skillRuleProblem(role, name, level, shippedRules(join(conv(o), "skills.conf")), name === PROJECT_PATTERN);
@@ -476,7 +489,7 @@ function planned(store: Store, target: string, src: ImportSource, o: PlanOpts): 
 
 function planOne(store: Store, target: string, file: ImportFile, key: string, raw: string, o: PlanOpts): PlanRow {
   const current = rowOf(store, target, file, key)?.value ?? null;
-  const skip = (why: string, value: string | null = null, can = false): PlanRow => ({ file, key, value, current, action: "skip", why, pick: false, can_pick: can });
+  const skip = (why: string, value: string | null = null, can = false): PlanRow => ({ file, key, value, ...(value === null ? { raw: raw.trim() } : {}), current, action: "skip", why, pick: false, can_pick: can });
   if (unknownKey(store, target, file, key, o)) return skip("unknown key");
   if (o.board && shellOnly(file, key)) return skip("shell only", raw.trim());
   let value: string;
@@ -484,7 +497,7 @@ function planOne(store: Store, target: string, file: ImportFile, key: string, ra
     if (e instanceof SettingsError) return skip(`refused: ${e.message}`);
     throw e;
   }
-  if (value === current || (current === null && runsAlready(file, key, value, o))) return { file, key, value, current, action: "same", pick: false, can_pick: false };
+  if ((current !== null && words(value) === words(current)) || (current === null && runsAlready(file, key, value, o))) return { file, key, value, current, action: "same", pick: false, can_pick: false };
   if (projectSpecific(file, key)) return skip("project-specific", value, true);
   const warn = file === "roles.conf" ? planWarn(store, value) : undefined;
   return { file, key, value, current, action: current === null ? "add" : "change", pick: true, can_pick: true, ...(warn ? { warn } : {}) };

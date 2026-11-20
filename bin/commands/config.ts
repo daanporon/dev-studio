@@ -67,7 +67,7 @@ function takeLists(args: string[]): { rest: string[]; lists: Record<"only" | "sk
 
 const cell = (v: string | null): string => (v === null ? "-" : v.length > 60 ? `${v.slice(0, 57)}...` : v);
 function planLine(r: PlanRow, picked: boolean): string {
-  const arrow = r.action === "remove" ? `${cell(r.current)} → (drop)` : r.action === "skip" || r.action === "same" ? cell(r.value ?? r.current) : `${cell(r.current)} → ${cell(r.value)}`;
+  const arrow = r.action === "remove" ? `${cell(r.current)} → (drop)` : r.action === "same" ? cell(r.value ?? r.current) : r.action === "skip" ? `${cell(r.current)} → ${cell(r.value ?? r.raw ?? null)}` : `${cell(r.current)} → ${cell(r.value)}`;
   const why = r.why ? `  (${r.why})` : r.warn ? `  (warning: ${r.warn})` : "";
   return `${picked ? "[x]" : "[ ]"} ${r.action.padEnd(6)} ${r.file.padEnd(11)} ${r.key}  ${arrow}${why}`;
 }

@@ -71,7 +71,7 @@ import { skillsJson } from "./skills-data.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
 import { answer as answerQuestion } from "../loop/messages/questions.ts";
 import { dbPath, open, openReadOnly, type Row, type Store } from "../loop/core/store.ts";
-import { exportTransfer, IMPORT_FILES, planImport, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
+import { checkExportText, exportTransfer, IMPORT_FILES, planImport, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
 import { canRestartRole } from "../loop/pause/restart-roles.ts";
 import { paused, type PauseTarget, type Prerequisite } from "../loop/pause/pause.ts";
 
@@ -459,6 +459,7 @@ async function settingsImportPost(req: Request) {
   if ("r" in pr) return pr.r;
   const t = importTarget(pr.b); if ("r" in t) return t.r;
   const so = importSource(pr.b, t.project); if ("r" in so) return so.r;
+  if ("text" in so.src) try { checkExportText(so.src.text); } catch (e) { if (e instanceof SettingsError) return json(400, { error: e.message }); throw e; }
   const { picks } = pr.b;
   if (!Array.isArray(picks) || !picks.length || picks.length > IMPORT_PICKS_MAX) return json(400, { error: `picks needs 1 to ${IMPORT_PICKS_MAX} rows` });
   for (const p of picks)

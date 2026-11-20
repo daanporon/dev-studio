@@ -52,7 +52,7 @@ function devStudioLike(s: Store): void {
   raw(s, SRC, "limits.conf", "context_warn", "90000");         // dst has 120000: change
   raw(s, SRC, "limits.conf", "briefing_time", "07:30");        // dst has the same: same
   raw(s, SRC, "limits.conf", "cleanup_on_close", "rm -rf node_modules/.cache");
-  raw(s, SRC, "roles.conf", "builder", "claude  sonnet   ondemand  medium");   // spacing only: same
+  raw(s, SRC, "roles.conf", "builder", "claude  sonnet   ondemand  medium  claude:sonnet,muse:muse-spark-1.3");   // spacing only: same
   raw(s, SRC, "roles.conf", "lead", "claude  sonnet always");  // dst has no row; the default's spacing: same
   raw(s, SRC, "roles.conf", "tester", "claude gpt-9 ondemand"); // unknown model: refused
   raw(s, SRC, "roles.conf", "wizard", "claude opus always");   // a role dst can't run: unknown key
@@ -131,6 +131,27 @@ describe("planImport", () => {
     expect(find(plan, "roles.conf", "thinker")).toMatchObject({ action: "add", value: "claude opus-next always" });
     expect(find(plan, "roles.conf", "thinker").warn).toBeUndefined();
     expect(find(plan, "roles.conf", "tester")).toMatchObject({ action: "add", warn: "no account on this host reports plan claude:Ultra" });
+  });
+
+  test("u4: a skip row carries the incoming value; a source roster row without fallbacks clears them; spacing alone is same; an unknown section is refused", () => {
+    const { s, o } = fixture();
+    raw(s, SRC, "limits.conf", "hooks_ts", "1");
+    raw(s, SRC, "limits.conf", "auto_merge", "merge");
+    raw(s, SRC, "roles.conf", "builder-standard", "claude sonnet ondemand medium");
+    raw(s, DST, "roles.conf", "builder-standard", "claude sonnet ondemand medium claude:opus");
+    raw(s, SRC, "roles.conf", "builder-hard-babysit", "claude sonnet ondemand - claude:opus");
+    raw(s, DST, "roles.conf", "builder-hard-babysit", "claude   sonnet  ondemand  -  claude:opus");
+    raw(s, SRC, "roles.conf", "tester", "claude gpt-9 always");
+    const plan = planImport(s, DST, { project: SRC }, o);
+    expect(find(plan, "limits.conf", "hooks_ts")).toMatchObject({ action: "skip", raw: "1" });
+    expect(find(plan, "limits.conf", "auto_merge").value).toBe("merge");
+    expect(find(plan, "roles.conf", "tester").raw).toBe("claude gpt-9 always");
+    expect(find(plan, "roles.conf", "builder-standard")).toMatchObject({ action: "change", value: "claude sonnet ondemand medium" });
+    expect(find(plan, "roles.conf", "builder-hard-babysit").action).toBe("same");
+    applyImport(s, DST, { project: SRC }, [{ file: "roles.conf", key: "builder-standard" }], "t", o);
+    expect(row(s, DST, "roles.conf", "builder-standard")).toBe("claude sonnet ondemand medium");
+    const text = `${TRANSFER_HEAD} 1 from=x\n#== nosuch.conf\nfoo 1\n`;
+    expect(() => planImport(s, DST, { text }, o)).toThrow(/unknown section 'nosuch.conf'/);
   });
 
   test("an unknown source project, the target itself, a text that is not an export, a newer format: refused", () => {
