@@ -49,7 +49,11 @@ printf '{"run_id":"r-uact","status":"running","members":[{"role":"lead","wt":"wL
 printf '# plan x\n' > "$SD/uact-x-plan.md"; printf '# plan y\n' > "$SD/uact-y-plan.md"
 jq --arg p "$DBR/$LBL/squads/uact-x-plan.md" '.approved_plans = [$p]' "$SD/uact.json" > "$TMP/uact.tmp" && mv "$TMP/uact.tmp" "$SD/uact.json"
 # --serve: the page, the JSON and the api routes. Nothing else (no state files) is reachable.
-PORT=$(( 20000 + $$ % 20000 ))
+# The test serves on PORT..PORT+6: a block below Linux's ephemeral range (32768+), so no outgoing connection
+# holds one of them, that nothing listens on yet (another worktree's suite on the same host).
+busy() { local p; for p in $(seq "$1" $(($1 + 6))); do (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && return 0; done; return 1; }
+PORT=$(( 20000 + $$ % 12000 ))
+while busy "$PORT"; do PORT=$(( 20000 + (PORT - 20000 + 7) % 12000 )); done
 # /lavish/<key> asks the loop to start Lavish when it is down; this fake "Lavish" is a bun server on LP.
 LP=$((PORT + 5)); LK=0123456789abcdef; mkdir -p "$TMP/lv2"
 printf '{"sessions":{"%s":{"key":"%s","file":"/x/a.html","url":"http://127.0.0.1:%s/session/%s","status":"open"}}}' "$LK" "$LK" "$LP" "$LK" > "$TMP/lv2/state.json"
@@ -67,8 +71,12 @@ printf '%s\n' 'import { Database } from "bun:sqlite";' \
 dbq(){ bun "$TMP/dbq.ts" "$DBR/loop.db" "$1"; }
 resync
 mkdir -p "$DBR/$LBL"; cp "$DS_STATE_ROOT/$LBL/alerts.json" "$DBR/$LBL/alerts.json"   # what alerts.sh resolves
+# The skills the /api/skills block knows: a listing cache of its own and an empty Claude config dir, so
+# the answer never depends on what the host (or a CI runner, which has none) has installed.
+mkdir -p "$TMP/no-claude"
+printf '{"at":1,"skills":[{"name":"compound-engineering:ce-work","source":"session listing","description":"work a plan"}]}' > "$DBR/skills-listing.json"
 # DS_EVLOG_SEARCH_SLICE: a search reads 6 ids per request, so the event-log-filters U4 block can page one.
-PATH="$TMP/tsbin:$PATH" DS_STATE_ROOT="$DBR" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" DS_EVLOG_SEARCH_SLICE=6 \
+PATH="$TMP/tsbin:$PATH" DS_STATE_ROOT="$DBR" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" DS_EVLOG_SEARCH_SLICE=6 CLAUDE_CONFIG_DIR="$TMP/no-claude" \
   "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$PORT" >"$TMP/serve.log" 2>&1 &
 SPID=$!
 for _ in $(seq 1 300); do curl -s -o /dev/null "http://127.0.0.1:$PORT/" && break; sleep 0.2; done
