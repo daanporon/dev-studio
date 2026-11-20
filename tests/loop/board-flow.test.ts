@@ -124,7 +124,7 @@ describe("flow.ts", () => {
     const q = (pick: FlowUnit["pick"]) => one(unit("u", { status: "planned", pick }));
     const p = { reason: null, wait_until: null, wait_known: null, slot: 0, account: null };
     expect(q({ ...p, reason: "queued: 4 of 4 start slots in flight" })).toMatchObject({ group: "waiting for a slot", note: "4 of 4 start slots in flight" });
-    expect(q({ ...p, reason: "WAIT host: psi cpu 40 ≥ crit 25" })).toMatchObject({ group: "waiting for a slot", note: "host busy: psi cpu 40 ≥ crit 25" });   // U4 host brake
+    expect(q({ ...p, reason: "WAIT host: psi cpu 40 ≥ crit 25" })).toMatchObject({ group: "waiting for the host", note: null });   // U4 host brake: the lane banner carries the reason
     expect(q({ ...p, reason: "no account free", wait_until: N + 600, wait_known: 0 })).toMatchObject({ group: "waiting for an account", note: "no account free" });
     expect(q({ ...p, reason: "no account free" })).toMatchObject({ group: "waiting for an account", note: "no account free" });
     expect(one(unit("u", { status: "planned", paused: true, blocked_by: ["x"] }))).toMatchObject({ group: "held", note: "paused" });
