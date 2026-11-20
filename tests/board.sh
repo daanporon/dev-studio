@@ -1375,6 +1375,25 @@ jt "U3 update: a pending request shows"      "$TMP/upd.json" '.update.pending !=
 has "U3 update: pending text" "$(render "$LBL")" "UPDATE asked — waiting for the Studio"
 dbw "DELETE FROM observed_update"
 
+# investigate-disk-cleanup U1: the Host tidy card on the board shows a size the measuring pass took
+# (`size_from: du`) as it is, and a partial walk not measured yet as `≥ <size>`.
+TIDY_TXT="$(bun -e '
+  const { open } = await import(process.argv[1] + "/bin/loop/core/store.ts");
+  const { cardText } = await import(process.argv[1] + "/bin/loop/fulfil/cleanup.ts");
+  const s = open(process.argv[2]), p = process.argv[3], at = Math.floor(Date.now() / 1000);
+  s.upsert("projects", { label: p }, { home_repo: null, observed_at: 1 });
+  const ins = s.db.query("INSERT INTO observed_cleanup (project, class, key, path, size_kb, first_seen, verdict, facts, observed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  ins.run(p, "d", "/w/ds-measured", "/w/ds-measured", 3145728, at, "removable", JSON.stringify({ partial: true, size_from: "du", size_at: at }), at);
+  ins.run(p, "c", "/h/partial", "/h/partial", 2048, at, "too new", JSON.stringify({ partial: true }), at);
+  process.stdout.write(cardText(s, p)); s.close();' "$ROOT" "$TMP/tidy-root" "$LBL")"
+"$ROOT/bin/lib/alerts.sh" "$CRA" add "cleanup:$LBL.card" "Host tidy: $LBL" "Needs you: 1 removable.
+$TIDY_TXT" "" "" '{"kind":"host_tidy","removable":1}' >/dev/null
+board "$LBL" > "$TMP/tidy.json"
+TIDY_SEL="(.needs_you[], .loop_notes[]) | select(.title==\"Host tidy: $LBL\") | .text"
+jt "U1 sizes: the measured row's size is shown as it is" "$TMP/tidy.json" "[$TIDY_SEL] | length == 1 and (.[0] | contains(\"- [d] removable · 3.0 GB · /w/ds-measured\"))"
+jt "U1 sizes: a partial row not measured yet reads ≥"    "$TMP/tidy.json" "[$TIDY_SEL][0] | contains(\"- [c] too new · ≥ 2.0 MB · /h/partial\") and (contains(\"≥ 3.0 GB\") | not)"
+rm -f "$CRA"
+
 # disk-pressure U3: an open disk spell shows a Needs-you card (title, first consumer) and one DISK line on the text board.
 DNOW="$(date +%s)"
 dbw "INSERT INTO observed_machine (host, disks, observed_at) VALUES ('dh', '[{\"path\":\"/\",\"total_kb\":1048576000,\"free_kb\":157286400}]', $DNOW)"

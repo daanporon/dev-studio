@@ -38,15 +38,24 @@ describe("card text", () => {
     expect(cardText(t, "p")!.split("\n")[1]).toBe("1 rows, 1 removable (2.0 MB disk).");
   });
 
-  test("a By-class size ends in + when any row in it is partial", () => {
+  test("a partial size not measured yet reads ≥, in its row and its By-class total; a measured one (size_from du) does not", () => {
     const s = store();
     project(s, "p"); scan(s);
     seed(s, "c", "/h/a", "kept", 2048, { partial: true });
     seed(s, "c", "/h/b", "kept", 2048);
     seed(s, "d", "/w/ds-p-x", "kept", 1024, { partial: false });
-    const by = cardText(s, "p")!.split("\n").find((l) => l.startsWith("By class:"))!;
-    expect(by).toContain("c helper checkouts 2 (4.0 MB+)");
-    expect(by).toContain("d worktrees 1 (1.0 MB)");
+    seed(s, "d", "/w/ds-p-big", "kept", 3_145_728, { partial: true, size_from: "du", size_at: AT });
+    seed(s, "e", "/t/zzcache-*", "too new", 300, { count: 2, dirs: 2, partial: true, too_new: 2 });
+    const lines = cardText(s, "p")!.split("\n");
+    const by = lines.find((l) => l.startsWith("By class:"))!;
+    expect(by).toContain("c helper checkouts 2 (≥ 4.0 MB)");
+    expect(by).toContain("d worktrees 2 (3.0 GB)");
+    expect(by).toContain("e glob files 1 (≥ 300 kB)");
+    expect(lines).toContain("- [c] kept · ≥ 2.0 MB · /h/a");
+    expect(lines).toContain("- [c] kept · 2.0 MB · /h/b");
+    expect(lines).toContain("- [d] kept · 3.0 GB · /w/ds-p-big");
+    expect(lines).toContain("- [e] too new · ≥ 300 kB · 2 files matching /t/zzcache-*");
+    expect(lines).toContain("Glob /t/zzcache-*: 2 matched (≥ 300 kB), 0 removable, too new 2, not ours 0, in use 0.");
   });
 
   test("totals per class and verdict, removable first then by size, live members counted but not listed", () => {
@@ -68,7 +77,7 @@ describe("card text", () => {
       "- [e] removable · 12 kB · 4 files matching /t/zzdebris-*",
       "- [b] too new · 4.0 MB · /t/slug-big",
       "- [a] in use by pid 9 · 0 kB · pid 7 node in /w/ds-p-gone",
-      "Glob /t/zzdebris-*: 4 matched, 2 removable, too new 1, not ours 1, in use 0.",
+      "Glob /t/zzdebris-*: 4 matched (12 kB), 2 removable, too new 1, not ours 1, in use 0.",
       "Host: 3 loose files in the Claude temp root (40 kB), report only.",
       "Every row: ds observed cleanup --project p",
     ]);
