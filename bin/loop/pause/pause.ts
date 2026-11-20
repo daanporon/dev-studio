@@ -95,7 +95,7 @@ export function projection(store: Store, t: Target): Row {
     generation: row?.generation ?? sources[0]?.generation ?? null, reason: row?.reason ?? (sources.length && !closed ? "awaiting journal checkpoint" : null),
     checkpoint: row?.checkpoint ?? null, session: row?.session ?? null, dispatch: row?.dispatch ?? null, delivered_at: row?.delivered_at ?? null,
     sources: sources.map((r) => ({ scope: r.scope, source: r.source, project: r.project, squad: r.squad, role: r.role,
-      suffix: r.suffix, generation: r.generation, prerequisites: r.prerequisites ? JSON.parse(String(r.prerequisites)) : [],
+      suffix: r.suffix, generation: r.generation, requested_at: r.requested_at ?? null, prerequisites: r.prerequisites ? JSON.parse(String(r.prerequisites)) : [],
       ...(r.source === "dependency" ? { remaining: dependencyReasons(store, r as Target, JSON.parse(String(r.prerequisites ?? "[]"))) } : {}) })) };
 }
 export function pause(store: Store, t: PauseTarget, opts: PauseOptions, at: number): Row {

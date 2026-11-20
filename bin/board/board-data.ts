@@ -34,7 +34,7 @@ import { approvedPlans, readyLine } from "../loop/reconcilers/ready.ts";
 import { canonPath } from "../loop/squad/plan-approved.ts";
 import { unitWishes } from "../loop/squad/queued-builder.ts";
 import { now as clockNow, openReadOnly, pendingWishes, stateRoot, type Pending, type Row, type Store } from "../loop/core/store.ts";
-import { effective, paused, projection } from "../loop/pause/pause.ts";
+import { effective, memberKey, paused, projection } from "../loop/pause/pause.ts";
 import { laneNow, placeOf, queue } from "../loop/capacity/slot.ts";
 import { focusSquad, focusValue, NO_FOCUS } from "../loop/squad/focus.ts";
 import { flowLine, flowOf, type FlowEvent, type FlowPick, type FlowReview, type FlowUnit } from "./flow.ts";
@@ -1149,6 +1149,28 @@ function machineView(db: Db, label: string, squads: any[], usedKb: number | null
   return { ram_basis: charged ? "charged" : "rss", consumers: out.sort((a, b) => b.ram_kb - a.ram_kb), total, loop, breakdown, card, outside };
 }
 
+// Why a Flow card is paused and since when (paused-in-swimlanes U1): `pausing` / `resuming` while the
+// pause is in flight, else its sources (you, a dependency wait, a taken-back plan), else the Lead's hold.
+export function pausedFacts(db: { s: any }, label: string, topic: string, bm: any, pause: any, hold: boolean): { paused_at: number | null; paused_why: string | null } {
+  const sources: any[] = pause && pause.state !== "active" ? pause.sources ?? [] : [];
+  const at = sources.map((x) => Number(x.requested_at)).filter((n) => Number.isFinite(n) && n > 0);
+  let row: any = null;
+  if (bm?.role) { try { row = db.s.get("pause_members", memberKey({ project: label, squad: topic, role: bm.role, suffix: bm.suffix ?? "" })); } catch { /* no row */ } }
+  const rowAt = Number(row?.requested_at);
+  const paused_at = at.length ? Math.min(...at) : Number.isFinite(rowAt) && rowAt > 0 && pause && pause.state !== "active" ? rowAt : null;
+  if (pause?.state === "resuming") return { paused_at, paused_why: "resuming" };
+  if (pause?.state === "pausing") return { paused_at, paused_why: "pausing" };
+  const man = sources.find((x) => x.source === "manual");
+  if (man) return { paused_at, paused_why: "paused by you" };
+  const dep = sources.find((x) => x.source === "dependency");
+  if (dep) {
+    if ((dep.prerequisites ?? []).some((p: any) => p.kind === "plan")) return { paused_at, paused_why: "plan taken back" };
+    const rem = (dep.remaining ?? []).map((r: string) => r.replace(/^[^:]*:\s*/, ""));
+    return { paused_at, paused_why: rem.length ? `waits on ${rem.join(", ")}` : "waits on another unit" };
+  }
+  return { paused_at, paused_why: hold ? "Lead hold" : pause && pause.state !== "active" ? "paused" : null };
+}
+
 // The squads the header and the Flow count: not done, failed, suspended, on hold or paused.
 const activeSquads = (squads: any[]) => squads.filter((s) => s.status !== "done" && s.status !== "failed"
   && s.status !== "suspended" && s.status !== "on-hold" && (!s.pause || s.pause.state === "active"));
@@ -1587,6 +1609,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
           active_at: activeAt(db, label, topic, slug, x?.builder_wt, b === "working", reasons, pr?.status, pr ? null : promptOf(db, label, topic).bySlug.get(slug) ?? null),
           hold: !!x?.hold, hold_reason: x?.hold_reason ?? null, plan_blocked: planBlocked,
           paused: (!inactive && !!bm?.pause && bm.pause.state !== "active") || (us === "dispatched" && !!x?.hold),
+          ...pausedFacts(db, label, topic, bm, !inactive ? bm?.pause : null, us === "dispatched" && !!x?.hold),
           blocked_by: [...deps.filter((d) => !satisfied(d, slug)).map(blockedNote), ...extDeps.filter((d) => d.status !== "done" && d.status !== "closed-done").map((d) => d.ref)],
           deps, pick: picks.get(`${topic}/${slug}`) ?? null,
           question: ask ? { id: ask.id == null ? null : String(ask.id), since: Number.isFinite(askAt) ? Math.floor(askAt / 1000) : null } : null,

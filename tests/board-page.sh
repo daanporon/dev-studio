@@ -713,11 +713,11 @@ DS_STATE_ROOT="$FR" DS_NOW="$FXNOW" TZ=UTC PATH="$TMP/nopath" "$ROOT/bin/board/b
 jt "U1: flow has a card in every stage" "$TMP/flow.json" '[.flow.cards[].stage] | unique == ["building","merging","needs_you","pr_open","queued"]' '.flow.cards'
 jt "U1: flow has a card in every Queued and PR open group" "$TMP/flow.json" '[.flow.cards[].group | select(. != null)] | unique == ["blocked","checks running","coding","draft","fixing","fixing findings","held","in review","review stopped","reviewing","waiting for a slot","waiting for an account","waiting on another unit"]' '[.flow.cards[].group]'
 jt "U4: the fixture squad's Building units show the four review groups with their notes" "$TMP/flow.json" '[.flow.cards[] | select(.squad == "flow" and .stage == "building") | {slug, group, note}] | sort_by(.slug) == [{"slug":"u19-slow","group":"reviewing","note":"2nd review · delta 4m"},{"slug":"u2-building","group":"coding","note":null},{"slug":"u8-gone","group":"review stopped","note":"reviews stopped · needs --retry"},{"slug":"u9-closed","group":"fixing findings","note":"6 findings 12m"}]' '[.flow.cards[] | select(.stage == "building")]'
-jt "U1: flow counts add up to the header's units left" "$TMP/flow.json" '.flow.counts as $c | ($c.queued + $c.building + $c.pr_open + $c.needs_you + $c.merging) == .header.units_left'
+jt "U1: flow counts add up to the header's units left" "$TMP/flow.json" '.flow.counts as $c | ($c.queued + $c.building + $c.pr_open + $c.needs_you + $c.merging + ($c.paused // 0)) == .header.units_left'
 jt "U1: flow keeps 30 days of merges" "$TMP/flow.json" '(.flow.per_day | length) == 30'
 DS_STATE_ROOT="$FR" DS_NOW="$FXNOW" TZ=UTC PATH="$TMP/nopath" "$ROOT/bin/board/board.sh" zzflow > "$TMP/flow.txt"
 eq "U1: one FLOW line on the text board" "$(grep -c '^FLOW ' "$TMP/flow.txt" || true)" "1"
-eq "U1: the FLOW line has flow.counts' numbers" "$(grep '^FLOW ' "$TMP/flow.txt")" "$(jq -r '.flow.counts | "FLOW \(.queued) queued · \(.building) building · \(.pr_open) PR open · \(.merging) merging · \(.stuck) stuck\(if .slow > 0 then " · \(.slow) slow" else "" end) · \(.needs_you) needs you · \(.merged_today) merged today"' "$TMP/flow.json")"
+eq "U1: the FLOW line has flow.counts' numbers" "$(grep '^FLOW ' "$TMP/flow.txt")" "$(jq -r '.flow.counts | "FLOW \(.queued) queued · \(.building) building · \(.pr_open) PR open · \(.merging) merging · \(.stuck) stuck\(if .slow > 0 then " · \(.slow) slow" else "" end) · \(.needs_you) needs you\(if .paused > 0 then " · \(.paused) paused" else "" end) · \(.merged_today) merged today"' "$TMP/flow.json")"
 
 
 # U7: Needs-you holds the cards only the operator can clear: the morning brief (Read) and a finished squad (Show squad, Close squad, Dismiss).

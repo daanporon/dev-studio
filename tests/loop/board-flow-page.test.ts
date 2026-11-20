@@ -461,3 +461,27 @@ test("U281-1. an empty lane is dimmed with the class empty; the six lanes stay i
   expect(cls("building")).not.toContain("empty");
   expect(cls("pr_open")).toContain("empty");
 });
+
+test("paused-in-swimlanes: a lane's paused cards leave its count, sit in a folded paused group, and unfold dim with why · how long", () => {
+  const mk = (slug: string, stage: string, o: any = {}) => ({ key: `p/s/${slug}`, project: "p", squad: "s", slug, stage, group: stage === "building" ? "coding" : null, pr: null, needs_you: false, ask: null,
+    stuck: false, slow: false, in_stage_s: 60, note: null, ...o });
+  const pz = (slug: string, stage: string) => mk(slug, stage, { group: "paused", paused: true, paused_s: 90000, note: "paused by you" });
+  const f = { ...flow, cards: [mk("w", "building"), pz("b1", "building"), pz("b2", "building"), pz("m1", "merging")],
+    counts: { ...flow.counts, queued: 0, building: 1, pr_open: 0, needs_you: 0, merging: 0, paused: 3, stuck: 0, slow: 0 } };
+  const { view, store, FlowCard } = render({ flow: f });
+  expect(text(view)).toContain("0 needs you · 3 paused · ");
+  expect(text(col(view, "building"))).toContain("1 · 2 paused");
+  const g = (stage: string) => nodes(col(view, stage)).find((n) => n.values.includes("paused") && String(n.values[0]).length > 0 && n.str.includes("data-group"));
+  expect(text(g("building"))).toContain("▸ paused");
+  expect(text(g("building"))).not.toContain("b1");   // folded: no cards drawn
+  expect(text(g("merging"))).toContain("▸ paused");
+  expect(text(col(view, "building"))).not.toContain("b2");
+  // unfolded: the dim card with its why and how long
+  const open = render({ flow: f }, lstoreOf({ "b:flow:fold:building:paused": false }));
+  expect(text(col(open.view, "building"))).toContain("b1");
+  const card = FlowCard({ card: pz("b1", "building"), typicalS: {}, moved: false, onOpen: () => {}, showProject: false, pos: null, now: FX_NOW });
+  expect(card.values[0]).toContain(" paused");
+  expect(text(card)).toContain("paused by you");
+  expect(text(card)).toContain("25h");
+  expect(store.writes).toEqual([]);
+});

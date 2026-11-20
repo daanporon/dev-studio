@@ -43,6 +43,8 @@ export type FlowUnit = {
   focus?: "on" | "held" | "muted" | null;  // open unit of the focus squad: next in line / the squad holds its share / any other
   lane?: string; lane_rule?: string | null; lane_cpu_h?: number; lane_limit_h?: number;   // a light-tagged unit's lane (board-data unitLane)
   tier_key?: string | null;             // units.tier (standard | hard), not the display label
+  paused_at?: number | null;            // when the pause began (earliest open source); null: unknown or a Lead hold
+  paused_why?: string | null;           // paused by you | waits on … | plan taken back | Lead hold | pausing | resuming
   active_at?: number | null;            // newest sign of work of its Builder (U279); null: none seen
 };
 export type FlowReview = { project: string; squad: string; slug: string; state: ReviewState; since: number | null;
@@ -273,6 +275,9 @@ export function flowOf(input: FlowInput) {
     // A ready PR waiting for its Builder has no typical time: the floor alone.
     const readyWait = s.stage === "merging" && s.note === "ready · waiting for finish-unit";
     const late = inStage != null && (readyWait ? inStage > floor : typ != null && inStage > Math.max(2 * typ, floor));
+    // A paused building, pr_open or merging card moves to the lane's `paused` group (unitStage keeps its stage and group);
+    // its note says why and its time is the pause's, while since / in_stage_s stay the stage's.
+    const isPaused = u.paused && (s.stage === "building" || s.stage === "pr_open" || s.stage === "merging");
     const stale = !u.paused && u.status === "dispatched" && u.stale;
     // Late is stuck when its Builder shows no sign of work for flow_quiet_min, else slow. A stale card, and
     // a ready PR waiting for its Builder to run finish-unit, are stuck whatever the activity.
@@ -283,9 +288,10 @@ export function flowOf(input: FlowInput) {
     const slow = live && !stuck && late;
     return {
       key: ukey(u.project, u.squad, u.slug), project: u.project, squad: u.squad, slug: u.slug, tier: u.tier,
-      stage: s.stage, group: s.group, since: s.since, in_stage_s: inStage, stuck, slow, stale, active_at: u.active_at ?? null, typical_s: typ,
+      stage: s.stage, group: isPaused ? "paused" : s.group, since: s.since, in_stage_s: inStage,
+      paused: isPaused, paused_s: isPaused && u.paused_at != null ? Math.max(0, now - u.paused_at) : null, stuck, slow, stale, active_at: u.active_at ?? null, typical_s: typ,
       needs_you: s.stage === "needs_you", ask: u.question?.id ? ukey(u.project, u.squad, u.question.id) : null,
-      note: s.note, pr: u.pr, open_pr: s.open_pr, queue_pos: null as number | null, urgent: u.urgent === true, focus: u.focus ?? null,
+      note: isPaused ? u.paused_why ?? s.note : s.stage === "queued" && u.paused ? u.paused_why ?? s.note : s.note, pr: u.pr, open_pr: s.open_pr, queue_pos: null as number | null, urgent: u.urgent === true, focus: u.focus ?? null,
       ...(u.lane ? { lane: u.lane, lane_rule: u.lane_rule ?? null, lane_cpu_h: u.lane_cpu_h, lane_limit_h: u.lane_limit_h } : {}),
     };
   });
@@ -297,7 +303,7 @@ export function flowOf(input: FlowInput) {
       took_s: disp != null && e.at >= disp ? e.at - disp : null,
       focus: input.focus_squad?.[e.project] === e.squad ? "muted" as const : null };
   });
-  const count = (st: Stage) => cards.filter((c) => c.stage === st).length;
+  const count = (st: Stage) => cards.filter((c) => c.stage === st && !c.paused).length;
   const squads: Record<string, { stuck: number; slow: number; longest_stuck_s: number | null; needs_you: number; last_merge_at: number | null }> = {};
   const sq = (k: string) => (squads[k] ??= { stuck: 0, slow: 0, longest_stuck_s: null, needs_you: 0, last_merge_at: null });
   for (const s of input.squads) sq(`${s.project}/${s.squad}`);
@@ -310,7 +316,7 @@ export function flowOf(input: FlowInput) {
   for (const e of done) { const s = sq(`${e.project}/${e.squad}`); if (s.last_merge_at == null || e.at > s.last_merge_at) s.last_merge_at = e.at; }
   return {
     counts: {
-      queued: count("queued"), building: count("building"), pr_open: count("pr_open"), needs_you: count("needs_you"), merging: count("merging"),
+      queued: count("queued"), building: count("building"), pr_open: count("pr_open"), needs_you: count("needs_you"), merging: count("merging"), paused: cards.filter((c) => c.paused).length,
       stuck: cards.filter((c) => c.stuck).length, slow: cards.filter((c) => c.slow).length, open_prs: cards.filter((c) => c.open_pr).length,
       merged_today: perDay[perDay.length - 1].merged,
     },
@@ -328,5 +334,5 @@ export type Flow = ReturnType<typeof flowOf>;
 
 export const flowLine = (f: Flow): string => {
   const c = f.counts;
-  return `FLOW ${c.queued} queued · ${c.building} building · ${c.pr_open} PR open · ${c.merging} merging · ${c.stuck} stuck${c.slow ? ` · ${c.slow} slow` : ""} · ${c.needs_you} needs you · ${c.merged_today} merged today`;
+  return `FLOW ${c.queued} queued · ${c.building} building · ${c.pr_open} PR open · ${c.merging} merging · ${c.stuck} stuck${c.slow ? ` · ${c.slow} slow` : ""} · ${c.needs_you} needs you${c.paused ? ` · ${c.paused} paused` : ""} · ${c.merged_today} merged today`;
 };

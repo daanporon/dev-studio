@@ -67,6 +67,28 @@ const flowBoard = {
     ],
   },
 };
+test("paused-in-swimlanes: the lane header counts paused apart, its paused group starts folded, an unfolded dim card says why and for how long", async () => {
+  const pz = (slug: string) => flowCard({ key: "fixture/gone/" + slug, slug, stage: "building", group: "paused", paused: true, paused_s: 90000, note: "paused by you" });
+  const pb = { ...flowBoard, flow: { ...flowBoard.flow, cards: [flowCard({ key: "fixture/gone/w1", slug: "w1", stage: "building", group: "coding" }), pz("p1"), pz("p2")],
+    counts: { ...flowBoard.flow.counts, building: 1, pr_open: 0, needs_you: 0, merging: 0, queued: 0, paused: 2 } } };
+  const r = await mount(pb, false);
+  const doc = r.window.document;
+  try {
+    doc.getElementById("flow").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    expect(doc.querySelector("#flow-col-building h4")?.textContent).toContain("1 · 2 paused");
+    expect(doc.querySelector("#flow small")?.textContent).toContain("2 paused");
+    const g = doc.querySelector('#flow-col-building [data-group="paused"]') as any;
+    expect(g.querySelector(".fgl").textContent).toBe("▸ paused");
+    expect(g.querySelectorAll(".fcard").length).toBe(0);
+    g.querySelector(".fgrp").dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((x) => setTimeout(x, 30));
+    const c = doc.querySelector('#flow-col-building [data-group="paused"] .fcard.paused') as any;
+    expect(c).not.toBeNull();
+    expect(c.querySelector(".m").textContent).toContain("paused by you");
+    expect(c.querySelector(".m").textContent).toContain("25h");
+  } finally { r.window.close?.(); }
+});
 test("every Flow card opens a details window; a PR number opens the PR, not the window", async () => {
   const r = await mount(flowBoard, false);
   const w = r.window, doc = w.document;
