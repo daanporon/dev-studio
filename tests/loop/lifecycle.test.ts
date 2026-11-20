@@ -1144,8 +1144,8 @@ describe("U178: one red stretch, bounded pokes", () => {
     expect(o.cards).toHaveLength(1);
     expect(o.cards[0]).toMatchObject({ title: "Red PR still blocked", card: "pr_stale", fields: { ref: `${NWO}#7`, pr: 7 } });
     const lead = Number(o.got.find((e) => e.includes(" poke pr-stale-lead:"))!.split(" ")[0]);
-    expect(Number(alerts[0].split(" ")[0])).toBeGreaterThanOrEqual(lead + 120 * 60);
-    expect(Number(alerts[0].split(" ")[0])).toBeLessThan(lead + 120 * 60 + P + 1);
+    expect(Number(alerts[0].split(" ")[0])).toBeGreaterThanOrEqual(lead + 60 * 60);
+    expect(Number(alerts[0].split(" ")[0])).toBeLessThan(lead + 60 * 60 + P + 1);
   });
 
   test("same head: a check that was green failing is 1 pr-news; reasons dropping and returning are 0", async () => {
@@ -1312,8 +1312,8 @@ describe("U178: one red stretch, bounded pokes", () => {
       worker(s, LEAD, "idle", null, T - 3600);
       const lead = T + 620 + 1800;
       await l.tick(lead);
-      expect(eps(await l.tick(lead + 7199))).toEqual([]);
-      const a = await l.tick(lead + 7200);
+      expect(eps(await l.tick(lead + 3599))).toEqual([]);
+      const a = await l.tick(lead + 3600);
       expect(eps(a)).toEqual([`alert pr-stale:${NWO}#7|${T}`]);
       expect(String((a[0].payload as Row).text)).toContain("PR #7 (lc/u1) is still not merge-ready (threads:1)");
       expect(await l.tick(lead + 9000)).toEqual([]);
@@ -1362,6 +1362,93 @@ describe("U178: one red stretch, bounded pokes", () => {
         expect(pokes(await l.tick(T + 40 * Q))).toEqual([]);
         cpu(s, 2);
         expect(pokes(await l.tick(T + 41 * Q))).toEqual([`poke pr-stale:threads|${T}#2#1`]);
+      });
+      // board-empty-state-and-port U4: Orca reads the Builder `working`, but liveness's atPrompt reads it at
+      // its prompt (transcript still for prompt_wait_min, CPU under 5 %, only a background task open).
+      describe("a Builder that only looks busy", () => {
+        const use = (id: string, input: Row = {}) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input }] } });
+        const res = (id: string, content = "ok") => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content }] } });
+        const BG = [use("a", { command: "until ! pgrep -f review-unit.sh; do sleep 5; done", run_in_background: true }), res("a", "Command running in background with ID: bx1")];
+        // The Builder's transcript (last written at `mtime`) and a terminal Orca reads `working`, its screen moving.
+        function busy(s: Store, root: string, lines: string[], mtime = T) {
+          const path = join(root, "b1.jsonl");
+          writeFileSync(path, lines.join("\n") + "\n");
+          s.upsert("observed_transcripts", { path }, { project: "fx", wt: B, mtime, size: 1, observed_at: T });
+          cpu(s, 2);
+          worker(s, B, "working");
+        }
+        const at = async (s: Store, l: { tick: (at: number) => Promise<Action[]> }, m: number) => { out(s, T + m * Q); return l.tick(T + m * Q); };
+
+        test("at its prompt with a background task: the second nudge after stale_repoke_min, then the Lead and the alert", async () => {
+          const { s, root } = squad([{ slug: "u1", pr: "7" }]);
+          const l = await firstPoke(s);
+          busy(s, root, BG);
+          expect(pokes(await at(s, l, 29))).toEqual([]);
+          const got = await at(s, l, 31);
+          expect(pokes(got)).toEqual([`poke pr-stale:threads|${T}#2#1`]);
+          expect(String((got[0].payload as Row).text)).toContain("nothing has changed for 30 min");
+          expect([epRow(s).count, epRow(s).next_at]).toEqual([2, T + 31 * Q]);
+          worker(s, LEAD, "idle", null, T - 3600);
+          const lead = T + 31 * Q + 30 * Q;
+          expect(eps(await at(s, l, 61))).toEqual([`poke pr-stale-lead:7|${T}#lead#1`]);
+          expect(eps(await l.tick(lead + 7200))).toEqual([`alert pr-stale:${NWO}#7|${T}`]);
+        });
+        test("the clock counts from its transcript's last write, not the moving screen", async () => {
+          const { s, root } = squad([{ slug: "u1", pr: "7" }]);
+          const l = await firstPoke(s);
+          busy(s, root, BG, T + 10 * Q);
+          expect(pokes(await at(s, l, 31))).toEqual([]);
+          expect(pokes(await at(s, l, 41))).toEqual([`poke pr-stale:threads|${T}#2#1`]);
+        });
+        test("a truly working Builder gets none: its transcript moving, or a foreground call open", async () => {
+          const { s, root } = squad([{ slug: "u1", pr: "7" }]);
+          const l = await firstPoke(s);
+          busy(s, root, BG, T + 85 * Q);
+          expect(pokes(await at(s, l, 90))).toEqual([]);
+          busy(s, root, [...BG, use("b", { command: "CI_JOBS=4 tests/ci.sh" })]);
+          expect(pokes(await at(s, l, 91))).toEqual([]);
+          busy(s, root, BG);
+          cpu(s, 40);
+          expect(pokes(await at(s, l, 92))).toEqual([]);
+          expect(epRow(s).count).toBe(1);
+        });
+      });
+      // board-empty-state-and-port U4 fix 2: a second poke due but never sent does not freeze the ladder.
+      test.each([
+        ["really working", (s: Store) => worker(s, B, "working")],
+        ["limited", (s: Store) => worker(s, B, "idle", "limited")],
+      ])("a Builder %s never gets the second poke: the Lead at repoke + lead min, the card 60 min later, once each", async (_why, block) => {
+        const { s } = squad([{ slug: "u1", pr: "7" }]);
+        const l = await firstPoke(s);
+        block(s);
+        worker(s, LEAD, "idle", null, T - 3600);
+        expect(eps(await l.tick(T + 59 * Q))).toEqual([]);
+        const req = await l.tick(T + 60 * Q);
+        expect(eps(req)).toEqual([`poke pr-stale-lead:7|${T}#lead#1`]);
+        expect(String((req[0].payload as Row).text)).toContain("60 min after its Builder's first pr-stale poke (the second, due 30 min after it, could not be sent)");
+        expect(epRow(s).count).toBe(1);
+        expect(eps(await l.tick(T + 119 * Q))).toEqual([]);
+        const card = await l.tick(T + 120 * Q);
+        expect(eps(card)).toEqual([`alert pr-stale:${NWO}#7|${T}`]);
+        expect(String((card[0].payload as Row).text)).toContain("60 min after its Lead was told, and its Builder was poked once (a second poke could not be sent)");
+        expect(eps(await l.tick(T + 300 * Q))).toEqual([]);
+      });
+      test("stale_repoke_min 0: no due time, so no Lead request after one poke", async () => {
+        const { s } = squad([{ slug: "u1", pr: "7" }]);
+        s.upsert("config", { project: "fx", file: "limits.conf", key: "stale_repoke_min" }, { value: "0", observed_at: T });
+        const l = await firstPoke(s);
+        worker(s, LEAD, "idle", null, T - 3600);
+        expect(eps(await l.tick(T + 600 * Q))).toEqual([]);
+      });
+      // board-empty-state-and-port U4 fix 3: the card's default wait is 60 min after the Lead's request.
+      test("stale_alert_min defaults to 60", async () => {
+        const { s } = squad([{ slug: "u1", pr: "7" }]);
+        const l = await firstPoke(s);
+        expect(pokes(await l.tick(T + 31 * Q))).toEqual([`poke pr-stale:threads|${T}#2#1`]);
+        worker(s, LEAD, "idle", null, T - 3600);
+        expect(eps(await l.tick(T + 61 * Q))).toEqual([`poke pr-stale-lead:7|${T}#lead#1`]);
+        expect(eps(await l.tick(T + 120 * Q))).toEqual([]);
+        expect(eps(await l.tick(T + 121 * Q))).toEqual([`alert pr-stale:${NWO}#7|${T}`]);
       });
       test("the clock counts from the Builder's last output", async () => {
         const { s } = squad([{ slug: "u1", pr: "7" }]);

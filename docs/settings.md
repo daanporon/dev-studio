@@ -143,8 +143,8 @@ key's source.
 | `github_budget_share` | Share of the hourly GitHub GraphQL budget (5000 points) the PR observer may spend (U286): the next read waits `max(DS_LOOP_GITHUB_S, cost × 3600 / (share × limit))`, and for GitHub's reset when fewer than two reads' cost remain. Host-wide (one gh user): the smallest share any project sets wins | 0.5 | number above 0, at most 1 | `DS_LIMIT_GITHUB_BUDGET_SHARE` |
 | `pr_stale_min` | Minutes a blocked unit PR stays blocked before the loop flags it stale on the board | 0 | non-negative integer | `DS_LIMIT_PR_STALE_MIN` |
 | `stale_repoke_min` | Minutes of quiet (no push, Builder idle at its prompt, its worktree under 5% CPU, no check running) after a blocked unit PR's first pr-stale poke before the second comes without a push; `0` = only after a push | 30 |
-| `stale_lead_min` | Minutes after a Builder's second pr-stale poke before a unit PR still not merge-ready is reported to its Lead, once per red stretch | 30 | non-negative integer, `0` = never | `DS_LOOP_STALE_LEAD_MIN` |
-| `stale_alert_min` | Minutes after that Lead request before a unit PR still blocked raises one Studio alert for the stretch (U178) | 120 | non-negative integer, `0` = never | `DS_LOOP_STALE_ALERT_MIN` |
+| `stale_lead_min` | Minutes after a Builder's second pr-stale poke (or after the second's due time, `stale_repoke_min` after the first, when it could not be sent) before a unit PR still not merge-ready is reported to its Lead, once per red stretch | 30 | non-negative integer, `0` = never | `DS_LOOP_STALE_LEAD_MIN` |
+| `stale_alert_min` | Minutes after that Lead request before a unit PR still blocked raises one Studio alert for the stretch (U178) | 60 | non-negative integer, `0` = never | `DS_LOOP_STALE_ALERT_MIN` |
 | `prompt_wait_min` | Minutes a Builder that Orca reads `working` may sit at its prompt before the loop nudges it: its transcript has not moved, its worktree is under 5% CPU, no review runs on its unit, the only thing open is a background command (say a wait loop that never ends) and the unit has no open PR. The nudge names the command; the idle ladder follows (a second nudge `stale_min` later, then a report to its Lead), and its Builder gets no quiet poke meanwhile (builder-idle-no-pr-card U1) | 20 | non-negative integer, `0` = off | `DS_SWEEP_PROMPT_WAIT_MIN` |
 | `msg_chase_min` | Minutes a `ds msg` message may stay unread after its poke before the loop pokes the receiver once more, while it is idle (U277); `0` = never | 15 | non-negative integer | `DS_LIMIT_MSG_CHASE_MIN` |
 | `notes_cap` | Most notes a role keeps per project in `notes.sh`; every role prints all its notes at start, so a higher cap costs context in every session of that role. Lowering it deletes nothing: a role over the cap just cannot add until it drops one | 20 | whole number 1-100 | `DS_LIMIT_NOTES_CAP` |
@@ -189,7 +189,8 @@ closed or waits on a `required:<context>` alone; GitHub reshuffling its reasons 
 head does not start a new one (U178). In a stretch the Builder gets two pr-stale pokes (the second after a push, or after `stale_repoke_min` of quiet),
 plus one per new session (placed or cleared after its last poke about the PR); pr-news
 only for a new head or a blocking reason the stretch has not sent yet; the Lead one
-request `stale_lead_min` after the second poke; and the Studio one alert
+request `stale_lead_min` after the second poke (or after its due time when the loop could not
+send it: a limited, paused or busy Builder, a draft in its prompt); and the Studio one alert
 `stale_alert_min` after that.
 
 A unit PR that waits on `required:<context>` alone waits on a context nobody has posted,
