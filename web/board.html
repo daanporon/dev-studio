@@ -42,7 +42,7 @@ button.tile{cursor:pointer} button.tile:hover{border-color:var(--dim)} .tile[ari
 .banner{display:flex;align-items:center;gap:14px;border:1px solid #5a2a26;background:var(--red-bg);border-radius:8px;padding:12px 16px;margin-bottom:18px}
 .banner .t{flex:1} .banner.err{border-color:#5a4a26;background:var(--amber-bg)} .banner.info{border-color:#2a4672;background:var(--blue-bg)}
 .banner .ucommits{margin:8px 0 0;padding:0;list-style:none;font-size:12px} .banner .ucommits li{padding:1px 0} .banner .utag{font-size:10px;padding:0 5px;margin-left:6px;border-radius:4px;background:#23272f;color:var(--mut)} .banner .ubtns{display:flex;gap:8px;flex:none}
-.btn{border:1px solid var(--line);background:var(--panel2);border-radius:6px;padding:6px 12px;cursor:pointer;white-space:nowrap}
+a.btn{text-decoration:none;color:inherit} .btn{border:1px solid var(--line);background:var(--panel2);border-radius:6px;padding:6px 12px;cursor:pointer;white-space:nowrap}
 .btn:hover{border-color:#3a4458} .btn.pri{background:var(--amber);border-color:var(--amber);color:#1a1405;font-weight:600}
 .btn.red{background:var(--red);border-color:var(--red);color:#1d0b09;font-weight:600} .btn.blue{background:var(--blue);border-color:var(--blue);color:#0a1424;font-weight:600}
 .btn.sm{padding:3px 9px;font-size:12px}
@@ -127,6 +127,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .units .u>.dot,.crew .m>.dot,.units .u>.acts{overflow:visible}
 .num{text-align:right;font-variant-numeric:tabular-nums} .dot{width:8px;height:8px;border-radius:50%;background:var(--dim)}
 .dot.bad{background:var(--red)} .dot.warnd{background:var(--amber)} .dot.done{background:var(--green)} .dot.working,.dot.waiting,.dot.built,.dot.building,.dot.testing,.dot.babysitting{background:var(--blue)} .dot.ready{background:var(--fg)} .dot.gone{background:var(--red)} .dot.fixing,.dot.noPR{background:var(--amber)} .dot.merged{background:var(--purple)} .dot.cancelled,.dot.held{background:var(--dim)} .dot.stale{background:var(--amber)} .dot.merge-ready{background:var(--green)}
+.imp-src{display:flex;flex-direction:column;gap:8px;align-items:flex-start;margin-bottom:12px} .imp-src textarea{width:100%;font:12px var(--mono)} .imp-tab{width:100%;border-collapse:collapse;font:12px var(--mono)} .imp-tab th,.imp-tab td{text-align:left;padding:3px 6px;border-bottom:1px solid var(--line);vertical-align:top;word-break:break-word} .imp-row.dim{color:var(--mut);opacity:.7} .imp-go{margin-top:10px} .set-note.err{color:var(--red,#e5534b)}
 .set-box{overflow:auto} .set-body{padding:12px 16px 16px;overflow:auto} .set-note{font-size:12px;color:var(--mut);margin:0 0 10px}
 .set-tabs{display:flex;gap:4px;padding:8px 16px 0;border-bottom:1px solid var(--line)} .set-tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--mut);font:600 13px var(--mono);padding:6px 10px;cursor:pointer} .set-tab.on{color:inherit;border-bottom-color:var(--blue)}
 .lim{width:100%;border-collapse:collapse;font-size:13px} .lim th{text-align:left;font-weight:500;color:var(--mut);font-size:11px;padding:4px 8px} .lim td{padding:5px 8px;border-top:1px solid var(--line,#8883);vertical-align:middle}
@@ -2748,10 +2749,86 @@ function ChangeNote({ c, busy, onUndo }) {
 const SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"]];
 function Settings({ project, toast, onClose }) {
   const [tab, setTab] = useState(SETTINGS_TABS[0][0]);
+  const [importing, setImporting] = useState(false);
+  const [rev, setRev] = useState(0);   // bumped by an applied import: the tabs read their rows again
   return html`<div class="modal" id="settings" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div class="mbox set-box" role="dialog" aria-label="Settings"><div class="mhd"><span>Settings · ${project}</span><span class="sp"></span><button class="btn sm" title="Close (Esc)" onClick=${onClose}>✕</button></div>
-      <div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
-      <div class="set-body">${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}</div></div></div>`;
+    <div class="mbox set-box" role="dialog" aria-label="Settings"><div class="mhd"><span>Settings · ${project}</span><span class="sp"></span>
+      <a class="btn sm" id="settings-export" href=${"api/settings-export?project=" + encodeURIComponent(project)} download=${project + "-settings.txt"} title="Download this project's settings as a text file another project (or host) can import">Export</a>
+      <button class="btn sm" id="settings-import" style=${{ marginLeft: 6 }} title="Copy settings in from a file or another project, choosing row by row" onClick=${() => setImporting(!importing)}>Import</button>
+      <button class="btn sm" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
+      ${importing ? html`<div class="set-body"><${ImportPane} project=${project} toast=${toast} onBack=${() => setImporting(false)} onApplied=${() => setRev((n) => n + 1)} /></div>` : html`<div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
+      <div class="set-body" key=${rev}>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}</div>`}</div></div>`;
+}
+
+// Import in Settings: a source (a file, pasted export text, or another project on this host) -> the plan
+// (POST api/settings-import/preview) as a table with a tick box per row -> Apply files one `settings-import`
+// request with the ticked rows. A row that can't be ticked (unknown key, refused value, shell only, or
+// already the same) is greyed with its reason; a project-specific one is unticked but can be ticked.
+function importRowKey(r) { return r.file + "\u0000" + r.key; }
+function importPicks(rows, pick) { return rows.filter((r) => pick[importRowKey(r)]).map((r) => ({ file: r.file, key: r.key, expect: r.current })); }
+function importWhy(r) { return r.action === "skip" ? (r.why || "skipped") : r.action === "same" ? "same as now" : r.warn || ""; }
+function ImportPane({ project, toast, onBack, onApplied }) {
+  const [others, setOthers] = useState([]);
+  const [from, setFrom] = useState("");
+  const [text, setText] = useState("");
+  const [name, setName] = useState("");
+  const [plan, setPlan] = useState(null);       // {rows}
+  const [pick, setPick] = useState({});         // row key -> ticked
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState(null);         // the applied request's result
+  useEffect(() => {
+    fetch("api/settings-import?project=" + encodeURIComponent(project), { cache: "no-store" }).then((r) => r.json()).then((b) => setOthers(b.projects || [])).catch(() => {});
+  }, [project]);
+  const source = () => from ? { from } : { text, ...(name ? { name } : {}) };
+  const chooseFile = async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    setText(await f.text()); setName(f.name.replace(/\.[^.]*$/, "")); setFrom(""); setPlan(null); setRes(null);
+  };
+  const preview = async () => {
+    setErr(""); setRes(null); setBusy(true);
+    try {
+      const b = await post("api/settings-import/preview", { project, ...source() });
+      setPlan(b.rows); setPick(Object.fromEntries(b.rows.filter((r) => r.pick && r.can_pick).map((r) => [importRowKey(r), true])));
+    } catch (e) { setPlan(null); setErr(String(e.message || e)); }
+    setBusy(false);
+  };
+  const apply = async () => {
+    const picks = importPicks(plan, pick);
+    if (!picks.length) { setErr("tick at least one row"); return; }
+    setErr(""); setBusy(true);
+    try {
+      const b = await post("api/settings-import", { project, ...source(), picks });
+      const r = b.id != null ? await awaitDone(b.id) : {};
+      if (r && r.ok === false) setErr(r.error || "the loop refused it");
+      else { setRes(r || { written: [], skipped: [], stale: [], pending: true }); setPlan(null); onApplied(); toast("imported " + ((r && r.changed) || 0) + " setting" + ((r && r.changed) === 1 ? "" : "s")); }
+    } catch (e) { setErr(String(e.message || e)); }
+    setBusy(false);
+  };
+  const ticked = plan ? importPicks(plan, pick).length : 0;
+  return html`<div class="imp" role="region" aria-label="Import settings">
+    <div class="set-note"><button class="btn sm" onClick=${onBack}>← Settings</button> Copy settings into <b>${project}</b>. Nothing is written until you press Apply; project-specific rows start unticked.</div>
+    <div class="imp-src">
+      <label>From another project <select id="imp-from" value=${from} onChange=${(e) => { setFrom(e.target.value); setText(""); setName(""); setPlan(null); setRes(null); }}>
+        <option value="">—</option>${others.map((o) => html`<option key=${o} value=${o}>${o}</option>`)}</select></label>
+      <label>or a file <input type="file" id="imp-file" onChange=${chooseFile} /></label>
+      <textarea id="imp-text" rows="4" placeholder="or paste an export here" value=${text} onInput=${(e) => { setText(e.target.value); setFrom(""); setPlan(null); setRes(null); }}></textarea>
+      <button class="btn sm" id="imp-preview" disabled=${busy || (!from && !text.trim())} onClick=${preview}>Preview</button>
+    </div>
+    ${err && html`<div class="set-note err" role="alert">${err}</div>`}
+    ${plan && html`<div>
+      ${plan.length === 0 ? html`<div class="set-note">The source has no settings.</div>` : html`<table class="imp-tab"><thead><tr><th></th><th>action</th><th>file</th><th>key</th><th>now → new</th><th>why</th></tr></thead><tbody>
+        ${plan.map((r) => html`<tr key=${importRowKey(r)} class=${"imp-row " + r.action + (r.can_pick ? "" : " dim")} data-key=${r.key}>
+          <td><input type="checkbox" aria-label=${"import " + r.key} checked=${!!pick[importRowKey(r)]} disabled=${!r.can_pick || busy} onChange=${(e) => setPick({ ...pick, [importRowKey(r)]: e.target.checked })} /></td>
+          <td>${r.action}</td><td>${r.file}</td><td>${r.key}</td>
+          <td>${r.action === "skip" || r.action === "same" ? (r.current == null ? "—" : r.current) : (r.current == null ? "—" : r.current) + " → " + (r.value == null ? "(removed)" : r.value)}</td>
+          <td class="imp-why">${importWhy(r)}</td></tr>`)}</tbody></table>`}
+      <div class="imp-go"><button class="btn sm" id="imp-apply" disabled=${busy || !ticked} onClick=${apply}>Apply ${ticked} row${ticked === 1 ? "" : "s"}</button></div>
+    </div>`}
+    ${res && html`<div class="set-note imp-res" role="status">${res.pending ? "Filed; the loop applies it on its next tick." : "Written " + (res.written || []).length + " · skipped " + (res.skipped || []).length + " · stale " + (res.stale || []).length + " (changed since the preview; preview again)."}
+      ${[...(res.skipped || []), ...(res.stale || [])].map((x) => html`<div key=${x.file + x.key}>${x.key}: ${x.why || "changed since the preview"}</div>`)}</div>`}
+  </div>`;
 }
 
 // A category's folded line: "<Name> · <n> settings", then only when non-zero overridden / unsaved / error.

@@ -46,6 +46,9 @@
 //   /api/chat     {project, topic, wt, text}  `chat`: one line (no newline or control character, at most
 //                 2000 characters) the loop types into that live, unpaused member's terminal once it is ready
 //   /api/limits   {project, key, value|null}  `limits`: the loop sets or drops the limit; {project, key, undo: <history id>} files `config-undo` (U258)
+//   GET /api/settings-export?project=<label> the export text (a transfer file, header line first); GET /api/settings-import?project= the other projects an import can read
+//   /api/settings-import/preview {project, text|from}  the plan (one row per setting; reads only)
+//   /api/settings-import  {project, text|from, picks: [{file, key, expect}]}  `settings-import`: the loop writes the picked rows as `board`
 //   /api/skills   {project, role, set: {<skill|hook:name|mcp:server|*>: level}} | {project, role, reset: true}  `skills` (U230)
 //   /api/roles    {project, role, agent, model, effort, spawn, fallbacks | reset:true}  `roles`
 //   /api/unit    {project, topic, slug, action: release|cancel, why?}  `unit-action`: a Work units ⋯ menu choice
@@ -60,13 +63,15 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
+import { isTestProject } from "../loop/settings/projects.ts";
 import { isCat } from "./event-cats.ts";
 import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
 import { skillsJson } from "./skills-data.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
 import { answer as answerQuestion } from "../loop/messages/questions.ts";
-import { dbPath, open, type Row, type Store } from "../loop/core/store.ts";
+import { dbPath, open, openReadOnly, type Row, type Store } from "../loop/core/store.ts";
+import { exportTransfer, IMPORT_FILES, planImport, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
 import { canRestartRole } from "../loop/pause/restart-roles.ts";
 import { paused, type PauseTarget, type Prerequisite } from "../loop/pause/pause.ts";
 
@@ -400,6 +405,67 @@ async function limitsPost(req: Request) {
       return json(400, { error: row.list ? `${key} must be comma-separated check names, no spaces` : row.allowed ? `${key} must be one of ${row.allowed.join(", ")}` : `${key} must be a whole number, 0 or more` });
   }
   return write((s) => board(s, "limits", { key, value: v }, { project }));
+}
+
+// Settings transfer (Import / Export in Settings): the export text, the plan, the apply.
+const IMPORT_PICKS_MAX = 2000;
+function importSource(b: any, project: string): { src: ImportSource } | { r: Response } {
+  const hasText = typeof b.text === "string" && b.text !== "", hasFrom = typeof b.from === "string" && b.from !== "";
+  if (hasText === hasFrom) return { r: json(400, { error: "give either text (an export) or from (another project)" }) };
+  if (hasFrom) {
+    if (!NAME.test(b.from)) return { r: json(400, { error: "bad source project" }) };
+    if (b.from === project) return { r: json(400, { error: `'${project}' can't import from itself` }) };
+    return { src: { project: b.from } };
+  }
+  return { src: { text: b.text, name: typeof b.name === "string" ? b.name.slice(0, 60) : undefined } };
+}
+// A board scoped to one project writes only that one; its reads cover the host.
+const importTarget = (b: any): { project: string } | { r: Response } => {
+  if (!NAME.test(b.project ?? "")) return { r: json(400, { error: "need project" }) };
+  if (scope.project && scope.project !== b.project) return { r: json(403, { error: "project is outside this board's scope" }) };
+  return { project: b.project };
+};
+function settingsExportGet(url: URL) {
+  const project = url.searchParams.get("project") ?? "";
+  if (!NAME.test(project)) return json(400, { error: "need project" });
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  const s = openReadOnly();
+  try {
+    return new Response(exportTransfer(s, project), { headers: { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": `attachment; filename="${project}-settings.txt"`, "Cache-Control": "no-store" } });
+  } catch (e) { return json(e instanceof SettingsError ? 400 : 500, { error: e instanceof Error ? e.message : String(e) }); } finally { s.close(); }
+}
+function settingsImportGet(url: URL) {
+  const project = url.searchParams.get("project") ?? "";
+  if (!NAME.test(project)) return json(400, { error: "need project" });
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  const s = openReadOnly();
+  try {
+    const rows = s.db.query("SELECT label FROM projects UNION SELECT project FROM config WHERE project <> '' ORDER BY 1").all() as { label: string }[];
+    return json(200, { project, projects: rows.map((r) => r.label).filter((l) => l !== project && NAME.test(l) && !isTestProject(l)) });
+  } finally { s.close(); }
+}
+async function settingsImportPreview(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const t = importTarget(pr.b); if ("r" in t) return t.r;
+  const so = importSource(pr.b, t.project); if ("r" in so) return so.r;
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  const s = openReadOnly();
+  try { return json(200, { project: t.project, rows: planImport(s, t.project, so.src, { board: true, replace: pr.b.replace === true }) }); }
+  catch (e) { return e instanceof SettingsError ? json(400, { error: e.message }) : json(500, { error: String(e).slice(-500) }); } finally { s.close(); }
+}
+async function settingsImportPost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const t = importTarget(pr.b); if ("r" in t) return t.r;
+  const so = importSource(pr.b, t.project); if ("r" in so) return so.r;
+  const { picks } = pr.b;
+  if (!Array.isArray(picks) || !picks.length || picks.length > IMPORT_PICKS_MAX) return json(400, { error: `picks needs 1 to ${IMPORT_PICKS_MAX} rows` });
+  for (const p of picks)
+    if (!p || typeof p.file !== "string" || !(IMPORT_FILES as readonly string[]).includes(p.file) || typeof p.key !== "string" || !p.key || p.key.length > 200
+      || (p.expect !== undefined && p.expect !== null && typeof p.expect !== "string")) return json(400, { error: "each pick needs a file, a key and the expected current value" });
+  const payload = "project" in so.src ? { from: so.src.project, picks } : { text: so.src.text, ...(so.src.name ? { name: so.src.name } : {}), picks };
+  return write((s) => board(s, "settings-import", payload, { project: t.project }));
 }
 
 const WORD = /^[A-Za-z0-9._-]{1,64}$/;
@@ -803,6 +869,8 @@ async function get(req: Request, url: URL) {
   if (path === "/api/limits") return limitsGet(url);
   if (path === "/api/roles") return rolesGet(url);
   if (path === "/api/skills") return skillsGet(url);
+  if (path === "/api/settings-export") return settingsExportGet(url);
+  if (path === "/api/settings-import") return settingsImportGet(url);
   if (path === "/api/briefing") return briefingGet(url);
   if (path === "/api/events") return eventsGet(url);
   if (path === "/api/events/lists") return eventsListsGet(url);
@@ -825,6 +893,7 @@ async function get(req: Request, url: URL) {
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
   "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/settings-import/preview": settingsImportPreview,
 };
 
 async function handle(req: Request) {
@@ -835,6 +904,7 @@ async function handle(req: Request) {
   if (path === "/api/limits" && req.method === "POST") return limitsPost(req);
   if (path === "/api/roles" && req.method === "POST") return rolesPost(req);
   if (path === "/api/skills" && req.method === "POST") return skillsPost(req);
+  if (path === "/api/settings-import" && req.method === "POST") return settingsImportPost(req);
   if (path === "/api/chat" && req.method === "POST") return chatPost(req);
   if (req.method !== "GET" && req.method !== "HEAD") return text(405, "GET only\n");
   return get(req, new URL(req.url));

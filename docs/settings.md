@@ -324,6 +324,24 @@ After that the rows are the only copy:
   exactly the text's, unchecked, each change one history row by `ds config import`.
 - `ds config export [--project <label>]` prints the same text as the backup.
 
+### Copy settings with the board's Import and Export
+
+The Settings window has **Export** and **Import** (settings-export-import U3).
+
+- **Export** downloads `<project>-settings.txt` (`GET /api/settings-export?project=`): the export text with a
+  first line `#! ds-settings 1 from=<label> rev=<commit> at=<time>` and the `skills.conf` rows.
+- **Import** takes a file, pasted text or another project on this host. **Preview** (`POST
+  /api/settings-import/preview {project, text|from}`) shows one row per setting: action (`add`, `change`,
+  `same`, `skip`), file, key, now → new, and why. Each row has a tick box. Settings that fit one project only
+  (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`, ship mode) start unticked and can be
+  ticked; a key this dev-studio doesn't know, a value it would refuse, and the two shell-only keys
+  (`cleanup_on_close`, `cleanup_tmp_globs`, shown `shell only`) are greyed and can't be ticked.
+- **Apply** (`POST /api/settings-import {project, text|from, picks: [{file, key, expect}]}`) files one
+  `settings-import` request; the loop writes only the picked rows, each one `config_history` row by
+  `board` (so the Limits and Roles tabs can undo them one by one), and answers with what it `written`,
+  `skipped` and found `stale` (a row that changed after the preview). The dialog shows the three counts and
+  the Limits and Roles tabs read their rows again.
+
 ## Autonomy: checkpoints vs fire-and-forget
 
 What it does: decides whether a squad stops for your nod at checkpoints

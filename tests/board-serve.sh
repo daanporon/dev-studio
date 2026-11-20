@@ -516,6 +516,31 @@ has "skills: the refusal says on or off" "$(cat "$TMP/post.out")" "on or off"
 eq "skills: a required MCP server can't be turned off" "$(sp "{\"project\":\"$LBL\",\"role\":\"builder\",\"set\":{\"mcp:context-mode\":\"off\"}}")" "400"
 eq "skills: reset with no edits is 409" "$(sp "{\"project\":\"$LBL\",\"role\":\"builder\",\"reset\":true}")" "409"
 eq "skills: foreign Origin is 403"   "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"role\":\"builder\",\"reset\":true}" "$SU")" "403"
+# Import / Export in Settings (settings-export-import U3): the export text, the plan, the apply.
+bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.argv[1]); for (const [f, k, v] of [["limits.conf", "hooks_ts", "1"], ["limits.conf", "auto_merge", "merge"], ["limits.conf", "limit_pct", "80"], ["limits.conf", "cleanup_on_close", "rm -rf x"]]) d.run("INSERT OR REPLACE INTO config (project, file, key, value, comment, observed_at) VALUES (?, ?, ?, ?, NULL, 1)", ["importsrc", f, k, v])' "$DBR/loop.db"
+IU="http://127.0.0.1:$PORT/api/settings-import"
+EU="http://127.0.0.1:$PORT/api/settings-export"
+ip(){ post -H "$O" -H "$CT" -d "$2" "$1"; }
+eq "import: export is 200" "$(curl -s -D "$TMP/ex.hdr" -o "$TMP/ex.txt" -w '%{http_code}' "$EU?project=importsrc")" "200"
+has "import: export starts with the transfer header" "$(head -1 "$TMP/ex.txt")" "#! ds-settings 1 from=importsrc"
+has "import: export names the download" "$(cat "$TMP/ex.hdr")" "importsrc-settings.txt"
+has "import: export carries the rows" "$(cat "$TMP/ex.txt")" "limit_pct 80"
+eq "import: export without project is 400" "$(curl -s -o /dev/null -w '%{http_code}' "$EU")" "400"
+eq "import: list is 200" "$(curl -s -o "$TMP/il.json" -w '%{http_code}' "$IU?project=$LBL")" "200"
+jt "import: list names the other project, not this one" "$TMP/il.json" '(.projects | index("importsrc") != null) and (.projects | index("'"$LBL"'") == null)'
+eq "import: preview is 200" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"from\":\"importsrc\"}")" "200"
+cp "$TMP/post.out" "$TMP/ip.json"
+jt "import: hooks_ts reads skipped (unknown key)" "$TMP/ip.json" '.rows[] | select(.key=="hooks_ts") | .action=="skip" and .why=="unknown key" and .can_pick==false'
+jt "import: auto_merge is unticked but tickable" "$TMP/ip.json" '.rows[] | select(.key=="auto_merge") | .pick==false and .can_pick==true and .why=="project-specific"'
+jt "import: cleanup_on_close is shell only" "$TMP/ip.json" '.rows[] | select(.key=="cleanup_on_close") | .why=="shell only" and .can_pick==false'
+eq "import: preview from a text that is no export is 400" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"text\":\"hello\"}")" "400"
+has "import: the 400 names why" "$(cat "$TMP/post.out")" "not a settings export"
+eq "import: preview with both sources is 400" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"text\":\"x\"}")" "400"
+eq "import: foreign Origin is 403" "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[{\"file\":\"limits.conf\",\"key\":\"limit_pct\"}]}" "$IU")" "403"
+eq "import: apply without picks is 400" "$(ip "$IU" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[]}")" "400"
+eq "import: apply with a bad file is 400" "$(ip "$IU" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[{\"file\":\"../x\",\"key\":\"a\"}]}")" "400"
+eq "import: apply is 202" "$(ip "$IU" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[{\"file\":\"limits.conf\",\"key\":\"limit_pct\",\"expect\":null}]}")" "202"
+eq "import: one settings-import request row" "$(bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.argv[1], { readonly: true }); const r = d.query("SELECT count(*) n, json_extract(payload, \"$.from\") f, project FROM requests WHERE kind = ?").get("settings-import") as any; console.log(r.n, r.f, r.project)' "$DBR/loop.db")" "1 importsrc $LBL"
 eq "roles: form post is 415"         "$(post -H "$O" -H 'Content-Type: application/x-www-form-urlencoded' -d 'a=b' "$RU")" "415"
 eq "roles: refusals changed nothing" "$(DS_STATE_ROOT="$DBR" "$ROOT/bin/commands/roles.sh" list "$LBL" | awk '$1=="builder"{print $3}')" "opus"
 eq "roles: reset without override is 409" "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"reset\":true}")" "409"
