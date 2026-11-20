@@ -146,7 +146,7 @@ exists with `test -f <path>` on its own, because context-mode can cut a combined
 
 - **State** (`conventions/state.md`, `state/SCHEMA.json`) — each Lead writes its squad's
   state to `state/<project>/squads/<topic>.json` via `bin/role/squad-state.sh`, always, so
-  the board is ground truth. `squads/` holds only `<topic>.json` squad state files (written by `bin/role/squad-state.sh`) and `.md` plans and brainstorms, and the approved copy of each plan (`<plan>.approved.md`); notes, reviews and experiment records go in `state/<project>/notes/` or as `.md` next to their plan, and a JSON file in `squads/` that is not a squad is skipped with a warning. Each `/ds-up <project>` is a per-project instance
+  the board is ground truth. `squads/` holds only `<topic>.json` squad state files (written by `bin/role/squad-state.sh`) and `.md` plans and brainstorms, and the approved copy of each plan (`<plan>.approved.md`); notes, reviews and experiment records go in `state/<project>/notes/` or as `.md` next to their plan, and a JSON file in `squads/` that is not a squad is skipped with a warning. Lavish review pages and their files go in `state/<project>/pages/<topic>/` (the Studio: `pages/_studio/`), opened with `lavish-axi <path>`; the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend. Each `/ds-up <project>` is a per-project instance
   (`ds-<project>-studio`, state under `state/<project>/`).
 - **Escalation** (`conventions/escalation.md`) — a squad question flows role → Lead, and
   the Lead decides: answer it, ask the Thinker, or **ping the operator** (a card note on

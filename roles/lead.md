@@ -576,3 +576,5 @@ successful acknowledgment stop at your prompt and let the loop close the agent t
 Never send worker_done for pause, force-close yourself, or delete the retained worktree.
 If the helper fails, remain Pausing and raise its error to the Lead. Resume is a state change;
 the loop starts a fresh session from this journal using the normal picker.
+
+Lavish pages and their files go in `state/<label>/pages/<topic>/` (open with `lavish-axi <path>`); the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend.
