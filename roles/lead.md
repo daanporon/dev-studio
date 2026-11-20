@@ -435,7 +435,7 @@ Orca brief says — you stay running between turns and report through `ds` and `
    (how to write each part: `conventions/escalation.md`; board + ping + an `ON BOARD` receipt; no receipt = not raised). **The loop asks the PR questions**: a
    review, sign-off or waiver for a PR is asked, withdrawn and routed by the loop from the observed
    PR state once only human gates remain — never ask the operator about a PR yourself
-   (`ask-operator.sh --pr` refuses: the loop asks PR questions; finish your unit and stop). An
+   (`ask-operator.sh --pr` refuses and names who posts it: the loop, or its Builder to fix a PR that is not ready; if the operator must decide, ask about the unit with `--unit <slug>` and no PR number). An
    operator answer to a PR question arrives as a poke (to the unit's Builder, with a one-line copy
    to you), then stop. Never leave a decision only in your terminal. `lfg`: no gates;
    decide-log-continue.
