@@ -29,6 +29,7 @@ export type FlowUnit = {
   status: string;                       // planned | dispatched
   hold: boolean; hold_reason?: string | null;
   plan_blocked: boolean;                // dep-ready but its plan is not approved
+  resuming?: boolean;                   // the unit's Builder is resuming (pause.ts): not paused, it waits for a seat
   paused: boolean;                      // the unit's Builder (or the Lead's hold on a dispatched unit)
   blocked_by: string[];                 // unmet deps and open ext deps (squad()'s satisfied() rule)
   deps: string[];                       // its in-squad deps (Queued's since: the last one's unit_done)
@@ -53,6 +54,7 @@ export type FlowEvent = { project: string; squad: string; unit: string; kind: st
 export type FlowInput = {
   now: number;
   units: FlowUnit[];
+  seated?: { project: string; squad: string; unit: string }[];   // units whose Builder holds a seat: never shown as queued
   events: FlowEvent[];                  // unit_dispatched, unit_pr, auto_merge_armed, unit_done of the window
   squads: { project: string; squad: string }[];   // the active squads (scope)
   floor_min: Record<string, number>;    // flow_stuck_floor_min per project
@@ -93,6 +95,11 @@ const waitsOn = (deps: string[]) => `waits on ${deps.slice(0, 3).join(", ")}${de
 const withDeps = (note: string, deps: string[]) => (deps.length ? `${note} · ${waitsOn(deps)}` : note);
 
 function queuedGroup(u: FlowUnit): { group: string; note: string | null } {
+  const q = queuedBase(u);
+  // A member that is resuming with no seat waits like any queued unit: it is not paused.
+  return u.resuming && q.group === "waiting for a slot" ? { group: q.group, note: "resumed · waiting for a seat" } : q;
+}
+function queuedBase(u: FlowUnit): { group: string; note: string | null } {
   if (u.paused) return { group: "held", note: "paused" };
   if (u.hold) return { group: "held", note: withDeps(u.hold_reason || "held", u.blocked_by) };
   if (u.blocked_by.length) return { group: "waiting on another unit", note: waitsOn(u.blocked_by) };
@@ -136,7 +143,7 @@ export function reviewNote(r: FlowReview | null, now: number): string | null {
   return null;
 }
 
-export function unitStage(u: FlowUnit, t: Times = NO_TIMES, depsDoneAt: number | null = null, review: FlowReview | null = null, now = 0): { stage: Stage; group: string | null; since: number | null; note: string | null; open_pr: boolean } {
+export function unitStage(u: FlowUnit, t: Times = NO_TIMES, depsDoneAt: number | null = null, review: FlowReview | null = null, now = 0, seated = false): { stage: Stage; group: string | null; since: number | null; note: string | null; open_pr: boolean } {
   const prOpen = !!u.pr && OPEN_PR(u.pr.status);
   const paused = u.paused ? "paused" : null;
   if (u.question) return { stage: "needs_you", group: null, since: u.question.since, note: paused, open_pr: prOpen };
@@ -151,7 +158,7 @@ export function unitStage(u: FlowUnit, t: Times = NO_TIMES, depsDoneAt: number |
     return { stage: "merging", group: null, since: firstFrom(t.armed, lastPr), note: paused, open_pr: prOpen };
   }
   if (prOpen) return { stage: "pr_open", group: prGroup(u), since: firstPr, note: paused, open_pr: true };
-  if (u.status === "dispatched") {
+  if (u.status === "dispatched" || seated) {
     const closed = u.pr?.status === "closed";
     return { stage: "building", group: REVIEW_GROUP[review?.state ?? "coding"] ?? "coding", since: closed ? firstFrom(t.dispatched, lastPr) : first(t.dispatched),
       note: paused ?? reviewNote(review, now) ?? (closed ? "PR closed" : null), open_pr: false };
@@ -264,10 +271,11 @@ export function flowOf(input: FlowInput) {
   for (const p of [...input.squads.map((s) => s.project), ...units.map((u) => u.project)])
     typical[p] ??= { building: null, pr_open: null, merging: null };
   const reviews = new Map((input.reviews ?? []).map((r) => [ukey(r.project, r.squad, r.slug), r]));
+  const seatedKeys = new Set((input.seated ?? []).map((h) => ukey(h.project, h.squad, h.unit)));
   const cards = units.map((u) => {
     const depsDone = u.deps.map((d) => last(times.get(ukey(u.project, u.squad, d))?.done ?? [])).filter((n): n is number => n != null);
     const k = ukey(u.project, u.squad, u.slug);
-    const s = unitStage(u, times.get(k), depsDone.length ? Math.max(...depsDone) : null, reviews.get(k) ?? null, now);
+    const s = unitStage(u, times.get(k), depsDone.length ? Math.max(...depsDone) : null, reviews.get(k) ?? null, now, seatedKeys.has(k));
     const inStage = s.since == null ? null : Math.max(0, now - s.since);
     const st = s.stage === "building" || s.stage === "pr_open" || s.stage === "merging" ? s.stage : null;
     const typ = st ? ((u.tier_key ?? u.tier) ? typical[u.project]?.tiers?.[(u.tier_key ?? u.tier)!]?.[st] : null) ?? typical[u.project]?.[st] ?? null : null;

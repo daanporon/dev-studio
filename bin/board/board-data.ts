@@ -1172,9 +1172,11 @@ export function pausedFacts(db: { s: any }, label: string, topic: string, bm: an
   return { paused_at, paused_why: hold ? "Lead hold" : pause && pause.state !== "active" ? "paused" : null };
 }
 
-// The squads the header and the Flow count: not done, failed, suspended, on hold or paused.
+// The squads the header and the Flow count: not done, failed, suspended, on hold or paused. A squad whose
+// pause state is `resuming` still counts: pause.ts gives it that state while any one member resumes, and
+// a squad that is itself paused is `pausing` or `paused`, so a resuming member must not hide its squad.
 const activeSquads = (squads: any[]) => squads.filter((s) => s.status !== "done" && s.status !== "failed"
-  && s.status !== "suspended" && s.status !== "on-hold" && (!s.pause || s.pause.state === "active"));
+  && s.status !== "suspended" && s.status !== "on-hold" && (!s.pause || (s.pause.state !== "pausing" && s.pause.state !== "paused")));
 
 // The header tiles' numbers (plan U3, KTD8), from the squads the board renders: the page only lays
 // them out. "Active" squads are the page's (not done/failed/parked, pause active).
@@ -1637,7 +1639,9 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
           project: label, squad: topic, slug, tier: tier || null, tier_key: x?.tier ? String(x.tier) : null, status: us, order: ukey(slug),
           active_at: activeAt(db, label, topic, slug, x?.builder_wt, b === "working", reasons, pr?.status, pr ? null : promptOf(db, label, topic).bySlug.get(slug) ?? null),
           hold: !!x?.hold, hold_reason: x?.hold_reason ?? null, plan_blocked: planBlocked,
-          paused: (!inactive && !!bm?.pause && bm.pause.state !== "active") || (us === "dispatched" && !!x?.hold),
+          // `resuming` is a member waiting for a seat, not a pause (it queues like any unit)
+          resuming: !inactive && bm?.pause?.state === "resuming",
+          paused: (!inactive && !!bm?.pause && bm.pause.state !== "active" && bm.pause.state !== "resuming") || (us === "dispatched" && !!x?.hold),
           ...pausedFacts(db, label, topic, bm, !inactive ? bm?.pause : null, us === "dispatched" && !!x?.hold),
           blocked_by: [...deps.filter((d) => !satisfied(d, slug)).map(blockedNote), ...extDeps.filter((d) => d.status !== "done" && d.status !== "closed-done").map((d) => d.ref)],
           deps, pick: picks.get(`${topic}/${slug}`) ?? null,
@@ -1778,12 +1782,17 @@ function activeAt(db: Db, label: string, squad: string, slug: string, wt: unknow
 function flowFor(db: Db | null, labels: string[], squads: any[]) {
   const now = NOW();
   const active = activeSquads(squads);
+  // Every Builder that holds a seat (slot.ts seats()), whatever the unit row says: its card is never Queued.
+  const seated: { project: string; squad: string; unit: string }[] = [];
+  if (db) for (const l of labels) {
+    try { for (const h of seats(db.s, l, now).holders) if (h.unit) seated.push({ project: l, squad: h.squad, unit: h.unit }); } catch { /* an older loop.db: no seat list */ }
+  }
   const events: FlowEvent[] = db && labels.length ? db.all(`SELECT project, squad, unit, kind, at, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.pr') END AS pr
     FROM events WHERE kind IN (${FLOW_KINDS.map(() => "?").join(", ")}) AND at >= ? AND project IN (SELECT value FROM json_each(?))
       AND squad IS NOT NULL AND unit IS NOT NULL ORDER BY at, id`, ...FLOW_KINDS, now - FLOW_WINDOW_S, JSON.stringify(labels))
     .map((r) => ({ project: String(r.project), squad: String(r.squad), unit: String(r.unit), kind: String(r.kind), at: Number(r.at), pr: r.pr == null ? null : String(r.pr) })) : [];
   return flowOf({
-    now, events,
+    now, events, seated,
     units: active.flatMap((s) => flowUnitsOf.get(s) ?? []),
     squads: active.map((s) => ({ project: String(s.label), squad: String(s.topic) })),
     floor_min: Object.fromEntries(labels.map((l) => [l, db ? dsLimit(db, l, "flow_stuck_floor_min") ?? 10 : 10])),

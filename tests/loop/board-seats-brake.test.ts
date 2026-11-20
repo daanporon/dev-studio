@@ -48,7 +48,7 @@ test("seats: six live Builders, three in a squad that is resuming and one idle, 
   f.squad("one"); f.squad("two");
   for (const [sq, slug, st] of [["one", "a1", "working"], ["one", "a2", "working"], ["one", "a3", "idle"], ["two", "b1", "working"], ["two", "b2", "working"], ["two", "b3", "working"]] as const)
     f.live(sq, slug, st);
-  for (const slug of ["b1", "b2", "b3"]) f.resuming("two", slug);   // `two` is resuming: not an active squad on the board
+  for (const slug of ["b1", "b2", "b3"]) f.resuming("two", slug);   // `two` has members resuming: it stays on the board
   const h = f.board().header;
   expect(h.builders_normal).toBe(6);
   expect(h.builders_total).toBe(6);
@@ -127,4 +127,71 @@ test("the mounted page: the Builders tile tooltip names all six holders with why
   expect(tile.querySelector(".tv").textContent).toBe("6/6");
   const title = tile.getAttribute("title") ?? "";
   for (const h of ["one/a1 — working", "one/a2 — idle", "two/b1 — working", "two/b2 — working", "two/b3 — working", "one/a3 — working"]) expect(title).toContain(h);
+});
+
+// board-shows-host-brake U3: the Flow holds one card outside Queued for each Builder seat holder.
+const outside = (b: any) => b.flow.cards.filter((c: any) => c.stage !== "queued");
+const cardOf = (b: any, slug: string) => b.flow.cards.find((c: any) => c.slug === slug);
+
+test("flow (a): a squad with one member resuming keeps its Building card and its header counts", () => {
+  const f = setup({ max_builders: "6" });
+  f.squad("two");
+  f.live("two", "b1"); f.live("two", "b2", "idle");
+  f.unit("two", "b3", "planned");
+  f.resuming("two", "b3");   // b3's Builder waits for a seat: the member's state must not hide the squad
+  const b = f.board();
+  expect(b.header.builders_seats.used).toBe(2);
+  expect(cardOf(b, "b1")?.stage).toBe("building");
+  expect(cardOf(b, "b2")?.stage).toBe("building");
+  expect(b.flow.counts.building).toBe(2);
+});
+
+test("flow (b): a squad paused at squad scope is still dropped from the Flow", () => {
+  const f = setup({ max_builders: "6" });
+  f.squad("two"); f.squad("three");
+  f.live("two", "b1"); f.live("three", "c1");
+  f.s.db.run(`INSERT INTO pause_intents (scope, project, squad, role, suffix, source, generation, requested_at) VALUES ('squad', 'p', 'two', '', '', 'manual', 'g1', ?)`, [NOW]);
+  const b = f.board();
+  expect(cardOf(b, "b1")).toBeUndefined();
+  expect(cardOf(b, "c1")?.stage).toBe("building");
+});
+
+test("flow (c): a planned unit whose Builder is live and idle is a Building card, not Queued", () => {
+  const f = setup({ max_builders: "6" });
+  f.squad("one");
+  f.live("one", "u27", "idle");
+  f.unit("one", "u27", "planned", { builder_wt: "wt_u27" });   // the row went back to planned while the Builder runs
+  const c = cardOf(f.board(), "u27");
+  expect(c.stage).toBe("building");
+  expect(c.group).toBe("coding");
+});
+
+test("flow (d): on a seat-heavy board the cards outside Queued equal the seats used", () => {
+  const f = setup({ max_builders: "8" });
+  f.squad("one"); f.squad("two");
+  f.live("one", "a1"); f.live("one", "a2", "idle"); f.live("one", "a3");
+  f.unit("one", "a3", "planned", { builder_wt: "wt_a3" });
+  f.live("two", "b1"); f.live("two", "b2"); f.live("two", "b3", "idle");
+  for (const slug of ["b1", "b2"]) f.resuming("two", slug);
+  f.unit("one", "q1", "planned");   // a real queued unit, no Builder
+  const b = f.board();
+  expect(b.header.builders_seats.used).toBe(6);
+  expect(outside(b).length).toBe(6);
+  expect(cardOf(b, "q1")?.stage).toBe("queued");
+});
+
+test("flow (e): a resuming member with no seat is a Queued card at its queue position, never paused and never Building", () => {
+  const f = setup({ max_builders: "6" });
+  f.squad("two");
+  f.unit("two", "r1", "planned", { builder_wt: "wt_r1" });
+  f.s.upsert("members", { project: "p", squad: "two", role: "builder", suffix: "r1" }, { wt: "wt_r1", agent: "claude", model: "opus", status: "waiting", observed_at: NOW, updated_at: NOW });
+  f.resuming("two", "r1");
+  const b = f.board();
+  const c = cardOf(b, "r1");
+  expect(c.stage).toBe("queued");
+  expect(c.group).toBe("waiting for a slot");
+  expect(c.note).toBe("resumed · waiting for a seat");
+  expect(c.paused).toBe(false);
+  expect(c.queue_pos).toBe(1);
+  expect(b.flow.counts.paused).toBe(0);
 });

@@ -20,7 +20,7 @@ describe("the fixture board", () => {
     expect(card("u4-plan")).toMatchObject({ stage: "queued", group: "held", note: "plan not approved" });
     expect(card("u5-slot")).toMatchObject({ group: "waiting for a slot", note: "at max_builders 6", since: null, in_stage_s: null });
     expect(card("u6-account")).toMatchObject({ group: "waiting for an account", note: "no room until 13:30" });
-    expect(card("u20-starting")).toMatchObject({ group: "waiting for a slot", note: "starting" });
+    expect(card("u20-starting")).toMatchObject({ stage: "building", group: "coding" });   // a starting Builder holds a seat: not Queued
     expect(card("u7-next")).toMatchObject({ group: "waiting for a slot", note: "next in line", since: N - 3600, stuck: false });
   });
 
@@ -75,7 +75,7 @@ describe("the fixture board", () => {
 
   test("counts: each its cards, all of them the header's units left; a suspended squad has none", () => {
     const c = b.flow.counts, of = (st: string) => b.flow.cards.filter((x: any) => x.stage === st && !x.paused).length;
-    expect(c).toEqual({ queued: 7, building: 4, pr_open: 5, needs_you: 2, merging: 2, paused: 0, stuck: 1, slow: 2, open_prs: 7, merged_today: 1 });
+    expect(c).toEqual({ queued: 6, building: 5, pr_open: 5, needs_you: 2, merging: 2, paused: 0, stuck: 1, slow: 2, open_prs: 7, merged_today: 1 });
     for (const st of ["queued", "building", "pr_open", "needs_you", "merging"]) expect(c[st]).toBe(of(st));
     expect(c.queued + c.building + c.pr_open + c.needs_you + c.merging + c.paused).toBe(b.header.units_left);
     expect(b.flow.cards.filter((x: any) => x.squad !== "flow")).toEqual([]);
@@ -90,7 +90,7 @@ describe("the fixture board", () => {
   });
 
   test("every project: counts and per_day summed, each card against its own project's typical", () => {
-    expect(all.flow.counts).toMatchObject({ building: 5, stuck: 1, slow: 3, merged_today: 2 });
+    expect(all.flow.counts).toMatchObject({ building: 6, stuck: 1, slow: 3, merged_today: 2 });
     expect(all.flow.per_day.reduce((n: number, d: any) => n + d.merged, 0)).toBe(12);
     expect(all.flow.typical_s[f.b]).toEqual({ building: 300, pr_open: 100, merging: 50 });
     expect(all.flow.cards.find((c: any) => c.project === f.b)).toMatchObject({ slug: "u1-quick", in_stage_s: 1000, stuck: false, slow: true });   // late (> 600 in b, < 2400 in a) with its Builder working
@@ -98,7 +98,7 @@ describe("the fixture board", () => {
 
   test("text: one FLOW line under the STUDIO line, with flow.counts' numbers", () => {
     const lines = renderText(b).split("\n").filter((l) => l.startsWith("FLOW "));
-    expect(lines).toEqual(["FLOW 7 queued · 4 building · 5 PR open · 2 merging · 1 stuck · 2 slow · 2 needs you · 1 merged today"]);
+    expect(lines).toEqual(["FLOW 6 queued · 5 building · 5 PR open · 2 merging · 1 stuck · 2 slow · 2 needs you · 1 merged today"]);
     expect(renderText(b).split("\n")[1]).toBe(lines[0]);
   });
 });
