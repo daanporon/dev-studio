@@ -2,7 +2,7 @@
 // fixture roots (fake /proc, fake Claude temp root, temp git clones, a fake backend list), the
 // write's row lifecycle, and the off-tick scan with its in-flight guard.
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupObserver, measureCleanup, scanCleanup, writeCleanup, writeSizes, type CleanupScan } from "../../bin/loop/observers/cleanup.ts";
 import { cardText } from "../../bin/loop/fulfil/cleanup.ts";
@@ -196,6 +196,54 @@ describe("class e: globs (KTD5)", () => {
   }, 60_000);
 });
 
+describe("class f: trim globs (investigate-disk-cleanup U2)", () => {
+  const trim = (s: Store, g: string) => s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_trim_globs" }, { value: g, observed_at: 1 });
+  // <dir>/zzcache-v1/ with an old, a new and a held file and an old folder; a matched symlink and file beside it.
+  function cache() {
+    const dir = tmp(), folder = join(dir, "zzcache-v1"), outside = tmp();
+    mkdirSync(folder);
+    for (const n of ["old", "new", "held"]) writeFileSync(join(folder, n), "x");
+    mkdirSync(join(folder, "olddir")); writeFileSync(join(folder, "olddir", "f"), "x");
+    for (const n of ["old", "held", "olddir/f", "olddir"]) aged(join(folder, n), AT - 49 * 3600);
+    writeFileSync(join(outside, "x"), "x"); aged(join(outside, "x"), AT - 49 * 3600);
+    symlinkSync(outside, join(dir, "zzcache-link"));
+    writeFileSync(join(dir, "zzcache-file"), "x"); aged(join(dir, "zzcache-file"), AT - 49 * 3600);
+    return { dir, folder };
+  }
+
+  test("one row per glob: the entries inside each matched folder, judged like class e; a matched symlink or file is not a folder", async () => {
+    const s = store(), { dir, folder } = cache();
+    project(s, "p"); trim(s, `${dir}/zzcache-*`);
+    const proc = fakeProc([{ pid: 55, cwd: "/home", fds: [join(folder, "held")] }]);
+    const r = await scanCleanup(s, AT, opts({ proc, tmpRoot: tmp() }));
+    expect(rows(r, "e")).toEqual([]);
+    expect(rows(r, "f")).toHaveLength(1);
+    expect(rows(r, "f")[0]).toMatchObject({ project: "p", key: `${dir}/zzcache-*`, path: dir,
+      facts: { folders: 1, count: 4, removable: 2, too_new: 1, in_use: 1, in_use_pid: 55, not_ours: 0, dirs: 1, partial: true, capped: false, folder_sample: [folder] } });
+    const other = await scanCleanup(s, AT, opts({ proc, tmpRoot: tmp(), uid: UID + 1 }));
+    expect(rows(other, "f")[0].facts).toMatchObject({ folders: 0, folders_not_ours: 1, count: 0, removable: 0 }); // another uid's folder is skipped
+  });
+
+  test("past the entry budget the row is partial and capped; a rejected glob and a glob matching no folder give no row", async () => {
+    const s = store(), { dir } = cache();
+    project(s, "p"); trim(s, `${dir}/zzcache-*, zzrelative-*, ${tmp()}/zznothing-*`);
+    const r = await scanCleanup(s, AT, opts({ proc: fakeProc([]), tmpRoot: tmp(), trimEntries: 2 }));
+    expect(rows(r, "f").map((x) => x.key)).toEqual([`${dir}/zzcache-*`]);
+    expect(rows(r, "f")[0].facts).toMatchObject({ count: 2, partial: true, capped: true });
+    writeCleanup(s, r);
+    expect(cardText(s, "p")).toContain("Invalid trim glob zzrelative-*");
+    expect(cardText(s, "p")).toContain("(entry budget reached: counts so far)");
+  });
+
+  test("a glob in both keys gives an e row and an f row", async () => {
+    const s = store(), { dir } = cache();
+    project(s, "p"); trim(s, `${dir}/zzcache-*`);
+    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: `${dir}/zzcache-*`, observed_at: 1 });
+    const r = await scanCleanup(s, AT, opts({ proc: fakeProc([]), tmpRoot: tmp() }));
+    expect([rows(r, "e").length, rows(r, "f").length]).toEqual([1, 1]);
+  });
+});
+
 describe("the write and the schedule (KTD4)", () => {
   test("first_seen stays while a row stays; a row not seen gets gone_at; one back from gone starts over", async () => {
     const s = store(), ws = tmp(), root = tmp();
@@ -268,6 +316,22 @@ describe("the measuring pass (investigate-disk-cleanup U1)", () => {
     expect(got.facts).toMatchObject({ size_from: "du", size_at: AT + 5, partial: true, count: 2 });
     expect(cardText(s, "p")).toContain(`(${(got.kb / 1024).toFixed(1)} MB)`);
     expect(cardText(s, "p")).not.toContain("≥");
+  }, 30_000);
+
+  test("a class f row is the du of the folders its glob matches; a matched file or symlink adds nothing", async () => {
+    const s = store(), dir = tmp();
+    project(s, "p");
+    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_trim_globs" }, { value: `${dir}/zzcache-*`, observed_at: 1 });
+    folder(join(dir, "zzcache-a"), 10, 100);
+    folder(join(dir, "zzcache-b"), 5, 100);
+    writeFileSync(join(dir, "zzcache-f"), "x".repeat(100_000));
+    symlinkSync(join(dir, "zzcache-a"), join(dir, "zzcache-l"));
+    writeCleanup(s, await scanCleanup(s, AT, opts({ proc: fakeProc([]), tmpRoot: tmp() })));
+    expect(row(s, "f").facts).toMatchObject({ folders: 2, count: 15, partial: true });
+    writeSizes(s, await measureCleanup(s), AT + 5);
+    const want = realDu(join(dir, "zzcache-a")) + realDu(join(dir, "zzcache-b"));
+    expect(Math.abs(row(s, "f").kb - want) / want).toBeLessThan(0.05);
+    expect(row(s, "f").facts).toMatchObject({ size_from: "du" });
   }, 30_000);
 
   test("largest first, one du at a time, each capped by what is left of the pass; the pass stops at its cap; whole rows only", async () => {

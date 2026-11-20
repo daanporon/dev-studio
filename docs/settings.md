@@ -217,12 +217,13 @@ Review thresholds apply when a Builder runs `bin/review/review-unit.sh`:
 | `review_skip_lenses` | `-` | Comma-separated reviewer lenses the project drops (`security`, `learnings`, …); never `correctness`; `-` means none |
 | `host_tidy` | `report` | `report`: the loop only keeps the Host tidy card. `apply` (exactly that word): it also removes, one at a time per project, each row the card calls removable, after reading it again (processes are stopped, Claude temp dirs and glob files removed, helper checkouts and orphaned worktrees removed without force, their branches kept). A paused or refused project gets no removal. Each removal writes one `cleanup_removed`, `cleanup_stopped` or `cleanup_failed` event. The card is in Needs-you only when something needs the operator (a refusal or failed backend list, an invalid glob, a removable row while not `apply`, a failed removal under `apply`) and starts with `Needs you:`; `ds observed cleanup --project <label>` lists every row at any time |
 | `cleanup_tmp_globs` | `-` | Comma- or space-separated absolute globs of host temp files the loop may clear: wildcard in the last path segment only, at least 3 literal characters there, and a parent that is not `/`, the home dir, the dev-studio root, the state dir, a workspaces dir or a repo clone. An invalid glob matches nothing. `-` means none. Read whole (`limitLine`), unlike other keys |
+| `cleanup_trim_globs` | `-` | Cache folders the loop keeps but trims inside: the same glob rules as `cleanup_tmp_globs` (an invalid one is listed on the Host tidy card and trims nothing). Each matched folder stays; only the entries directly inside it are judged (one class `f` row per glob). With `host_tidy apply`, a file older than `cleanup_tmp_age_h`, of this uid and open in no process is unlinked (a symlink's target stays) and a folder inside goes only when nothing in it is newer, in capped passes. A glob may also sit in `cleanup_tmp_globs`: that one removes whole old folders, this one trims the live one. `-` means none. Read whole (`limitLine`) |
 | `cleanup_tmp_age_h` | `48` | Hours a match must be untouched before it is cleared; non-negative integer, else 48 |
 | `cleanup_on_close` | `-` | Command run in a member's worktree before the loop removes it (read whole, e.g. `docker compose down -v`). A ` #` starts a comment, so point it at a script when the command needs one. `-` means none |
 | `disk_card_free_pct` | `20` | A Studio card `Disk <path> low: <free> free (<pct>%)` opens when a disk's free share drops below this percent and names up to 8 consumers (Docker build cache, images and volumes, the Host tidy rows, `disk_watch_paths`). It clears once free space is above the value plus 5 points. `0` = off. The card deletes nothing. |
 | `disk_watch_paths` | `-` | Host-level (read from the default row, a project value is ignored): comma- or space-separated absolute paths (a leading `~/` is the home; no `..`, no wildcard) the disk card sizes with `du -sk`, e.g. `~/.bun/install/cache,~/.claude/projects`. Set it through an import like `cleanup_tmp_globs`. |
 
-`cleanup_tmp_globs`, `cleanup_on_close` and `disk_watch_paths` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
+`cleanup_tmp_globs`, `cleanup_trim_globs`, `cleanup_on_close` and `disk_watch_paths` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
 
 For example, `/ds-limits <project> review_risk_paths contracts/*.sol,src/auth/*`
 uses the risky threshold for those files. Globs match the whole path; `*` also
@@ -332,7 +333,7 @@ After that the rows are the only copy:
   file, key, current → new, why) and writes nothing; `--apply` writes the picked rows, each with a history row
   by `import:<from>`. Unknown keys (`hooks_ts`) and rows the target refuses are skipped with their reason;
   project-specific keys (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`,
-  `cleanup_tmp_globs`, `cleanup_on_close`, `ship-mode`) are not picked unless named with `--include <key>`.
+  `cleanup_tmp_globs`, `cleanup_trim_globs`, `cleanup_on_close`, `disk_watch_paths`, `ship-mode`) are not picked unless named with `--include <key>`.
   `--only <file>` limits it to a file, `--skip <key>` unpicks a key, `--replace` also drops target rows the
   source lacks, `--json` prints the plan as JSON. The three options may repeat or take a comma list.
 - `ds config prune <project>` lists the project's rows whose key this dev-studio doesn't know and, with
@@ -348,8 +349,8 @@ The Settings window has **Export** and **Import** (settings-export-import U3).
   /api/settings-import/preview {project, text|from}`) shows one row per setting: action (`add`, `change`,
   `same`, `skip`), file, key, now → new, and why. Each row has a tick box. Settings that fit one project only
   (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`, ship mode) start unticked and can be
-  ticked; a key this dev-studio doesn't know, a value it would refuse, and the two shell-only keys
-  (`cleanup_on_close`, `cleanup_tmp_globs`, shown `shell only`) are greyed and can't be ticked.
+  ticked; a key this dev-studio doesn't know, a value it would refuse, and the shell-only keys
+  (`cleanup_on_close`, `cleanup_tmp_globs`, `cleanup_trim_globs`, `disk_watch_paths`, shown `shell only`) are greyed and can't be ticked.
 - **Apply** (`POST /api/settings-import {project, text|from, picks: [{file, key, expect}]}`) files one
   `settings-import` request; the loop writes only the picked rows, each one `config_history` row by
   `board` (so the Limits and Roles tabs can undo them one by one), and answers with what it `written`,

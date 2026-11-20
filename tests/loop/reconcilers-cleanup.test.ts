@@ -3,6 +3,7 @@
 // seeded observed_cleanup rows; no filesystem, no processes.
 import { describe, expect, test } from "bun:test";
 import { CLEANUP_REPORT, keepSet, reconcile, VERDICTS } from "../../bin/loop/reconcilers/cleanup.ts";
+import { cardText, needsYou } from "../../bin/loop/fulfil/cleanup.ts";
 import type { Store } from "../../bin/loop/core/store.ts";
 import { project, store, UID } from "./cleanup-fixture.ts";
 
@@ -212,6 +213,14 @@ describe("floors and words (R9)", () => {
     expect(["/t/a-*", "/t/b-*", "/t/c-*"].map((k) => verdict(s, k))).toEqual(["removable", "not ours", "in use by pid 9"]);
   });
 
+  test("f: a trim glob's row is judged like e: removable when any entry inside is, else the commonest kept reason", () => {
+    const s = fixture();
+    seed(s, { class: "f", key: "/t/cache-*", facts: { folders: 1, count: 3, removable: 1, too_new: 2 } });
+    seed(s, { class: "f", key: "/t/keep-*", facts: { folders: 2, count: 3, removable: 0, not_ours: 2, too_new: 1 } });
+    run(s);
+    expect(["/t/cache-*", "/t/keep-*"].map((k) => verdict(s, k))).toEqual(["removable", "not ours"]);
+  });
+
   test("every verdict written is one of the fixed words", () => {
     expect([...VERDICTS]).toEqual(["removable", "in use by pid N", "dirty", "unpushed", "detached", "locked", "too new", "live member", "not ours", "report only"]);
     const s = fixture();
@@ -233,5 +242,14 @@ describe("the report action", () => {
     expect(run(s)[0].episode).toBe(one.episode);
     seed(s, { class: "b", key: "/t/old2", mtime: AT - 49 * H, facts: { uid: UID } });
     expect(run(s)[0].episode).not.toBe(one.episode);
+  });
+
+  test("a rejected trim glob alone is a report action whose card names it", () => {
+    const s = fixture();
+    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_trim_globs" }, { value: "relative-*", observed_at: 1 });
+    const [one] = run(s);
+    expect(one).toMatchObject({ project: "p", subject: "cleanup:p", kind: CLEANUP_REPORT });
+    expect(cardText(s, "p")).toContain("Invalid trim glob relative-*");
+    expect(needsYou(s, "p")).toContain("invalid trim glob relative-*");
   });
 });

@@ -9,20 +9,22 @@
 //   d  a git folder: as c, once the backend list shows it is no Orca worktree; an entity:
 //      terminal-close-worktree, the probe again, worktree-rm (as fulfil/worktree.ts)
 //   e  one capped pass over the glob (tidy.removeGlobBatch, KTD9); a capped pass asks for the next
+//   f  one capped pass inside each folder the trim glob matches (tidy.trimGlobBatch, investigate-disk-
+//      cleanup U2); the folders themselves stay; a capped pass asks for the next, as e
 // Each outcome is one event (R13): cleanup_stopped, cleanup_removed or cleanup_failed. A failure
 // settles done with facts.act_error on the row, never a retry storm; the next scan tries again.
 import { lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Action } from "../core/plugins.ts";
 import type { Exec, Fulfiller, Result } from "../core/actuator.ts";
-import { cleanupGlobs, limit, limitInt } from "../settings/limits.ts";
+import { cleanupGlobs, limit, limitInt, trimGlobs } from "../settings/limits.ts";
 import { errOf, spawn } from "../io/orca.ts";
 import { mangle, shellAdapter, wtPath, type PsWorktree } from "../observers/orca.ts";
 import { actionBlock } from "../pause/pause.ts";
 import { readCwdRaw, readUid } from "../io/proc.ts";
 import { judge, keepSet, lastScan, parseFacts, refusal, type CleanupRow, type Facts } from "../reconcilers/cleanup.ts";
 import type { Store } from "../core/store.ts";
-import { claudeTmpRoot, gitWorktrees, inUse, liveAgents, probeTree, procIndex, removeGlobBatch, removeGuarded, stopProcs, targetRef,
+import { claudeTmpRoot, gitWorktrees, inUse, liveAgents, probeTree, procIndex, removeGlobBatch, removeGuarded, stopProcs, targetRef, trimGlobBatch,
   type DirReader, type InUse, type TProc } from "../io/tidy.ts";
 
 export const CLEANUP_ACT = "cleanup.act";
@@ -125,6 +127,10 @@ async function refresh(store: Store, r: CleanupRow, f: Facts, o: ActOpts, use: I
       if (!cleanupGlobs(store, r.project).valid.includes(r.key)) return { gone: "the glob is no longer configured" };
       return { facts: f };
     }
+    case "f": {
+      if (!trimGlobs(store, r.project).valid.includes(r.key)) return { gone: "the trim glob is no longer configured" };
+      return { facts: f };
+    }
   }
   return { facts: f };
 }
@@ -143,6 +149,7 @@ const why = (r: CleanupRow, f: Facts, ageH: number): string => ({
   c: "helper checkout of no live member: clean, nothing unpushed",
   d: "worktree of no live member: clean, nothing unpushed",
   e: `untouched ${ageH}h, ours, no open file`,
+  f: `inside a kept cache folder: untouched ${ageH}h, ours, no open file`,
 } as Record<string, string>)[r.class] ?? "removable";
 const removed = (x: Exec, a: Action, r: CleanupRow, kind: "cleanup_removed" | "cleanup_stopped", payload: Record<string, unknown>): Result => {
   x.store.tx(() => {
@@ -195,10 +202,11 @@ async function act(a: Action, x: Exec, o: ActOpts): Promise<Result> {
       if (rm.code !== 0) return failed(x, a, r, errOf(rm, "git worktree remove"));
       return removed(x, a, r, "cleanup_removed", { kb: r.size_kb, repo, branch: f.branch ?? null, reason });
     }
-    case "e": {
-      const b = await removeGlobBatch(r.key, { ageS: tmpAgeS, now: x.now, inUse: use, uid, max: o.batch, maxMs: o.batchMs, dirs: o.dirs });
+    case "e": case "f": {
+      const batch = r.class === "e" ? removeGlobBatch : trimGlobBatch;
+      const b = await batch(r.key, { ageS: tmpAgeS, now: x.now, inUse: use, uid, max: o.batch, maxMs: o.batchMs, dirs: o.dirs });
       store.tx(() => {
-        store.event("cleanup_removed", { project: a.project, payload: { class: "e", glob: r.key, count: b.count, kb: b.kb, sample: b.sample, capped: b.capped, reason } });
+        store.event("cleanup_removed", { project: a.project, payload: { class: r.class, glob: r.key, count: b.count, kb: b.kb, sample: b.sample, capped: b.capped, reason } });
         // A capped pass leaves the row removable under a new pass number (the next episode); a full one leaves what was kept.
         const next = b.capped ? { removable: Math.max(1, Number(f.removable ?? 0) - b.count), act_pass: Number(f.act_pass ?? 0) + 1 }
           : { removable: 0, count: Math.max(0, Number(f.count ?? 0) - b.count) };
