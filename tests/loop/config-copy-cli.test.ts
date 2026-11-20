@@ -81,6 +81,17 @@ describe("ds config copy", () => {
     expect(keys(f.rows(DST))).toEqual(["briefing_time", "limit_pct", "builder"]);
   });
 
+  test("u4: a skip row shows the incoming value; a file with an unknown section exits 2", () => {
+    const f = fixture();
+    expect(f.ds("copy", SRC, DST).out).toMatch(/skip +limits\.conf +auto_merge .*→ merge/);
+    expect(f.ds("copy", SRC, DST).out).toMatch(/skip +limits\.conf +hooks_ts .*→ 1 .*\(unknown key\)/);
+    const file = join(tmp(), "bad.txt");
+    writeFileSync(file, "#! ds-settings 1 from=x\n#== nosuch.conf\nfoo 1\n");
+    const res = f.ds("copy", file, DST);
+    expect(res.code).toBe(2);
+    expect(res.err).toContain("nosuch.conf");
+  });
+
   test("an unknown source project is refused", () => {
     expect(fixture().ds("copy", "nope", DST).code).toBe(2);
   });

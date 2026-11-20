@@ -2822,7 +2822,7 @@ function ImportPane({ project, toast, onBack, onApplied }) {
         ${plan.map((r) => html`<tr key=${importRowKey(r)} class=${"imp-row " + r.action + (r.can_pick ? "" : " dim")} data-key=${r.key}>
           <td><input type="checkbox" aria-label=${"import " + r.key} checked=${!!pick[importRowKey(r)]} disabled=${!r.can_pick || busy} onChange=${(e) => setPick({ ...pick, [importRowKey(r)]: e.target.checked })} /></td>
           <td>${r.action}</td><td>${r.file}</td><td>${r.key}</td>
-          <td>${r.action === "skip" || r.action === "same" ? (r.current == null ? "—" : r.current) : (r.current == null ? "—" : r.current) + " → " + (r.value == null ? "(removed)" : r.value)}</td>
+          <td>${r.action === "same" ? (r.current == null ? "—" : r.current) : r.action === "skip" ? (r.current == null ? "—" : r.current) + " → " + (r.value ?? r.raw ?? "—") : (r.current == null ? "—" : r.current) + " → " + (r.value == null ? "(removed)" : r.value)}</td>
           <td class="imp-why">${importWhy(r)}</td></tr>`)}</tbody></table>`}
       <div class="imp-go"><button class="btn sm" id="imp-apply" disabled=${busy || !ticked} onClick=${apply}>Apply ${ticked} row${ticked === 1 ? "" : "s"}</button></div>
     </div>`}
