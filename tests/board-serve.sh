@@ -49,7 +49,11 @@ printf '{"run_id":"r-uact","status":"running","members":[{"role":"lead","wt":"wL
 printf '# plan x\n' > "$SD/uact-x-plan.md"; printf '# plan y\n' > "$SD/uact-y-plan.md"
 jq --arg p "$DBR/$LBL/squads/uact-x-plan.md" '.approved_plans = [$p]' "$SD/uact.json" > "$TMP/uact.tmp" && mv "$TMP/uact.tmp" "$SD/uact.json"
 # --serve: the page, the JSON and the api routes. Nothing else (no state files) is reachable.
-PORT=$(( 20000 + $$ % 20000 ))
+# The test serves on PORT..PORT+6: a block below Linux's ephemeral range (32768+), so no outgoing connection
+# holds one of them, that nothing listens on yet (another worktree's suite on the same host).
+busy() { local p; for p in $(seq "$1" $(($1 + 6))); do (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && return 0; done; return 1; }
+PORT=$(( 20000 + $$ % 12000 ))
+while busy "$PORT"; do PORT=$(( 20000 + (PORT - 20000 + 7) % 12000 )); done
 # /lavish/<key> asks the loop to start Lavish when it is down; this fake "Lavish" is a bun server on LP.
 LP=$((PORT + 5)); LK=0123456789abcdef; mkdir -p "$TMP/lv2"
 printf '{"sessions":{"%s":{"key":"%s","file":"/x/a.html","url":"http://127.0.0.1:%s/session/%s","status":"open"}}}' "$LK" "$LK" "$LP" "$LK" > "$TMP/lv2/state.json"
