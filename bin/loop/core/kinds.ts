@@ -114,7 +114,7 @@ export function payloadOf<K extends ActionKind>(a: { kind: string; payload?: unk
 const ep = obj({ episode: opt(str), account: opt(str), notice: opt(str), reset: opt(num), kind: opt(str), until: opt(num) });
 const svc = { id: num, name: opt(str), project: opt(str), topic: opt(str), port: opt(num) };
 const delivery = { delivery: num, state: opt(str), settled_at: opt(num), tries: opt(num), at: opt(num), verify_at: opt(num) };
-const wishDone = obj({ result: opt(str), want: opt(str), id: opt(num), subject: opt(str) });
+const wishDone = obj({ result: opt(str), want: opt(str), id: opt(num), subject: opt(str), rescued: opt(str) });
 const anyOf = obj({}); // payload is the written columns: not fixed
 
 export const FACTS = {
@@ -139,7 +139,7 @@ export const FACTS = {
   member_requested: obj({ by: opt(str), id: opt(num), role: opt(str), suffix: opt(str), tier: opt(str), unit: opt(str) }),
   member_start_failed: anyOf,
   member_started: anyOf,
-  member_suspended: obj({ id: opt(num), result: opt(str) }),
+  member_suspended: obj({ id: opt(num), result: opt(str), rescued: opt(str) }),
   member_told: anyOf,
   member_waiting: obj({}),
   orca_call_settled: obj({ dispatch: opt(str), retry: opt(any), state: opt(str) }),
