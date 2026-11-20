@@ -243,7 +243,8 @@ describe("ds config", () => {
     ds(root, "set", P, "limits.conf", "auto_merge", "squash");
     ds(root, "rm", P, "ship-mode", "mode");
     expect(ds(root, "import", "--project", P, backup).code).toBe(0);
-    expect(ds(root, "export", "--project", P).out).toBe(readFileSync(backup, "utf8"));
+    // `export` is a transfer file: the backup's text under the header line.
+    expect(ds(root, "export", "--project", P).out.split("\n").slice(1).join("\n")).toBe(readFileSync(backup, "utf8"));
     writeFileSync(join(dir, "limits.conf.imported-2026-11-17"), "context_warn 90000\n");
     expect(ds(root, "import", "--project", P, join(dir, "limits.conf.imported-2026-11-17")).code).toBe(0);
     expect(JSON.parse(ds(root, "get", P, "limits.conf", "context_warn").out)).toMatchObject({ value: "90000", source: "project" });

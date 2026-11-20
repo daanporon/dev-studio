@@ -250,6 +250,33 @@ export function importText(store: Store, project: string, file: string, text: st
   }));
 }
 
+// What importText would change, without writing: the rows the text lacks go, the rows it has are
+// written when their value differs (`ds config import --dry-run`).
+export function previewText(store: Store, project: string, file: string, text: string, o: Opts = {}): Change[] {
+  checkProject(project);
+  const f = checkImportFile(file);
+  const want = new Map(confText(project, f, text, o.now ?? clock()).map((r) => [String(r.key.key), String(r.set.value ?? "")]));
+  const out: Change[] = [];
+  for (const r of rowsOf(store, project, f)) if (!want.has(r.key)) out.push({ project, file: f, key: r.key, old: r.value, new: null });
+  for (const [key, value] of want) {
+    const old = rowOf(store, project, f, key)?.value ?? null;
+    if (old !== value) out.push({ project, file: f, key, old, new: value });
+  }
+  return out;
+}
+
+// The project's rows whose key this dev-studio doesn't know (an older version's `hooks_ts`, a retired role).
+export function staleRows(store: Store, project: string, o: Opts = {}): { file: ImportFile; key: string; value: string | null }[] {
+  checkProject(project);
+  return IMPORT_FILES.flatMap((file) => rowsOf(store, project, file).filter((r) => unknownKey(store, project, file, r.key, o)).map((r) => ({ file, key: r.key, value: r.value })));
+}
+
+// Drop those rows: one history row each, then the backup once.
+export function prune(store: Store, project: string, actor: string, o: Opts = {}): Change[] {
+  const at = o.now ?? clock(), rows = staleRows(store, project, o);
+  return done(store, project, store.tx(() => rows.flatMap((r) => one(write(store, project, r.file, r.key, null, null, actor, at)))));
+}
+
 // Each file's project rows in conf syntax, as confRows reads them back to the same rows (skills.conf
 // too: `<role> <pattern> <level>`); a file with no rows is left out.
 export function exportFiles(store: Store, project: string): Partial<Record<ImportFile, string>> {
