@@ -1,7 +1,7 @@
 // board-github.test.ts — U287: the board shows the loop's GitHub API budget (JSON, PRs tile states, text GITHUB
 // line), one self-clearing Needs-you card while it is used up with a merge-ready PR open, a lasting
 // merge_card in Needs-you, and one card per PR.
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,10 @@ const REPO = join(import.meta.dir, "../..");
 const roots: string[] = [];
 afterAll(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
 const NOW = Math.floor(Date.now() / 1000);
+// The board's clock is DS_NOW else Date.now(): pin it to NOW (and the card grace) so no other file's leak moves it.
+const saved = { DS_NOW: process.env.DS_NOW, DS_LIMIT_NEEDS_GRACE_MIN: process.env.DS_LIMIT_NEEDS_GRACE_MIN };
+beforeAll(() => { process.env.DS_NOW = String(NOW); delete process.env.DS_LIMIT_NEEDS_GRACE_MIN; });
+afterAll(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
 
 type Sched = Record<string, unknown>;
 function fixture(sched: Sched | null, opts: { ready?: boolean; alerts?: any[]; question?: any } = {}) {
