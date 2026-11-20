@@ -220,3 +220,5 @@ the loop starts a fresh session from this journal using the normal picker.
 ## Reload
 
 A `reload` message in your inbox carries its own `ds reload ack …` command: re-read `AGENTS.md` and your role file, then run it from this terminal to confirm (an old session's ack does not count).
+
+Lavish pages and their files go in `state/<label>/pages/<topic>/` (open with `lavish-axi <path>`); the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend.

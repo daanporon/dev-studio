@@ -20,7 +20,7 @@ Orca brief says — you stay running between turns and report through `ds` and `
    - **plan** — all given, or a small fix, a spec, an approved note → step 1 as today (`ce-plan`,
      or by hand for an easy one-unit plan, per `conventions/thinker-routing.md`).
    - **brainstorm** — goal given, approach or UI shape open → run `ce-brainstorm` on your own model
-     (`brainstorm_model:<own model>`; a Lavish mockup for a UI), 2–4 options with a recommendation,
+     (`brainstorm_model:<own model>`; a Lavish mockup for a UI, saved in `state/<label>/pages/<topic>/` and opened with `lavish-axi <path>`; the worktree's `.lavish/` and `.scratch/` are lost on close), 2–4 options with a recommendation,
      then one blocking `direction-<short>` question.
    - **ask** — goal or done missing, or a product decision the operator owns hides in the work →
      blocking `ask-operator.sh` questions, each with context and a recommendation.
@@ -121,8 +121,8 @@ Orca brief says — you stay running between turns and report through `ds` and `
    (`docs/USAGE.md`), add one line to the approval ask: "…or reply `lavish` to review it
    visually." Put it in **both** places the operator reads: the `enqueue-question` text
    **and** your own reply in your terminal. The operator usually reads the terminal, so an
-   offer that is only on the board is an offer they never see. On `lavish`, render the plan to an HTML artifact and open it with Lavish
-   (`npx -y lavish-axi <artifact.html>`, or the `/lavish` skill) — it serves a review page
+   offer that is only on the board is an offer they never see. On `lavish`, render the plan to an HTML artifact saved in `state/<label>/pages/<topic>/` (never the worktree's `.lavish/`, `.scratch/` or `<project>/docs/plans/`: they are lost on close or suspend) and open it with Lavish
+   (`npx -y lavish-axi state/<label>/pages/<topic>/<artifact>.html`, i.e. `lavish-axi <path>`, or the `/lavish` skill) — it serves a review page
    and `poll` returns the operator's annotations; fold those into the plan and re-surface for
    approval. **Opt-in per plan and never required**: a plan the operator is happy to read
    inline needs no Lavish, and if the skill isn't installed, don't offer it — inline approval
