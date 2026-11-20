@@ -1224,7 +1224,7 @@ function headerSummary(db: Db | null, label: string, squads: any[], needs: any[]
       builders_over: over.length ? { urgent: n("urgent"), moved: n("moved"), other: n("other"), list: over.filter((o) => o.unit) } : null,
       builders_seats: { used: taken, total, by_why, list: seat.holders.map((h) => ({ squad: h.squad, unit: h.unit ?? h.suffix, lane: h.lane, why: h.why })) } };
   })();
-  const laneNums = seat ? { builders_normal: seat.used.normal, builders_light: seat.used.light, builders_light_of: lightOf }
+  const laneNums = seat ? { builders_normal: seat.used.normal, builders_light: seat.used.light, ...(lightOf ? { builders_light_of: lightOf } : {}) }
     : lightOf ? { builders_normal: working - lightWorking, builders_light: lightWorking, builders_light_of: lightOf } : {};
   return {
     ...laneNums, ...lane,
