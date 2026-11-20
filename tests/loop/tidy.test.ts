@@ -2,10 +2,10 @@
 // roots. A fake /proc tree drives matching; the only real processes signalled are ones this test spawned,
 // and nothing is removed outside this test's own temp dir.
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeTmpDir, inUse, procsUnder, removeGuarded, runOnClose, stopProcs, trimGlobBatch } from "../../bin/loop/io/tidy.ts";
+import { claudeTmpDir, inUse, procsUnder, removeGuarded, runOnClose, stopProcs, streamDir, trimGlobBatch, type DirReader } from "../../bin/loop/io/tidy.ts";
 
 const UID = process.getuid!();
 const temps: string[] = [], spawned: number[] = [];
@@ -196,13 +196,27 @@ describe("trimGlobBatch (class f)", () => {
     expect(left(outside)).toEqual(["keep.txt", "old"]);
   });
 
+  test("a folder swapped for a symlink during the pass: the pass leaves it and the link's target is untouched", async () => {
+    const { folder, glob, t } = cache(5, 0), victim = tmp();
+    for (let i = 0; i < 5; i++) { writeFileSync(join(victim, `old-${i}`), "x"); aged(join(victim, `old-${i}`), t); }
+    const dirs: DirReader = (d) => d !== folder ? streamDir(d) : (async function* () {
+      const names = readdirSync(folder).sort();
+      yield names[0];
+      renameSync(folder, `${folder}.moved`); symlinkSync(victim, folder); // another user's swap, between two entries
+      for (const n of names.slice(1)) yield n;
+    })();
+    const b = await trimGlobBatch(glob, { ageS: 48 * H, now: now(), inUse: inUse(fakeProc([])), dirs });
+    expect(b.count).toBe(1);
+    expect(readdirSync(victim)).toHaveLength(5);
+  });
+
   test("another uid's entries are kept; an old folder inside goes only when nothing in it is newer", async () => {
     const { folder, glob, t } = cache(3, 0);
     for (const d of ["olddir", "mixed"]) { mkdirSync(join(folder, d)); writeFileSync(join(folder, d, "f"), "x"); aged(join(folder, d, "f"), t); }
     writeFileSync(join(folder, "mixed", "new"), "x");
     aged(join(folder, "olddir"), t); aged(join(folder, "mixed"), t);
     const o = { ageS: 48 * H, now: now(), inUse: inUse(fakeProc([])) };
-    expect((await trimGlobBatch(glob, { ...o, uid: UID + 1 })).count).toBe(0);
+    expect((await trimGlobBatch(glob, { ...o, uid: UID + 1 })).count).toBe(0); // another uid's folder: not entered
     expect(left(folder)).toEqual(["mixed", "old-0", "old-1", "old-2", "olddir"]);
     expect((await trimGlobBatch(glob, o)).count).toBe(4);
     expect(left(folder)).toEqual(["mixed"]);

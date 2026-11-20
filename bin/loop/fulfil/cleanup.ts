@@ -74,7 +74,7 @@ export function cardText(store: Store, project: string, o: { refused?: string | 
   }
   for (const r of rows.filter((x) => x.class === "f")) {
     const f = facts(r);
-    out.push(`Trim ${r.key}: ${f.folders} folder${f.folders === 1 ? "" : "s"} kept, ${f.count} entries inside (${sizeOf(r)}), ${f.removable ?? 0} removable, too new ${f.too_new ?? 0}, not ours ${f.not_ours ?? 0}, in use ${f.in_use ?? 0}${f.capped ? " (entry budget reached: counts so far)" : ""}.`);
+    out.push(`Trim ${r.key}: ${f.folders} folder${f.folders === 1 ? "" : "s"} kept, ${f.count} entries inside (${sizeOf(r)}), ${f.removable ?? 0} removable, too new ${f.too_new ?? 0}, not ours ${f.not_ours ?? 0}, in use ${f.in_use ?? 0}${f.capped ? " (entry budget reached: counts so far)" : ""}${f.folders_not_ours ? `; ${f.folders_not_ours} folder${f.folders_not_ours === 1 ? "" : "s"} of another user skipped` : ""}.`);
   }
   for (const g of globs.rejected) out.push(`Invalid glob ${g.glob}: ${g.reason} (matches nothing).`);
   for (const g of trims.rejected) out.push(`Invalid trim glob ${g.glob}: ${g.reason} (trims nothing).`);

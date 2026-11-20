@@ -266,13 +266,15 @@ export async function scanCleanup(store: Store, at: number, o: CleanupOpts = {})
     if (trimmed.has(glob)) continue;
     trimmed.add(glob);
     const { parent, match } = globMatcher(glob);
-    const f = { folders: 0, ...globFacts(), capped: false, folder_sample: [] as string[] };
+    const f = { folders: 0, folders_not_ours: 0, ...globFacts(), capped: false, folder_sample: [] as string[] };
     let left = o.trimEntries ?? ITEM_ENTRIES;
     for await (const name of dirs(parent)) {
       await tick(); entries++;
       if (!match(name)) continue;
       const folder = join(parent, name);
-      if (!(await lstat(folder).catch(() => null))?.isDirectory()) continue; // a symlink or a file is never trimmed
+      const fst = await lstat(folder).catch(() => null);
+      if (!fst?.isDirectory()) continue; // a symlink or a file is never trimmed
+      if (fst.uid !== uid) { f.folders_not_ours++; continue; } // nor another uid's folder (it could swap it for a symlink)
       f.folders++;
       if (f.folder_sample.length < 20) f.folder_sample.push(folder);
       for await (const entry of dirs(folder)) {
@@ -281,7 +283,7 @@ export async function scanCleanup(store: Store, at: number, o: CleanupOpts = {})
         await judgeEntry(f, join(folder, entry), ageS);
       }
     }
-    if (f.folders) rows.push({ project: label, class: "f", key: glob, path: parent, size_kb: f.kb, mtime: f.newest, facts: f });
+    if (f.folders || f.folders_not_ours) rows.push({ project: label, class: "f", key: glob, path: parent, size_kb: f.kb, mtime: f.newest, facts: f });
   }
   return { at, ms: Math.round(performance.now() - t0), entries: entries + idx.all.length, psError, looseCount, looseKb, rows };
 }

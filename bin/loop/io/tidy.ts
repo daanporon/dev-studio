@@ -216,8 +216,8 @@ export async function removeGlobBatch(glob: string, o: BatchOpts): Promise<GlobB
   return b.out;
 }
 
-// investigate-disk-cleanup U2: one guarded pass inside each folder a cleanup_trim_globs entry matches
-// (a matched symlink or file is skipped, never followed). The folder itself stays; each entry directly
+// investigate-disk-cleanup U2: one guarded pass inside each folder of this uid a cleanup_trim_globs
+// entry matches (a matched symlink, file or another uid's folder is skipped, never followed). The folder itself stays; each entry directly
 // inside it of this uid past the age floor that nothing holds is removed: a file or a symlink by
 // unlink (its target stays), a directory through removeGuarded with that folder as its root (so it
 // goes only when nothing in it is newer). The same caps and yielding as removeGlobBatch.
@@ -227,11 +227,15 @@ export async function trimGlobBatch(glob: string, o: BatchOpts): Promise<GlobBat
     await b.tick();
     if (b.out.capped) break;
     if (!match(name)) continue;
-    const folder = join(parent, name);
-    if (!(await lstat(folder).catch(() => null))?.isDirectory()) continue;
+    const folder = join(parent, name), st = await lstat(folder).catch(() => null);
+    // Only a folder of this uid: in a sticky shared dir nobody else can swap it for a symlink. Its
+    // dev/ino is read again before each removal, and the folder is left once it changed.
+    if (!st?.isDirectory() || st.uid !== b.uid) continue;
+    const same = async () => { const now = await lstat(folder).catch(() => null); return !!now?.isDirectory() && now.dev === st.dev && now.ino === st.ino; };
     for await (const entry of b.dirs(folder)) {
       await b.tick();
       if (b.full()) { b.out.capped = true; break; }
+      if (!(await same())) break;
       await removeEntry(join(folder, entry), folder, o, b);
     }
   }

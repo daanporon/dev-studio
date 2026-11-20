@@ -221,7 +221,7 @@ describe("class f: trim globs (investigate-disk-cleanup U2)", () => {
     expect(rows(r, "f")[0]).toMatchObject({ project: "p", key: `${dir}/zzcache-*`, path: dir,
       facts: { folders: 1, count: 4, removable: 2, too_new: 1, in_use: 1, in_use_pid: 55, not_ours: 0, dirs: 1, partial: true, capped: false, folder_sample: [folder] } });
     const other = await scanCleanup(s, AT, opts({ proc, tmpRoot: tmp(), uid: UID + 1 }));
-    expect(rows(other, "f")[0].facts).toMatchObject({ count: 4, not_ours: 4, removable: 0 });
+    expect(rows(other, "f")[0].facts).toMatchObject({ folders: 0, folders_not_ours: 1, count: 0, removable: 0 }); // another uid's folder is skipped
   });
 
   test("past the entry budget the row is partial and capped; a rejected glob and a glob matching no folder give no row", async () => {
