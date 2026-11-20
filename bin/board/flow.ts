@@ -104,7 +104,7 @@ function queuedGroup(u: FlowUnit): { group: string; note: string | null } {
   const slot = reason.match(/^WAIT slot:\s*\S+\s+(.*)$/) ?? reason.match(/^queued:\s*(.*)$/);
   if (slot) return { group: "waiting for a slot", note: slot[1].trim() || null };
   const host = reason.match(/^WAIT host:\s*(.*)$/);
-  if (host) return { group: "waiting for a slot", note: `host busy: ${host[1].trim()}` };
+  if (host) return { group: "waiting for the host", note: null };   // the lane's banner carries the reason once
   if (p.slot === 1 && p.wait_until == null) return { group: "waiting for a slot", note: "starting" };
   return { group: "waiting for a slot", note: reason || null };
 }
@@ -245,14 +245,14 @@ const cmpPlace = (a: number[] | null | undefined, b: number[] | null | undefined
 function queueOrder(cards: { key: string; project: string; stage: Stage; group: string | null; queue_pos: number | null }[], units: FlowUnit[]): string[] {
   const unit = new Map(units.map((u) => [ukey(u.project, u.squad, u.slug), u]));
   const q = cards.filter((c) => c.stage === "queued");
-  const rankOf = (g: string | null) => ["waiting for an account", "waiting for a slot", "waiting on another unit", "held"].indexOf(g ?? "");
+  const rankOf = (g: string | null) => ["waiting for an account", "waiting for the host", "waiting for a slot", "waiting on another unit", "held"].indexOf(g ?? "");
   const waitOf = (c: { key: string }) => { const p = unit.get(c.key)?.pick; return p?.wait_known === 1 && p.wait_until ? p.wait_until : Infinity; };
   q.sort((a, b) => a.project.localeCompare(b.project) || rankOf(a.group) - rankOf(b.group)
     || (a.group === "waiting for an account" ? waitOf(a) - waitOf(b) || 0 : 0)
     || cmpPlace(unit.get(a.key)?.place, unit.get(b.key)?.place) || a.key.localeCompare(b.key));
   const n = new Map<string, number>();
   for (const c of q) {
-    if (c.group === "waiting for an account" || c.group === "waiting for a slot") { const k = (n.get(c.project) ?? 0) + 1; n.set(c.project, k); c.queue_pos = k; }
+    if (c.group === "waiting for an account" || c.group === "waiting for the host" || c.group === "waiting for a slot") { const k = (n.get(c.project) ?? 0) + 1; n.set(c.project, k); c.queue_pos = k; }
   }
   return q.map((c) => c.key);
 }

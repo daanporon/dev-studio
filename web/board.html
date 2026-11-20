@@ -296,6 +296,9 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .fgrp{font:500 10px var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--dim);margin:8px 0 4px;display:flex;justify-content:space-between;text-align:left;border-top:1px dashed var(--line);padding-top:4px;cursor:pointer;width:100%;background:none;border-left:0;border-right:0;border-bottom:0}
 .fgrp>.fgl{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
 .fgrp>span{flex:none;margin-left:6px}
+.fbrake{display:flex;gap:8px;align-items:center;justify-content:space-between;font:500 11px var(--mono);margin:0 0 8px;padding:6px 8px;border:1px solid var(--line);border-radius:4px;color:var(--dim)}
+.fbrake.holding{color:var(--red);border-color:var(--red)}
+.fbrake.armed{color:var(--amber,var(--dim));border-color:var(--amber,var(--line))}
 [data-group]:first-child>.fgrp{border-top:0;margin-top:0;padding-top:0}
 .fcard[role=button]{cursor:pointer}
 .flow-col .fsub{font:11px var(--mono);color:var(--mut);margin-bottom:6px}
@@ -986,7 +989,7 @@ function Tile({ label, value, detail, level, on, pressed, title, bar }) {
 // ---- Flow section (U2): the project-wide stage kanban from board.json's `flow` ----
 const FLOW_STAGES = [["queued", "Queued"], ["building", "Building"], ["pr_open", "PR open"], ["needs_you", "Needs you"], ["merging", "Merging"], ["merged", "Merged"]];
 const FLOW_GROUPS = {
-  queued: ["waiting for a slot", "waiting for an account", "waiting on another unit", "held"],
+  queued: ["waiting for the host", "waiting for a slot", "waiting for an account", "waiting on another unit", "held"],
   building: ["coding", "reviewing", "fixing findings", "review stopped", "paused"],
   pr_open: ["draft", "checks running", "fixing", "in review", "blocked", "paused"],
 };
@@ -1047,7 +1050,7 @@ function flowMeta(card, typicalS) {
 }
 // A paused card's why and for how long: "paused by you · 25h".
 const pausedText = (c) => [c.note || "paused", c.paused_s != null ? flowDur(c.paused_s) : null].filter(Boolean).join(" · ");
-const FLOW_LABELS = { "waiting for a slot": "for a slot", "waiting for an account": "for an account", "waiting on another unit": "on another unit" };
+const FLOW_LABELS = { "waiting for the host": "for the host", "waiting for a slot": "for a slot", "waiting for an account": "for an account", "waiting on another unit": "on another unit" };
 const ordinal = (n) => { const t = n % 100, o = n % 10; return n + (t >= 11 && t <= 13 ? "th" : o === 1 ? "st" : o === 2 ? "nd" : o === 3 ? "rd" : "th"); };
 const flowGroupLabel = (g) => FLOW_LABELS[g] || g;
 const openPr = (url) => window.open(url, "_blank", "noopener");
@@ -1057,19 +1060,34 @@ const openPr = (url) => window.open(url, "_blank", "noopener");
 // The Builders tile's second line, with the light lane on (same text as the text board, board-data.ts buildersText): normal and light
 // share one total, so the light seats usable now are what is left of it; the why shows while normal is over its limit.
 function buildersDetail(H) {
-  const o = H.builders_over;
-  const why = o ? " (" + [o.urgent ? "⚡" + o.urgent : "", o.moved ? o.moved + " moved" : "", o.held ? o.held + " held" : "", o.other ? o.other + " other" : ""].filter(Boolean).join(", ") + ")" : "";
-  const light = "light " + H.builders_light + "/" + H.builders_light_usable + (H.builders_light_usable < H.builders_light_of ? " (" + H.builders_light_of + ")" : "");
-  return "normal " + H.builders_normal + "/" + H.builders_of + why + " · " + light;
+  const o = H.builders_over, bw = (H.builders_seats && H.builders_seats.by_why) || {};
+  const over = o ? [o.urgent ? "⚡" + o.urgent : "", o.moved ? o.moved + " moved" : "", o.held ? o.held + " held" : "", o.other ? o.other + " other" : ""].filter(Boolean) : [];
+  const reasons = ["working", "idle", "pausing", "restarting", "starting", "hold"].filter((k) => bw[k] > 0).map((k) => bw[k] + " " + (k === "hold" ? "held by a pick" : k));
+  const why = over.length || reasons.length ? " (" + [...over, ...reasons].join(", ") + ")" : "";
+  const light = H.builders_light_of > 0 ? " · light " + H.builders_light + "/" + H.builders_light_usable + (H.builders_light_usable < H.builders_light_of ? " (" + H.builders_light_of + ")" : "") : "";
+  return "normal " + H.builders_normal + "/" + H.builders_of + why + light;
 }
-// The tile's big value with the light lane on: seats in use (normal + light) over the shared total.
+// The tile's big value: seats in use (normal + light) over the shared total, as the loop counts them (slot.ts seats()).
 const buildersSeats = (H) => H.builders_normal + H.builders_light;
 function buildersTip(H, building) {
   const o = H.builders_over, why = { urgent: "urgent (goes over the limit)", moved: "a light unit past its CPU limit, now normal", other: "over the limit" };
-  const seats = buildersSeats(H);
-  return "Light seats come out of the shared " + H.builders_total + ": " + H.builders_working + " taken, " + H.builders_left + " left."
+  const seats = buildersSeats(H), bs = H.builders_seats;
+  return "Seats as the loop counts them: " + seats + " of " + H.builders_total + " taken, " + H.builders_left + " left."
     + (building != null && building < seats ? " " + building + " building, " + (seats - building) + " holding a seat at a later stage." : "")
-    + (o ? " Over the normal limit: " + (o.list.length ? o.list.map((x) => x.squad + "/" + x.unit + " (" + why[x.why] + ")").join(", ") : o.other + " " + why.other) + "." : "");
+    + (o ? " Over the normal limit: " + (o.list.length ? o.list.map((x) => x.squad + "/" + x.unit + " (" + why[x.why] + ")").join(", ") : o.other + " " + why.other) + "." : "")
+    + (bs && bs.list.length ? " Holders: " + bs.list.map((x) => x.squad + "/" + x.unit + " — " + x.why).join("; ") + (bs.by_why.hold ? "; " + bs.by_why.hold + " held by a pick" : "") + "." : "");
+}
+// The host brake's line (the text board's BRAKE line): `load 153% ≥ crit 150% (machine_load_crit_pct)`.
+const brakeLine = (br) => br.hit.metric + " " + br.hit.value + br.hit.unit + " ≥ crit " + br.hit.crit + br.hit.unit + " (" + br.hit.key + ")";
+// The queued lane's banner while the host crosses a crit line: holding starts, armed (on, nothing waits for a seat), or a muted note when the brake is off here.
+function BrakeBanner({ br }) {
+  if (!br || !br.hit) return null;
+  const others = br.projects;
+  const text = !br.on ? "Host over crit: " + brakeLine(br) + " · the brake is off here" + (others.length ? ", on for " + others.join(", ") : "")
+    : br.holding ? "Host brake holding " + br.held + " start" + (br.held === 1 ? "" : "s") + ": " + brakeLine(br) + " · " + br.setting
+    : "Host brake armed: " + brakeLine(br) + " · " + (br.free > 0 ? "no unit waits for a seat" : "no free seat now");
+  return html`<div class=${"fbrake" + (br.holding ? " holding" : br.on ? " armed" : " off")} id="flow-brake" role="status"><span>${(br.holding ? "⛔ " : "") + text}</span>
+    <button class="btn sm" onClick=${() => { location.hash = "#settings"; }} title=${"Open Settings: " + br.setting}>Settings</button></div>`;
 }
 // ⚡ on an urgent unit and ★ on a queued unit of the focus squad (muted when the squad holds its share): the same marks the loop ranks by.
 function UnitMarks({ u }) {
@@ -1211,14 +1229,18 @@ function FlowSection({ flow, lstore, focus, onOpen, now, showProject }) {
       ${mergedShown.map((m) => FlowCard({ card: { ...m, stage: "merged", merged: true }, typicalS, onOpen, showProject, now }))}
       ${mergedAll.length > 3 && html`<button class="fmore" onClick=${() => setAllMerged(!allMerged)}>${allMerged ? "show latest 3" : "show all " + mergedAll.length}</button>`}` });
     if (stage === "queued") {
-      const next = cs.filter((c) => c.queue_pos != null).sort((a, b) => a.queue_pos - b.queue_pos);
+      const inLine = cs.filter((c) => c.queue_pos != null).sort((a, b) => a.queue_pos - b.queue_pos);
+      // The units the host brake keeps from starting sit in their own group (the lane's banner carries the reason once).
+      const hostHeld = inLine.filter((c) => c.group === "waiting for the host"), next = inLine.filter((c) => c.group !== "waiting for the host");
       const not = cs.filter((c) => c.queue_pos == null);
       const nrOpen = lstore.get("b:flow:notready", false);
       const nextShown = allNext ? next : next.slice(0, 3);
-      const sum = [next.length ? next.length + " next up" : "", not.length ? not.length + " not ready" : ""].filter(Boolean).join(" · ");
+      const sum = [next.length + hostHeld.length ? next.length + hostHeld.length + " next up" : "", not.length ? not.length + " not ready" : ""].filter(Boolean).join(" · ");
       const nextCard = (c) => FlowCard({ card: c, typicalS, moved: moved.has(c.key), onOpen, showProject, pos: c.queue_pos });
       return FlowColumn({ stage, title, count: cs.length, children: html`
+        <${BrakeBanner} br=${flow.brake} />
         ${sum && html`<div class="fsub">${sum}</div>`}
+        ${hostHeld.length > 0 && html`<div data-group="waiting for the host"><div class="fgrp static"><span class="fgl" title="waiting for the host">${flowGroupLabel("waiting for the host")}</span><span>${hostHeld.length}</span></div>${hostHeld.map(nextCard)}</div>`}
         ${nextShown.map(nextCard)}
         ${next.length > 3 && html`<button class="fmore" onClick=${() => setAllNext(!allNext)}>${allNext ? "show first 3" : "show all " + next.length}</button>`}
         ${not.length > 0 && html`<button class="fgrp" aria-expanded=${nrOpen} onClick=${() => { lstore.set("b:flow:notready", !nrOpen); bump((n) => n + 1); }}><span class="fgl">${(nrOpen ? "▾ " : "▸ ") + "not ready"}</span><span>${not.length}</span></button>
@@ -3376,8 +3398,8 @@ function App() {
     <div class="tiles">
       <${Tile} label="Needs you" value=${H.needs || 0} level=${(H.needs || 0) === 0 ? "" : H.blocking > 0 ? "crit" : "warn"} on=${() => setFilter("needs")} pressed=${filter === "needs"} title="Filter the squads: needs you"
         detail=${H.quiet > 0 ? html`<button class="lnk red" onClick=${(e) => { e.stopPropagation(); setFilter("quiet"); }} title="Filter the squads: Lead stuck">${H.quiet} Leads stuck</button>` : (H.blocking > 0 ? H.blocking + " blocking" : "")} />
-      <${Tile} label="Builders" value=${H.builders_total != null ? buildersSeats(H) + "/" + H.builders_total : FT ? FT.builders : H.builders_working || 0} level=${FT && FT.stuckBuilding > 0 ? "warn" : ""} on=${FT ? () => openFlow("building") : undefined} title=${(FT ? "Open the Flow at Building" : "Builders working") + (H.builders_total != null ? ". " + buildersTip(H, FT ? FT.builders : null) : "")}
-        detail=${H.builders_total != null ? buildersDetail(H) + (FT ? " · " + FT.stuckBuilding + " stuck" : "") : H.builders_light_of > 0 ? "normal " + H.builders_normal + "/" + H.builders_of + " · light " + H.builders_light + "/" + H.builders_light_of + (FT ? " · " + FT.stuckBuilding + " stuck" : "") : FT ? FT.stuckBuilding + " stuck" : H.builders_of_kind === "max" ? "of " + H.builders_of + " max" : "of " + H.builders_of + " ready units"} />
+      <${Tile} label="Builders" value=${H.builders_total != null ? buildersSeats(H) + "/" + H.builders_total : FT ? FT.builders : H.builders_working || 0} level=${H.brake && H.brake.holding ? "crit" : H.brake && H.brake.on ? "warn" : FT && FT.stuckBuilding > 0 ? "warn" : ""} on=${FT ? () => openFlow("building") : undefined} title=${(FT ? "Open the Flow at Building" : "Builders working") + (H.builders_total != null ? ". " + buildersTip(H, FT ? FT.builders : null) : "")}
+        detail=${H.builders_total != null ? (H.brake && H.brake.holding ? "⛔ host brake · " : "") + buildersDetail(H) + (FT ? " · " + FT.stuckBuilding + " stuck" : "") : H.builders_light_of > 0 ? "normal " + H.builders_normal + "/" + H.builders_of + " · light " + H.builders_light + "/" + H.builders_light_of + (FT ? " · " + FT.stuckBuilding + " stuck" : "") : FT ? FT.stuckBuilding + " stuck" : H.builders_of_kind === "max" ? "of " + H.builders_of + " max" : "of " + H.builders_of + " ready units"} />
       <${Tile} label="Units left" value=${FT ? FT.left : H.units_left || 0} on=${FT ? () => openFlow("queued") : undefined} title=${FT ? "Open the Flow at Queued: every unit not yet merged" : "Units not done or cancelled in active squads"}
         detail=${(H.squads_active || 0) + " squads · " + (H.ready_units || 0) + " ready"} />
       <${Tile} label="PRs" value=${FT ? FT.prs : H.prs_open || 0} level=${H.ci_failing > 0 || GHT.level === "crit" ? "crit" : GHT.level} on=${FT ? () => openFlow(FT.prsStage) : undefined} title=${(FT ? "Open the Flow at the first column with an open PR: unit PRs open now" : "Open PRs") + GHT.tip}

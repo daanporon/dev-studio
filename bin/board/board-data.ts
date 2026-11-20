@@ -35,7 +35,8 @@ import { canonPath } from "../loop/squad/plan-approved.ts";
 import { unitWishes } from "../loop/squad/queued-builder.ts";
 import { now as clockNow, openReadOnly, pendingWishes, stateRoot, type Pending, type Row, type Store } from "../loop/core/store.ts";
 import { effective, memberKey, paused, projection } from "../loop/pause/pause.ts";
-import { laneNow, placeOf, queue } from "../loop/capacity/slot.ts";
+import { laneNow, placeOf, queue, seatable, seats } from "../loop/capacity/slot.ts";
+import { brakeView } from "../loop/capacity/pick.ts";
 import { focusSquad, focusValue, NO_FOCUS } from "../loop/squad/focus.ts";
 import { flowLine, flowOf, type FlowEvent, type FlowPick, type FlowReview, type FlowUnit } from "./flow.ts";
 import { retestDue, openPrUnits, type Retest } from "../loop/squad/retest.ts";
@@ -1191,32 +1192,42 @@ function headerSummary(db: Db | null, label: string, squads: any[], needs: any[]
   const lightOf = Number.isFinite(maxL) && maxL > 0 ? maxL : 0;
   const lightWorking = lightOf ? active.reduce((n, s) => n + arr(s.members).filter((m: any) => m.role === "builder" && m.state === "working"
     && arr(s.units).some((u: any) => u.lane === "light" && u.builder_wt && m.wt && wtKey(u.builder_wt) === wtKey(m.wt))).length, 0) : 0;
-  // The Builders tile's numbers when the light lane is on (squad-priority U2): normal and light share one total
-  // (max_builders + max_light_builders), so the light seats usable now are what the light limit allows or what is
-  // left of that total; `over` says why normal is past its limit, for each live normal Builder over it.
+  // The Builders tile's numbers (squad-priority U2, board-shows-host-brake U2): the seats as the loop counts them
+  // (slot.ts seats(): every live Builder in any squad, whatever its pause or state, and the `ds pick` holds), not
+  // the working Builders of the active squads. Normal and light share one total (max_builders + max_light_builders);
+  // the light seats usable now are what the light limit allows or what is left of the total; `over` says why
+  // normal is past its limit, for each live normal Builder over it. Read-only, like queue().
+  const seat = (() => {
+    if (!db || maxB == null) return null;
+    try { return seats(db.s, label, NOW()); } catch { return null; }   // an older loop.db: the old count
+  })();
   const lane = (() => {
-    if (!lightOf || maxB == null) return {};
-    const total = maxB + lightOf, normal = working - lightWorking;
-    const usable = Math.max(0, Math.min(lightOf, lightWorking + (total - working)));
+    if (!seat || maxB == null) return {};
+    const total = maxB + lightOf, normal = seat.used.normal, light = seat.used.light, taken = normal + light;
+    const usable = Math.max(0, Math.min(lightOf, light + (total - taken)));
+    const unitOf = (sq: string, slug: string | null) => squads.find((s) => s.topic === sq)?.units?.find((x: any) => x.slug === slug);
     const over: { squad: string; unit: string; why: string }[] = [];
     if (normal > maxB) {
-      const mine: { squad: string; unit: string; why: string }[] = [];
-      for (const sq of active) for (const m of arr(sq.members)) {
-        if (m.role !== "builder" || m.state !== "working") continue;
-        const u = arr(sq.units).find((x: any) => x.builder_wt && m.wt && wtKey(x.builder_wt) === wtKey(m.wt));
-        if (u?.lane === "light") continue;
-        mine.push({ squad: sq.topic, unit: u?.slug ?? m.suffix ?? "?", why: u?.urgent ? "urgent" : u?.lane === "moved" ? "moved" : "other" });
+      for (const h of seat.holders) {
+        if (h.lane === "light") continue;
+        const u = unitOf(h.squad, h.unit);
+        const why = u?.urgent ? "urgent" : u?.lane === "moved" ? "moved" : "other";
+        if (why !== "other") over.push({ squad: h.squad, unit: h.unit ?? "?", why });
       }
       // Every live normal Builder whose unit is urgent or moved is named; what stays over the limit after those is `other`.
-      over.push(...mine.filter((x) => x.why !== "other"));
       for (let i = over.length; i < normal - maxB; i++) over.push({ squad: "", unit: "", why: "other" });
     }
     const n = (w: string) => over.filter((o) => o.why === w).length;
-    return { builders_total: total, builders_light_usable: usable, builders_left: Math.max(0, total - working),
-      builders_over: over.length ? { urgent: n("urgent"), moved: n("moved"), other: n("other"), list: over.filter((o) => o.unit) } : null };
+    const by_why: Record<string, number> = { working: 0, idle: 0, pausing: 0, restarting: 0, starting: 0, hold: seat.holds };
+    for (const h of seat.holders) by_why[h.why]++;
+    return { builders_total: total, builders_light_usable: usable, builders_left: Math.max(0, total - taken),
+      builders_over: over.length ? { urgent: n("urgent"), moved: n("moved"), other: n("other"), list: over.filter((o) => o.unit) } : null,
+      builders_seats: { used: taken, total, by_why, list: seat.holders.map((h) => ({ squad: h.squad, unit: h.unit ?? h.suffix, lane: h.lane, why: h.why })) } };
   })();
+  const laneNums = seat ? { builders_normal: seat.used.normal, builders_light: seat.used.light, builders_light_of: lightOf }
+    : lightOf ? { builders_normal: working - lightWorking, builders_light: lightWorking, builders_light_of: lightOf } : {};
   return {
-    ...(lightOf ? { builders_normal: working - lightWorking, builders_light: lightWorking, builders_light_of: lightOf, ...lane } : {}),
+    ...laneNums, ...lane,
     needs: needs.length, blocking: needs.filter((n) => n.kind === "blocking").length,
     quiet: squads.filter((s) => s.lead && s.lead.silent).length,
     builders_working: working, builders_of: maxB ?? ready, builders_of_kind: maxB != null ? "max" : "ready",
@@ -1225,7 +1236,25 @@ function headerSummary(db: Db | null, label: string, squads: any[], needs: any[]
     ci_failing: prs.filter((p: any) => p.status === "failing").length, drafts: prs.filter((p: any) => p.status === "draft").length,
     tick_age_s: loop?.age_s ?? null,
     tick_ms: loop?.tick_ms ?? null, tick_slow: loop?.tick_slow ?? false, tick_slowest: loop?.tick_slowest ?? null,
+    brake: brakeOf(db, label, seat),
   };
+}
+
+// The host brake as the header shows it (board-shows-host-brake U2): one host signal, present only while the host's
+// fresh sample crosses a crit line. `on` is this project's builder_host_brake and `projects` every project that has it
+// on; with `on` false it is only a host note, never holding. `held` is how many queued units the loop's own seat walk
+// would start now with the brake off (slot.ts seatable()), `free` the free seats; with none free the brake only waits
+// for the next one (`holding` false). Read-only.
+function brakeOf(db: Db | null, label: string, seat: ReturnType<typeof seats> | null) {
+  if (!db) return null;
+  try {
+    const now = NOW(), v = brakeView(db.s, now, label);
+    if (!v.hit) return null;
+    const on = v.projects.some((p) => p.project === label && p.on);
+    const held = on && seat ? seatable(db.s, label, now, readyLine(db.s, label, now).map((c) => ({ squad: c.topic, suffix: c.slug }))).length : 0;
+    const free = seat && seat.limit != null ? Math.max(0, seat.limit + seat.light - seat.used.normal - seat.used.light) : 0;
+    return { setting: v.setting, sample: v.sample, hit: v.hit, on, projects: v.projects.filter((p) => p.on).map((p) => p.project), holding: on && held > 0, held, free };
+  } catch { return null; }   // an older loop.db
 }
 
 // The crew chip: the account's LABEL (id -> label from accounts.tsv; unknown id -> the id), or for a
@@ -2048,7 +2077,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const machine = machineSummary(db, label, out.live_worktrees, db && live.backendOk ? terminals : null, squads);
   const update = updateSummary(db, label);
   const disk = diskSummary(db, label);
-  return { ...out, ...(update ? { update } : {}), ...(disk.length ? { disk } : {}), accounts_summary: accountsSummary(db, label, accts), header: headerSummary(db, label, squads, out.needs_you, loop), flow: flowFor(db, labels, squads), ...(machine ? { machine, as_of: { ...out.as_of, machine: machine.observed_at } } : {}) };
+  const header = headerSummary(db, label, squads, out.needs_you, loop);
+  return { ...out, ...(update ? { update } : {}), ...(disk.length ? { disk } : {}), accounts_summary: accountsSummary(db, label, accts), header, flow: { ...flowFor(db, labels, squads), brake: header.brake ?? null }, ...(machine ? { machine, as_of: { ...out.as_of, machine: machine.observed_at } } : {}) };
 }
 
 // The open disk-pressure spells of this project (disk-pressure U3): the episodes, the machine row's disk and the
@@ -2153,14 +2183,27 @@ function updateLine(u: NonNullable<Board["update"]>): string {
   return "UPDATE current";
 }
 
-// The Builders tile's second line (squad-priority U2), only with the light lane on: `7/8 · normal 7/6 (⚡2) · light 0/1 (2)`.
+// The Builders tile's second line (squad-priority U2), whenever max_builders is set:
+// `6/8 · normal 6/6 (4 working, 1 idle, 1 pausing) · light 0/2`; with the light lane off no light part.
 // The page (web/board.html) builds the same text from the same header fields.
 export function buildersText(h: any): string | null {
-  if (!(h?.builders_light_of > 0) || h.builders_total == null) return null;
-  const o = h.builders_over;
-  const why = o ? ` (${[o.urgent ? `⚡${o.urgent}` : "", o.moved ? `${o.moved} moved` : "", o.held ? `${o.held} held` : "", o.other ? `${o.other} other` : ""].filter(Boolean).join(", ")})` : "";
-  const light = `light ${h.builders_light}/${h.builders_light_usable}${h.builders_light_usable < h.builders_light_of ? ` (${h.builders_light_of})` : ""}`;
-  return `${h.builders_normal + h.builders_light}/${h.builders_total} · normal ${h.builders_normal}/${h.builders_of}${why} · ${light}`;
+  if (h?.builders_total == null) return null;
+  const o = h.builders_over, bw = h.builders_seats?.by_why ?? {};
+  const over = o ? [o.urgent ? `⚡${o.urgent}` : "", o.moved ? `${o.moved} moved` : "", o.held ? `${o.held} held` : "", o.other ? `${o.other} other` : ""].filter(Boolean) : [];
+  const reasons = ["working", "idle", "pausing", "restarting", "starting", "hold"].filter((k) => bw[k] > 0).map((k) => `${bw[k]} ${k === "hold" ? "held by a pick" : k}`);
+  const why = over.length || reasons.length ? ` (${[...over, ...reasons].join(", ")})` : "";
+  const light = h.builders_light_of > 0 ? ` · light ${h.builders_light}/${h.builders_light_usable}${h.builders_light_usable < h.builders_light_of ? ` (${h.builders_light_of})` : ""}` : "";
+  return `${h.builders_normal + h.builders_light}/${h.builders_total} · normal ${h.builders_normal}/${h.builders_of}${why}${light}`;
+}
+
+// The BRAKE line while the host's sample crosses a crit line (board-shows-host-brake U2): holding (this project has
+// the brake on and a start waits), armed (on, no start waits now) or a host note when it is off here.
+export function brakeText(br: any): string | null {
+  if (!br?.hit) return null;
+  const h = br.hit, line = `${h.metric} ${h.value}${h.unit} ≥ crit ${h.crit}${h.unit} (${h.key})`;
+  if (!br.on) return `BRAKE  host over crit: ${line} · the brake is off here${br.projects.length ? `, on for ${br.projects.join(", ")}` : ""}`;
+  if (br.holding) return `BRAKE  holding ${br.held} start${br.held === 1 ? "" : "s"}: ${line} · set ${br.setting} off to start anyway`;
+  return `BRAKE  armed: ${line} · ${br.free > 0 ? "no unit waits for a seat" : "no free seat now"}`;
 }
 
 export function renderText(b: Board): string {
@@ -2173,6 +2216,7 @@ export function renderText(b: Board): string {
   if (b.machine) o.push(machineLine(b.machine), RULE);
   for (const d of b.disk ?? []) o.push(`DISK  ⚠ ${d.title}${d.consumers.length ? ` — ${d.consumers[0]}` : ""}`, RULE);
   { const bl = buildersText(b.header); if (bl) o.push(`BUILDERS  ${bl}`, RULE); }
+  { const br = brakeText(b.header?.brake); if (br) o.push(br, RULE); }
   if (b.loop.stalling) o.push(`LOOP  ⚠ the loop keeps stalling — ${b.loop.restarts_recent} restarts in the last ${b.loop.stall_window_min} min; see loop.log / journalctl --user -u ds-loop.service`, RULE);
   if (b.loop.down) o.push(`LOOP  ⚠ loop down — ${b.loop.tick_at == null ? "it has never ticked" : `data as of ${clock(b.loop.tick_at)} (${Math.floor((b.loop.age_s ?? 0) / 60)} min ago)`}; pokes, restarts and PR status are paused. Start it: bin/loop/loop.sh --ensure`, RULE);
   { const gl = githubLine(b.github, b.github?.waiting.length ?? 0); if (gl) o.push(gl, RULE); }
