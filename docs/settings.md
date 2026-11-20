@@ -320,7 +320,21 @@ After that the rows are the only copy:
   `settings.export` (every section; a file it lacks loses its rows) or one file, named by `--file` or
   by its own name (`limits.conf`, `limits.conf.imported-2026-11-17`, …). The file's rows become
   exactly the text's, unchecked, each change one history row by `ds config import`.
-- `ds config export [--project <label>]` prints the same text as the backup.
+- `ds config export --project <label>` prints the same rows as the backup (skills rules included) with a
+  first line `#! ds-settings 1 from=<label> rev=<short commit> at=<iso>`, the file header that marks a
+  transfer file; the backup itself has no header. An older export without the header or the `skills.conf`
+  section still reads.
+- `ds config import --project <label> <path> --dry-run` prints the rows the restore would change and writes nothing.
+- `ds config copy <from> <to>` is the checked copy (not a restore): `<from>` is a project on this host or an
+  export file from another host. It prints one line per row (`[x]` picked, action `add|change|same|remove|skip`,
+  file, key, current → new, why) and writes nothing; `--apply` writes the picked rows, each with a history row
+  by `import:<from>`. Unknown keys (`hooks_ts`) and rows the target refuses are skipped with their reason;
+  project-specific keys (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`,
+  `cleanup_tmp_globs`, `cleanup_on_close`, `ship-mode`) are not picked unless named with `--include <key>`.
+  `--only <file>` limits it to a file, `--skip <key>` unpicks a key, `--replace` also drops target rows the
+  source lacks, `--json` prints the plan as JSON. The three options may repeat or take a comma list.
+- `ds config prune <project>` lists the project's rows whose key this dev-studio doesn't know and, with
+  `--apply`, drops them (one history row each).
 
 ## Autonomy: checkpoints vs fire-and-forget
 
