@@ -5,20 +5,24 @@
 //     untracked or ignored files in its folder and below (pages use relative paths), at most
 //     `DS_RESCUE_FOLDER_MB` (20) per folder; a page at the worktree's top takes only its top-level siblings;
 //   - each untracked or ignored `*.html` / `*.md` under `.lavish/`, `.scratch/`, `docs/plans/` and
-//     `docs/brainstorms/` (`git ls-files --others`, which lists ignored files too; `node_modules` skipped).
+//     `docs/brainstorms/` (`git ls-files --others`, which lists ignored files too; `node_modules`, `.env*` and
+//     `CLAUDE.local.md` skipped). A file gone between the listing and its copy is skipped.
 // Copy only: nothing in the worktree is deleted or edited, and nothing at the destination is overwritten:
 // the same content already there (under its name or a numbered one) is skipped, different content is
 // written as `<name>.<n>.<ext>` (through a temp file and a hard link, so a replay never sees half a file).
 // A failed copy (no space, permission) is `ok: false` with the why; a failed git listing is not: the
 // session files are still copied and the probe that follows decides the worktree's fate.
 import { link, lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { spawn } from "./orca.ts";
 import type { Store } from "../core/store.ts";
 
 export const NOTE_DIRS = [".lavish", ".scratch", "docs/plans", "docs/brainstorms"];
 const NOTE_EXT = /\.(html|md)$/i;
-const SKIP = ["node_modules/**", "**/node_modules/**"].map((g) => `:(exclude,glob)${g}`);
+// Never copied: dependencies, env files (secrets) and the role brief.
+const SKIP = ["node_modules/**", "**/node_modules/**", ".env", ".env.*", "**/.env", "**/.env.*", "CLAUDE.local.md", "**/CLAUDE.local.md"]
+  .map((g) => `:(exclude,glob)${g}`);
 
 export type Rescued = {
   ok: boolean; why?: string; dest: string;
@@ -111,6 +115,7 @@ export async function rescuePages(store: Store, project: string, squad: string, 
       if (await place(join(path, rel), join(dest, rel)) === "same") { out.same++; continue; }
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
+      if (err.code === "ENOENT" && !existsSync(join(path, rel))) continue;   // gone since the listing: nothing to keep
       return { ...out, ok: false, why: `${err.code ?? "error"} on ${rel}: ${String(err.message ?? e).split("\n")[0]}`.slice(0, 200) };
     }
     out.count++; out.bytes += size; out.files.push(rel);

@@ -183,4 +183,13 @@ describe("rescuePages", () => {
     expect(one.files.sort()).toEqual([".scratch/a/board.html", ".scratch/a/style.css", ".scratch/notes.md"]);
     expect(existsSync(join(r.S, "fx", "pages", "t1", "rescued", "builder-u1", "other.html"))).toBe(false);
   });
+
+  test("env files and the role brief next to a page are never copied, at the top or in a folder", async () => {
+    const r = rig();
+    writeFileSync(join(r.wt, "top.html"), "<html>top</html>\n");
+    for (const f of [".env", ".env.local", "CLAUDE.local.md", ".scratch/a/.env", ".scratch/a/.env.production"]) writeFileSync(join(r.wt, f), "SECRET=1\n");
+    r.s.upsert("observed_sessions", { project: "", file: join(r.wt, "top.html") }, { url: null, status: "running", observed_at: T });
+    const one = await rescuePages(r.s, "fx", "t1", "builder-u1", r.wt);
+    expect(one.files.sort()).toEqual([".scratch/a/board.html", ".scratch/a/style.css", ".scratch/notes.md", "top.html"]);
+  });
 });
