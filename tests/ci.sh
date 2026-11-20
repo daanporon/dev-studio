@@ -203,6 +203,11 @@ fi
 left="$(find "$RUN_TMP/t" -mindepth 1 -maxdepth 1 -printf '%f\n' 2> /dev/null | sed -E 's/[-.]?[A-Za-z0-9]{6,}$//; s/-$//' | sort | uniq -c | sort -rn | awk '{ printf "  %s x%s\n", $2, $1 }')"
 [ -z "$left" ] || left="$left
   e.g. $(find "$RUN_TMP/t" -mindepth 1 -maxdepth 1 -printf '%f ' 2> /dev/null | cut -c1-300)"
+  for d in $(find "$RUN_TMP/t" -mindepth 1 -maxdepth 1 -type d 2> /dev/null | head -3); do
+    left="$left
+  contents of $(basename "$d"):
+$(find "$d" 2> /dev/null | head -12 | sed 's/^/    /')"
+  done
 if [ -n "$left" ]; then
   printf 'FAIL  %-26s tests left temp dirs behind (by prefix):\n%s\n' temp-dirs "$left"
   failed+=("temp-dirs")
