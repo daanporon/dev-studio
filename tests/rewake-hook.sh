@@ -24,7 +24,7 @@ fi
 if [ "${FAKE_MSG:-0}" = 1 ]; then echo "MESSAGES:"; { [ -n "${FAKE_MID:-}" ] && printf '  • [msg] wtLead — ping  (id=%s)\n' "$FAKE_MID"; } || echo "  m"; else echo "(none — timeout; do a check-in and re-arm)"; fi
 [ -n "${FAKE_UNASKED:-}" ] && printf '  ❓ unasked\tthinker\twtTh\t%s\t(since 222)\n' "$FAKE_UNASKED"
 [ -n "${FAKE_SIT:-}" ] && printf '  ⏸ sitting\tu1\twtSit\t20m idle\t%s\t(since 10:05)\n' "$FAKE_SIT"
-[ -n "${FAKE_BANG:-}" ] && printf '  ‼ merged\t%s\twtBang\tPR #%s MERGED\tthe loop has not marked it done: mark it done and retire the Builder\n' "${FAKE_BANG%% *}" "${FAKE_BANG#* }"
+[ -n "${FAKE_BANG:-}" ] && printf '  ‼ merged\t%s\twtBang\tPR #%s MERGED\tthe loop has not marked it done yet: it does on its next PR read; if this stays after a tick, mark it done (refused until the loop has read the merge), and it retires the Builder\n' "${FAKE_BANG%% *}" "${FAKE_BANG#* }"
 [ -n "${FAKE_FIN:-}" ] && printf '  ★ finished\t%s\t%s\tall units merged: do the testability handoff\n' "${FAKE_FIN%% *}" "${FAKE_FIN#* }"
 [ -n "${FAKE_STALLED:-}" ] && printf '  ⚠ sweep stalled\t-\t-\tlast full run %s\tno merges marked, no Builders retired — tell the operator\t(since %s)\n' "$FAKE_STALLED" "$FAKE_STALLED"
 [ -n "${FAKE_MERGED:-}" ] && printf '  ✓ merged\t%s\tPR #%s\t(at 10:05)\n' "${FAKE_MERGED%% *}" "${FAKE_MERGED#* }"

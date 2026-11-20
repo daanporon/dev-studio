@@ -365,7 +365,7 @@ has   "unchanged PR: unit counted, not listed"  "$(pq SUCCESS)" "(1 workers, 1 u
 has   "checks went red: the unit is listed"     "$(pq FAILURE)" "checks failing"
 printf 'wL\tworking\tL\nwA\tidle\tA\t%s\n' "$(( ($(date +%s) - 1200) * 1000 ))" > "$TMP/states"
 mergedq="$(pq SUCCESS MERGED)"
-has   "live merged PR gets its action row"     "$mergedq" $'‼ merged\tw1\twA\tPR #7 MERGED\tthe loop has not marked it done: mark it done and retire the Builder'
+has   "live merged PR gets its action row"     "$mergedq" $'‼ merged\tw1\twA\tPR #7 MERGED\tthe loop has not marked it done yet: it does on its next PR read; if this stays after a tick, mark it done (refused until the loop has read the merge), and it retires the Builder'
 hasnt "merged PR suppresses sitting nudge"      "$mergedq" "⏸ sitting"
 has   "merged action survives quiet mode"       "$(pq SUCCESS MERGED)" $'‼ merged\tw1\twA\tPR #7 MERGED'
 printf '{"run_id":"rq","members":[{"role":"lead","wt":"wL"}],"units":[{"slug":"d1","status":"done"}]}' > "$SD/lq.json"

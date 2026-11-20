@@ -39,6 +39,15 @@ hand() {
     const project = path.basename(path.dirname(path.dirname(file))), topic = path.basename(file, ".json");
     open().fact("squad_state", squadRows(project, topic, file), { project, squad: topic });' "$ROOT" "$f"
 }
+# observe_pr <file> <slug> <pr> <state>: the loop observed the unit's PR in <state> (OPEN, CLOSED,
+# MERGED). On a marked root set-unit-status done needs it MERGED; the file backend never reads it.
+observe_pr() {
+  [ -z "${SQUAD_STATE_MARKED:-}" ] || "$(command -v bun || echo "$HOME/.bun/bin/bun")" -e '
+    const [root, file, slug, pr, state] = process.argv.slice(1), path = require("node:path");
+    const { open } = require(path.join(root, "bin/loop/core/store.ts"));
+    const project = path.basename(path.dirname(path.dirname(file))), topic = path.basename(file, ".json");
+    open().upsert("observed_prs", { project, ref: `${topic}/${slug}` }, { pr: Number(pr), state, observed_at: 1 });' "$ROOT" "$1" "$2" "$3" "$4"
+}
 if [ -n "${SQUAD_STATE_MARKED:-}" ]; then
   tmp() { mkdir -p "$TMPDIR/p/squads"; mktemp --suffix=.json "$TMPDIR/p/squads/t.XXXXXX"; }
 fi
@@ -86,7 +95,7 @@ check "done refusal names each dispatched unit" "1" "$(grep -c 'refusing done: u
 check "done refusal names the settle command for a dispatched unit" "1" "$(grep -c "merge its PR, or cancel-unit <slug> --why" "$d.err")"
 "$SS" "$d" set-status "blocked" >/dev/null
 check "another status with dispatched units still works" "blocked" "$("$SS" "$d" get | jq -r '.status')"
-"$SS" "$d" set-unit-status "a" "done" >/dev/null
+observe_pr "$d" a 81 MERGED; "$SS" "$d" set-unit-status "a" "done" >/dev/null
 "$SS" "$d" cancel-unit "b" >/dev/null 2>&1
 # U1: done also needs a debrief; set-debrief refuses an empty one; other statuses are not gated.
 before="$(cat "$d")"
@@ -175,7 +184,7 @@ JF="$JD/journals/topic-lead.md"
 check "done refusal writes no journal" "absent" "$([ -e "$JF" ] && echo present || echo absent)"
 "$SS" "$JD/squads/topic.json" set-status "blocked" >/dev/null
 check "non-done status writes no journal" "absent" "$([ -e "$JF" ] && echo present || echo absent)"
-"$SS" "$JD/squads/topic.json" set-unit-status "a" "done" >/dev/null
+observe_pr "$JD/squads/topic.json" a 81 MERGED; "$SS" "$JD/squads/topic.json" set-unit-status "a" "done" >/dev/null
 "$SS" "$JD/squads/topic.json" set-status "done" >/dev/null 2>&1
 check "no-debrief refusal writes no journal" "absent" "$([ -e "$JF" ] && echo present || echo absent)"
 "$SS" "$JD/squads/topic.json" set-debrief "d
@@ -278,7 +287,7 @@ check "done --no-pr works" "done" "$("$SS" "$d" get | jq -r '.units[0].status')"
 check "--no-pr is not stored as builder_wt" "" "$("$SS" "$d" get | jq -r '.units[0].builder_wt')"
 "$SS" "$d" set-unit-status "noprlib" "dispatched" "wt_d" >/dev/null
 "$SS" "$d" set-unit-pr "noprlib" "77" >/dev/null
-"$SS" "$d" set-unit-status "noprlib" "done" >/dev/null 2>&1
+observe_pr "$d" noprlib 77 MERGED; "$SS" "$d" set-unit-status "noprlib" "done" >/dev/null 2>&1
 check "done with a PR works" "done" "$("$SS" "$d" get | jq -r '.units[0].status')"
 "$SS" "$d" set-unit-status "noprlib" "dispatched" "wt_d" >/dev/null
 "$SS" "$d" set-unit-pr "noprlib" "" >/dev/null
@@ -286,6 +295,30 @@ check "done with a PR works" "done" "$("$SS" "$d" get | jq -r '.units[0].status'
 check "done takes --no-pr after a builder wt" "done/wt_d" "$("$SS" "$d" get | jq -r '.units[0] | "\(.status)/\(.builder_wt)"')"
 "$SS" "$d" set-unit-status "ghost" "done" >/dev/null 2>&1; rc=$?
 check "done on an unknown unit stays a silent no-op" "0" "$rc"
+
+# 5d-quinquies (U4). On the loop's store a unit with a recorded PR is done only once the loop observed
+# that PR MERGED (the loop marks it done on the merge); open, closed and unobserved are refused with
+# nothing written, and --no-pr does not skip it. The file backend has no loop, so it keeps the old rule.
+d="$(tmp)"
+"$SS" "$d" add-unit "prg" >/dev/null 2>&1
+"$SS" "$d" set-unit-status "prg" "dispatched" "wt_p" >/dev/null
+"$SS" "$d" set-unit-pr "prg" "55" >/dev/null
+if [ -n "${SQUAD_STATE_MARKED:-}" ]; then
+  for st in none OPEN CLOSED; do
+    [ "$st" = none ] || observe_pr "$d" prg 55 "$st"
+    before="$("$SS" "$d" get)"
+    "$SS" "$d" set-unit-status "prg" "done" >/dev/null 2>"$d.err"; rc=$?
+    check "PR $st: done refused" "1" "$rc"
+    check "PR $st: nothing written" "$before" "$("$SS" "$d" get)"
+    check "PR $st: the refusal names the PR" "1" "$(grep -c "unit 'prg' is not done — its PR #55 " "$d.err")"
+  done
+  check "PR CLOSED: the refusal says closed" "1" "$(grep -c "is closed" "$d.err")"
+  "$SS" "$d" set-unit-status "prg" "done" --no-pr >/dev/null 2>&1; rc=$?
+  check "PR recorded: --no-pr does not skip the merge check" "1" "$rc"
+  observe_pr "$d" prg 55 MERGED
+fi
+"$SS" "$d" set-unit-status "prg" "done" >/dev/null 2>&1; rc=$?
+check "PR merged (or the file backend): done works" "0/done" "$rc/$("$SS" "$d" get | jq -r '.units[0].status')"
 
 # approve-plan / plan-approved: durable operator approval, the Lead's restart-safe gate.
 check "plan unapproved by default"   "no"  "$("$SS" "$f" plan-approved "plans/x.md")"
@@ -1088,7 +1121,7 @@ d="$D/mt.json"
 check "into-unit planned -> dependent not ready" "u3" "$("$SS" "$d" ready-units 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 "$SS" "$d" set-unit-status u3 dispatched wtX >/dev/null
 check "into-unit dispatched -> dependent not ready" "" "$("$SS" "$d" ready-units 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
-"$SS" "$d" set-unit-pr u3 99 >/dev/null; "$SS" "$d" set-unit-status u3 "done" >/dev/null
+"$SS" "$d" set-unit-pr u3 99 >/dev/null; observe_pr "$d" u3 99 MERGED; "$SS" "$d" set-unit-status u3 "done" >/dev/null
 check "into-unit done -> dependent ready" "u2" "$("$SS" "$d" ready-units 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 "$SS" "$d" add-unit u4 --tier standard >/dev/null 2>&1
 "$SS" "$d" add-unit u5 "" "" u4 --tier standard >/dev/null 2>&1
