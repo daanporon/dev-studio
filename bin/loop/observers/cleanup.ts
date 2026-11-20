@@ -9,6 +9,9 @@
 //   d  ds-<label>-* Orca entities, ds-<label>-* folders git lists but Orca does not, and ds-* folders
 //      git does not list; skipped (rows kept as they were) when the backend list fails or is empty
 //   e  each valid cleanup_tmp_globs entry, its parent streamed, matches folded into one row
+//   f  each valid cleanup_trim_globs entry (investigate-disk-cleanup U2): the folders it matches are
+//      kept, the entries directly inside them streamed and folded into one row (partial past the
+//      entry budget, or while a folder inside is counted by its own inode until the measuring pass)
 // Host scope, every tick, with its own DS_LOOP_CLEANUP_S (3600 s) timer (KTD4): a due tick starts the
 // scan off the tick (async fs, yielding every 1,000 entries or second, one scan at a time); the next
 // tick that finds it finished writes it in one transaction. Rows not seen again get gone_at; a row
@@ -20,7 +23,7 @@
 import { lstat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { cleanupGlobs, limitInt } from "../settings/limits.ts";
+import { cleanupGlobs, limitInt, trimGlobs } from "../settings/limits.ts";
 import type { Observer, TickCtx } from "../core/plugins.ts";
 import { discoverProjects } from "../settings/projects.ts";
 import { CLK_TCK, readCwdRaw, readText, readUid } from "../io/proc.ts";
@@ -32,7 +35,7 @@ import { claudeTmpRoot, gitWorktrees, globMatcher, inUse, liveAgents, procIndex,
   type DirReader, type GitTree, type InUse } from "../io/tidy.ts";
 import { mangle, prefix, shellAdapter, wtPath, type PsWorktree } from "./orca.ts";
 
-export type CleanupRow = { project: string; class: "a" | "b" | "c" | "d" | "e"; key: string; path?: string | null; pid?: number | null;
+export type CleanupRow = { project: string; class: "a" | "b" | "c" | "d" | "e" | "f"; key: string; path?: string | null; pid?: number | null;
   size_kb?: number | null; mtime?: number | null; facts: Record<string, unknown> };
 export type CleanupScan = { at: number; ms: number; entries: number; psError: string | null; looseCount: number; looseKb: number; rows: CleanupRow[] };
 export type CleanupOpts = {
@@ -45,6 +48,7 @@ export type CleanupOpts = {
   self?: number; uid?: number; host?: string;
   sizeEntries?: number;                   // lstat budget for classes c and d sizes per scan (best effort)
   tmpSizeEntries?: number;                // lstat budget for class b (Claude temp dirs) sizes per scan
+  trimEntries?: number;                   // entries read per class f glob (default ITEM_ENTRIES)
   du?: Du;                                // the measuring pass's sizer (io/du.ts)
   duS?: number;                           // its per-path timeout (DS_LOOP_CLEANUP_DU_S)
   duTotalS?: number;                      // its time cap per pass (DS_LOOP_CLEANUP_DU_TOTAL_S)
@@ -82,7 +86,7 @@ export async function scanCleanup(store: Store, at: number, o: CleanupOpts = {})
   const sessions = new Map<string, string>(); // wt -> the session id of its newest transcript
   for (const r of store.db.query("SELECT wt, path FROM observed_transcripts t WHERE wt IS NOT NULL AND mtime = (SELECT MAX(mtime) FROM observed_transcripts u WHERE u.wt = t.wt)").all() as { wt: string; path: string }[])
     sessions.set(r.wt, basename(r.path).replace(/\.jsonl$/, ""));
-  const globs = labels.map((l) => ({ label: l, ageS: limitInt(store, l, "cleanup_tmp_age_h", 48) * 3600, globs: cleanupGlobs(store, l).valid }));
+  const globs = labels.map((l) => ({ label: l, ageS: limitInt(store, l, "cleanup_tmp_age_h", 48) * 3600, globs: cleanupGlobs(store, l).valid, trims: trimGlobs(store, l).valid }));
 
   const exists = async (p: string | null | undefined) => { if (!p) return false; try { await lstat(p); return true; } catch { return false; } };
   const parents = new Set(wts.filter((w) => basename(w.path).startsWith(pre)).map((w) => dirname(w.path)));
@@ -220,31 +224,66 @@ export async function scanCleanup(store: Store, at: number, o: CleanupOpts = {})
       facts: { slug: name, slug_wt: g?.wt ?? null, wt: g?.path ?? null, uid: st.uid, holder: holder(p), partial: z.partial } });
   }
 
+  // A glob's tally (classes e and f): each entry counted and judged, a folder by its own inode until
+  // the measuring pass sizes the row.
+  const globFacts = () => ({ count: 0, kb: 0, oldest: null as number | null, newest: null as number | null, too_new: 0, not_ours: 0, in_use: 0,
+    in_use_pid: null as number | null, removable: 0, dirs: 0, partial: false, sample: [] as string[] });
+  const judgeEntry = async (f: ReturnType<typeof globFacts>, p: string, ageS: number) => {
+    const st = await lstat(p).catch(() => null);
+    if (!st) return;
+    const m = Math.floor(st.mtimeMs / 1000);
+    f.count++; f.kb += Math.ceil(Number(st.blocks) / 2);
+    if (st.isDirectory()) { f.dirs++; f.partial = true; }
+    f.oldest = f.oldest === null ? m : Math.min(f.oldest, m); f.newest = f.newest === null ? m : Math.max(f.newest, m);
+    const h = !st.isDirectory() && use.exact ? use.exact(p) : holder(p);
+    if (st.uid !== uid) f.not_ours++;
+    else if (m > at - ageS) f.too_new++;
+    else if (h) { f.in_use++; f.in_use_pid ??= h; }
+    else f.removable++;
+    if (f.sample.length < 20) f.sample.push(p);
+  };
+
   // e: one row per valid glob, its parent streamed (KTD5); a glob two projects list belongs to the first.
   const seen = new Set<string>();
   for (const { label, ageS, globs: gs } of globs) for (const glob of gs) {
     if (seen.has(glob)) continue;
     seen.add(glob);
     const { parent, match } = globMatcher(glob);
-    const f = { count: 0, kb: 0, oldest: null as number | null, newest: null as number | null, too_new: 0, not_ours: 0, in_use: 0,
-      in_use_pid: null as number | null, removable: 0, dirs: 0, partial: false, sample: [] as string[] };
+    const f = globFacts();
     for await (const name of dirs(parent)) {
       await tick(); entries++;
       if (!match(name)) continue;
-      const p = join(parent, name), st = await lstat(p).catch(() => null);
-      if (!st) continue;
-      const m = Math.floor(st.mtimeMs / 1000);
-      f.count++; f.kb += Math.ceil(Number(st.blocks) / 2);
-      if (st.isDirectory()) { f.dirs++; f.partial = true; } // a matched folder counts its own inode until the measuring pass
-      f.oldest = f.oldest === null ? m : Math.min(f.oldest, m); f.newest = f.newest === null ? m : Math.max(f.newest, m);
-      const h = !st.isDirectory() && use.exact ? use.exact(p) : holder(p);
-      if (st.uid !== uid) f.not_ours++;
-      else if (m > at - ageS) f.too_new++;
-      else if (h) { f.in_use++; f.in_use_pid ??= h; }
-      else f.removable++;
-      if (f.sample.length < 20) f.sample.push(p);
+      await judgeEntry(f, join(parent, name), ageS);
     }
     if (f.count) rows.push({ project: label, class: "e", key: glob, path: parent, size_kb: f.kb, mtime: f.newest, facts: f });
+  }
+
+  // f: one row per valid trim glob; each matched folder stays, the entries directly inside it are judged
+  // as class e judges a match, at most ITEM_ENTRIES entries per glob (its own budget: a pool the
+  // checkouts used up must not hide a cache's removable entries).
+  const trimmed = new Set<string>();
+  for (const { label, ageS, trims } of globs) for (const glob of trims) {
+    if (trimmed.has(glob)) continue;
+    trimmed.add(glob);
+    const { parent, match } = globMatcher(glob);
+    const f = { folders: 0, folders_not_ours: 0, ...globFacts(), capped: false, folder_sample: [] as string[] };
+    let left = o.trimEntries ?? ITEM_ENTRIES;
+    for await (const name of dirs(parent)) {
+      await tick(); entries++;
+      if (!match(name)) continue;
+      const folder = join(parent, name);
+      const fst = await lstat(folder).catch(() => null);
+      if (!fst?.isDirectory()) continue; // a symlink or a file is never trimmed
+      if (fst.uid !== uid) { f.folders_not_ours++; continue; } // nor another uid's folder (it could swap it for a symlink)
+      f.folders++;
+      if (f.folder_sample.length < 20) f.folder_sample.push(folder);
+      for await (const entry of dirs(folder)) {
+        await tick(); entries++;
+        if (left-- <= 0) { f.partial = true; f.capped = true; break; }
+        await judgeEntry(f, join(folder, entry), ageS);
+      }
+    }
+    if (f.folders || f.folders_not_ours) rows.push({ project: label, class: "f", key: glob, path: parent, size_kb: f.kb, mtime: f.newest, facts: f });
   }
   return { at, ms: Math.round(performance.now() - t0), entries: entries + idx.all.length, psError, looseCount, looseKb, rows };
 }
@@ -290,7 +329,8 @@ const parse = (t: string | null | undefined): Record<string, unknown> => { try {
 // row counts a matched folder as its own inode, so after each written scan every live row whose facts
 // say `partial` gets its real size from `du -sk`, unmeasured rows first, then largest first, off the tick: one path at a time,
 // each killed after DS_LOOP_CLEANUP_DU_S (120 s), the pass stopped after DS_LOOP_CLEANUP_DU_TOTAL_S
-// (600 s). A class e row is the sum over its glob's matches (a folder's du, a file's own blocks). A
+// (600 s). A class e row is the sum over its glob's matches (a folder's du, a file's own blocks), a
+// class f row the sum of the du of the folders its glob matches. A
 // path gone before or during its du is skipped; a failed du keeps the walk's size and says why in
 // `size_error`. Everything read from loop.db is read before the first await. Sizes decide no verdict (KTD4).
 export type Sized = { project: string; class: string; key: string } & ({ kb: number } | { error: string });
@@ -314,7 +354,7 @@ export async function measureCleanup(store: Store, o: CleanupOpts = {}, rows = t
   for (const r of rows) {
     if (left() <= 0) break;
     const id = { project: r.project, class: r.class, key: r.key };
-    if (r.class !== "e") {
+    if (r.class !== "e" && r.class !== "f") {
       const d = r.path ? await one(r.path) : "gone";
       if (d !== "gone") out.push({ ...id, ...d });
       continue;
@@ -327,7 +367,7 @@ export async function measureCleanup(store: Store, o: CleanupOpts = {}, rows = t
       const p = join(parent, name), st = await there(p);
       if (!st) continue;
       seen = true;
-      if (!st.isDirectory()) { kb += Math.ceil(Number(st.blocks) / 2); continue; }
+      if (!st.isDirectory()) { if (r.class === "e") kb += Math.ceil(Number(st.blocks) / 2); continue; } // class f trims folders only
       const d = await one(p);
       if (d === "gone") continue;
       if ("error" in d) { error = d.error; break; }

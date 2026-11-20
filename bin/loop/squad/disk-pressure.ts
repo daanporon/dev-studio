@@ -79,7 +79,8 @@ export function consumers(store: Store): Consumer[] {
     { project: string; class: string; key: string; path: string | null; size_kb: number; verdict: string | null; facts: string | null }[]) {
     let partial = false;
     try { partial = !!JSON.parse(r.facts ?? "{}").partial; } catch { /* no facts */ }
-    all.push({ label: `Host tidy ${r.path ?? r.key}${r.project ? ` (${r.project})` : ""}`, size_kb: r.size_kb, note: `${partial ? "≥ " : ""}${r.verdict ?? "not judged"}` });
+    const where = r.class === "f" ? `trim ${r.key}` : r.class === "e" ? r.key : r.path ?? r.key; // a glob's row: its glob, not its parent
+    all.push({ label: `Host tidy ${where}${r.project ? ` (${r.project})` : ""}`, size_kb: r.size_kb, note: `${partial ? "≥ " : ""}${r.verdict ?? "not judged"}` });
   }
   for (const r of store.db.query("SELECT label, size_kb FROM observed_disk_usage WHERE key LIKE 'du:%' AND size_kb > 0").all() as { label: string; size_kb: number }[])
     all.push({ label: r.label, size_kb: r.size_kb, note: "" });

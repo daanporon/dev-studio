@@ -2298,7 +2298,7 @@ export function lastChange(db: Db, project: string, file: string, key: string) {
 // of conventions/limits.conf with its value and source (env | override | default | unset).
 // Limits the board shows as read-only text: globs and a command run in worktrees are edited in
 // through `ds config import` (docs/settings.md), never from a web form. `reset` of an override stays allowed.
-export const FILE_ONLY_LIMITS = new Set(["cleanup_tmp_globs", "cleanup_on_close", "disk_watch_paths"]);
+export const FILE_ONLY_LIMITS = new Set(["cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths"]);
 export function limitsJson(project: string, root = stateRoot()) {
   return withDb((db) => {
     const limits = db.all("SELECT key, value, comment FROM config WHERE project = '' AND file = 'limits.conf' ORDER BY rowid").map((d) => {
