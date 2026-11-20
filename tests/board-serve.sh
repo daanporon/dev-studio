@@ -67,8 +67,12 @@ printf '%s\n' 'import { Database } from "bun:sqlite";' \
 dbq(){ bun "$TMP/dbq.ts" "$DBR/loop.db" "$1"; }
 resync
 mkdir -p "$DBR/$LBL"; cp "$DS_STATE_ROOT/$LBL/alerts.json" "$DBR/$LBL/alerts.json"   # what alerts.sh resolves
+# The skills the /api/skills block knows: a listing cache of its own and an empty Claude config dir, so
+# the answer never depends on what the host (or a CI runner, which has none) has installed.
+mkdir -p "$TMP/no-claude"
+printf '{"at":1,"skills":[{"name":"compound-engineering:ce-work","source":"session listing","description":"work a plan"}]}' > "$DBR/skills-listing.json"
 # DS_EVLOG_SEARCH_SLICE: a search reads 6 ids per request, so the event-log-filters U4 block can page one.
-PATH="$TMP/tsbin:$PATH" DS_STATE_ROOT="$DBR" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" DS_EVLOG_SEARCH_SLICE=6 \
+PATH="$TMP/tsbin:$PATH" DS_STATE_ROOT="$DBR" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" DS_EVLOG_SEARCH_SLICE=6 CLAUDE_CONFIG_DIR="$TMP/no-claude" \
   "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$PORT" >"$TMP/serve.log" 2>&1 &
 SPID=$!
 for _ in $(seq 1 300); do curl -s -o /dev/null "http://127.0.0.1:$PORT/" && break; sleep 0.2; done

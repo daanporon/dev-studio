@@ -220,39 +220,41 @@ describe("processes (class a)", () => {
 });
 
 describe("glob files (class e, KTD9)", () => {
+  // `now` is read after the matches exist: NOW is fixed when the file loads, and an entry made after
+  // NOW + 10 (a slow runner, after the 60,000-file test) would be newer than the age floor.
   function globDir(s: Store, n: number, more?: (dir: string) => void) {
     const dir = tmp(), glob = join(dir, "zzdebris-*");
     for (let i = 0; i < n; i++) writeFileSync(join(dir, `zzdebris-${i}`), "");
     if (more) { more(dir); n += 1; }
     setLimit(s, "cleanup_tmp_globs", glob); setLimit(s, "cleanup_tmp_age_h", "0");
     seed(s, { class: "e", key: glob, path: dir, facts: { count: n, removable: n, too_new: 0, not_ours: 0, in_use: 0 } });
-    return { dir, glob };
+    return { dir, glob, now: Math.floor(Date.now() / 1000) + 10 };
   }
 
   test("60,000 matches: the first pass removes 50,000 with one event, the next episode the rest; the event loop is never held a second", async () => {
-    const s = fixture(), { dir, glob } = globDir(s, 60_000), o = { proc: fakeProc([]), uid: UID };
+    const s = fixture(), { dir, glob, now } = globDir(s, 60_000), o = { proc: fakeProc([]), uid: UID };
     let lag = 0, last = performance.now();
     const timer = setInterval(() => { const t = performance.now(); lag = Math.max(lag, t - last - 20); last = t; }, 20);
     try {
-      const [first] = acts(s, NOW + 10);
-      expect(await exec(s, first, o, backend(), NOW + 10)).toEqual({ done: true, result: "removed 50000 (capped)" });
+      const [first] = acts(s, now);
+      expect(await exec(s, first, o, backend(), now)).toEqual({ done: true, result: "removed 50000 (capped)" });
       s.upsert("episodes", { project: "p", subject: first.subject, kind: `action:${CLEANUP_ACT}` }, { episode_key: first.episode, state: "done", source: "loop", ended_at: NOW, observed_at: 1 });
-      const [second] = acts(s, NOW + 10);
+      const [second] = acts(s, now);
       expect(second.episode).not.toBe(first.episode);
-      expect(await exec(s, second, o, backend(), NOW + 10)).toEqual({ done: true, result: "removed 10000" });
+      expect(await exec(s, second, o, backend(), now)).toEqual({ done: true, result: "removed 10000" });
     } finally { clearInterval(timer); }
     expect(readdirSync(dir)).toEqual([]);
     expect(events(s, "cleanup_removed").map((e) => [e.glob, e.count, e.sample.length])).toEqual([[glob, 50_000, 20], [glob, 10_000, 20]]);
     expect(lag).toBeLessThan(1000);
-    expect(acts(s, NOW + 10)).toEqual([]);
+    expect(acts(s, now)).toEqual([]);
   }, 180_000);
 
   test("a matching symlink that points outside the root: the link is removed, its target is untouched", async () => {
     const s = fixture(), target = join(tmp(), "keep.txt");
     writeFileSync(target, "keep");
-    const { dir } = globDir(s, 0, (d) => symlinkSync(target, join(d, "zzdebris-link")));
-    const [a] = acts(s, NOW + 10);
-    expect(await exec(s, a, { proc: fakeProc([]), uid: UID }, backend(), NOW + 10)).toEqual({ done: true, result: "removed 1" });
+    const { dir, now } = globDir(s, 0, (d) => symlinkSync(target, join(d, "zzdebris-link")));
+    const [a] = acts(s, now);
+    expect(await exec(s, a, { proc: fakeProc([]), uid: UID }, backend(), now)).toEqual({ done: true, result: "removed 1" });
     expect(readdirSync(dir)).toEqual([]);
     expect(existsSync(target)).toBe(true);
   });

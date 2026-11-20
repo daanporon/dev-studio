@@ -576,15 +576,19 @@ check "conventions/backend.md documents agent-accounts" "1" "$(grep -c '^| `agen
 # cache alone (no provider call): one line per account-list account, Muse not_reported, no sidecar unknown.
 # shellcheck disable=SC2016 # a literal, not an expansion
 check "conventions/backend.md documents account-resets" "1" "$(grep -c '^| `account-resets` |' "$ROOT/conventions/backend.md")"
+# A fake Orca that is not running (every call fails), so account-list is the system login alone and
+# nothing here reaches the host's real orca (on a host whose bun sits beside it in PATH) or needs one
+# (a CI runner has none).
+noorca="$tmp/noorca"; mkdir -p "$noorca/bin"; printf '#!/bin/sh\nexit 1\n' > "$noorca/bin/orca"; chmod +x "$noorca/bin/orca"
 check "account-resets: muse not_reported, codex and a never-fetched claude unknown" \
   "$(printf 'claude\tsystem\t{"state":"unknown"}\nmuse\tdefault\t{"state":"not_reported"}\ncodex\tdefault\t{"state":"unknown"}')" \
-  "$(env -i PATH="${bun%/*}:/usr/bin:/bin" HOME="$tmp" DS_ORCA_DATA="$tmp/no-orca-data" DS_CLAUDE_HOME="$tmp/no-claude" DS_USAGE_CACHE="$tmp/usage-cache" \
+  "$(env -i DS_ORCA_CLI_BIN_DIR="$noorca/bin" PATH="${bun%/*}:/usr/bin:/bin" HOME="$tmp" DS_ORCA_DATA="$tmp/no-orca-data" DS_CLAUDE_HOME="$tmp/no-claude" DS_USAGE_CACHE="$tmp/usage-cache" \
     "$ROOT/bin/backend/orca.sh" account-resets 2>/dev/null)"
 # account-free-resets U4: account-reset-use is in the contract; it answers one outcome line, and an agent
 # with no free resets or a bad id is refused before any provider call (no login here, so none could run).
 # shellcheck disable=SC2016 # a literal, not an expansion
 check "conventions/backend.md documents account-reset-use" "1" "$(grep -c '^| `account-reset-use` |' "$ROOT/conventions/backend.md")"
-seamuse() { env -i PATH="${bun%/*}:/usr/bin:/bin" HOME="$tmp" DS_ORCA_DATA="$tmp/no-orca-data" DS_CLAUDE_HOME="$tmp/no-claude" DS_USAGE_CACHE="$tmp/usage-cache" \
+seamuse() { env -i DS_ORCA_CLI_BIN_DIR="$noorca/bin" PATH="${bun%/*}:/usr/bin:/bin" HOME="$tmp" DS_ORCA_DATA="$tmp/no-orca-data" DS_CLAUDE_HOME="$tmp/no-claude" DS_USAGE_CACHE="$tmp/usage-cache" \
   "$ROOT/bin/backend/orca.sh" account-reset-use "$@" 2>/dev/null; }
 check "account-reset-use: muse has no free resets" "$(printf 'failed\tmuse has no free resets')" "$(seamuse muse default g1 k1)"
 check "account-reset-use: a bad grant id is refused" "$(printf 'failed\tbad grant id')" "$(seamuse claude system 'g 1' k1)"
