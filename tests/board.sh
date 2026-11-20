@@ -1375,5 +1375,22 @@ jt "U3 update: a pending request shows"      "$TMP/upd.json" '.update.pending !=
 has "U3 update: pending text" "$(render "$LBL")" "UPDATE asked — waiting for the Studio"
 dbw "DELETE FROM observed_update"
 
+# disk-pressure U3: an open disk spell shows a Needs-you card (title, first consumer) and one DISK line on the text board.
+DNOW="$(date +%s)"
+dbw "INSERT INTO observed_machine (host, disks, observed_at) VALUES ('dh', '[{\"path\":\"/\",\"total_kb\":1048576000,\"free_kb\":157286400}]', $DNOW)"
+dbw "INSERT INTO episodes (project, subject, kind, state, started_at, episode_key, source, observed_at) VALUES ('$LBL', 'disk-pressure./', 'disk-pressure', 'low', $DNOW, '$DNOW', 'loop', $DNOW)"
+dbw "INSERT INTO observed_disk_usage (key, label, size_kb, reclaimable_kb, read_at, observed_at) VALUES ('docker:build-cache', 'Docker build cache', 524288000, 503316480, $DNOW, $DNOW)"
+dbw "INSERT INTO observed_disk_usage (key, label, size_kb, read_at, observed_at) VALUES ('du:/srv/cache', '/srv/cache', 1048576, $DNOW, $DNOW)"
+dbw "INSERT INTO observed_alerts (project, id, doc, observed_at) VALUES ('$LBL', 'sweep-disk-pressure./-1', '{\"id\":\"sweep-disk-pressure./-1\",\"asker\":\"sweep\",\"title\":\"Disk / low: 150 GB free (15%)\",\"question\":\"Disk / low: 150 GB free (15%). Biggest consumers: 1. Docker build cache: 500 GB (480 GB reclaimable).\",\"since\":\"2026-11-20T09:00:00Z\"}', $DNOW)"
+render "$LBL" --json > "$TMP/disk.json"
+jt "disk U3: the Needs-you card carries the title"        "$TMP/disk.json" '.studio_alerts | map(select(.text | startswith("Disk / low: 150 GB free (15%)"))) | length == 1'
+jt "disk U3: the card names Docker build cache first"     "$TMP/disk.json" '.studio_alerts[] | select(.text | startswith("Disk /")) | .text | test("1\\. Docker build cache: 500 GB")'
+jt "disk U3: board.json lists the spell and its consumers" "$TMP/disk.json" '.disk | length == 1 and .[0].path == "/" and .[0].free_pct == 15 and (.[0].consumers[0] | startswith("Docker build cache: 500 GB"))'
+has "disk U3: the text board's DISK line" "$(render "$LBL")" "DISK  ⚠ Disk / low: 150 GB free (15%) — Docker build cache: 500 GB (480 GB reclaimable)"
+dbw "UPDATE episodes SET ended_at = $DNOW, state = 'closed' WHERE kind = 'disk-pressure'"
+render "$LBL" --json > "$TMP/disk.json"
+jt "disk U3: a closed spell leaves no disk field"         "$TMP/disk.json" 'has("disk") | not'
+dbw "DELETE FROM observed_alerts WHERE id LIKE 'sweep-disk-pressure%'"
+
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

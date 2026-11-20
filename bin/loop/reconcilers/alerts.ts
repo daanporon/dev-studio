@@ -35,6 +35,8 @@
 //   account-skills U3, a broken account   (`sweep-account-skills.<account>-<n>`, reconcilers/account-skills.ts):
 //            gone once the account's skills read `ok` or `warn:`, or its row is gone; skills NULL (a
 //            10-column accounts.tsv) cannot be judged, so the day-old rule applies.
+//   disk-pressure U3, a low disk   (`sweep-disk-pressure.<path>-<n>`, reconcilers/disk-pressure.ts):
+//            gone once the disk's spell closed (free space above disk_card_free_pct + 5 points, the limit 0, or the disk unlisted).
 import { existsSync, readFileSync } from "node:fs";
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
@@ -387,6 +389,12 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
     if (v === undefined) return "the account is no longer listed";
     if (v === null) return null;
     return v.startsWith("broken:") ? false : `the account's skills read ${v === "ok" ? "ok" : "warn (no longer broken)"}`;
+  }
+  // disk-pressure U3: a disk's card goes once its spell closed (free space above the limit plus 5 points, the limit off, the disk gone).
+  const disk = id.match(/^sweep-disk-pressure\.(.+)-[0-9]+$/);
+  if (disk) {
+    const ep = store.get("episodes", { project, subject: `disk-pressure.${disk[1]}`, kind: "disk-pressure" });
+    return ep && ep.ended_at == null ? false : "the disk has free space again";
   }
   const studio = (store.get("projects", { label: project })?.studio_wt as string | null) ?? null;
   if (/^(sweep|loop)-studio\.limit-/.test(id)) {

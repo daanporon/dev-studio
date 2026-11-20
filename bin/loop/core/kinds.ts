@@ -50,6 +50,7 @@ export const REQUESTS = {
   keys: obj({ text: str, enter: opt(bool) }),
   lavish: obj({ port: either(num, str) }),
   "config-undo": obj({ file: str, key: str, history: num }),
+  "settings-import": obj({ text: opt(str), from: opt(str), name: opt(str), picks: arr(any) }),
   "limit-lift": obj({ agent: str, account: str, ...THROUGH }),
   limits: obj({ key: str, value: opt(either(str, num)) }),
   merge: MERGE,

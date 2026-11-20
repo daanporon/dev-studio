@@ -219,8 +219,10 @@ Review thresholds apply when a Builder runs `bin/review/review-unit.sh`:
 | `cleanup_tmp_globs` | `-` | Comma- or space-separated absolute globs of host temp files the loop may clear: wildcard in the last path segment only, at least 3 literal characters there, and a parent that is not `/`, the home dir, the dev-studio root, the state dir, a workspaces dir or a repo clone. An invalid glob matches nothing. `-` means none. Read whole (`limitLine`), unlike other keys |
 | `cleanup_tmp_age_h` | `48` | Hours a match must be untouched before it is cleared; non-negative integer, else 48 |
 | `cleanup_on_close` | `-` | Command run in a member's worktree before the loop removes it (read whole, e.g. `docker compose down -v`). A ` #` starts a comment, so point it at a script when the command needs one. `-` means none |
+| `disk_card_free_pct` | `20` | A Studio card `Disk <path> low: <free> free (<pct>%)` opens when a disk's free share drops below this percent and names up to 8 consumers (Docker build cache, images and volumes, the Host tidy rows, `disk_watch_paths`). It clears once free space is above the value plus 5 points. `0` = off. The card deletes nothing. |
+| `disk_watch_paths` | `-` | Host-level (read from the default row, a project value is ignored): comma- or space-separated absolute paths (a leading `~/` is the home; no `..`, no wildcard) the disk card sizes with `du -sk`, e.g. `~/.bun/install/cache,~/.claude/projects`. Set it through an import like `cleanup_tmp_globs`. |
 
-`cleanup_tmp_globs` and `cleanup_on_close` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
+`cleanup_tmp_globs`, `cleanup_on_close` and `disk_watch_paths` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
 
 For example, `/ds-limits <project> review_risk_paths contracts/*.sol,src/auth/*`
 uses the risky threshold for those files. Globs match the whole path; `*` also
@@ -335,6 +337,24 @@ After that the rows are the only copy:
   source lacks, `--json` prints the plan as JSON. The three options may repeat or take a comma list.
 - `ds config prune <project>` lists the project's rows whose key this dev-studio doesn't know and, with
   `--apply`, drops them (one history row each).
+
+### Copy settings with the board's Import and Export
+
+The Settings window has **Export** and **Import** (settings-export-import U3).
+
+- **Export** downloads `<project>-settings.txt` (`GET /api/settings-export?project=`): the export text with a
+  first line `#! ds-settings 1 from=<label> rev=<commit> at=<time>` and the `skills.conf` rows.
+- **Import** takes a file, pasted text or another project on this host. **Preview** (`POST
+  /api/settings-import/preview {project, text|from}`) shows one row per setting: action (`add`, `change`,
+  `same`, `skip`), file, key, now → new, and why. Each row has a tick box. Settings that fit one project only
+  (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`, ship mode) start unticked and can be
+  ticked; a key this dev-studio doesn't know, a value it would refuse, and the two shell-only keys
+  (`cleanup_on_close`, `cleanup_tmp_globs`, shown `shell only`) are greyed and can't be ticked.
+- **Apply** (`POST /api/settings-import {project, text|from, picks: [{file, key, expect}]}`) files one
+  `settings-import` request; the loop writes only the picked rows, each one `config_history` row by
+  `board` (so the Limits and Roles tabs can undo them one by one), and answers with what it `written`,
+  `skipped` and found `stale` (a row that changed after the preview). The dialog shows the three counts and
+  the Limits and Roles tabs read their rows again.
 
 ## Autonomy: checkpoints vs fire-and-forget
 
