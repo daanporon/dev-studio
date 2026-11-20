@@ -16,7 +16,10 @@
 //           the PR stays blocked (or waits on running checks), whatever reasons GitHub reshuffles in
 //           between; ready, merged, closed or a wait on required:* alone ends it (no pr-stale poke on
 //           that wait; U179's required-wait poke covers it). A Builder session placed or cleared (placed_at/cleared_at) after the last
-//           poke about the PR gets one more pr-stale poke once idle, outside the two
+//           poke about the PR gets one more pr-stale poke once idle, outside the two. U275: a Builder
+//           quiet for stale_repoke_min after the first poke (no check running, worktree under 5% CPU)
+//           gets the second; quiet is idle/done, or Orca's `working` that liveness's atPrompt reads as
+//           at its prompt (transcript still, only a background task open), timed from its last write
 //   U179    a unit PR waiting on required:<context> alone, none of them a human gate (isHumanGate /
 //           human_checks keep the pr-question path), unless the ship mode is local-only: once the wait
 //           is required_wait_min (15; 0 = off) old and the Builder has been idle that long, one
@@ -68,6 +71,7 @@ import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Ctx, Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { wake } from "../pause/wake.ts";
+import { atPrompt } from "./liveness.ts";
 import { allDone as allDoneIn, retestDue, settleIn } from "../squad/retest.ts";
 import { paused } from "../pause/pause.ts";
 
@@ -341,17 +345,22 @@ export function run(ctx: TickCtx): Action[] {
           : `Fix it — merge the base in and resolve conflicts, fix the red check, address the open review threads — push, and stop at your prompt: the loop pokes you again when the PR changes (merge-ready included). If a blocker needs a reviewer or the Lead (changes requested, a thread you disputed), orch.sh ask your Lead instead of changing code. Don't send worker_done again.`;
         // U160: a sent pr-stale poke told the Builder about the PR as it is now; the pr-news poke below fires only for a later change.
         const staleRepoke = envOr(store, project, "DS_LOOP_STALE_REPOKE_MIN", "stale_repoke_min", 30);
-        // Quiet: no check running, the Builder idle at its prompt, its worktree under 5% CPU, and
-        // staleRepoke min since the latest of the first poke, the last news poke and its last output.
-        const quietDue = (ep: Row): boolean => {
-          if (staleRepoke <= 0 || all.includes("checks-running")) return false;
+        // Quiet: no check running, the Builder idle at its prompt (idle/done, or Orca's `working` that
+        // atPrompt reads as at its prompt: a still transcript with only a background task open), its
+        // worktree under 5% CPU, and staleRepoke min since the latest of the first poke, the last news
+        // poke and its last output (at its prompt: its transcript's last write, as the screen keeps moving).
+        const quiet = (ep: Row): { prompt: boolean } | null => {
+          if (staleRepoke <= 0 || all.includes("checks-running")) return null;
           const w = worker(bwt);
-          if (!w || (w.state !== "idle" && w.state !== "done")) return false;
+          if (!w) return null;
+          const p = w.state === "working" ? atPrompt(store, project, topic, slug, String(bwt), t, w) : null;
+          if (w.state !== "idle" && w.state !== "done" && !p) return null;
           const cpu = store.db.query("SELECT cpu_pct FROM observed_procs WHERE project = ? AND wt = ?").get(project, String(bwt)) as { cpu_pct: number | null } | null;
-          if (cpu && Number(cpu.cpu_pct ?? 0) >= 5) return false;
-          const last = Math.max(Number(ep.observed_at ?? 0), toldOf(store.get("episodes", nk), pr.since)?.at ?? 0, Number(w.last_output_at ?? 0));
-          return t - last >= staleRepoke * 60;
+          if (cpu && Number(cpu.cpu_pct ?? 0) >= 5) return null;
+          const last = Math.max(Number(ep.observed_at ?? 0), toldOf(store.get("episodes", nk), pr.since)?.at ?? 0, p ? p.since : Number(w.last_output_at ?? 0));
+          return t - last >= staleRepoke * 60 ? { prompt: !!p } : null;
         };
+        let q: { prompt: boolean } | null = null;
         const told = () => tell(store, project, topic, slug, pr, prNews(store, project, pr, u, u.status === "dispatched", sf, dflt)?.key ?? null, t);
         if (n === 0 || (same && row!.state === "armed" && n < 2)) {
           const text = `dev-studio loop: PR #${pr.pr} for your unit ${slug} is not merge-ready (${reasons}).${threadList(pr)} ${fix}`;
@@ -360,11 +369,11 @@ export function run(ctx: TickCtx): Action[] {
           if (w.status === "sent") store.upsert("episodes", sk, { squad: topic, episode_key: key, count: n + 1, state: "poked", source: "loop", started_at: same ? row!.started_at : t, observed_at: t,
             next_at: n + 1 >= 2 ? t : null });
           if (w.status === "sent") told();
-        } else if (same && row!.state === "poked" && n === 1 && quietDue(row!)) {
+        } else if (same && row!.state === "poked" && n === 1 && (q = quiet(row!))) {
           // U275: the Builder went quiet after the first poke without pushing: the second comes after
           // stale_repoke_min, so the Lead and card timers (which run from it) follow.
           const text = `dev-studio loop: PR #${pr.pr} for your unit ${slug} is still not merge-ready (${reasons}) and nothing has changed for ${staleRepoke} min.${threadList(pr)} ${fix}`;
-          const w = wake(ctx, bwt, text, "pr-stale", `${pr.problem ?? ""}|${pr.since ?? ""}#2`);
+          const w = wake(ctx, bwt, text, "pr-stale", `${pr.problem ?? ""}|${pr.since ?? ""}#2`, { allowWorking: q.prompt });
           out.push(...w.actions);
           if (w.status === "sent") { store.upsert("episodes", sk, { squad: topic, episode_key: key, count: 2, state: "poked", source: "loop", observed_at: t, next_at: t }); told(); }
         } else if (same) {
