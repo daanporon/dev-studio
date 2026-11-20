@@ -475,12 +475,14 @@ function questionDoc(db: Db, label: string, topic: string, x: any, units: any[] 
   } catch { return none; }
 }
 
-// Lavish review pages (observed_sessions) whose artifact sits in one of the squad's worktrees.
-function lavish(db: Db, st: any) {
-  const wts = arr(st.worktrees).map(String).map((w) => w.includes("::") ? w.slice(w.lastIndexOf("::") + 2) : w).filter(Boolean);
-  if (!wts.length) return [];
+// Lavish review pages (observed_sessions) of a squad: the artifact sits in one of its worktrees, or in its
+// pages folder `<state root>/<label>/pages/<topic>/` or the legacy `<label>/squads/<topic>-board/`. A live
+// and an archived squad read the same way (an archived one has no worktrees).
+function lavish(db: Db, st: any, label: string, topic: string) {
+  const wts = arr(st?.worktrees).map(String).map((w) => w.includes("::") ? w.slice(w.lastIndexOf("::") + 2) : w).filter(Boolean);
+  const homes = [`${db.s.root}/${label}/pages/${topic}/`, `${db.s.root}/${label}/squads/${topic}-board/`];
   return db.all("SELECT file, url, status, doc FROM observed_sessions WHERE COALESCE(status, '') != 'log' ORDER BY file")
-    .filter((s) => wts.some((w) => String(s.file).startsWith(w + "/")))
+    .filter((s) => wts.some((w) => String(s.file).startsWith(w + "/")) || homes.some((h) => String(s.file).startsWith(h)))
     .map((s) => {
       const d = parse(s.doc) ?? {}, f = String(s.file);
       return { key: d.key ?? null, name: basename(f), dir: basename(f.slice(0, f.lastIndexOf("/"))), mtime: Number(d.mtime) || 0, url: s.url ?? null, status: s.status ?? null };
@@ -1671,7 +1673,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
       ...cls("mplan", (s) => s !== "done" && s !== "dispatched" && s !== "cancelled"),
     ].join("\n"),
     plans: plans(db, label, `${label}/squads/${topic}`, st, topic),
-    lavish: lavish(db, st),
+    lavish: lavish(db, st, label, topic),
     proposals: arr(st.proposed_squads).filter((p) => p?.status !== "spawned").map((p) => ({
       id: p.id ?? null, topic: p.topic ?? null,
       command: `~/.dev-studio/bin/commands/approve-fix.sh ${q(label)} ${q(topic)} ${shq(p.id ?? null)}`,
@@ -1899,6 +1901,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       framing: String(st.framing ?? "").slice(0, 160), progress: progress(arr(st.units)),
       debrief: typeof st.debrief === "string" && st.debrief.trim() ? st.debrief : null,
       prs: squadPrs(db, l, st, repoSlug(db, l, String(st.repo ?? ""))), plans: plans(db, l, `${l}/archive/${t}`),
+      lavish: lavish(db, null, l, t),
     };
   })) : [];
 

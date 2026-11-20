@@ -245,6 +245,20 @@ describe("state observer", () => {
     expect(JSON.parse(rows(s, "observed_sessions")[2].doc as string).tail).toContain("listening on 4387");
   });
 
+  test("Lavish pages under pages/<topic>/ and squads/<topic>-board/ get the project; notes/ stays unowned", () => {
+    const s = imported(), x = observer();
+    mkdirSync(x.lavishDir, { recursive: true });
+    const f = (rel: string) => `${s.root}/${rel}`;
+    writeFileSync(join(x.lavishDir, "state.json"), JSON.stringify({ sessions: {
+      a: { file: f("fx/pages/t/a.html"), status: "open" }, b: { file: f("fx/squads/t-board/b.html"), status: "open" },
+      c: { file: `${LEAD_PATH}/.lavish/c.html`, status: "open" }, d: { file: f("fx/notes/d.html"), status: "open" },
+      e: { file: f("fx/squads/plan.html"), status: "open" } } }));
+    tick(s, x.o, T);
+    expect(Object.fromEntries(rows(s, "observed_sessions").map((r) => [String(r.file).replace(`${s.root}/`, ""), r.project]))).toMatchObject({
+      "fx/pages/t/a.html": "fx", "fx/squads/t-board/b.html": "fx", "fx/notes/d.html": "", "fx/squads/plan.html": "" });
+    expect(rows(s, "observed_sessions").find((r) => String(r.file).endsWith("c.html"))?.project).toBe("fx");
+  });
+
   test("a stale accounts.tsv asks for one refresh, not one per tick", () => {
     const s = imported(), x = observer();
     tick(s, x.o, T);

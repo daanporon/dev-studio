@@ -157,7 +157,7 @@ up to 4, if more than one cross-squad question is open) — then
 `send <squad-run> answer "msg_id=<id> <the pick>"` down to each owning Lead. The picker blocks
 your terminal, so it only works while you're attached; never reach for it during a hook tick.
 
-**Where you save things:** `squads/` holds only `<topic>.json` squad state files (written by `bin/role/squad-state.sh`) and `.md` plans and brainstorms; notes, reviews and experiment records go in `state/<project>/notes/` or as `.md` next to their plan, morning briefs go in `state/<project>/briefings/<date>.md`, and a JSON file in `squads/` that is not a squad is skipped with a warning.
+**Where you save things:** `squads/` holds only `<topic>.json` squad state files (written by `bin/role/squad-state.sh`) and `.md` plans and brainstorms; notes, reviews and experiment records go in `state/<project>/notes/` or as `.md` next to their plan, morning briefs go in `state/<project>/briefings/<date>.md`, and a JSON file in `squads/` that is not a squad is skipped with a warning. Lavish review pages and their files go in `state/<label>/pages/_studio/` (a squad's in `pages/<topic>/`), opened with `lavish-axi <path>`; the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend.
 
 ## Reloading squads after a dev-studio update
 

@@ -436,6 +436,19 @@ jt "lavish session on its squad"  "$TMP/lv.json" '.squads[] | select(.topic=="la
 jt "no lavish state = empty list" "$J" '.squads[0].lavish == []'
 rm -f "$SD/lav-sq.json"
 
+# A squad's pages folder (pages/<topic>/, legacy squads/<topic>-board/) and its worktree: three pages on A, one on B, one on archived C.
+PG="$DS_STATE_ROOT/$LBL"; mkdir -p "$PG/pages/pa" "$PG/pages/pb" "$PG/pages/pc" "$PG/squads/pa-board" "$TMP/wtPA" "$PG/archive"
+PR="$DBR/$LBL"  # the board reads the db under $DBR: that is the root its pages folders are named from
+printf '{"run_id":"p1","status":"running","members":[],"units":[],"worktrees":["u1::%s/wtPA"]}' "$TMP" > "$SD/pa.json"
+printf '{"run_id":"p2","status":"running","members":[],"units":[]}' > "$SD/pb.json"
+printf '{"topic":"pc","closed_at":"2026-10-01T00:00:00Z","units":[]}' > "$PG/archive/pc-1.json"
+printf '{"sessions":{"a1":{"key":"a1","file":"%s/pages/pa/one.html","url":"http://h/session/a1","status":"open"},"a2":{"key":"a2","file":"%s/squads/pa-board/two.html","url":"http://h/session/a2","status":"open"},"a3":{"key":"a3","file":"%s/wtPA/three.html","url":"http://h/session/a3","status":"open"},"b1":{"key":"b1","file":"%s/pages/pb/b.html","url":"http://h/session/b1","status":"open"},"c1":{"key":"c1","file":"%s/pages/pc/c.html","url":"http://h/session/c1","status":"open"},"n1":{"key":"n1","file":"%s/notes/n.html","url":"http://h/session/n1","status":"open"}}}' "$PR" "$PR" "$TMP" "$PR" "$PR" "$PR" > "$TMP/lv/state.json"
+LAVISH_AXI_STATE_DIR="$TMP/lv" board "$LBL" > "$TMP/pg.json"
+jt "pages: squad A lists its 3 (pages/, -board/, worktree)" "$TMP/pg.json" '[.squads[] | select(.topic=="pa") | .lavish[].key] | sort == ["a1","a2","a3"]' '.squads[] | select(.topic=="pa") | .lavish'
+jt "pages: squad B lists only its own" "$TMP/pg.json" '[.squads[] | select(.topic=="pb") | .lavish[].key] == ["b1"]'
+jt "pages: archived C lists its 1" "$TMP/pg.json" '[.archived[] | select(.topic=="pc") | .lavish[].key] == ["c1"]' '.archived'
+rm -rf "$PG/pages" "$PG/squads/pa-board" "$PG/archive" "$SD/pa.json" "$SD/pb.json"
+
 # Dependency DAG: u2 no deps -> ready; u3 waits on u1(done)+u4 -> blocked. Natural order u1..u10.
 printf '{"run_id":"w1","status":"running","type":"feature","members":[],"units":[{"slug":"u10-last","status":"planned","deps":["u3"]},{"slug":"u1","status":"done"},{"slug":"u3","status":"planned","deps":["u1","u4"]},{"slug":"u2","status":"planned","deps":[]},{"slug":"u4","status":"planned","deps":[]}]}' > "$SD/deps-sq.json"
 board "$LBL" > "$TMP/e.json"

@@ -193,7 +193,8 @@ export function stateObserver(opts: StateOpts = {}): Observer {
     file(store, at, "accounts.tsv", sig(f), () => accountRows(store.root), [["observed_accounts", {}]]);
   }
 
-  // Lavish review pages: each belongs to the project whose member worktree holds its file.
+  // Lavish review pages: each belongs to the project whose member worktree holds its file, or whose
+  // state folder holds it: `<root>/<label>/pages/<topic>/` and the legacy `<root>/<label>/squads/<topic>-board/`.
   function sessions(store: Store, at: number) {
     const dir = opts.lavishDir ?? process.env.LAVISH_AXI_STATE_DIR ?? join(process.env.HOME || "", ".lavish-axi");
     const st = join(dir, "state.json"), log = opts.lavishLog ?? join(process.env.TMPDIR || "/tmp", "ds-lavish-start.log");
@@ -203,7 +204,8 @@ export function stateObserver(opts: StateOpts = {}): Observer {
       const s = readJson(st) as { sessions?: Record<string, Row> } | undefined;
       const rows: FactRow[] = Object.entries(isObj(s?.sessions) ? s.sessions : {}).filter((e): e is [string, Row] => isObj(e[1])).map(([key, v]) => {
         const f = String(v.file ?? "");
-        return { table: "observed_sessions", key: { project: roots.find((r) => f.startsWith(r.dir))?.project ?? "", file: f },
+        const home = f.startsWith(`${store.root}/`) ? /^([^/]+)\/(?:pages\/[^/]+|squads\/[^/]+-board)\//.exec(f.slice(store.root.length + 1))?.[1] : undefined;
+        return { table: "observed_sessions", key: { project: roots.find((r) => f.startsWith(r.dir))?.project ?? home ?? "", file: f },
           set: { url: (v.url as string) ?? null, status: (v.status as string) ?? null, doc: JSON.stringify({ key, ...v }), observed_at: at } };
       });
       if (existsSync(log)) rows.push({ table: "observed_sessions", key: { project: "", file: log },
