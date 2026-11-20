@@ -2,9 +2,11 @@
 // fixture roots (fake /proc, fake Claude temp root, temp git clones, a fake backend list), the
 // write's row lifecycle, and the off-tick scan with its in-flight guard.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupObserver, scanCleanup, writeCleanup, type CleanupScan } from "../../bin/loop/observers/cleanup.ts";
+import { cleanupObserver, measureCleanup, scanCleanup, writeCleanup, writeSizes, type CleanupScan } from "../../bin/loop/observers/cleanup.ts";
+import { cardText } from "../../bin/loop/fulfil/cleanup.ts";
+import type { Du } from "../../bin/loop/io/du.ts";
 import { mangle } from "../../bin/loop/observers/orca.ts";
 import type { Store } from "../../bin/loop/core/store.ts";
 import { streamDir, type DirReader } from "../../bin/loop/io/tidy.ts";
@@ -231,5 +233,122 @@ describe("the write and the schedule (KTD4)", () => {
     expect(calls).toBe(1);                                     // not due again until DS_LOOP_CLEANUP_S
     ob.run(ctx(AT + 3600)); await ob.idle();
     expect(calls).toBe(2);
+  });
+});
+
+describe("the measuring pass (investigate-disk-cleanup U1)", () => {
+  const glob = (s: Store, g: string) => s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: g, observed_at: 1 });
+  const seed = (s: Store, cls: string, key: string, kb: number, facts: Record<string, unknown>) =>
+    s.db.query(`INSERT INTO observed_cleanup (project, class, key, path, size_kb, first_seen, facts, observed_at) VALUES ('p', ?, ?, ?, ?, ?, ?, ?)`)
+      .run(cls, key, key, kb, AT, JSON.stringify(facts), AT);
+  const row = (s: Store, cls: string) => {
+    const r = s.db.query("SELECT size_kb, facts FROM observed_cleanup WHERE class = ?").get(cls) as { size_kb: number; facts: string };
+    return { kb: r.size_kb, facts: JSON.parse(r.facts) as Record<string, unknown> };
+  };
+  const realDu = (p: string) => Number(Bun.spawnSync(["du", "-sk", p]).stdout.toString().split("\t")[0]);
+  const folder = (d: string, subdirs: number, files: number) => {
+    mkdirSync(d);
+    for (let i = 0; i < subdirs; i++) { mkdirSync(join(d, `s${i}`)); for (let j = 0; j < files; j++) writeFileSync(join(d, `s${i}`, `f${j}`), "x"); }
+  };
+
+  test("a class e glob matching a folder of 3,000 files: the scan counts its inode and marks it partial; one pass sizes it like du -sk", async () => {
+    const s = store(), dir = tmp();
+    project(s, "p"); glob(s, `${dir}/zzcache-*`);
+    folder(join(dir, "zzcache-a"), 30, 100);
+    writeFileSync(join(dir, "zzcache-f"), "x".repeat(10_000));
+    const scan = await scanCleanup(s, AT, opts({ proc: fakeProc([]), tmpRoot: tmp() }));
+    expect(rows(scan, "e")[0].facts).toMatchObject({ count: 2, dirs: 1, partial: true });
+    writeCleanup(s, scan);
+    const walk = row(s, "e").kb;
+    writeSizes(s, await measureCleanup(s), AT + 5);
+    const want = realDu(join(dir, "zzcache-a")) + realDu(join(dir, "zzcache-f"));
+    const got = row(s, "e");
+    expect(walk).toBeLessThan(want / 10);
+    expect(Math.abs(got.kb - want) / want).toBeLessThan(0.05);
+    expect(got.facts).toMatchObject({ size_from: "du", size_at: AT + 5, partial: true, count: 2 });
+    expect(cardText(s, "p")).toContain(`(${(got.kb / 1024).toFixed(1)} MB)`);
+    expect(cardText(s, "p")).not.toContain("≥");
+  }, 30_000);
+
+  test("largest first, one du at a time, each capped by what is left of the pass; the pass stops at its cap; whole rows only", async () => {
+    const s = store(), d = tmp();
+    for (const [n, kb] of [["small", 100], ["big", 900], ["mid", 500]] as const) { mkdirSync(join(d, n)); seed(s, "c", join(d, n), kb, { partial: true }); }
+    mkdirSync(join(d, "whole")); seed(s, "d", join(d, "whole"), 5000, { partial: false });
+    seed(s, "a", "1:1", 9999, { partial: true });
+    const calls: [string, number][] = [];
+    let running = 0, most = 0;
+    const du: Du = async (p, t) => { calls.push([p, t]); most = Math.max(most, ++running); await Bun.sleep(600); running--; return { kb: 7 }; };
+    const out = await measureCleanup(s, { du, duS: 50, duTotalS: 1 });
+    expect(calls).toEqual([[join(d, "big"), 1], [join(d, "mid"), 1]]);
+    expect(most).toBe(1);
+    expect(out.map((m) => m.key)).toEqual([join(d, "big"), join(d, "mid")]);
+  });
+
+  test("a du past DS_LOOP_CLEANUP_DU_S is killed: the walk's size stays with size_error, and the card still reads ≥", async () => {
+    const s = store(), d = tmp(), bin = join(tmp(), "bin");
+    project(s, "p");
+    mkdirSync(join(d, "slow")); seed(s, "c", join(d, "slow"), 2048, { partial: true });
+    mkdirSync(bin); writeFileSync(join(bin, "du"), "#!/bin/sh\nexec sleep 30\n"); chmodSync(join(bin, "du"), 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    const t0 = performance.now();
+    let out;
+    try { out = await measureCleanup(s, { duS: 1 }); } finally { process.env.PATH = path; }
+    expect(performance.now() - t0).toBeLessThan(5000);
+    expect(out).toEqual([{ project: "p", class: "c", key: join(d, "slow"), error: "du timed out after 1 s" }]);
+    writeSizes(s, out, AT + 5);
+    expect(row(s, "c")).toEqual({ kb: 2048, facts: { partial: true, size_error: "du timed out after 1 s" } });
+    expect(cardText(s, "p")).toContain(`≥ 2.0 MB · ${join(d, "slow")}`);
+  });
+
+  test("a path gone before its du or during it is skipped; a row gone before the write keeps its old size", async () => {
+    const s = store(), d = tmp();
+    for (const n of ["before", "during", "after"]) { mkdirSync(join(d, n)); seed(s, "d", join(d, n), 10, { partial: true }); }
+    rmSync(join(d, "before"), { recursive: true });
+    const du: Du = async (p) => { if (p.endsWith("during")) { rmSync(p, { recursive: true }); return { error: "du exited 1" }; } return { kb: 4242 }; };
+    const out = await measureCleanup(s, { du });
+    expect(out).toEqual([{ project: "p", class: "d", key: join(d, "after"), kb: 4242 }]);
+    s.db.query("UPDATE observed_cleanup SET gone_at = ? WHERE key = ?").run(AT + 1, join(d, "after"));
+    writeSizes(s, out, AT + 5);
+    expect(s.db.query("SELECT key, size_kb FROM observed_cleanup ORDER BY key").all()).toEqual(
+      ["after", "before", "during"].map((n) => ({ key: join(d, n), size_kb: 10 })));
+  });
+
+  test("the next scan keeps the measured size while the walk is still under it, and drops it once the walk passes it", async () => {
+    const s = store(), ws = tmp(), root = tmp();
+    project(s, "p");
+    observedWt(s, "p", "g", `${ws}/ds-p-g`, AT - 900);
+    const dir = join(root, mangle(`${ws}/ds-p-g`)); mkdirSync(dir); writeFileSync(join(dir, "out"), "x".repeat(8192)); writeFileSync(join(dir, "out2"), "x");
+    const o = opts({ proc: fakeProc([]), tmpRoot: root, tmpSizeEntries: 2 });            // the folder and one file: partial
+    writeCleanup(s, await scanCleanup(s, AT, o));
+    writeSizes(s, await measureCleanup(s, { du: async () => ({ kb: 999_999 }) }), AT + 5);
+    writeCleanup(s, await scanCleanup(s, AT + 3600, o));
+    expect(row(s, "b")).toMatchObject({ kb: 999_999, facts: { partial: true, size_from: "du", size_at: AT + 5 } });
+    writeSizes(s, await measureCleanup(s, { du: async () => ({ kb: 1 }) }), AT + 3605);   // under the walk's 8 kB
+    writeCleanup(s, await scanCleanup(s, AT + 7200, o));
+    const r = row(s, "b");
+    expect(r.kb).toBeGreaterThan(0);
+    expect(r.facts.size_from).toBeUndefined();
+  });
+
+  test("through the observer: the tick that writes a scan starts its pass, a later tick writes its sizes, and no scan starts meanwhile", async () => {
+    const s = store(), d = tmp();
+    project(s, "p");
+    let release: () => void = () => {}, scans = 0;
+    const gate = new Promise<void>((r) => { release = r; });
+    mkdirSync(join(d, "x"));
+    const ob = cleanupObserver(opts({ proc: fakeProc([]), tmpRoot: tmp(), ps: async () => { scans++; return []; },
+      du: async () => { await gate; return { kb: 31_337 }; } }));
+    const ctx = (now: number) => ({ store: s, project: "", tick: 1, now, fired: [], poked: new Set<string>() });
+    ob.run(ctx(AT)); await Bun.sleep(50);
+    seed(s, "d", join(d, "x"), 10, { partial: true });       // as if the scan had found it
+    ob.run(ctx(AT + 1));                                      // writes the scan (an empty backend list keeps class d rows), starts the pass
+    ob.run(ctx(AT + 3601));                                   // due, but the pass is in flight
+    expect(scans).toBe(1);
+    release(); await ob.idle();
+    ob.run(ctx(AT + 3602));
+    expect(row(s, "d")).toMatchObject({ kb: 31_337, facts: { size_from: "du", size_at: AT + 3602 } });
+    await ob.idle();
+    expect(scans).toBe(2);
   });
 });

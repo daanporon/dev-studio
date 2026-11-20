@@ -12,7 +12,11 @@
 // Host scope, every tick, with its own DS_LOOP_CLEANUP_S (3600 s) timer (KTD4): a due tick starts the
 // scan off the tick (async fs, yielding every 1,000 entries or second, one scan at a time); the next
 // tick that finds it finished writes it in one transaction. Rows not seen again get gone_at; a row
-// that comes back starts over. Gone rows are pruned after a day.
+// that comes back starts over. Gone rows are pruned after a day. The tick that writes a scan starts its
+// measuring pass (investigate-disk-cleanup U1, `measureCleanup`): every `partial` row (a walk past its
+// entry budget, a class e glob that matched a folder) gets one `du -sk` per path off the tick, largest
+// first, DS_LOOP_CLEANUP_DU_S (120 s) each and DS_LOOP_CLEANUP_DU_TOTAL_S (600 s) per pass; a later
+// tick writes `size_kb` with facts `size_from: "du"` and `size_at`. No scan starts while it runs.
 import { lstat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -23,6 +27,7 @@ import { CLK_TCK, readCwdRaw, readText, readUid } from "../io/proc.ts";
 import { keepSet } from "../reconcilers/cleanup.ts";
 import type { Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
+import { du as duSk, type Du, type DuResult } from "../io/du.ts";
 import { claudeTmpRoot, gitWorktrees, globMatcher, inUse, liveAgents, procIndex, probeTree, streamDir, targetRef, treeSize, yielder,
   type DirReader, type GitTree, type InUse } from "../io/tidy.ts";
 import { mangle, prefix, shellAdapter, wtPath, type PsWorktree } from "./orca.ts";
@@ -40,6 +45,9 @@ export type CleanupOpts = {
   self?: number; uid?: number; host?: string;
   sizeEntries?: number;                   // lstat budget for classes c and d sizes per scan (best effort)
   tmpSizeEntries?: number;                // lstat budget for class b (Claude temp dirs) sizes per scan
+  du?: Du;                                // the measuring pass's sizer (io/du.ts)
+  duS?: number;                           // its per-path timeout (DS_LOOP_CLEANUP_DU_S)
+  duTotalS?: number;                      // its time cap per pass (DS_LOOP_CLEANUP_DU_TOTAL_S)
 };
 type Wt = { project: string; wt: string; path: string; gone_at: number | null };
 
@@ -219,7 +227,7 @@ export async function scanCleanup(store: Store, at: number, o: CleanupOpts = {})
     seen.add(glob);
     const { parent, match } = globMatcher(glob);
     const f = { count: 0, kb: 0, oldest: null as number | null, newest: null as number | null, too_new: 0, not_ours: 0, in_use: 0,
-      in_use_pid: null as number | null, removable: 0, sample: [] as string[] };
+      in_use_pid: null as number | null, removable: 0, dirs: 0, partial: false, sample: [] as string[] };
     for await (const name of dirs(parent)) {
       await tick(); entries++;
       if (!match(name)) continue;
@@ -227,6 +235,7 @@ export async function scanCleanup(store: Store, at: number, o: CleanupOpts = {})
       if (!st) continue;
       const m = Math.floor(st.mtimeMs / 1000);
       f.count++; f.kb += Math.ceil(Number(st.blocks) / 2);
+      if (st.isDirectory()) { f.dirs++; f.partial = true; } // a matched folder counts its own inode until the measuring pass
       f.oldest = f.oldest === null ? m : Math.min(f.oldest, m); f.newest = f.newest === null ? m : Math.max(f.newest, m);
       const h = !st.isDirectory() && use.exact ? use.exact(p) : holder(p);
       if (st.uid !== uid) f.not_ours++;
@@ -242,7 +251,17 @@ export async function scanCleanup(store: Store, at: number, o: CleanupOpts = {})
 
 // One transaction: upsert every row (first_seen kept while the row stays; a row back from gone starts
 // over), gone_at on the rows not seen (class d left alone when the backend list failed), the scan row.
+// A partial row keeps the measuring pass's last size (and its size_from/size_at) while that is still
+// at least the new walk's, so the card does not fall back to `≥` every hour until the pass runs again.
 export function writeCleanup(store: Store, s: CleanupScan, host = hostname()): void {
+  const prev = store.db.query("SELECT size_kb, facts FROM observed_cleanup WHERE project = ? AND class = ? AND key = ? AND gone_at IS NULL");
+  const carry = (r: CleanupRow): CleanupRow => {
+    if (r.class === "a" || !r.facts.partial) return r;
+    const p = prev.get(r.project, r.class, r.key) as { size_kb: number | null; facts: string | null } | null;
+    const f = parse(p?.facts);
+    if (f.size_from !== "du" || p?.size_kb === null || p?.size_kb === undefined || p.size_kb < Number(r.size_kb ?? 0)) return r;
+    return { ...r, size_kb: p.size_kb, facts: { ...r.facts, size_from: "du", size_at: f.size_at } };
+  };
   const up = store.db.query(`INSERT INTO observed_cleanup (project, class, key, path, pid, size_kb, mtime, first_seen, facts, observed_at, gone_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT (project, class, key) DO UPDATE SET path = excluded.path, pid = excluded.pid, size_kb = excluded.size_kb, mtime = excluded.mtime,
@@ -253,7 +272,7 @@ export function writeCleanup(store: Store, s: CleanupScan, host = hostname()): v
       gone_at = NULL`);
   const seen = new Set(s.rows.map((r) => JSON.stringify([r.project, r.class, r.key])));
   store.tx(() => {
-    for (const r of s.rows) up.run(r.project, r.class, r.key, r.path ?? null, r.pid ?? null, r.size_kb ?? null, r.mtime ?? null, s.at, JSON.stringify(r.facts), s.at);
+    for (const r of s.rows.map(carry)) up.run(r.project, r.class, r.key, r.path ?? null, r.pid ?? null, r.size_kb ?? null, r.mtime ?? null, s.at, JSON.stringify(r.facts), s.at);
     const live = store.db.query("SELECT project, class, key FROM observed_cleanup WHERE gone_at IS NULL").all() as { project: string; class: string; key: string }[];
     const gone = store.db.query("UPDATE observed_cleanup SET gone_at = ? WHERE project = ? AND class = ? AND key = ?");
     for (const r of live) if (!seen.has(JSON.stringify([r.project, r.class, r.key])) && !(s.psError && r.class === "d")) gone.run(s.at, r.project, r.class, r.key);
@@ -265,25 +284,102 @@ export function writeCleanup(store: Store, s: CleanupScan, host = hostname()): v
   });
 }
 
+const parse = (t: string | null | undefined): Record<string, unknown> => { try { return JSON.parse(t ?? "{}") ?? {}; } catch { return {}; } };
+
+// The measuring pass (investigate-disk-cleanup U1). The walk stops at its entry budgets and a class e
+// row counts a matched folder as its own inode, so after each written scan every live row whose facts
+// say `partial` gets its real size from `du -sk`, largest first, off the tick: one path at a time,
+// each killed after DS_LOOP_CLEANUP_DU_S (120 s), the pass stopped after DS_LOOP_CLEANUP_DU_TOTAL_S
+// (600 s). A class e row is the sum over its glob's matches (a folder's du, a file's own blocks). A
+// path gone before or during its du is skipped; a failed du keeps the walk's size and says why in
+// `size_error`. Everything read from loop.db is read before the first await. Sizes decide no verdict (KTD4).
+export type Sized = { project: string; class: string; key: string } & ({ kb: number } | { error: string });
+
+type ToSize = { project: string; class: string; key: string; path: string | null };
+export const toSize = (store: Store): ToSize[] => store.db.query(`SELECT project, class, key, path FROM observed_cleanup
+  WHERE gone_at IS NULL AND class <> 'a' AND json_extract(facts, '$.partial') = 1 ORDER BY size_kb DESC, class, key`).all() as ToSize[];
+
+export async function measureCleanup(store: Store, o: CleanupOpts = {}, rows = toSize(store)): Promise<Sized[]> {
+  const perS = o.duS ?? envInt("DS_LOOP_CLEANUP_DU_S", 120), totalS = o.duTotalS ?? envInt("DS_LOOP_CLEANUP_DU_TOTAL_S", 600);
+  const run = o.du ?? duSk, dirs = o.dirs ?? streamDir, tick = yielder(), t0 = performance.now();
+  const left = () => totalS - (performance.now() - t0) / 1000;
+  const there = (p: string) => lstat(p).then((st) => st, () => null);
+  const one = async (p: string): Promise<DuResult | "gone"> => {
+    if (!(await there(p))) return "gone";
+    const r = await run(p, Math.max(1, Math.min(perS, Math.ceil(left()))));
+    return "error" in r && !(await there(p)) ? "gone" : r;
+  };
+  const out: Sized[] = [];
+  for (const r of rows) {
+    if (left() <= 0) break;
+    const id = { project: r.project, class: r.class, key: r.key };
+    if (r.class !== "e") {
+      const d = r.path ? await one(r.path) : "gone";
+      if (d !== "gone") out.push({ ...id, ...d });
+      continue;
+    }
+    const { parent, match } = globMatcher(r.key);
+    let kb = 0, error: string | null = null, seen = false;
+    for await (const name of dirs(parent)) {
+      await tick();
+      if (!match(name)) continue;
+      const p = join(parent, name), st = await there(p);
+      if (!st) continue;
+      seen = true;
+      if (!st.isDirectory()) { kb += Math.ceil(Number(st.blocks) / 2); continue; }
+      const d = await one(p);
+      if (d === "gone") continue;
+      if ("error" in d) { error = d.error; break; }
+      kb += d.kb;
+    }
+    if (seen) out.push(error ? { ...id, error } : { ...id, kb });
+  }
+  return out;
+}
+
+// The pass's sizes, on a later tick: a row gone (or back from gone) since is skipped.
+export function writeSizes(store: Store, sized: Sized[], at: number): void {
+  const get = store.db.query("SELECT facts FROM observed_cleanup WHERE project = ? AND class = ? AND key = ? AND gone_at IS NULL");
+  const set = store.db.query("UPDATE observed_cleanup SET size_kb = COALESCE(?, size_kb), facts = ? WHERE project = ? AND class = ? AND key = ?");
+  store.tx(() => {
+    for (const m of sized) {
+      const row = get.get(m.project, m.class, m.key) as { facts: string | null } | null;
+      if (!row) continue;
+      const f = parse(row.facts);
+      if ("kb" in m) { delete f.size_error; f.size_from = "du"; f.size_at = at; } else f.size_error = m.error;
+      set.run("kb" in m ? m.kb : null, JSON.stringify(f), m.project, m.class, m.key);
+    }
+  });
+}
+
 export type CleanupObserver = Observer & { idle(): Promise<void> };
 
+// One background job at a time: the scan, then (after the tick that writes it) its measuring pass.
 export function cleanupObserver(o: CleanupOpts = {}): CleanupObserver {
-  let inflight: Promise<void> | null = null, done: CleanupScan | null = null, failed: string | null = null, nextAt: number | null = null;
+  let inflight: Promise<void> | null = null, done: CleanupScan | null = null, sized: Sized[] | null = null;
+  let failed: string | null = null, nextAt: number | null = null;
+  const start = (what: string, job: Promise<void>) => {
+    inflight = job.catch((e) => { failed = `${what}: ${(e as Error)?.message ?? e}`; }).finally(() => { inflight = null; });
+  };
   return {
     name: "cleanup",
     scope: "host",
-    idle: () => inflight ?? Promise.resolve(),
+    idle: async () => { while (inflight) await inflight; },
     run(ctx: TickCtx) {
       const { store, now } = ctx;
-      if (done) { const s = done; done = null; writeCleanup(store, s, o.host); }
-      if (failed) { const e = failed; failed = null; throw new Error(`cleanup scan: ${e}`); }
+      if (sized) { const m = sized; sized = null; writeSizes(store, m, now); }
+      if (done) {
+        const s = done; done = null; writeCleanup(store, s, o.host);
+        const rows = toSize(store);
+        if (rows.length) start("cleanup sizes", measureCleanup(store, o, rows).then((m) => { sized = m.length ? m : null; }));
+      }
+      if (failed) { const e = failed; failed = null; throw new Error(e); }
       if (inflight) return;
       const every = envInt("DS_LOOP_CLEANUP_S", 3600);
       nextAt ??= Number((store.db.query("SELECT MAX(started_at) AS at FROM observed_cleanup_scan").get() as { at: number | null }).at ?? -Infinity) + every;
       if (now < nextAt) return;
       nextAt = now + every;
-      inflight = scanCleanup(store, now, o).then((s) => { done = s; }, (e) => { failed = (e as Error)?.message ?? String(e); })
-        .finally(() => { inflight = null; });
+      start("cleanup scan", scanCleanup(store, now, o).then((s) => { done = s; }));
     },
   };
 }

@@ -6,7 +6,8 @@
 // is not `apply`, or a removal that failed under `apply`; otherwise it is resolved, and `ds observed
 // cleanup` still lists every row. Nothing is deleted or stopped here (AE6): with host_tidy `apply`
 // that is fulfil/cleanup-act.ts, and the card says so, with what it removed in the last 24 hours and
-// the error of any row it failed on (U3).
+// the error of any row it failed on (U3). A size the walk only bounds from below reads `≥ <size>`
+// until the measuring pass sizes it (investigate-disk-cleanup U1).
 import { alert, resolveAlert, type Fulfiller } from "../core/actuator.ts";
 import { cleanupGlobs, limit } from "../settings/limits.ts";
 import { errOf } from "../io/orca.ts";
@@ -27,6 +28,9 @@ export function human(kb: number): string {
 }
 
 const facts = (r: R): Record<string, unknown> => { try { return JSON.parse(r.facts ?? "{}") ?? {}; } catch { return {}; } };
+// A partial walk the measuring pass (observers/cleanup.ts) has not sized yet is a lower bound: `≥ 30 MB`.
+const atLeast = (r: R): boolean => !!facts(r).partial && facts(r).size_from !== "du";
+const sizeOf = (r: R): string => r.size_kb === null ? "?" : `${atLeast(r) ? "≥ " : ""}${human(Number(r.size_kb))}`;
 const what = (r: R): string => {
   const f = facts(r);
   if (r.class === "a") return `pid ${r.pid} ${f.comm ?? ""} in ${f.cwd ?? r.path}`.replace(/\s+/g, " ");
@@ -51,7 +55,7 @@ export function cardText(store: Store, project: string, o: { refused?: string | 
     limit(store, project, "host_tidy") === "apply" ? "Apply: the loop removes what reads removable, one at a time, after reading it again."
       : "Report only: the loop deletes and stops nothing here.",
     `${rows.length} rows, ${removable.length} removable (${human(kb(removable))} disk${removable.some((r) => r.class === "a") ? `, ${human(memory)} memory` : ""}).`,
-    `By class: ${[...Map.groupBy(rows, (r) => r.class)].map(([c, rs]) => `${c} ${CLASSES[c] ?? c} ${rs.length}${c === "a" ? "" : ` (${human(kb(rs))}${rs.some((r) => facts(r).partial) ? "+" : ""})`}`).join(" · ")}`,
+    `By class: ${[...Map.groupBy(rows, (r) => r.class)].map(([c, rs]) => `${c} ${CLASSES[c] ?? c} ${rs.length}${c === "a" ? "" : ` (${rs.some(atLeast) ? "≥ " : ""}${human(kb(rs))})`}`).join(" · ")}`,
     `By verdict: ${[...Map.groupBy(rows, (r) => word(r.verdict))].sort((a, b) => b[1].length - a[1].length).map(([v, rs]) => `${v} ${rs.length}`).join(" · ")}`,
   ];
   const done = removedSince(store, project, (o.now ?? now()) - 86_400);
@@ -61,11 +65,11 @@ export function cardText(store: Store, project: string, o: { refused?: string | 
   if (shown.length) {
     out.push(`Largest${shown.length > LIST ? ` ${LIST} of ${shown.length}` : ""}:`);
     const order = [...shown].sort((a, b) => Number(b.verdict === "removable") - Number(a.verdict === "removable") || Number(b.size_kb ?? 0) - Number(a.size_kb ?? 0) || a.key.localeCompare(b.key));
-    for (const r of order.slice(0, LIST)) out.push(`- [${r.class}] ${r.verdict ?? "unjudged"} · ${r.size_kb === null ? "?" : human(Number(r.size_kb))}${facts(r).partial ? "+" : ""} · ${what(r)}${facts(r).act_error ? ` · failed: ${facts(r).act_error}` : ""}`);
+    for (const r of order.slice(0, LIST)) out.push(`- [${r.class}] ${r.verdict ?? "unjudged"} · ${sizeOf(r)} · ${what(r)}${facts(r).act_error ? ` · failed: ${facts(r).act_error}` : ""}`);
   }
   for (const r of rows.filter((x) => x.class === "e")) {
     const f = facts(r);
-    out.push(`Glob ${r.key}: ${f.count} matched, ${f.removable ?? 0} removable, too new ${f.too_new ?? 0}, not ours ${f.not_ours ?? 0}, in use ${f.in_use ?? 0}.`);
+    out.push(`Glob ${r.key}: ${f.count} matched (${sizeOf(r)}), ${f.removable ?? 0} removable, too new ${f.too_new ?? 0}, not ours ${f.not_ours ?? 0}, in use ${f.in_use ?? 0}.`);
   }
   for (const g of globs.rejected) out.push(`Invalid glob ${g.glob}: ${g.reason} (matches nothing).`);
   if (scan?.loose_count) out.push(`Host: ${scan.loose_count} loose files in the Claude temp root (${human(Number(scan.loose_kb ?? 0))}), report only.`);

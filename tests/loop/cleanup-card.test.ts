@@ -6,7 +6,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync }
 import { join } from "node:path";
 import { alertId, LoopActuator } from "../../bin/loop/core/actuator.ts";
 import { FakeBackend } from "../../bin/loop/fakes/orca.ts";
-import cleanupCard from "../../bin/loop/fulfil/cleanup.ts";
+import cleanupCard, { human } from "../../bin/loop/fulfil/cleanup.ts";
 import { cleanupObserver } from "../../bin/loop/observers/cleanup.ts";
 import { mangle } from "../../bin/loop/observers/orca.ts";
 import reconciler from "../../bin/loop/reconcilers/cleanup.ts";
@@ -34,7 +34,7 @@ function world(labels: string[]) {
     mkdirSync(d); writeFileSync(join(d, "out"), "x".repeat(4096)); aged(join(d, "out"), AT - 72 * H); aged(d, AT - 72 * H);
     return d;
   };
-  return { s, ws, root, pass, slug };
+  return { s, ws, root, pass, slug, ob, act, loop };
 }
 const cards = (s: Store, p: string): { id: string; title: string; question: string; kind: string }[] => {
   try { return JSON.parse(readFileSync(join(s.root, p, "alerts.json"), "utf8")).alerts ?? []; } catch { return []; }
@@ -90,4 +90,25 @@ describe("Host tidy card", () => {
     expect(cards(s, "q")).toHaveLength(1);
     expect(kills).not.toHaveBeenCalled();
   });
+
+  test("investigate-disk-cleanup U1: a glob's cache folder reads ≥ its inode until the measuring pass, then its du size", async () => {
+    const { s, ob, act, loop, pass } = world(["p"]);
+    const dir = tmp(), cache = join(dir, "zzcache-a");
+    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: `${dir}/zzcache-*`, observed_at: 1 });
+    mkdirSync(cache);
+    for (let i = 0; i < 20; i++) { mkdirSync(join(cache, `s${i}`)); for (let j = 0; j < 50; j++) writeFileSync(join(cache, `s${i}`, `f${j}`), "x"); }
+    aged(cache, AT - 72 * H);
+    const before = snapshot(dir);
+
+    await pass(AT);                                           // the scan is written; its pass starts
+    const line = () => cards(s, "p")[0].question.split("\n").find((l) => l.startsWith("- [e]"));
+    expect(line()).toMatch(/^- \[e\] removable · ≥ \d+ kB · 1 files matching /);
+
+    await ob.idle(); await loop.tick(AT + 2); await act.drain();
+    const du = Number(Bun.spawnSync(["du", "-sk", cache]).stdout.toString().split("\t")[0]);
+    expect(line()).toBe(`- [e] removable · ${human(du)} · 1 files matching ${dir}/zzcache-*`);
+    expect(cards(s, "p")[0].question).toContain(`Glob ${dir}/zzcache-*: 1 matched (${human(du)}), 1 removable`);
+    expect(snapshot(dir)).toEqual(before);
+    expect(kills).not.toHaveBeenCalled();
+  }, 30_000);
 });
