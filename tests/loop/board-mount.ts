@@ -36,8 +36,12 @@ export async function mount(b: any, open = true, fixtures: Record<string, any> =
   window.eval(nm("htm/dist/htm.umd.js"));
   window.eval(pageScript);
   const settle = () => new Promise((r) => setTimeout(r, 30));
-  await settle();
   const doc = window.document;
+  // The first render waits on the board.json fetch: on a loaded host (a CI runner, CI_JOBS=4) one 30 ms
+  // settle can end while the page still shows its `loading…` header, before any section exists.
+  const loading = () => { const m = doc.querySelector("#root .hdr .meta"); return !doc.getElementById("root")?.firstChild || m?.textContent === "loading…"; };
+  for (const end = Date.now() + 3000; loading() && Date.now() < end;) await new Promise((r) => setTimeout(r, 10));
+  await settle();
   let opened = 0;
   for (let round = 0; open && round < 6; round++) {
     const rows = [...doc.querySelectorAll('[role="button"][aria-expanded="false"]')];
