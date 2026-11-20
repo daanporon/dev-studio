@@ -44,7 +44,10 @@ export function buildFlowDb(root: string, a: string, b?: string): void {
   for (const [src, label] of pairs) run([process.execPath, join(REPO, "tests/board-db.ts"), join(FX, src, "seed.json"), label], env);
 }
 
+// Pins DS_NOW and TZ for the file's board reads; cleanup puts them back, because bun runs every file of a
+// shard in one process and a later file (board-github's reset and grace checks) reads the same clock.
 export function flowFixture(o: { a?: string; b?: string } = {}) {
+  const was = { DS_NOW: process.env.DS_NOW, TZ: process.env.TZ };
   process.env.DS_NOW = String(FX_NOW);
   process.env.TZ = FX_TZ;
   const root = mkdtempSync(join(process.env.XDG_RUNTIME_DIR || tmpdir(), "flowfx-"));
@@ -54,7 +57,10 @@ export function flowFixture(o: { a?: string; b?: string } = {}) {
     root, a, b,
     // The board as board.sh --json builds it: one project, or every project with "".
     board: (project = a) => buildBoard(project, "", root) as any,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => {
+      rmSync(root, { recursive: true, force: true });
+      for (const [k, v] of Object.entries(was)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    },
   };
 }
 
