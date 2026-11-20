@@ -104,10 +104,14 @@ W_() { t lib/watch.sh "$@"; }
 AO() { t role/ask-operator.sh "$@"; }
 S="$W/state/proj/squads/topicA.json"
 # The Lead tick's CREW CHAT: section (board chat, U2) is newer than the shell bodies: it is dropped
-# (header and its indented lines) before comparing; tests/watch.sh covers it.
+# (header and its indented lines) before comparing; tests/watch.sh covers it. U1 of ask-operator-silent-failures reworded
+# two ask-operator refusals (a bad --unit, now one line with no usage line, and the loop-asks-PR-questions line that
+# names the poster): both are normalised on both sides; exit codes, files written and calls are still compared.
 norm() {
   local s; s="$(cat)"; s="${s//$TMP\/old/<ROOT>}"; s="${s//$TMP\/new/<ROOT>}"
   printf '%s' "$s" | sed -E 's/^(err: )?usage: ask-operator\.sh .*$/\1usage: ask-operator.sh <USAGE>/; s/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z/ISO/g; s/\b1[0-9]{9}([0-9]{3})?\b/EPOCH/g' \
+    | sed -E 's/^(err: )?ask-operator: the loop asks PR questions.*$/\1ask-operator: <LOOP-PR-REFUSAL>/' \
+    | awk '/^err: ask-operator: unknown unit / { print "err: ask-operator: <UNKNOWN-UNIT>"; unit = 1; next } unit && /^err: usage: ask-operator\.sh / { unit = 0; next } { unit = 0 } { print }' \
     | awk '/^CREW CHAT:$/ { skip = 1; next } skip && /^  / { next } { skip = 0; print }'
 }
 snap() { # every file in the world but the git checkout, name + content

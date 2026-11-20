@@ -121,7 +121,7 @@ Builders don't collide.
       Once, right after the push, run `finish-unit.sh <state> <unit> --check`: a PR green except a
       required context nobody posts (`required:<context>`) gets no poke, so run the repo step that posts it, or `orch.sh ask` the Lead.
    The loop asks the PR questions: never ask the operator (or ask your Lead to ask) for a PR
-      review, sign-off or waiver — finish your unit and stop; the loop asks, withdraws and routes
+      review, sign-off or waiver — finish your unit and stop (a refusal names the poster; a PR that is not ready is yours to fix, and a cause outside your unit goes to your Lead with `send-role.sh <topic> lead`); the loop asks, withdraws and routes
       those questions, and an operator answer arrives as a poke.
    3. On the merge-ready poke, run `finish-unit.sh <state> <unit>`. It refuses anything but merge-ready, so never
       send `worker_done` by hand. Your worker_done means "merge-ready", not "unit done":

@@ -16,7 +16,10 @@
 # that writes to a wrong path must hear about it, not report "on the board" from memory.
 # --pr <n>: the question is about PR #n (a human review, a sign-off, a waiver) — one PR per question.
 # The loop asks PR questions: a Builder or Lead is refused for --pr and for a question naming one
-# of its squad's unit PRs ("the loop asks PR questions; finish your unit and stop").
+# of its squad's unit PRs. The refusal starts "the loop asks PR questions" and names who posts it:
+# the loop (a question is already on the board, or it posts once only human gates remain), or, when
+# the PR is not ready, its Builder fixes it first; a Lead asks about the unit with --unit <slug> and
+# no PR number. A --unit that is not a unit slug exits 2 with one line listing the squad's slugs.
 # With no --pr, PR references in --title and --question (`#<n>` or `.../pull/<n>`) count the same:
 # one distinct PR acts as --pr <n>; two or more are refused like a second --pr (U86). A plan path,
 # an issue key such as PRD-18424 or a U<n> is not a PR reference.
