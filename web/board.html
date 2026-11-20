@@ -305,6 +305,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .fcard .t{color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fcard .m{color:var(--mut);display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;font-size:11px}
 .fcard.queued{border-left-color:var(--dim)} .fcard.merging{border-left-color:var(--green)} .fcard.merged{border-left-color:var(--purple)}
+.fcard.paused{border-left-color:var(--dim);opacity:.6} .fcard.paused .t{color:var(--mut)}
 .fcard.stuck{border-left-color:var(--red);background:var(--red-bg)} .fcard.stuck .m .why{color:var(--red)}
 .fcard.slow{border-left-color:var(--amber)} .fcard.slow .m .why{color:var(--amber)}
 .fcard.you{border-left-color:var(--amber);cursor:pointer} .fcard.you:not(.stuck){background:var(--amber-bg)}
@@ -986,11 +987,11 @@ function Tile({ label, value, detail, level, on, pressed, title, bar }) {
 const FLOW_STAGES = [["queued", "Queued"], ["building", "Building"], ["pr_open", "PR open"], ["needs_you", "Needs you"], ["merging", "Merging"], ["merged", "Merged"]];
 const FLOW_GROUPS = {
   queued: ["waiting for a slot", "waiting for an account", "waiting on another unit", "held"],
-  building: ["coding", "reviewing", "fixing findings", "review stopped"],
-  pr_open: ["draft", "checks running", "fixing", "in review", "blocked"],
+  building: ["coding", "reviewing", "fixing findings", "review stopped", "paused"],
+  pr_open: ["draft", "checks running", "fixing", "in review", "blocked", "paused"],
 };
 const flowDur = (s) => s == null ? "—" : s < 60 ? "<1m" : s < 3600 ? Math.round(s / 60) + "m" : Math.floor(s / 3600) + "h" + (Math.round(s / 60) % 60 ? " " + (Math.round(s / 60) % 60) + "m" : "");
-const flowSummary = (c) => `${c.queued} queued · ${c.building} building · ${c.pr_open} PR open · ${c.merging} merging · ${c.stuck} stuck${c.slow ? ` · ${c.slow} slow` : ""} · ${c.needs_you} needs you · ${c.merged_today} merged today`;
+const flowSummary = (c) => `${c.queued} queued · ${c.building} building · ${c.pr_open} PR open · ${c.merging} merging · ${c.stuck} stuck${c.slow ? ` · ${c.slow} slow` : ""} · ${c.needs_you} needs you${c.paused ? ` · ${c.paused} paused` : ""} · ${c.merged_today} merged today`;
 // Card keys whose stage changed since the previous payload. `prev` is a Map key -> stage, null on the first payload.
 function movedKeys(prev, cards) {
   const out = new Set();
@@ -1023,13 +1024,14 @@ function flowTiles(flow) {
   const open = (st) => cards.filter((x) => x.stage === st && x.pr && x.pr.status !== "merged" && x.pr.status !== "closed").length;
   const split = [["pr_open", "PR open"], ["merging", "merging"], ["needs_you", "needs you"]].map(([st, w]) => [st, open(st), w]).filter((x) => x[1] > 0);
   return { builders: c.building, stuckBuilding: cards.filter((x) => x.stage === "building" && x.stuck).length,
-    left: c.queued + c.building + c.pr_open + c.needs_you + c.merging, prs: c.open_prs,
+    left: c.queued + c.building + c.pr_open + c.needs_you + c.merging + (c.paused || 0), prs: c.open_prs,
     prsDetail: split.map(([, k, w]) => `${k} ${w}`).join(" · ") || "no PRs open", prsStage: split.length ? split[0][0] : "pr_open" };
 }
 // The small facts under a card's slug: why it waits, time in stage, and why it is red.
 function flowMeta(card, typicalS) {
   const out = [];
   if (card.note) out.push(card.note);
+  if (card.paused) { out.push(card.paused_s != null ? flowDur(card.paused_s) : "—"); return out; }
   if (card.in_stage_s != null) out.push(flowDur(card.in_stage_s));
   else if (card.stage !== "queued") out.push("—");
   if (card.stuck) {
@@ -1043,6 +1045,8 @@ function flowMeta(card, typicalS) {
   }
   return out;
 }
+// A paused card's why and for how long: "paused by you · 25h".
+const pausedText = (c) => [c.note || "paused", c.paused_s != null ? flowDur(c.paused_s) : null].filter(Boolean).join(" · ");
 const FLOW_LABELS = { "waiting for a slot": "for a slot", "waiting for an account": "for an account", "waiting on another unit": "on another unit" };
 const ordinal = (n) => { const t = n % 100, o = n % 10; return n + (t >= 11 && t <= 13 ? "th" : o === 1 ? "st" : o === 2 ? "nd" : o === 3 ? "rd" : "th"); };
 const flowGroupLabel = (g) => FLOW_LABELS[g] || g;
@@ -1081,7 +1085,7 @@ const runsOn = (u) => {
   return html`${out.join(" · ")}${marks.map((m) => html`<br key=${m} /><span class="ud-marks">${m}</span>`)}`;
 };
 function FlowCard({ card, typicalS, moved, onOpen, showProject, pos, now }) {
-  const cls = "fcard " + card.stage + (card.stuck ? " stuck" : "") + (card.slow ? " slow" : "") + (card.needs_you ? " you" : "") + (moved ? " moved" : "");
+  const cls = "fcard " + card.stage + (card.stuck ? " stuck" : "") + (card.slow ? " slow" : "") + (card.needs_you ? " you" : "") + (card.paused ? " paused" : "") + (moved ? " moved" : "");
   const meta = card.merged ? [flowDur(now - card.at) + " ago", "took " + flowDur(card.took_s)] : flowMeta(card, typicalS);
   const pr = card.merged ? (card.pr != null ? { num: card.pr, url: card.pr_url } : null) : card.pr;
   const act = () => onOpen(card);
@@ -1104,6 +1108,7 @@ function FlowCardDetails({ card, now, onAsk, onClose }) {
         <dt>Squad</dt><dd class="fcd-squad">${card.project + "/" + card.squad}</dd>
         <dt>Stage</dt><dd class="fcd-stage">${card.stage}</dd>
         <dt>Runs on</dt><dd class="fcd-runs ud-runs">${runsOn(card)}</dd>
+        ${card.paused && html`<dt>Paused</dt><dd class="fcd-paused">${pausedText(card)}</dd>`}
         <dt>PR</dt><dd class="fcd-pr">${pr && pr.url ? html`<a href=${pr.url} target="_blank" rel="noopener">#${pr.num}</a>` : pr && pr.num != null ? "#" + pr.num : none("none")}</dd>
         ${card.merged && html`<dt>Merged</dt><dd class="fcd-merged">${flowDur(now - card.at)} ago</dd><dt>Took</dt><dd class="fcd-took">${flowDur(card.took_s)}</dd>`}
       </dl><div class="mut fcd-gone">squad no longer on the board</div></div>
@@ -1111,8 +1116,8 @@ function FlowCardDetails({ card, now, onAsk, onClose }) {
         <button class="btn sm pri fcd-answer" title="Open the question this unit is waiting on" onClick=${() => { onClose(); onAsk(ask); }}>Answer</button></div>`}
     </div></div>`;
 }
-function FlowColumn({ stage, title, count, children }) {
-  return html`<div class=${"flow-col" + (count === 0 ? " empty" : "")} id=${"flow-col-" + stage}><h4>${title}<span>${count}</span></h4>${children}</div>`;
+function FlowColumn({ stage, title, count, paused, children }) {
+  return html`<div class=${"flow-col" + (count === 0 && !paused ? " empty" : "")} id=${"flow-col-" + stage}><h4>${title}<span>${count}${paused ? " · " + paused + " paused" : ""}</span></h4>${children}</div>`;
 }
 function MergedChart({ flow, days, onDays }) {
   const bars = dayBars(flow.per_day, days, flow.counts.open_prs);
@@ -1188,7 +1193,7 @@ function FlowSection({ flow, lstore, focus, onOpen, now, showProject }) {
     setTimeout(() => { const el = document.getElementById("flow-col-" + focus.stage); if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, 50);
   }, [focus]);
   const foldKey = (stage, g) => "b:flow:fold:" + stage + ":" + g;
-  const folded = (stage, g) => lstore.get(foldKey(stage, g), false);
+  const folded = (stage, g) => lstore.get(foldKey(stage, g), g === "paused");   // a paused group starts folded
   const toggleFold = (stage, g) => { lstore.set(foldKey(stage, g), !folded(stage, g)); bump((n) => n + 1); };
   const sqKey = (x) => x.project + "/" + x.squad;
   const squads = [...new Map(cards.map((c) => [sqKey(c), c])).values()];
@@ -1219,12 +1224,14 @@ function FlowSection({ flow, lstore, focus, onOpen, now, showProject }) {
         ${not.length > 0 && html`<button class="fgrp" aria-expanded=${nrOpen} onClick=${() => { lstore.set("b:flow:notready", !nrOpen); bump((n) => n + 1); }}><span class="fgl">${(nrOpen ? "▾ " : "▸ ") + "not ready"}</span><span>${not.length}</span></button>
           ${nrOpen && flowGroups(not, "queued").map((g) => html`<div key=${g.group} data-group=${g.group}><div class="fgrp static"><span class="fgl" title=${g.group}>${flowGroupLabel(g.group)}</span><span>${g.cards.length}</span></div>${g.cards.map(cardView)}</div>`)}`}` });
     }
-    const grouped = FLOW_GROUPS[stage] ? flowGroups(cs, stage) : null;
-    return FlowColumn({ stage, title, count: cs.length, children: grouped
-      ? grouped.map((g) => { const f = folded(stage, g.group);
-          return html`<div key=${g.group} data-group=${g.group}><button class="fgrp" aria-expanded=${!f} onClick=${() => toggleFold(stage, g.group)}><span class="fgl" title=${g.group}>${(f ? "▸ " : "▾ ") + flowGroupLabel(g.group)}</span><span>${g.cards.length}</span></button>
-            ${visibleCards(g.cards, f).map(cardView)}</div>`; })
-      : cs.map(cardView) });
+    // Paused cards leave the lane's count and draw last, in a folded group (paused is never stuck, so a folded one draws none).
+    const live = cs.filter((c) => !c.paused), idle = cs.filter((c) => c.paused);
+    const groupView = (g) => { const f = folded(stage, g.group);
+      return html`<div key=${g.group} data-group=${g.group}><button class="fgrp" aria-expanded=${!f} onClick=${() => toggleFold(stage, g.group)}><span class="fgl" title=${g.group}>${(f ? "▸ " : "▾ ") + flowGroupLabel(g.group)}</span><span>${g.cards.length}</span></button>
+        ${visibleCards(g.cards, f).map(cardView)}</div>`; };
+    const grouped = FLOW_GROUPS[stage] ? flowGroups(live, stage) : null;
+    const pausedView = idle.length > 0 && groupView({ group: "paused", cards: idle });
+    return FlowColumn({ stage, title, count: live.length, paused: idle.length, children: html`${grouped ? grouped.map(groupView) : live.map(cardView)}${pausedView}` });
   };
   return html`<details class="flow-sec" id="flow" open=${open} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== open) { setOpen(o); lstore.set("b:flow", o); } }}>
     <summary>Flow<small>${flowSummary(flow.counts)}</small></summary>
@@ -2218,7 +2225,7 @@ const unitTitle = (u) => {
 };
 // `ask` (the nkey of the unit's open question) and `onAsk` come from a Flow card; `onShow(member)` opens the squad and
 // marks the member's crew row; `onPlan(plan)` opens the plan viewer. All optional, so the Work units row opens the same window.
-function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan }) {
+function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, card }) {
   const [asking, setAsking] = useState(false);
   const [chat, setChat] = useState(null);
   const bm = builderMember(s, u);
@@ -2244,6 +2251,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan }) {
       ? html`<b>${bm.label}</b> <span class="mut">· ${bm.state || "?"}${tierName ? " · " + tierName : ""}${model ? " · " : ""}</span>${model && (b.model_mismatch && b.model ? html`${model} <span class="mut">(set: ${b.model})</span>` : model)}${memberLinks(s, bm).length > 0 && html` <span class="mut">· 🔗</span> <${MemberLinks} items=${memberLinks(s, bm)} />`}`
       : html`<span class="none">gone — its worktree is no longer on the squad</span>`],
     open && ["ud-runs", "Runs on", runsOn(u)],
+    card && card.paused && ["ud-paused", "Paused", pausedText(card)],
     u.plan && ["ud-plan", "Plan", html`${planDoc && onPlan ? html`<a href="#" class="ud-planlink" title="Open the plan" onClick=${(e) => { e.preventDefault(); onClose(); onPlan(planDoc); }}>${planFile}</a>` : planFile}${u.plan_unit ? " · " + u.plan_unit : ""}`],
   ].filter(Boolean);
   const canChat = open && bm && bm.wt, canShow = open && bm && onShow, canAnswer = ask && onAsk;
@@ -3485,7 +3493,7 @@ function App() {
 
     ${data.flow && html`<${FlowSection} flow=${data.flow} lstore=${lstore} focus=${flowFocus} onOpen=${openFlowUnit} now=${Date.now() / 1000} showProject=${!data.project} />`}
     ${flowUnit && (() => { const sq = squads.find((x) => x.label === flowUnit.label && x.topic === flowUnit.topic), un = sq && (sq.units || []).find((x) => x.slug === flowUnit.slug);
-      return un ? html`<${UnitDetails} s=${sq} u=${un} toast=${setToast} ask=${flowUnit.ask} onAsk=${setAsk} onShow=${showMember} onPlan=${setPlan} onClose=${() => setFlowUnit(null)} />`
+      return un ? html`<${UnitDetails} s=${sq} u=${un} toast=${setToast} ask=${flowUnit.ask} onAsk=${setAsk} onShow=${showMember} card=${flowUnit.card} onPlan=${setPlan} onClose=${() => setFlowUnit(null)} />`
         : html`<${FlowCardDetails} card=${flowUnit.card} now=${Date.now() / 1000} onAsk=${setAsk} onClose=${() => setFlowUnit(null)} />`; })()}
     ${(data.accounts || []).length > 0 && html`<details class="acc-sec" id="accounts" open=${accOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== accOpen) { setAccOpen(o); lstore.set("b:accts", o); } }}>
       <summary>Accounts<small>${data.accounts.length} · 5-hour and 7-day usage left</small><span class="asof">${asOf(data.as_of && data.as_of.accounts)}</span></summary>

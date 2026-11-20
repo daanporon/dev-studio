@@ -525,6 +525,21 @@ apt "UPDATE episodes SET state = 'cleared', ended_at = 2 WHERE kind = 'at-prompt
 jt "a cleared at-prompt episode: no marker, working keeps the card alive" "$TMP/apt2.json" '(.squads[] | select(.topic=="apt") | all(.members[]; .at_prompt == null)) and ([.flow.cards[] | select(.squad=="apt")] | all(.stuck == false))'
 rm -f "$SD/apt.json"
 
+# paused-in-swimlanes U1: a dispatched unit whose Builder the operator paused leaves Building for the lane's paused
+# group: `1 building` stays the working one, `1 paused` counts the other, and the FLOW line says so.
+printf '{"run_id":"pzd","status":"running","members":[{"role":"lead","wt":"wl"},{"role":"builder","wt":"wtPa"},{"role":"builder","wt":"wtPb","suffix":"u2"}],"units":[{"slug":"u1","status":"dispatched","builder_wt":"wtPa"},{"slug":"u2","status":"dispatched","builder_wt":"wtPb"}]}' > "$SD/pzd.json"
+jq '.workers += [["wtPa","working","ds-pzd",null,60,null,"completed",null,"ctx_pa"],["wtPb","working","ds-pzd",null,60,null,"completed",null,"ctx_pb"]]' "$SEED" > "$TMP/seed-pz.json"
+pzd(){ SEED="$TMP/seed-pz.json" mkdb "$LBL"
+  dbw "INSERT INTO pause_intents (scope, project, squad, role, suffix, source, generation, requested_by, requested_at) VALUES ('member', '$LBL', 'pzd', 'builder', '', 'manual', 'g1', 'you', $(( $(date +%s) - 25*3600 )))"
+  dbw "INSERT INTO pause_members (project, squad, role, suffix, generation, state, reason, requested_at) VALUES ('$LBL', 'pzd', 'builder', '', 'g1', 'paused', 'paused', $(( $(date +%s) - 25*3600 )))"
+  render "$LBL" "${1---json}"; }
+pzd > "$TMP/pzd.json"
+jt "a paused Builder's unit: building and paused counts" "$TMP/pzd.json" '[.flow.cards[] | select(.squad=="pzd")] as $c | ($c | length) == 2 and ([$c[] | select(.group=="paused")] | length) == 1 and ([$c[] | select(.stage=="building" and .group!="paused")] | length) == 1'
+jt "a paused card says why and for how long" "$TMP/pzd.json" '[.flow.cards[] | select(.squad=="pzd" and .group=="paused")][0] | .note=="paused by you" and .paused_s >= 90000 and .paused_s < 91000 and .stage=="building"'
+pzd "" > "$TMP/pzd.txt"
+grep -qE -- "^FLOW .* · 1 needs you · 1 paused|^FLOW .* · [0-9]+ needs you · 1 paused" "$TMP/pzd.txt" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board FLOW line says 1 paused" >&2; }
+rm -f "$SD/pzd.json"
+
 # A DONE squad with no live workers gets a close nudge.
 printf '{"run_id":"d1","status":"done","type":"feature","members":[],"units":[{"slug":"u1","status":"done"}]}' > "$SD/done-sq.json"
 board "$LBL" > "$TMP/f.json"
