@@ -1385,6 +1385,8 @@ TIDY_TXT="$(bun -e '
   const ins = s.db.query("INSERT INTO observed_cleanup (project, class, key, path, size_kb, first_seen, verdict, facts, observed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
   ins.run(p, "d", "/w/ds-measured", "/w/ds-measured", 3145728, at, "removable", JSON.stringify({ partial: true, size_from: "du", size_at: at }), at);
   ins.run(p, "c", "/h/partial", "/h/partial", 2048, at, "too new", JSON.stringify({ partial: true }), at);
+  ins.run(p, "f", "/srv/zzcache-*", "/srv", 10240, at, "removable", JSON.stringify({ folders: 2, count: 40, removable: 30, too_new: 9, not_ours: 0, in_use: 1, partial: true, size_from: "du", size_at: at }), at);
+  s.upsert("config", { project: p, file: "limits.conf", key: "cleanup_trim_globs" }, { value: "/srv/zzcache-*, relative-*", observed_at: 1 });
   process.stdout.write(cardText(s, p)); s.close();' "$ROOT" "$TMP/tidy-root" "$LBL")"
 "$ROOT/bin/lib/alerts.sh" "$CRA" add "cleanup:$LBL.card" "Host tidy: $LBL" "Needs you: 1 removable.
 $TIDY_TXT" "" "" '{"kind":"host_tidy","removable":1}' >/dev/null
@@ -1392,6 +1394,8 @@ board "$LBL" > "$TMP/tidy.json"
 TIDY_SEL="(.needs_you[], .loop_notes[]) | select(.title==\"Host tidy: $LBL\") | .text"
 jt "U1 sizes: the measured row's size is shown as it is" "$TMP/tidy.json" "[$TIDY_SEL] | length == 1 and (.[0] | contains(\"- [d] removable · 3.0 GB · /w/ds-measured\"))"
 jt "U1 sizes: a partial row not measured yet reads ≥"    "$TMP/tidy.json" "[$TIDY_SEL][0] | contains(\"- [c] too new · ≥ 2.0 MB · /h/partial\") and (contains(\"≥ 3.0 GB\") | not)"
+jt "U2 trim: the class f row reads its folders kept and entries inside" "$TMP/tidy.json" "[$TIDY_SEL][0] | contains(\"Trim /srv/zzcache-*: 2 folders kept, 40 entries inside (10.0 MB), 30 removable, too new 9, not ours 0, in use 1.\") and contains(\"- [f] removable · 10.0 MB · 40 entries inside 2 folders matching /srv/zzcache-* (kept)\")"
+jt "U2 trim: a rejected trim glob is listed with its reason"           "$TMP/tidy.json" "[$TIDY_SEL][0] | contains(\"Invalid trim glob relative-*: \") and contains(\"(trims nothing).\")"
 rm -f "$CRA"
 
 # disk-pressure U3: an open disk spell shows a Needs-you card (title, first consumer) and one DISK line on the text board.

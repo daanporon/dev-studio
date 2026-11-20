@@ -2,10 +2,10 @@
 // roots. A fake /proc tree drives matching; the only real processes signalled are ones this test spawned,
 // and nothing is removed outside this test's own temp dir.
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeTmpDir, inUse, procsUnder, removeGuarded, runOnClose, stopProcs } from "../../bin/loop/io/tidy.ts";
+import { claudeTmpDir, inUse, procsUnder, removeGuarded, runOnClose, stopProcs, trimGlobBatch } from "../../bin/loop/io/tidy.ts";
 
 const UID = process.getuid!();
 const temps: string[] = [], spawned: number[] = [];
@@ -145,5 +145,66 @@ describe("runOnClose", () => {
     expect([r.code, r.timedOut]).toEqual([null, true]);
     await Bun.sleep(100);
     expect(procsUnder(wt, { self: -1, groups: [r.pgid!] }).procs).toEqual([]);
+  });
+});
+
+// investigate-disk-cleanup U2: one capped pass inside each folder a cleanup_trim_globs entry matches.
+describe("trimGlobBatch (class f)", () => {
+  const H = 3600, now = () => Math.floor(Date.now() / 1000);
+  const aged = (p: string, at: number) => utimesSync(p, at, at);
+  // <root>/zzcache-v1/: `old` files 72 h old, `fresh` files just written; the folder itself is fresh too.
+  function cache(old: number, fresh: number) {
+    const root = tmp(), folder = join(root, "zzcache-v1"), t = now() - 72 * H;
+    mkdirSync(folder);
+    for (let i = 0; i < old; i++) { writeFileSync(join(folder, `old-${i}`), "x"); aged(join(folder, `old-${i}`), t); }
+    for (let i = 0; i < fresh; i++) writeFileSync(join(folder, `fresh-${i}`), "x");
+    return { root, folder, glob: join(root, "zzcache-*"), t };
+  }
+  const left = (d: string) => readdirSync(d).sort();
+
+  test("1,000 old files, 10 fresh and 1 old one a live process holds open: one pass removes exactly the 1,000; the folder stays", async () => {
+    const { folder, glob, t } = cache(1000, 10);
+    const held = join(folder, "held");
+    writeFileSync(held, "x"); aged(held, t);
+    const p = Bun.spawn(["bash", "-c", `exec 3<"${held}"; echo ready; exec sleep 30`], { stdout: "pipe" });
+    spawned.push(p.pid);
+    const r = p.stdout.getReader();
+    await r.read(); r.releaseLock();
+    const b = await trimGlobBatch(glob, { ageS: 48 * H, now: now(), inUse: inUse() });
+    expect([b.count, b.capped, b.sample.length]).toEqual([1000, false, 20]);
+    expect(existsSync(folder)).toBe(true);
+    expect(left(folder)).toEqual([...Array.from({ length: 10 }, (_, i) => `fresh-${i}`), "held"].sort());
+  }, 60_000);
+
+  test("the batch cap stops the pass and says capped; the next pass removes the rest", async () => {
+    const { folder, glob } = cache(30, 0);
+    const o = { ageS: 48 * H, now: now(), inUse: inUse(fakeProc([])), max: 20 };
+    expect(await trimGlobBatch(glob, o)).toMatchObject({ count: 20, capped: true });
+    expect(await trimGlobBatch(glob, o)).toMatchObject({ count: 10, capped: false });
+    expect(left(folder)).toEqual([]);
+    expect(existsSync(folder)).toBe(true);
+  });
+
+  test("an old symlink inside is unlinked and its target kept; a matched symlink to a folder is never entered", async () => {
+    const { root, folder, glob, t } = cache(0, 0), outside = tmp(), target = join(outside, "keep.txt");
+    writeFileSync(target, "keep"); writeFileSync(join(outside, "old"), "x"); aged(join(outside, "old"), t);
+    symlinkSync(target, join(folder, "link"));
+    symlinkSync(outside, join(root, "zzcache-link"));
+    const b = await trimGlobBatch(glob, { ageS: 0, now: now() + 10, inUse: inUse(fakeProc([])) });
+    expect(b.count).toBe(1);
+    expect(left(folder)).toEqual([]);
+    expect(left(outside)).toEqual(["keep.txt", "old"]);
+  });
+
+  test("another uid's entries are kept; an old folder inside goes only when nothing in it is newer", async () => {
+    const { folder, glob, t } = cache(3, 0);
+    for (const d of ["olddir", "mixed"]) { mkdirSync(join(folder, d)); writeFileSync(join(folder, d, "f"), "x"); aged(join(folder, d, "f"), t); }
+    writeFileSync(join(folder, "mixed", "new"), "x");
+    aged(join(folder, "olddir"), t); aged(join(folder, "mixed"), t);
+    const o = { ageS: 48 * H, now: now(), inUse: inUse(fakeProc([])) };
+    expect((await trimGlobBatch(glob, { ...o, uid: UID + 1 })).count).toBe(0);
+    expect(left(folder)).toEqual(["mixed", "old-0", "old-1", "old-2", "olddir"]);
+    expect((await trimGlobBatch(glob, o)).count).toBe(4);
+    expect(left(folder)).toEqual(["mixed"]);
   });
 });

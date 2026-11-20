@@ -260,6 +260,51 @@ describe("glob files (class e, KTD9)", () => {
   });
 });
 
+describe("trimmed folders (class f, investigate-disk-cleanup U2)", () => {
+  // <dir>/zzcache-v1/ with `old` files 72 h old and `fresh` ones just written; the row as the scan wrote it.
+  function cacheDir(s: Store, old: number, fresh: number) {
+    const dir = tmp(), folder = join(dir, "zzcache-v1"), glob = join(dir, "zzcache-*");
+    mkdirSync(folder);
+    for (let i = 0; i < old; i++) { writeFileSync(join(folder, `old-${i}`), "x"); age(join(folder, `old-${i}`), NOW - 72 * H); }
+    for (let i = 0; i < fresh; i++) writeFileSync(join(folder, `fresh-${i}`), "x");
+    setLimit(s, "cleanup_trim_globs", glob);
+    seed(s, { class: "f", key: glob, path: dir, facts: { folders: 1, count: old + fresh, removable: old, too_new: fresh, not_ours: 0, in_use: 0 } });
+    return { dir, folder, glob };
+  }
+
+  test("1,000 old files, 10 fresh, 1 old one held open: one pass removes exactly the 1,000, one class f event; the folder stays", async () => {
+    const s = fixture(), { folder, glob } = cacheDir(s, 1000, 10), held = join(folder, "held");
+    writeFileSync(held, "x"); age(held, NOW - 72 * H);
+    const [a] = acts(s);
+    expect(a).toMatchObject({ subject: `cleanup.act:f:${glob}`, payload: { class: "f", key: glob } });
+    expect(await exec(s, a, { proc: fakeProc([{ pid: 77, cwd: "/home", fds: [held] }]), uid: UID })).toEqual({ done: true, result: "removed 1000" });
+    expect(readdirSync(folder).sort()).toEqual([...Array.from({ length: 10 }, (_, i) => `fresh-${i}`), "held"].sort());
+    expect(events(s, "cleanup_removed").map((e) => [e.class, e.glob, e.count, e.capped])).toEqual([["f", glob, 1000, false]]);
+    expect(JSON.parse(row(s, glob).facts)).toMatchObject({ removable: 0, count: 10 }); // the seeded 1,010 less the removed
+  }, 60_000);
+
+  test("a capped pass asks for the next one under a new episode, which removes the rest", async () => {
+    const s = fixture(), { folder } = cacheDir(s, 30, 0), o = { proc: fakeProc([]), uid: UID, batch: 20 };
+    const [first] = acts(s);
+    expect(await exec(s, first, o)).toEqual({ done: true, result: "removed 20 (capped)" });
+    s.upsert("episodes", { project: "p", subject: first.subject, kind: `action:${CLEANUP_ACT}` }, { episode_key: first.episode, state: "done", source: "loop", ended_at: NOW, observed_at: 1 });
+    const [second] = acts(s);
+    expect(second.episode).not.toBe(first.episode);
+    expect(await exec(s, second, o)).toEqual({ done: true, result: "removed 10" });
+    expect([readdirSync(folder), existsSync(folder)]).toEqual([[], true]);
+  });
+
+  test("report: no act asked for and nothing trimmed, the row reads removable; a glob taken out of the key trims nothing", async () => {
+    const s = fixture("report"), { folder, glob } = cacheDir(s, 3, 0);
+    expect(acts(s)).toEqual([]);
+    expect(await exec(s, act("f", glob), { proc: fakeProc([]), uid: UID })).toEqual({ done: true, result: "kept: host_tidy is not apply" });
+    expect(cardText(s, "p")).toContain(`Trim ${glob}: 1 folder kept, 3 entries inside`);
+    setLimit(s, "host_tidy", "apply"); setLimit(s, "cleanup_trim_globs", "-");
+    expect((await exec(s, act("f", glob), { proc: fakeProc([]), uid: UID })).result).toContain("no longer configured");
+    expect(readdirSync(folder)).toHaveLength(3);
+  });
+});
+
 describe("through the loop", () => {
   test("one tick removes; the same episode acted again is a no-op; the card shows the totals without the removed row", async () => {
     const s = fixture(), t = tempDir(s), b = backend();

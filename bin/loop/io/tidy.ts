@@ -10,6 +10,7 @@
 //   closeTidy     the close-time order around a caller's worktree-rm (KTD10): before = the project's
 //                 cleanup_on_close, then stop what is left; after = remove the Claude temp dir.
 //   removeGlobBatch  one capped, guarded pass over a cleanup_tmp_globs entry (KTD9, host_tidy apply)
+//   trimGlobBatch    the same inside each folder a cleanup_trim_globs entry matches, the folder kept
 // Every root is a parameter so tests run on fixture trees; signalling needs the real /proc or an
 // injected `kill`.
 import { closeSync, mkdirSync, openSync, readdirSync, realpathSync } from "node:fs";
@@ -179,31 +180,62 @@ export async function removeGuarded(path: string, g: Guard): Promise<Removal> {
 // is never followed, so its target stays), a directory through removeGuarded. It stops after `max`
 // removals or `maxMs`, whichever comes first, and yields as the scan does (KTD4).
 export type GlobBatch = { count: number; kb: number; sample: string[]; capped: boolean };
-export async function removeGlobBatch(glob: string, o: { ageS: number; now: number; inUse: InUse; uid?: number; max?: number; maxMs?: number; dirs?: DirReader }): Promise<GlobBatch> {
-  const { parent, match } = globMatcher(glob), uid = o.uid ?? uidNow(), floor = o.now - o.ageS, tick = yielder();
+type BatchOpts = { ageS: number; now: number; inUse: InUse; uid?: number; max?: number; maxMs?: number; dirs?: DirReader };
+// One pass's state: its caps (DS_CLEANUP_BATCH entries, DS_CLEANUP_BATCH_MS), the age floor and the tally.
+function batchPass(o: BatchOpts) {
   const max = o.max ?? envNum("DS_CLEANUP_BATCH", 50_000), end = Date.now() + (o.maxMs ?? envNum("DS_CLEANUP_BATCH_MS", 30_000));
   const out: GlobBatch = { count: 0, kb: 0, sample: [], capped: false };
-  for await (const name of (o.dirs ?? streamDir)(parent)) {
-    await tick();
-    if (out.count >= max || Date.now() >= end) { out.capped = true; break; }
-    if (!match(name)) continue;
-    const p = join(parent, name);
-    let st;
-    try { st = await lstat(p); } catch { continue; }
-    if (st.uid !== uid || st.mtimeMs / 1000 > floor) continue;
-    let kb = Math.ceil(Number(st.blocks) / 2);
-    if (st.isDirectory()) {
-      const r = await removeGuarded(p, { root: parent, uid, ageFloorS: o.ageS, now: o.now, inUse: o.inUse });
-      if (!r.removed) continue;
-      kb = r.kb;
-    } else {
-      if ((o.inUse.exact ? o.inUse.exact(p) : o.inUse.holder(p)) !== null) continue;
-      try { await unlink(p); } catch { continue; }
-    }
-    out.count++; out.kb += kb;
-    if (out.sample.length < 20) out.sample.push(p);
+  return { out, uid: o.uid ?? uidNow(), floor: o.now - o.ageS, tick: yielder(), dirs: o.dirs ?? streamDir, full: () => out.count >= max || Date.now() >= end };
+}
+// Remove one entry of a pass when it is ours, past the floor and not held: a file or symlink by unlink,
+// a directory through removeGuarded under `root`. A removal is added to the tally.
+async function removeEntry(p: string, root: string, o: BatchOpts, b: ReturnType<typeof batchPass>): Promise<void> {
+  let st;
+  try { st = await lstat(p); } catch { return; }
+  if (st.uid !== b.uid || st.mtimeMs / 1000 > b.floor) return;
+  let kb = Math.ceil(Number(st.blocks) / 2);
+  if (st.isDirectory()) {
+    const r = await removeGuarded(p, { root, uid: b.uid, ageFloorS: o.ageS, now: o.now, inUse: o.inUse });
+    if (!r.removed) return;
+    kb = r.kb;
+  } else {
+    if ((o.inUse.exact ? o.inUse.exact(p) : o.inUse.holder(p)) !== null) return;
+    try { await unlink(p); } catch { return; }
   }
-  return out;
+  b.out.count++; b.out.kb += kb;
+  if (b.out.sample.length < 20) b.out.sample.push(p);
+}
+
+export async function removeGlobBatch(glob: string, o: BatchOpts): Promise<GlobBatch> {
+  const { parent, match } = globMatcher(glob), b = batchPass(o);
+  for await (const name of b.dirs(parent)) {
+    await b.tick();
+    if (b.full()) { b.out.capped = true; break; }
+    if (match(name)) await removeEntry(join(parent, name), parent, o, b);
+  }
+  return b.out;
+}
+
+// investigate-disk-cleanup U2: one guarded pass inside each folder a cleanup_trim_globs entry matches
+// (a matched symlink or file is skipped, never followed). The folder itself stays; each entry directly
+// inside it of this uid past the age floor that nothing holds is removed: a file or a symlink by
+// unlink (its target stays), a directory through removeGuarded with that folder as its root (so it
+// goes only when nothing in it is newer). The same caps and yielding as removeGlobBatch.
+export async function trimGlobBatch(glob: string, o: BatchOpts): Promise<GlobBatch> {
+  const { parent, match } = globMatcher(glob), b = batchPass(o);
+  for await (const name of b.dirs(parent)) {
+    await b.tick();
+    if (b.out.capped) break;
+    if (!match(name)) continue;
+    const folder = join(parent, name);
+    if (!(await lstat(folder).catch(() => null))?.isDirectory()) continue;
+    for await (const entry of b.dirs(folder)) {
+      await b.tick();
+      if (b.full()) { b.out.capped = true; break; }
+      await removeEntry(join(folder, entry), folder, o, b);
+    }
+  }
+  return b.out;
 }
 
 // cleanup_on_close (U1 step 6): in its own process group, output to a file, never through orca.ts's

@@ -54,10 +54,11 @@ export function compactWindow(store: Store, project: string, role: string): stri
 // `cleanup_tmp_globs` (KTD5): comma- or space-separated absolute globs with the wildcard in the last
 // path segment only, that segment holding a literal part of 3+ characters, in a parent that is not a
 // place the host keeps work. `rejected` carries each refused glob with its reason (for the card).
+// `cleanup_trim_globs` (investigate-disk-cleanup U2, `trimGlobs`) is checked by the same rules.
 export interface CleanupGlobs { valid: string[]; rejected: { glob: string; reason: string }[] }
-export function cleanupGlobs(store: Store, project: string): CleanupGlobs {
+export function cleanupGlobs(store: Store, project: string, key: "cleanup_tmp_globs" | "cleanup_trim_globs" = "cleanup_tmp_globs"): CleanupGlobs {
   const out: CleanupGlobs = { valid: [], rejected: [] };
-  const line = limitLine(store, project, "cleanup_tmp_globs");
+  const line = limitLine(store, project, key);
   if (!line) return out;
   const guarded = new Set(["/", posix.normalize(homedir()), posix.normalize(ROOT), posix.normalize(stateRoot()), posix.normalize(store.root),
     posix.normalize(join(homedir(), "orca", "workspaces"))]);
@@ -67,6 +68,9 @@ export function cleanupGlobs(store: Store, project: string): CleanupGlobs {
   }
   return out;
 }
+
+// The folders whose old entries cleanup trims, each kept itself (class f).
+export const trimGlobs = (store: Store, project: string): CleanupGlobs => cleanupGlobs(store, project, "cleanup_trim_globs");
 
 function globProblem(glob: string, guarded: Set<string>, storeRoot: string): string | null {
   if (!glob.startsWith("/")) return "not an absolute path";
