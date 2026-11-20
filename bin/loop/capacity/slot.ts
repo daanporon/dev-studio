@@ -31,6 +31,11 @@
 //   light       starts while the live total < that sum: in a light slot while live light < max_light_builders,
 //               else in a normal slot, only while no normal unit of the project waits
 // An urgent unit still always starts. The wait names both lanes: `WAIT slot: <p> normal 6/6, light 2/2`.
+// Read-only views for the board (board-shows-host-brake U1), from the same line and seat walk (`walk`):
+//   seats()     each live seat with why it is held (liveWhy: starting, pausing, restarting, working, idle;
+//               builderLive is liveWhy != null), the `ds pick` holds and the seats used per lane
+//   seatable()  the queue() entries the walk seats now, less a planned unit whose Builder is live and a
+//               Builder whose pick waits on an account: what the host brake keeps from starting
 import { failedResume, intents, type Target } from "../pause/pause.ts";
 import { lastStart, lock, view } from "../squad/member-state.ts";
 import { existsSync } from "node:fs";
@@ -79,20 +84,29 @@ function agentRuns(store: Store, project: string, wt: string, strict: boolean): 
   return strict ? w.presence === "running" : w.presence !== "none";
 }
 
-// Does this Builder member hold a live agent now?
-function builderLive(store: Store, m: Row, now: number): boolean {
-  if (m.status === "gone" || m.want === "gone") return false;
-  if (lock(store, m)) return true;
+// Why a live Builder holds its seat (the board explains each seat with it, through seats()):
+//   starting    its lifecycle lock is held, it holds a loop start slot (picks.slot = 1), a start or restart
+//               in the spawn grace, or a `running` member the observer has not seen yet
+//   pausing     a pause intent is on it and its agent still runs
+//   restarting  U153: a restart newer than its observed process start keeps the seat
+//   working     its agent runs and the observer reads it working
+//   idle        its agent runs in any other state (at its prompt, waiting for its PR's merge, unknown)
+export type SeatWhy = "starting" | "pausing" | "restarting" | "working" | "idle";
+
+// Does this Builder member hold a live agent now, and why? null: it holds no seat.
+export function liveWhy(store: Store, m: Row, now: number): SeatWhy | null {
+  if (m.status === "gone" || m.want === "gone") return null;
+  if (lock(store, m)) return "starting";
   const wt = m.wt ? String(m.wt) : "";
   // Being paused: live until its agent is seen gone (a paused one reads idle with no agent).
-  if (hardPaused(store, m)) return !!wt && agentRuns(store, String(m.project), wt, true);
-  if (open(m) && store.get("picks", { member: m.id })?.slot === 1) return true;
+  if (hardPaused(store, m)) return wt && agentRuns(store, String(m.project), wt, true) ? "pausing" : null;
+  if (open(m) && store.get("picks", { member: m.id })?.slot === 1) return "starting";
   // A start the loop just placed (placed_at) or a restart that stamped `started`/`restarting`, not
   // parked since (`waiting`): its worker may not be observed yet, until a walk after it reads none.
   const t = Math.max(...[Number(m.placed_at ?? NaN), iso(m.started), iso(m.restarting)].filter((v) => !Number.isNaN(v)), -Infinity);
   if (m.status !== "waiting" && t > now - graceS()) {
     const w = wt ? store.get("observed_workers", { project: m.project, wt }) : null;
-    if (!(w && w.presence === "none" && Number(w.account_at ?? 0) > t)) return true;
+    if (!(w && w.presence === "none" && Number(w.account_at ?? 0) > t)) return "starting";
   }
   // U153: a restarting Builder keeps its slot: wished running with a restart newer than the
   // observed process start counts live across the close and the start. No stored reservation.
@@ -100,13 +114,17 @@ function builderLive(store: Store, m: Row, now: number): boolean {
   // queued start like any other, not a slot to keep.
   if (open(m) && Number(m.restart_at ?? 0) > 0 && lastStart(m) > 0) {
     const w = store.db.query("SELECT started_at FROM observed_workers WHERE project = ? AND wt = ?").get(String(m.project), wt) as { started_at: number | null } | null;
-    if (Number(m.restart_at) > Math.max(Number(w?.started_at ?? 0), lastStart(m))) return true;
+    if (Number(m.restart_at) > Math.max(Number(w?.started_at ?? 0), lastStart(m))) return "restarting";
   }
-  if (!wt) return false;
+  if (!wt) return null;
+  const w = store.db.query("SELECT presence, gone_at, state FROM observed_workers WHERE project = ? AND wt = ?").get(String(m.project), wt) as { presence: string | null; gone_at: number | null; state: string | null } | null;
   // Never observed yet (a start the observer has not seen): its `running` status says so.
-  if (!store.db.query("SELECT 1 FROM observed_workers WHERE project = ? AND wt = ?").get(String(m.project), wt)) return m.status === "running";
-  return agentRuns(store, String(m.project), wt, false);
+  if (!w) return m.status === "running" ? "starting" : null;
+  // Its worker is present unless it is gone or its presence reads none (unknown counts, U149).
+  if (w.gone_at != null || w.presence === "none") return null;
+  return w.state === "working" ? "working" : "idle";
 }
+const builderLive = (store: Store, m: Row, now: number) => liveWhy(store, m, now) != null;
 
 // The (squad, suffix) keys of `ds pick` Builder slots given in the spawn grace (see `held` above).
 function holds(store: Store, project: string, now: number): Set<string> {
@@ -263,7 +281,7 @@ export function newBuilderStart(store: Store, project: string, who: Asker, now: 
 // Who is in line now, as slot() and queue() see it: every Builder that waits for a seat (not `exclude`,
 // the asker), the live seats per lane and per squad, the lane of a unit, and the focus.
 function lineCtx(store: Store, project: string, n: number, now: number, exclude: string, record: boolean) {
-  const all = builders(store, project).map((m) => ({ m, live: builderLive(store, m, now) }));
+  const all = builders(store, project).map((m) => { const why = liveWhy(store, m, now); return { m, why, live: why != null }; });
   const key = (m: Row) => `${m.squad}\0${m.suffix ?? ""}`, liveKeys = new Set(all.filter((b) => b.live).map((b) => key(b.m)));
   const heldKeys = [...holds(store, project, now)].filter((k) => k !== exclude && !liveKeys.has(k));
   const resuming = new Map((store.db.query("SELECT * FROM pause_members WHERE project = ? AND role = 'builder' AND state = 'resuming'").all(project) as Row[])
@@ -282,14 +300,38 @@ function lineCtx(store: Store, project: string, n: number, now: number, exclude:
     const h = bySquad.get(sq) ?? { normal: 0, light: 0 };
     h[lane]++; bySquad.set(sq, h);
   };
-  for (const b of all) if (b.live) take(String(b.m.squad), laneAt(unitOf(String(b.m.squad), String(b.m.suffix ?? ""), b.m)));
+  // Who holds each member seat and why (seats()); the holds are only counted.
+  const holders: SeatHolder[] = [];
+  for (const b of all) {
+    if (!b.why) continue;
+    const sq = String(b.m.squad), sf = String(b.m.suffix ?? ""), u = unitOf(sq, sf, b.m), lane = laneAt(u);
+    take(sq, lane);
+    holders.push({ squad: sq, suffix: sf, unit: u ? String(u.slug) : null, lane, why: b.why });
+  }
   for (const k of heldKeys) { const [sq, sf = ""] = k.startsWith("#") ? [] : k.split("\0"); take(sq ?? null, sq == null ? "normal" : laneAt(unitOf(sq, sf, null))); }
   const focus = focusFor(store, project, n, light, (sq) => bySquad.get(sq) ?? { normal: 0, light: 0 });
   const entry = (sq: string, sf: string, m: Row | null): Entry => { const u = unitOf(sq, sf, m); return { squad: sq, suffix: sf, m, u, lane: laneAt(u) }; };
   // A planned unit whose Builder already waits is in the line once, as that member (so it takes focus room once).
   const waitingKeys = new Set(waiting.map(key));
   const unwished = (p: Asker) => !waitingKeys.has(`${p.squad}\0${p.suffix ?? ""}`);
-  return { live: liveKeys.size + heldKeys.length, used, waiting, unwished, light, focus, entry, unitOf };
+  return { live: liveKeys.size + heldKeys.length, used, waiting, unwished, light, focus, entry, unitOf, liveKeys, holders, holds: heldKeys.length };
+}
+
+// The seat walk slot() gives free seats by, oldest first: does each entry of the line get a seat now?
+// Single lane: an urgent unit always (over the limit, U168), else the first `n − live` places. Light lane:
+// seat by seat (the rules in the header), an urgent unit always. seatable() walks the same line.
+function walk<P extends Placed>(line: P[], n: number, light: number, used: Record<Lane, number>, live: number): boolean[] {
+  if (light <= 0) return line.map((p, i) => p.rank[0] === 0 || i < n - live);
+  const u = { ...used }, cap = n + light, placed = line.map(() => false);
+  const fits = (i: number) => {
+    const p = line[i];
+    if (p.rank[0] === 0) return true;                                  // urgent: always, over the limit
+    if (u.normal + u.light >= cap) return false;
+    if (p.lane === "normal") return u.normal < n;
+    return u.light < light || !line.some((q, j) => j !== i && !placed[j] && q.lane === "normal");
+  };
+  for (let i = 0; i < line.length; i++) if (fits(i)) { placed[i] = true; u[line[i].lane]++; }
+  return placed;
 }
 
 // The line a free seat is given by, oldest first: every waiting Builder and the `planned` units (one entry
@@ -298,13 +340,50 @@ function lineCtx(store: Store, project: string, n: number, now: number, exclude:
 // the three never disagree. Empty when the project has no limit. Only reads: a lane is read with
 // laneNow, never recorded, so the board's read-only store can call it.
 export function queue(store: Store, project: string, now: number, planned: Asker[] = []): Placed[] {
+  return lineOf(store, project, now, planned)?.line ?? [];
+}
+function lineOf(store: Store, project: string, now: number, planned: Asker[]) {
   const n = maxBuilders(store, project);
-  if (n == null) return [];
+  if (n == null) return null;
   const c = lineCtx(store, project, n, now, "\0\0", false);
-  return lineOrder(store, project, [
+  const line = lineOrder(store, project, [
     ...c.waiting.map((m) => c.entry(String(m.squad), String(m.suffix ?? ""), m)),
     ...planned.filter(c.unwished).map((p) => c.entry(String(p.squad), String(p.suffix ?? ""), null)),
   ], c.focus);
+  return { n, c, line };
+}
+
+// One live Builder seat: whose it is, its unit (null: none found) and lane, and why it is held.
+export type SeatHolder = { squad: string; suffix: string; unit: string | null; lane: Lane; why: SeatWhy };
+// The project's Builder seats as slot() counts them: `limit` (max_builders, null = none), `light`
+// (max_light_builders, 0 = no light lane), each live member's seat with its why, the `ds pick` holds
+// (only counted) and `used` per lane (members and holds; with the light lane off all normal).
+export type Seats = { limit: number | null; light: number; holders: SeatHolder[]; holds: number; used: Record<Lane, number> };
+// Only reads, like queue(): the board's read-only store calls it.
+export function seats(store: Store, project: string, now: number): Seats {
+  const n = maxBuilders(store, project);
+  const c = lineCtx(store, project, n ?? 0, now, "\0\0", false);
+  return { limit: n, light: c.light, holders: c.holders, holds: c.holds, used: c.used };
+}
+
+// The entries of queue() that would get a seat now, by the same walk slot() uses: the queued units the
+// host brake keeps from starting while it holds (the board's `held`). Two entries are dropped before the
+// walk because they would not start with the brake off either: a planned unit whose Builder is already
+// live (the line lists it again, as a planned entry), and a waiting Builder whose latest pick waits on an
+// account. Empty when the project has no limit. Only reads.
+export function seatable(store: Store, project: string, now: number, planned: Asker[] = []): Placed[] {
+  const q = lineOf(store, project, now, planned);
+  if (!q) return [];
+  const { n, c } = q;
+  const line = q.line.filter((e) => (e.m ? !accountWait(store, e.m) : !c.liveKeys.has(`${e.squad}\0${e.suffix}`)));
+  const seat = walk(line, n, c.light, c.used, c.live);
+  return line.filter((_, i) => seat[i]);
+}
+// A pick that waits on an account's room (the pick reconciler's `no account free`, with a wait time),
+// not on a start (a slot or the host brake).
+function accountWait(store: Store, m: Row): boolean {
+  const p = store.get("picks", { member: m.id });
+  return !!p && p.wait_until != null && !SLOT_WAIT.test(String(p.reason ?? ""));
 }
 
 // May this Builder start now? `role` is the asker's role when no member row says it. `planned`: the
@@ -324,33 +403,19 @@ export function slot(store: Store, project: string, who: Asker, now: number, rol
   if (urgentOf(myUnit)) return { ok: true, limit: n };
   // The board shows the line as is: a blocker that waits says why it is next (U221).
   const next = () => { const b = blocksOf(store, project, myUnit); return b.length ? ` (next: blocks ${b.join(", ")})` : ""; };
-  const cand = (sq: string, sf: string, m: Row | null, isMe = false) => ({ ...c.entry(sq, sf, m), me: isMe, placed: false });
+  const cand = (sq: string, sf: string, m: Row | null, isMe = false) => ({ ...c.entry(sq, sf, m), me: isMe });
   const line = lineOrder(store, project, [
     ...c.waiting.map((m) => cand(String(m.squad), String(m.suffix ?? ""), m)),
     ...planned.filter((p) => !(p.squad === squad && p.suffix === suffix) && c.unwished(p)).map((p) => cand(String(p.squad), String(p.suffix ?? ""), null)),
     cand(squad, suffix, me, true),
   ], c.focus);
-  const light = c.light;
+  const light = c.light, seat = walk(line, n, light, c.used, c.live), mine = line.findIndex((p) => p.me);
   if (light > 0) {
-    // The line is walked seat by seat, oldest first.
-    const used = { ...c.used }, liveNow = { ...c.used };
-    const cap = n + light;
-    const fits = (p: (typeof line)[number]) => {
-      if (p.rank[0] === 0) return true;                                  // urgent: always, over the limit
-      if (used.normal + used.light >= cap) return false;
-      if (p.lane === "normal") return used.normal < n;
-      return used.light < light || !line.some((q) => q !== p && !q.placed && q.lane === "normal");
-    };
-    let ahead = 0;
-    for (const p of line) {
-      if (!fits(p)) continue;
-      if (p.me) return { ok: true, limit: cap };
-      p.placed = true; used[p.lane]++; ahead++;
-    }
-    return { ok: false, limit: cap, live: liveNow.normal + liveNow.light, ahead,
-      why: `WAIT slot: ${project} normal ${liveNow.normal}/${n}, light ${liveNow.light}/${light}${next()}` };
+    // Ahead: the entries before the asker that the walk seats.
+    if (seat[mine]) return { ok: true, limit: n + light };
+    return { ok: false, limit: n + light, live: c.used.normal + c.used.light, ahead: seat.slice(0, mine).filter(Boolean).length,
+      why: `WAIT slot: ${project} normal ${c.used.normal}/${n}, light ${c.used.light}/${light}${next()}` };
   }
-  const ahead = line.findIndex((p) => p.me);
-  if (ahead < n - c.live) return { ok: true, limit: n };
-  return { ok: false, limit: n, live: c.live, ahead, why: `WAIT slot: ${project} at max_builders ${n}${next()}` };
+  if (seat[mine]) return { ok: true, limit: n };
+  return { ok: false, limit: n, live: c.live, ahead: mine, why: `WAIT slot: ${project} at max_builders ${n}${next()}` };
 }

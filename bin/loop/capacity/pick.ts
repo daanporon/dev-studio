@@ -51,7 +51,8 @@ import { envInt } from "../core/tick.ts";
 import { accountDisabled, DISABLED } from "./accounts.ts";
 import { creditsHolds, OUT_OF_CREDITS } from "./credits.ts";
 import { newBuilderStart, slot, type Asker } from "./slot.ts";
-import { hostCrit } from "./machine-level.ts";
+import { hostCrit, hostCritHit, sampleState, type CritHit, type SampleState } from "./machine-level.ts";
+import { loopProjects } from "../settings/projects.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 
 export type PickReq = {
@@ -116,6 +117,20 @@ export function hostBrake(store: Store, project: string, who: Asker, now: number
   const r = store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null;
   const crit = hostCrit(r, (k) => wholeLimit(store, project, k), now);
   return crit && newBuilderStart(store, project, who, now, role) ? crit : null;
+}
+
+// The host brake as one host-wide state (board-shows-host-brake U1), for the board: the host's latest
+// sample (`fresh`/`stale`/`missing`, its age), the crit line it crosses (`hit`, null = none or not fresh)
+// and every loop project with its effective `builder_host_brake`. With `hit` set, a new Builder start of a
+// project whose `on` is true waits `WAIT host:` now. The lines are read as `project` reads them (the
+// board passes its own; default: the env and the conventions rows), since a project can move them.
+// Only reads: no pick, no event.
+export type BrakeView = { setting: "builder_host_brake"; sample: SampleState["state"]; age_s: number | null; hit: CritHit | null; projects: { project: string; on: boolean }[] };
+export function brakeView(store: Store, now: number, project = "", projects = loopProjects(store.root)): BrakeView {
+  const r = store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null;
+  const s = sampleState(r, now);
+  return { setting: "builder_host_brake", sample: s.state, age_s: s.age_s, hit: hostCritHit(r, (k) => wholeLimit(store, project, k), now),
+    projects: projects.map((p) => ({ project: p, on: limit(store, p, "builder_host_brake") === "on" })) };
 }
 
 // ds_ship_mode: the project's ship-mode, else the first projects.conf selector that is the label or
