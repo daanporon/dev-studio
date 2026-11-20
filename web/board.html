@@ -87,7 +87,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .pill.retest{background:var(--amber-bg);color:var(--amber)} .pill.planning{background:#262a3a;color:#c5c9ff} .pill.waiting-on-you,.pill.blocked{background:var(--amber-bg);color:var(--amber)}
 .pill.queued{background:#2a2733;color:#d4b8ff} .pill.archiving,.pill.suspending,.pill.resuming{background:var(--amber-bg);color:var(--amber)} .pill.stuck{background:var(--red-bg);color:var(--red)}
 .pill.implementing{background:var(--blue-bg);color:var(--blue)} .pill.fixing,.pill.testing{background:#1c2c2a;color:#7fd8c0}
-.pill.done{background:var(--green-bg);color:var(--green)} .pill.failed{background:var(--red-bg);color:var(--red)} .pill.on-hold,.pill.suspended{color:var(--mut)} .pill.held-only{background:#2e2a1c;color:#d9b866} .pill.wrapping-up{background:var(--blue-bg);color:var(--blue)} .pill.done{box-shadow:inset 0 0 0 1px var(--green)} .statelegend{font-size:12px;color:var(--mut);margin:6px 0} .explain{font-size:12px;color:var(--mut);margin:4px 0} .pill.broken{background:var(--red-bg);color:var(--red)}
+.pill.done{background:var(--green-bg);color:var(--green)} .pill.failed{background:var(--red-bg);color:var(--red)} .pill.on-hold,.pill.suspended{color:var(--mut)} .pill.held-only{background:#2e2a1c;color:#d9b866} .pill.wrapping-up{background:var(--blue-bg);color:var(--blue)} .pill.done{box-shadow:inset 0 0 0 1px var(--green)} .statelegend{font-size:11px;color:var(--mut);padding:8px 16px;border-top:1px solid var(--line,#2a2f38)} .explain{font-size:12px;color:var(--mut);margin:4px 0} .pill.broken{background:var(--red-bg);color:var(--red)}
 .lead{font-size:13px;white-space:nowrap} .lead::before{content:"●";margin-right:6px;font-size:10px;vertical-align:1px}
 .lead.ok{color:var(--green)} .lead.idle{color:var(--mut)} .lead.warn{color:var(--amber)} .lead.bad{color:var(--red)}
 .bar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#2a303b} .bar i{display:block}
@@ -1227,9 +1227,9 @@ function FlowSection({ flow, lstore, focus, onOpen, now, showProject }) {
   };
   return html`<details class="flow-sec" id="flow" open=${open} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== open) { setOpen(o); lstore.set("b:flow", o); } }}>
     <summary>Flow<small>${flowSummary(flow.counts)}</small></summary>
-    ${MergedChart({ flow, days, onDays: (n) => { setDays(n); lstore.set("b:flow:days", n); } })}
+    ${cards.length === 0 && (flow.merged || []).length === 0 ? html`<div class="empty">nothing in flight — units show here once a plan is approved</div>` : html`${MergedChart({ flow, days, onDays: (n) => { setDays(n); lstore.set("b:flow:days", n); } })}
     <div class="fchips">${[["all", "All squads"], ...squads.map((c) => [sqKey(c), c.squad])].map(([k, l]) => html`<button key=${k} class=${"fchip" + (squad === k ? " on" : "")} onClick=${() => setSquad(k)}>${l}</button>`)}</div>
-    <div class="flow-cols">${FLOW_STAGES.map(([st, title]) => column(st, title))}</div></details>`;
+    <div class="flow-cols">${FLOW_STAGES.map(([st, title]) => column(st, title))}</div>`}</details>`;
 }
 // The users of one account, grouped by squad (one line each): the roles, squads and mismatches counted.
 // `project` is this board's project; another project's squad gets its name as a prefix.
@@ -3269,9 +3269,11 @@ function App() {
   return html`<div class="wrap">
     <div class="hdr">
       <h1>dev-studio</h1>
-      <span class="meta">${data.project && html`project ${data.project_url ? html`<a class="plink" href=${data.project_url} target="_blank" rel="noopener" title=${data.project_url}>${data.project}<span class="ext"> ↗</span></a>` : data.project} · `}${[!M && data.live_worktrees != null && data.live_worktrees + " worktrees",
+      <span class="meta">${[data.project && html`project ${data.project_url ? html`<a class="plink" href=${data.project_url} target="_blank" rel="noopener" title=${data.project_url}>${data.project}<span class="ext"> ↗</span></a>` : data.project}`,
+        !M && data.live_worktrees != null && data.live_worktrees + " worktrees",
         !M && data.capacity && data.capacity.count + " " + data.capacity.label,
-        data.spent_total && html`<span title="price-weighted tokens, all squads of the project, archived included">spent ≈${fmtTok(data.spent_total.spent)} since ${dayOf(data.spent_total.since)}</span>`].filter(Boolean).map((x, k) => html`${k ? " · " : ""}${x}`)}${!data.gh.ok && html` · <span class="stale-dot" title="the loop's GitHub observer has no PR rows yet">no PR status yet</span>`}</span>
+        data.spent_total && html`<span title="price-weighted tokens, all squads of the project, archived included">spent ≈${fmtTok(data.spent_total.spent)} since ${dayOf(data.spent_total.since)}</span>`,
+        !data.gh.ok && html`<span class="stale-dot" title="the loop's GitHub observer has no PR rows yet">no PR status yet</span>`].filter(Boolean).map((x, k) => html`<${React.Fragment} key=${k}>${k ? " · " : ""}${x}</${React.Fragment}>`)}</span>
       <span class="sp"></span>
       ${data.project && html`<button class="btn sm" title="Limits and roles for ${data.project}" onClick=${() => setSettings(true)}>⚙ Settings</button>`}
     </div>
@@ -3279,7 +3281,7 @@ function App() {
     ${(data.project_controls ? (data.projects || []).filter((p) => !data.project || (p.pause && (p.pause.state !== "active" || p.pause.checkpoint))) : []).map((p) => html`<div class="dbar"><b>Project ${p.label}</b>${!data.project && html`<${PauseControls} target=${{ scope: "project", project: p.label }} pause=${p.pause} label=${"project " + p.label} toast=${setToast} />`}<${PauseInfo} pause=${p.pause} prerequisites=${data.prerequisites} /></div>`)}
     ${data.loop && data.loop.down && html`<div class="banner err" id="loop-down"><span>⚠</span><div class="t"><b>Loop down${data.loop.tick_at ? " / data as of " + hhmmss(new Date(data.loop.tick_at * 1000)) : " — it has never ticked"}.</b> Pokes, restarts, PR status and cleanup are paused; the board shows the last data the loop wrote. Start it: <span class="mono">bin/loop/loop.sh --ensure</span></div></div>`}
     ${data.loop && data.loop.stalling && html`<div class="banner err" id="loop-stalling"><span>⚠</span><div class="t"><b>The loop keeps stalling.</b> ${data.loop.restarts_recent} restarts in the last ${data.loop.stall_window_min} min — see <span class="mono">loop.log</span> / <span class="mono">journalctl --user -u ds-loop.service</span>.</div></div>`}
-    ${(data.studio || []).filter((st) => st.moved).map((st) => html`<div class="muted studio-moved" style=${{ fontSize: 12, margin: "4px 0" }} title=${"the loop moved the Studio of " + st.label + " off an account at its limit (studio_move)"}>Studio ${st.label}: Studio moved to <span class="mono">${st.moved.to_label}</span>${st.moved.from_label ? html` from <span class="mono">${st.moved.from_label}</span>` : ""} at ${hhmmss(new Date(st.moved.at * 1000))}</div>`)}
+    ${(data.studio || []).filter((st) => st.moved).map((st) => html`<div class="muted studio-moved" style=${{ fontSize: 12, margin: "4px 0" }} title=${"the loop moved the Studio of " + st.label + " off an account at its limit (studio_move)"}>Studio ${st.label}: Studio moved to <span class="mono">${st.moved.to_label}</span>${st.moved.from_label ? html` from <span class="mono">${st.moved.from_label}</span>` : ""} at ${hhmmss(new Date(st.moved.at * 1000))} — the previous account hit its usage limit · shown for 24 h</div>`)}
     ${data.loop && data.loop.restarts_24h > 0 && html`<div class="muted" id="loop-restarts" style=${{ fontSize: 12, margin: "4px 0" }}>Loop restarted ${data.loop.restarts_24h}× in 24 h (last ${hhmmss(new Date(data.loop.last_restart_at * 1000))})</div>`}
     ${data.backend_ok === false && !(data.loop && data.loop.down) && html`<div class="banner err"><span>⚠</span><div class="t"><b>The backend (Orca) isn't answering.</b> Worker states show as "unknown" until it's back — this is not every Builder being gone.</div></div>`}
     ${html`<${UpdateBanner} data=${data} toast=${setToast} />`}
@@ -3366,8 +3368,7 @@ function App() {
       </div></div>
     <div class="tbl">
       <div class="row head"><span></span><span>Squad</span><span>Phase</span><span class="c-lead">Lead</span><span class="c-units">Units</span><span class="c-prs">Open PRs</span><span class="c-open">Open</span><span class="c-spent num" title="spent since the squad started (price-weighted tokens)">Spent</span><span class="c-menu"></span></div>
-      <div class="statelegend">${STATE_LEGEND.join(" · ")}</div>
-      ${shown.length === 0 && html`<div class="empty">no squads${filter !== "all" ? " match this filter" : ""}</div>`}
+      ${shown.length === 0 && (filter !== "all" ? html`<div class="empty">no squads match this filter</div>` : html`<div class="empty">no squads yet${data.project && html` <button class="btn sm" onClick=${() => setStartOpen(true)}>Start squad</button>`}</div>`)}
       ${shown.map((s) => { const k = key(s), x = st.get(k), isOpen = open.has(k);
         const sub = (s.questions && s.questions[0] && (s.questions[0].title || s.questions[0].question)) || s.framing || "";
         return html`<${React.Fragment} key=${k}>
@@ -3384,6 +3385,7 @@ function App() {
           </div>
           ${isOpen && html`<${Detail} s=${s} onPlan=${setPlan} toast=${setToast} setAsk=${setAsk} askKeys=${askKeys} prerequisites=${data.prerequisites} flow=${data.flow} />`}
         </${React.Fragment}>`; })}
+      ${shown.some((s) => suspendedLike(s) || ["pausing", "paused", "resuming", "held-only"].includes(s.display_key || s.display_status)) && html`<div class="statelegend">${STATE_LEGEND.join(" · ")}</div>`}
       ${data.archived.length > 0 && html`<${React.Fragment}><div class="arch">Archived (${data.archived.length}) · ${data.archived.slice(0, 6).map((a) => a.topic).join(", ")}${data.archived.length > 6 ? "…" : ""}
         <button onClick=${() => setShowArch(!showArch)}>${showArch ? "hide" : "show"}</button></div>
         ${showArch && data.archived.map((a, i) => { const k = "arch:" + a.topic + ":" + (a.closed_at || i), isOpen = open.has(k);

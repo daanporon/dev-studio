@@ -162,6 +162,14 @@ function repoSlug(db: Db, label: string, repo: string): string {
   return String(db.one("SELECT value FROM config WHERE project = ? AND file = 'github' AND key = ?", label, `repo:${repo}`)?.value ?? "");
 }
 
+// "owner/repo" of a project's own repo for a single-project board: the `projects` row's owner/name, else the
+// config row the GitHub observer wrote for its home_repo. null when neither is known.
+function homeSlug(db: Db, label: string): string | null {
+  const p = db.one("SELECT home_repo, owner, name FROM projects WHERE label = ?", label);
+  if (p?.owner && p?.name) return `${p.owner}/${p.name}`;
+  return (p?.home_repo ? repoSlug(db, label, String(p.home_repo)) : "") || null;
+}
+
 // --- GitHub PR status (observed_prs, the GitHub observer's rows) ----------------------------------
 
 // One PR row -> a status word: merged / closed / draft / failing (a check failed) / running (checks
@@ -1953,7 +1961,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const spentTotal = spentRows.length
     ? { spent: spentRows.reduce((a, r) => a + r.spent, 0), since: Math.min(...spentRows.map((r) => r.since).filter(Boolean)) || null } : null;
   // First squad repo that resolves to a GitHub slug links the project's name to GitHub.
-  const projSlug = squads.map((s) => s.repo_slug).find(Boolean);
+  // No squad yet: the project's own repo (the `projects` row's owner/name, else the GitHub observer's slug for its home_repo).
+  const projSlug = squads.map((s) => s.repo_slug).find(Boolean) ?? (label && db ? homeSlug(db, label) : null);
   const pref = label ? `${dsPrefix()}${label}-` : "";
   const scope = label ? "AND project = ?" : "";
   const sargs = label ? [label] : [];
@@ -2153,7 +2162,7 @@ export function renderText(b: Board): string {
     o.push(`studio ${st.label}: ` + (st.adopted
       ? [`${st.agent}${st.model_label ? " " + st.model_label : ""}`, st.account_label ? `@${st.account_label}` : null, st.ctx == null ? null : `ctx ${compact(st.ctx)}`, st.handle].filter(Boolean).join(" · ")
       : "no Studio terminal adopted — see the studio.adopt card"));
-    if (st.moved) o.push(`studio ${st.label}: Studio moved to ${st.moved.to_label}${st.moved.from_label ? ` from ${st.moved.from_label}` : ""} at ${clock(st.moved.at)} (account limit)`);
+    if (st.moved) o.push(`studio ${st.label}: Studio moved to ${st.moved.to_label}${st.moved.from_label ? ` from ${st.moved.from_label}` : ""} at ${clock(st.moved.at)} — the previous account hit its usage limit · shown for 24 h`);
   }
   if (b.studio.length) o.push(RULE);
   if (b.squads.some((s) => ["held-only", "paused", "suspended", "on-hold"].includes(s.display_key))) o.push(`not working: ${STATE_LEGEND.join(" · ")}`);
