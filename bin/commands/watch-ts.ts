@@ -396,7 +396,7 @@ export async function run(argv: string[]): Promise<number> {
     const live = await prLive(n);
     if (!live) return { text: `      PR #${n} state unknown\n`, suppress: false };
     const lstate = cutF(live, 1), lsum = cutF(live, 2);
-    if (lstate === "MERGED") return { text: `      PR #${n} MERGED (live)\n  ‼ merged\t${slug}\t${wt}\tPR #${n} MERGED\tthe loop has not marked it done: mark it done and retire the Builder\n`, suppress: true };
+    if (lstate === "MERGED") return { text: `      PR #${n} MERGED (live)\n  ‼ merged\t${slug}\t${wt}\tPR #${n} MERGED\tthe loop has not marked it done yet: it does on its next PR read; if this stays after a tick, mark it done (refused until the loop has read the merge), and it retires the Builder\n`, suppress: true };
     if (lstate === "CLOSED") return { text: `      PR #${n} CLOSED (live)\n`, suppress: false };
     return { text: `      PR #${n} OPEN ${lsum} (live)\n`, suppress: false };
   };

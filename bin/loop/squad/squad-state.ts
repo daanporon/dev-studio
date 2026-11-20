@@ -308,7 +308,9 @@ const firstUnit = (units: J[], slug: J) => units.find((u) => u?.slug === slug) ?
 // The state (OPEN, CLOSED, MERGED) the loop last observed for a unit's PR, or null when it has no row:
 // found the way the lifecycle reconciler's prRow finds it (by `<nwo>#<pr>`, else by `<topic>/<slug>`).
 function observedPrState(b: StoreBackend, doc: Doc, slug: string, pr: string): string | null {
-  const { store, project, topic } = b, n = Number(pr);
+  const { store, project, topic } = b, m = pr.match(/(\d+)\/?$/);  // lifecycle.ts num(): '#12', a URL
+  if (!m) return null;
+  const n = Number(m[1]);
   const repo = (store.get("squads", { project, topic })?.repo as string | undefined) || (typeof doc.repo === "string" ? doc.repo : "");
   const nwo = repo ? (store.get("config", { project, file: "github", key: `repo:${repo}` })?.value as string) || "" : "";
   const row = (nwo && store.get("observed_prs", { project, ref: `${nwo}#${n}` }))

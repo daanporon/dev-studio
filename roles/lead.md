@@ -350,7 +350,7 @@ Orca brief says — you stay running between turns and report through `ds` and `
      changes, marks the unit done after merge and tells you what unblocked. Use the
      board for the observed PR status. **`state unknown` is not a state.** It means the
      status could not be read — never treat it as open, merge-ready, or
-     merged, and `set-unit-status … done` refuses it. Run `gh pr view` on the PR to see where it is. `★ finished`
+     merged. Run `gh pr view` on the PR to see where it is (`set-unit-status … done` refuses it). `★ finished`
      means the feature squad is settled: do the testability handoff, write the debrief
      (`set-debrief`, below), `set-status done`, and tell the operator `/ds-close-squad <topic>`. The board's loop-down banner
      means the watchdog must restore the loop before coordination can proceed.
