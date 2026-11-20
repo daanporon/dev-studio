@@ -172,8 +172,8 @@ A Studio out of credits (U264) is moved per `studio_move` through the one termin
 under the same ready check, which runs again right before anything is closed. The loop closes that
 tab only (never the worktree's other panes), starts the Studio in the same worktree on the pick
 (`studio-start`, with the auto-compact window and the Studio's skill overrides), tells it to read its
-journal briefing, and records the new terminal; the board shows "Studio moved to <agent>:<account>"
-for a day. A Run the old tab coordinated is bound again from a fresh `ds-loop` pane, and the rewake
+journal briefing, and records the new terminal; the move stays in the Event log under Crew
+(`studio_moved`). A Run the old tab coordinated is bound again from a fresh `ds-loop` pane, and the rewake
 hook lives in the worktree, so the new tab keeps it. While the Studio is busy nothing happens; when
 it stays not ready (text on the input line, unread mail, a waiting request) for
 `DS_LOOP_STUDIO_MOVE_HOLD_S` seconds (600) the `studio.limit` card says why and gives the command to
