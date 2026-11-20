@@ -259,7 +259,7 @@ export function writeCleanup(store: Store, s: CleanupScan, host = hostname()): v
     if (r.class === "a" || !r.facts.partial) return r;
     const p = prev.get(r.project, r.class, r.key) as { size_kb: number | null; facts: string | null } | null;
     const f = parse(p?.facts);
-    if (f.size_from !== "du" || p?.size_kb === null || p?.size_kb === undefined || p.size_kb < Number(r.size_kb ?? 0)) return r;
+    if (f.size_from !== "du" || p?.size_kb == null || p.size_kb < Number(r.size_kb ?? 0)) return r;
     return { ...r, size_kb: p.size_kb, facts: { ...r.facts, size_from: "du", size_at: f.size_at } };
   };
   const up = store.db.query(`INSERT INTO observed_cleanup (project, class, key, path, pid, size_kb, mtime, first_seen, facts, observed_at, gone_at)
