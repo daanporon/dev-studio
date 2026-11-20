@@ -288,7 +288,7 @@ const parse = (t: string | null | undefined): Record<string, unknown> => { try {
 
 // The measuring pass (investigate-disk-cleanup U1). The walk stops at its entry budgets and a class e
 // row counts a matched folder as its own inode, so after each written scan every live row whose facts
-// say `partial` gets its real size from `du -sk`, largest first, off the tick: one path at a time,
+// say `partial` gets its real size from `du -sk`, unmeasured rows first, then largest first, off the tick: one path at a time,
 // each killed after DS_LOOP_CLEANUP_DU_S (120 s), the pass stopped after DS_LOOP_CLEANUP_DU_TOTAL_S
 // (600 s). A class e row is the sum over its glob's matches (a folder's du, a file's own blocks). A
 // path gone before or during its du is skipped; a failed du keeps the walk's size and says why in
@@ -297,7 +297,8 @@ export type Sized = { project: string; class: string; key: string } & ({ kb: num
 
 type ToSize = { project: string; class: string; key: string; path: string | null };
 export const toSize = (store: Store): ToSize[] => store.db.query(`SELECT project, class, key, path FROM observed_cleanup
-  WHERE gone_at IS NULL AND class <> 'a' AND json_extract(facts, '$.partial') = 1 ORDER BY size_kb DESC, class, key`).all() as ToSize[];
+  WHERE gone_at IS NULL AND class <> 'a' AND json_extract(facts, '$.partial') = 1
+  ORDER BY json_extract(facts, '$.size_from') IS 'du', size_kb DESC, class, key`).all() as ToSize[];
 
 export async function measureCleanup(store: Store, o: CleanupOpts = {}, rows = toSize(store)): Promise<Sized[]> {
   const perS = o.duS ?? envInt("DS_LOOP_CLEANUP_DU_S", 120), totalS = o.duTotalS ?? envInt("DS_LOOP_CLEANUP_DU_TOTAL_S", 600);
@@ -346,7 +347,8 @@ export function writeSizes(store: Store, sized: Sized[], at: number): void {
       const row = get.get(m.project, m.class, m.key) as { facts: string | null } | null;
       if (!row) continue;
       const f = parse(row.facts);
-      if ("kb" in m) { delete f.size_error; f.size_from = "du"; f.size_at = at; } else f.size_error = m.error;
+      // A failed du leaves the size it had but not as a measured one: the card reads `≥` again.
+      if ("kb" in m) { delete f.size_error; f.size_from = "du"; f.size_at = at; } else { f.size_error = m.error; delete f.size_from; }
       set.run("kb" in m ? m.kb : null, JSON.stringify(f), m.project, m.class, m.key);
     }
   });

@@ -284,6 +284,19 @@ describe("the measuring pass (investigate-disk-cleanup U1)", () => {
     expect(out.map((m) => m.key)).toEqual([join(d, "big"), join(d, "mid")]);
   });
 
+  test("a row measured before waits behind every unmeasured one; a later failed du makes its size read ≥ again", async () => {
+    const s = store(), d = tmp();
+    project(s, "p");
+    mkdirSync(join(d, "known")); seed(s, "d", join(d, "known"), 9000, { partial: true, size_from: "du", size_at: AT });
+    mkdirSync(join(d, "new")); seed(s, "c", join(d, "new"), 100, { partial: true });
+    const calls: string[] = [];
+    const out = await measureCleanup(s, { du: async (p) => { calls.push(p); return p.endsWith("known") ? { error: "du exited 1" } : { kb: 50 }; } });
+    expect(calls).toEqual([join(d, "new"), join(d, "known")]);
+    writeSizes(s, out, AT + 5);
+    expect(row(s, "d")).toEqual({ kb: 9000, facts: { partial: true, size_at: AT, size_error: "du exited 1" } });
+    expect(cardText(s, "p")).toContain(`≥ 8.8 MB · ${join(d, "known")}`);
+  });
+
   test("a du past DS_LOOP_CLEANUP_DU_S is killed: the walk's size stays with size_error, and the card still reads ≥", async () => {
     const s = store(), d = tmp(), bin = join(tmp(), "bin");
     project(s, "p");
