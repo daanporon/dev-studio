@@ -7,6 +7,9 @@
 //           the worktree when clean and pushed, otherwise record a leftover in the squad
 //           doc (close-role.sh's mechanics); then prune the roster (status gone). The PR is
 //           never touched. A cancelled Builder is cancel.ts's, never this fulfiller's.
+//           Before any of that (lavish-docs-not-stored U3, io/rescue.ts) its review pages and working
+//           notes are copied to state/<label>/pages/<topic>/rescued/<role[-suffix]>/, kept or removed
+//           alike; a copy that fails keeps the worktree as a leftover (`rescue failed: <why>`).
 // Busy (U203, close-busy.ts, shared with decide.ts closeOK): worker state working/waiting, except a
 // finished unit's member that is `working` only through background tasks (its turn has ended: no
 // foreground tool call open): that one is closed. An unreadable transcript counts as busy.
@@ -20,6 +23,7 @@ import { wtProbe } from "../io/wt-probe.ts";
 import { actionBlock } from "../pause/pause.ts";
 import { closeTidy } from "../io/tidy.ts";
 import { removalHold } from "../squad/exposed.ts";
+import { rescuePages } from "../io/rescue.ts";
 import type { Row, Store } from "../core/store.ts";
 import type { Action } from "../core/plugins.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
@@ -34,37 +38,40 @@ function rowOf(x: Exec, a: Action): Row | null {
 function presence(x: Exec, r: Row): string | null {
   return r.wt ? String(x.store.get("observed_workers", { project: r.project, wt: r.wt })?.presence ?? "none") : "none";
 }
-function prune(store: Store, r: Row, at: number, result: string): void {
+// `rescued` (U3): the folder its pages and notes were copied to, when anything is there.
+type Rescue = { rescued?: string };
+function prune(store: Store, r: Row, at: number, result: string, extra: Rescue = {}): void {
   store.fact("wish_done", [{ table: "members", key: { id: r.id }, set: { status: "gone", doc: null, want_result: `done: ${result}`, updated_at: at } }],
-    { project: String(r.project), squad: String(r.squad), member: (r.wt as string | null) ?? null, payload: { want: "gone", result } });
+    { project: String(r.project), squad: String(r.squad), member: (r.wt as string | null) ?? null, payload: { want: "gone", result, ...extra } });
 }
 
 // A suspended member keeps its row, journal and branch: only the worktree goes, and its wt
 // clears so the resume's standing wish starts it fresh in a new worktree (U158).
-function suspendPrune(store: Store, r: Row, at: number, result: string): void {
+function suspendPrune(store: Store, r: Row, at: number, result: string, extra: Rescue = {}): void {
   store.fact("member_suspended", [{ table: "members", key: { id: r.id }, set: { status: "suspended", wt: null, updated_at: at } }],
-    { project: String(r.project), squad: String(r.squad), member: (r.wt as string | null) ?? null, payload: { id: r.id, result } });
+    { project: String(r.project), squad: String(r.squad), member: (r.wt as string | null) ?? null, payload: { id: r.id, result, ...extra } });
   if (r.role === "lead") store.db.run("UPDATE squads SET lead_wt = NULL WHERE project = ? AND topic = ? AND lead_wt = ?", [String(r.project), String(r.squad), String(r.wt)]);
 }
 
 // Record a leftover the way close-role.sh did: an entry in the squad doc's leftovers, so
 // lifecycle step 1d keeps trying to remove it once provably safe.
-function recordLeftover(store: Store, r: Row, wt: string, path: string, branch: string, reason: string, files: string[], n: number, unpushed: number): void {
+function recordLeftover(store: Store, r: Row, wt: string, path: string, branch: string, reason: string, files: string[], n: number, unpushed: number, extra: Rescue = {}): void {
   const squad = store.get("squads", { project: r.project, topic: r.squad });
-  if (!squad?.doc) { store.event("leftover_recorded", { project: String(r.project), squad: String(r.squad), member: wt, payload: { wt, path, branch, reason } }); return; }
+  if (!squad?.doc) { store.event("leftover_recorded", { project: String(r.project), squad: String(r.squad), member: wt, payload: { wt, path, branch, reason, ...extra } }); return; }
   const doc = JSON.parse(String(squad.doc)) as Row;
   const left = (Array.isArray(doc.leftovers) ? doc.leftovers as Row[] : []).filter((l) => l.wt !== wt);
   const unit = r.role === "builder" && r.suffix ? store.get("units", { project: r.project, squad: r.squad, slug: r.suffix }) : null;
   const waits = unit?.pr ? `PR #${unit.pr} merged — inspect, then close-squad --force or remove by hand` : "the Lead/operator decision";
   doc.leftovers = [...left, { wt, path, branch, reason, waits_on: waits, files: files.slice(0, 20), n_files: n, unpushed, ...(unit ? { unit: String(unit.slug) } : {}) }];
   store.db.run("UPDATE squads SET doc = ? WHERE project = ? AND topic = ?", [JSON.stringify(doc), String(r.project), String(r.squad)]);
-  store.event("leftover_recorded", { project: String(r.project), squad: String(r.squad), member: wt, payload: { wt, path, branch, reason, waits_on: waits } });
+  store.event("leftover_recorded", { project: String(r.project), squad: String(r.squad), member: wt, payload: { wt, path, branch, reason, waits_on: waits, ...extra } });
 }
 
 async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   const { store, now: at } = x, wt = String(r.wt ?? "");
   const suspended = view(store, r) === "suspended";
-  const finish = (result: string) => suspended ? suspendPrune(store, r, at, result) : prune(store, r, at, result);
+  let extra: Rescue = {};
+  const finish = (result: string) => suspended ? suspendPrune(store, r, at, result, extra) : prune(store, r, at, result, extra);
   // Release its settled dispatch (close-role.sh always did): a member archived while its
   // agent was already gone goes straight here and would otherwise keep its long-poll slot.
   const runId = String(store.get("squads", { project: r.project, topic: r.squad })?.run_id ?? "");
@@ -73,11 +80,21 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   const path = String(tree?.path ?? (wt.includes("::") ? wt.split("::").at(-1) : "") ?? "");
   const branch = String(tree?.branch ?? "");
   if (!path || !existsSync(path)) { finish("archived: worktree already gone"); return { done: true, result: "removed: already gone" }; }
+  // U3: copy its pages and notes out first, whatever the probe says next; a replay copies nothing twice.
+  const saved = await rescuePages(store, String(r.project), String(r.squad), r.suffix ? `${r.role}-${r.suffix}` : String(r.role), path);
+  if (saved.count + saved.same > 0) extra = { rescued: saved.dest };
+  if (saved.count > 0) store.event("pages_rescued", { project: String(r.project), squad: String(r.squad), member: wt,
+    payload: { wt, path, dest: saved.dest, count: saved.count, bytes: saved.bytes, same: saved.same, capped: saved.capped, listed: saved.listed, files: saved.files.slice(0, 20) } });
+  if (!saved.ok) {
+    recordLeftover(store, r, wt, path, branch || "unknown", `rescue failed: ${saved.why}`, [], 0, 0, extra);
+    finish("leftover kept (rescue failed)");
+    return { done: true, result: "left: rescue-failed" };
+  }
   // A dirty or unpushed tree is kept as a leftover, untouched; `tidied` says the close-time tidy ran.
   const check = async (tidied: boolean): Promise<Result | { dirty: number; unpushed: number; files: string[] }> => {
     const probe = await wtProbe(path, 60_000);
     if (probe.code !== 0) {
-      recordLeftover(store, r, wt, path, branch || "unknown", "unknown (probe failed)", [], 0, 0);
+      recordLeftover(store, r, wt, path, branch || "unknown", "unknown (probe failed)", [], 0, 0, extra);
       finish("leftover kept (probe failed)");
       return { done: true, result: "left: probe-failed" };
     }
@@ -85,7 +102,7 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
     const dirty = Number(d || 0), unpushed = Number(u || 0), files = lines.slice(1).filter(Boolean);
     if (dirty > 0 || unpushed > 0) {
       const reason = dirty > 0 && unpushed > 0 ? "both" : dirty > 0 ? "uncommitted changes" : "unpushed commits";
-      recordLeftover(store, r, wt, path, branch || "unknown", tidied ? `${reason} (after cleanup_on_close)` : reason, files, dirty, unpushed);
+      recordLeftover(store, r, wt, path, branch || "unknown", tidied ? `${reason} (after cleanup_on_close)` : reason, files, dirty, unpushed, extra);
       finish("leftover kept");
       return { done: true, result: dirty > 0 ? "left: dirty" : "left: unpushed" };
     }
@@ -108,7 +125,7 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   if (rm.code === 75) return { wait: "activity changed before removal" };   // the backend's pause/generation fence: not a refusal
   if (rm.code !== 0) {
     const err = (rm.err || rm.out).split("\n").filter((l) => l.trim()).at(-1)?.slice(0, 200) || "no detail from backend";
-    recordLeftover(store, r, wt, path, branch || "unknown", `worktree-rm refused: ${err}`, files, dirty, unpushed);
+    recordLeftover(store, r, wt, path, branch || "unknown", `worktree-rm refused: ${err}`, files, dirty, unpushed, extra);
     finish("leftover kept (worktree-rm refused)");
     return { done: true, result: "left: rm-refused" };
   }
