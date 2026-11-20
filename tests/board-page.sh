@@ -168,6 +168,13 @@ out="$(bsh "$LBL" --serve)"
 kill "$livepid" 2>/dev/null || true
 has "serve: a live pid says the loop runs it" "$out" "the loop runs it on :8795"
 eq  "serve: ... and changes nothing" "$(sqlr "SELECT want_at FROM services WHERE project='$LBL'" | jq -r '.[0].want_at')" "100"
+# U2 (board-empty-state-and-port): a board the loop moved (asked 8795, bound 8796) prints the bound port.
+bash -c 'exec -a board-server sleep 30' & livepid=$!
+sqlr "UPDATE services SET pid=$livepid, port=8796 WHERE project='$LBL'"
+out="$(bsh "$LBL" --serve)"
+kill "$livepid" 2>/dev/null || true
+has "serve: a moved board prints its bound port" "$out" "the loop runs it on :8796 (8795 was taken) — open http://127.0.0.1:8796/"
+eq  "serve: ... and asking again changes nothing" "$(sqlr "SELECT want_at, port FROM services WHERE project='$LBL'" | jq -r '.[0] | "\(.want_at) \(.port)"')" "100 8796"
 sqlr "UPDATE services SET status=NULL, pid=NULL WHERE project='$LBL'"
 rc=0; out="$(WAIT=1 bsh "$LBL" --serve 8797)" || rc=$?
 eq  "serve: no loop to start it within the wait exits 1" "$rc" "1"

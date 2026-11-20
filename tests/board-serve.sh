@@ -1059,13 +1059,22 @@ eq "upgrade: its pidfile + files removed" "$(find "$DS_STATE_ROOT/$LBL" -maxdept
 eq "upgrade: new board serves"          "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$((PORT + 3))/")" "200"
 stop_own "$SPID"; SPID=""
 
-# Port taken by something else: say so and exit non-zero — never claim "listening".
+# Port taken by something else (U2 of board-empty-state-and-port): the next free port, said so.
 "$(command -v bun)" -e "Bun.serve({hostname:'127.0.0.1',port:$((PORT + 4)),fetch:()=>new Response('other')}); await Bun.sleep(30000)" & HOG=$!
 sleep 0.5
-rc=0; out="$(PATH="$TMP/tsbin:$PATH" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$((PORT + 4))" 2>&1)" || rc=$?
+PATH="$TMP/tsbin:$PATH" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$((PORT + 4))" >"$TMP/serve6.log" 2>&1 &
+SPID=$!
+for _ in $(seq 1 150); do grep -q 'listening on' "$TMP/serve6.log" && break; sleep 0.2; done
+P6="$(sed -n 's/.*listening on 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$TMP/serve6.log" | head -1)"
+eq "busy port: moves past the held one" "$([ -n "$P6" ] && [ "$P6" -gt "$((PORT + 4))" ] && echo yes || echo no)" "yes"
+has "busy port: says the asked was taken" "$(cat "$TMP/serve6.log")" "($((PORT + 4)) was taken)"
+eq "busy port: the board serves there"  "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${P6:-0}/healthz")" "200"
+stop_own "$SPID"; SPID=""
+# Nothing free within DS_BOARD_PORT_TRIES: say so and exit non-zero — never claim "listening".
+rc=0; out="$(DS_BOARD_PORT_TRIES=0 PATH="$TMP/tsbin:$PATH" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$((PORT + 4))" 2>&1)" || rc=$?
 kill "$HOG" 2>/dev/null || true
 eq "busy port: exits non-zero"         "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
-has "busy port: says it can't bind"    "$out" "could not bind"
+has "busy port: says all are taken"    "$out" "are all taken"
 eq "busy port: never says listening"   "$(printf '%s' "$out" | grep -c 'listening on' || true)" "0"
 
 # Default bind (no DS_BIND): localhost + the tailnet IP only — never every interface (0.0.0.0).

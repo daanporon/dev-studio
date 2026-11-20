@@ -315,8 +315,11 @@ your laptop over the **tailnet** (`http://<tailscale-ip>:<port>/`). The loop run
 reason when it failed; the loop starts `bin/board/board-server.ts` as its
 child, pings `/healthz` every tick and restarts it within a tick when it dies or stops
 answering. More than three restarts in ten minutes raise one Studio alert and leave the row
-`failed` until you ask again; a port already in use fails it the same way, with the bind error
-(`bin/ds services` shows each row's status, pid and why). Its log is
+`failed` until you ask again (`bin/ds services` shows each row's status, pid and why). When
+another process already holds the port (a second project's board, any other tool), the loop
+takes the next free one, up to `DS_BOARD_PORT_TRIES` (20) further, skipping ports another
+board's row has registered; the port it bound becomes that board's port from then on, so the
+address stays the same between runs, and `--serve` prints it with `(8787 was taken)`. Its log is
 `state/<label>/board-serve.log`.
 
 ```sh
@@ -324,7 +327,8 @@ bin/board/board.sh name:your-app --serve           # the wish; prints the 127.0.
 bin/board/board.sh name:your-app --stop            # the loop stops it on its next tick
 ```
 
-Pass a port as `--serve 9000`. Without Tailscale it serves on `127.0.0.1` only (there is
+Pass a port as `--serve 9000` (`--serve-fg [port]`, the server in the foreground by hand, also
+moves on to the next free port). Without Tailscale it serves on `127.0.0.1` only (there is
 no file-based page, browsers won't load the board data from `file://`). `DS_BIND` overrides
 the addresses, space-separated (`DS_BIND=127.0.0.1` for host-only, `0.0.0.0` to open it up on
 purpose). It serves the page and `/board.json`, plus same-origin JSON APIs —
