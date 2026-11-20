@@ -62,7 +62,7 @@ const USAGE = `usage: squad-state.sh <file> <command> [args]
   set-unit-hold    <file> <slug> on|off [--why <text>]    (on requires a reason and a planned unit; off releases only a reasoned hold)
   set-unit-urgent  <file> <slug> on|off [--why <text>]    (on marks a planned or dispatched unit urgent — its Builder starts next, even at max_builders; refused on done or cancelled; off releases it)
   set-unit-wait    <file> <slug> <epoch>    (no account/model free: hold the unit until then; "" clears)
-  set-unit-status  <file> <slug> <planned|dispatched|done> [builder_worktree_id] [--no-pr]   (refuses done/dispatched on a cancelled unit — set it planned to revive it, which clears the cancel fields)
+  set-unit-status  <file> <slug> <planned|dispatched|done> [builder_worktree_id] [--no-pr]   (refuses done/dispatched on a cancelled unit — set it planned to revive it, which clears the cancel fields; refuses done without a recorded PR unless --no-pr, and on the loop's store refuses done while the recorded PR is not observed MERGED — the loop marks it done on the merge)
   set-unit-pr      <file> <slug> <pr-number>    (record the unit's PR; "" clears it)
   cancel-unit      <file> <slug> [--into <unit-slug|U<n>|#N|PR#N>] [--why <text>] [--check]   (writes a cancellation wish; the loop closes the Builder, removes its dirty worktree and closes its open PR while preserving branches)
   add-leftover     <file> <wt> <path> <branch> <reason> <waits_on> [--unit <slug>] [--file <f>]... [--n-files <n>] [--unpushed <n>]   (record a worktree that couldn't be removed without losing work; upsert by wt)
@@ -304,6 +304,17 @@ function backend(file: string, cmd: string, args: string[]): Backend {
 // so every existing reader keeps working.
 const unitsOf = (doc: Doc): J[] => arr(doc.units);
 const firstUnit = (units: J[], slug: J) => units.find((u) => u?.slug === slug) ?? null;
+
+// The state (OPEN, CLOSED, MERGED) the loop last observed for a unit's PR, or null when it has no row:
+// found the way the lifecycle reconciler's prRow finds it (by `<nwo>#<pr>`, else by `<topic>/<slug>`).
+function observedPrState(b: StoreBackend, doc: Doc, slug: string, pr: string): string | null {
+  const { store, project, topic } = b, n = Number(pr);
+  const repo = (store.get("squads", { project, topic })?.repo as string | undefined) || (typeof doc.repo === "string" ? doc.repo : "");
+  const nwo = repo ? (store.get("config", { project, file: "github", key: `repo:${repo}` })?.value as string) || "" : "";
+  const row = (nwo && store.get("observed_prs", { project, ref: `${nwo}#${n}` }))
+    || (store.db.query("SELECT * FROM observed_prs WHERE project = ? AND ref = ? AND pr = ?").get(project, `${topic}/${slug}`, n) as Row | null);
+  return row?.state ? String(row.state) : null;
+}
 
 // satisfied(s, self): dep slug s counts for dependent self. A dep on a CANCELLED unit counts when its
 // work landed elsewhere: folded into this unit itself, into a unit that is done (cancelled->cancelled
@@ -858,6 +869,19 @@ function main(argv: string[]): void {
         }
         if (st === "done" && !noPr && arr(d.units).some((u) => u?.slug === a[0] && alt(u.pr, "") === "")) {
           die(1, `squad-state: unit '${a[0]}' has no PR — record it with set-unit-pr, or pass --no-pr if it truly has none`);
+        }
+        // A unit with a recorded PR is done only once that PR merged: until then its Builder stays to
+        // fix checks, conflicts and review threads, and the loop marks the unit done and retires the
+        // Builder on the merge (lifecycle.ts 1b/1c). --no-pr does not skip this: it claims there is no
+        // PR, and there is one. The file backend has no loop to mark it done, so it keeps the old rule.
+        const prUnit = st === "done" && b instanceof StoreBackend ? firstUnit(unitsOf(d), a[0]) : null;
+        if (prUnit && alt(prUnit.pr, "") !== "") {
+          const pr = String(prUnit.pr), state = observedPrState(b as StoreBackend, d, a[0], pr);
+          if (state !== "MERGED") {
+            const said = state === null ? "has no observed state yet (the loop has not read it)" : `is ${state.toLowerCase()}`;
+            const closed = state === "CLOSED" ? "; a closed PR needs a new PR (set-unit-pr) or cancel-unit" : "";
+            die(1, `squad-state: unit '${a[0]}' is not done — its PR #${pr} ${said}. The loop marks the unit done and closes its Builder when the PR merges${closed}`);
+          }
         }
         units(d, (u) => {
           const n = { ...u, status: st };

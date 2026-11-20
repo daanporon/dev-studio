@@ -153,14 +153,14 @@ Orca brief says — you stay running between turns and report through `ds` and `
         (`set-unit-pr <slug> <pr>`), so `units[].pr` shows on the board with live status; if a
         Builder reports a PR to you instead of recording it, record it yourself. A unit isn't
         truly `done` until its PR is **merged** — a green open PR is "in review", not done.
-      **Retire a Builder once its PR is merged — promptly.** A finished Builder left open
-        **holds an Orca long-poll slot**, and one lingering per completed unit slowly
-        re-saturates the runtime (`runtime_busy`). So the moment a unit's PR merges, mark it
-        done (`set-unit-status <slug> done`) and close the Builder:
-        `~/.dev-studio/bin/commands/close-role.sh <project> <topic> builder-<slug>`. That **closes its
-        terminal tab and releases its dispatch** (freeing the slot), removes its worktree (the
-        branch is kept — the PR already merged it), and prunes it from the roster. Don't leave
-        done Builders sitting idle — retiring them is how capacity stays free over a long run.
+      **The loop retires a Builder once its PR is merged — not before.** Between worker_done and
+        the merge the Builder stays: it fixes failing checks, conflicts and review threads the loop
+        pokes it about. When the PR merges, the loop marks the unit done and closes the Builder (its
+        terminal tab and dispatch, so its Orca slot frees; its worktree goes, the branch is kept).
+        Don't mark a PR unit done yourself: `set-unit-status <slug> done` refuses while its PR is
+        not observed merged, and `close-role.sh` refuses a Builder whose unit is still dispatched.
+        Close a Builder by hand only when the tick still shows a merged unit's Builder up after the
+        loop marked it done: `~/.dev-studio/bin/commands/close-role.sh <project> <topic> builder-<slug>`.
       **Retire a Builder mid-unit (plan changed, unit folded into another PR)** with one
         command: `~/.dev-studio/bin/commands/close-role.sh <project> <topic> builder-<slug> --cancel
         --into <unit-slug|PR#N> --why "<reason>"` — it writes the cancellation and the Builder's `gone` wish. Any role can also
@@ -333,10 +333,12 @@ Orca brief says — you stay running between turns and report through `ds` and `
      sends no done message, so learn completion by **reconciling worker state**, not by
      waiting for one: your `watch.sh` tick's TEAM check-in reports each recorded
      worker's state (working/waiting/done/idle, or GONE), and its WORK ITEMS line shows
-     each unit's status. When a Builder's unit is complete, mark it:
-     `bin/role/squad-state.sh <state> set-unit-status <slug> done` (it refuses a unit with
-     no recorded PR — pass `--no-pr` only when it truly has none: `local-only` mode
-     or a no-code unit).
+     each unit's status. A unit with a PR is marked done by the loop when its PR merges, and
+     the loop then retires its Builder; a worker_done from its Builder means merge-ready, not
+     done. Only a unit with no PR (`local-only` mode or a no-code unit) is marked by you once
+     its work is committed: `bin/role/squad-state.sh <state> set-unit-status <slug> done --no-pr`.
+     A unit with a recorded PR is refused until that PR is observed merged (`--no-pr` does not
+     skip it); a closed PR needs a new PR (`set-unit-pr`) or `cancel-unit`.
      **"Complete" means the WORK landed, not that the Builder went idle.** For a unit that
      produces a PR, complete = its PR is **merged** — never mark it `done` on the
      Builder's word, because it stopped, or on a merely green open PR (that's "in
@@ -348,7 +350,7 @@ Orca brief says — you stay running between turns and report through `ds` and `
      changes, marks the unit done after merge and tells you what unblocked. Use the
      board for the observed PR status. **`state unknown` is not a state.** It means the
      status could not be read — never treat it as open, merge-ready, or
-     merged. Run `gh pr view` on the PR before marking the unit `done`. `★ finished`
+     merged, and `set-unit-status … done` refuses it. Run `gh pr view` on the PR to see where it is. `★ finished`
      means the feature squad is settled: do the testability handoff, write the debrief
      (`set-debrief`, below), `set-status done`, and tell the operator `/ds-close-squad <topic>`. The board's loop-down banner
      means the watchdog must restore the loop before coordination can proceed.
