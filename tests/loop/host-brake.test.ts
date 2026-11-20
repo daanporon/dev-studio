@@ -10,10 +10,10 @@ import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import { accountRows } from "../../bin/loop/db/import-json.ts";
-import { pick, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
+import { brakeView, pick, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
 import { reconcile } from "../../bin/loop/capacity/picks.ts";
 import { ladderPick } from "../../bin/loop/core/actuator.ts";
-import { hostCrit, machineLevels, worst } from "../../bin/loop/capacity/machine-level.ts";
+import { hostCrit, hostCritHit, machineLevels, sampleState, worst } from "../../bin/loop/capacity/machine-level.ts";
 import type { Member } from "../../bin/loop/drivers/types.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
 
@@ -160,6 +160,62 @@ describe("U4: the Builder host brake", () => {
       const crit = worst(m.lv.load, m.lv.mem, m.lv.swap, ...m.psi.map((p) => p.level)) === "crit";
       expect(hostCrit(row, line, T) !== null).toBe(crit);
     }
+  });
+});
+
+describe("board-shows-host-brake U1: the crossed line as data, and the brake as one host state", () => {
+  const lineOf = (s: Store) => (k: string) => Number(String((s.get("config", { project: "", file: "limits.conf", key: k }) as Row).value).split(/\s+/)[0]);
+
+  test("hostCritHit names the metric, value, line, key and unit; hostCrit's string is unchanged", () => {
+    const s = fixture(), line = lineOf(s);
+    const cases: [Row, ReturnType<typeof hostCritHit>, string | null][] = [
+      [{ load1: 40 }, { metric: "load", value: 166.7, crit: 150, key: "machine_load_crit_pct", unit: "%" }, "load 166.7% ≥ crit 150%"],
+      [{ mem_avail_kb: 2_000_000 }, { metric: "mem", value: 96.9, crit: 95, key: "machine_mem_crit_pct", unit: "%" }, "mem 96.9% ≥ crit 95%"],
+      [{ swap_free_kb: 400_000, psi_mem_some: 12 }, { metric: "swap", value: 95, crit: 90, key: "machine_swap_crit_pct", unit: "%" }, "swap 95% ≥ crit 90%"],
+      [{ swap_free_kb: 400_000, psi_mem_some: 2 }, null, null],                    // full swap, low PSI: warn only
+      [{ psi_cpu_some: 31.24 }, { metric: "psi cpu", value: 31.2, crit: 25, key: "machine_psi_crit", unit: "" }, "psi cpu 31.2 ≥ crit 25"],
+      [{}, null, null],
+    ];
+    for (const [set, hit, text] of cases) {
+      const row = { ...CALM, ...set };
+      expect(hostCritHit(row, line, T)).toEqual(hit);
+      expect(hostCrit(row, line, T)).toBe(text);
+    }
+  });
+
+  test("a stale or missing sample has no hit, and says which", () => {
+    const s = fixture(), line = lineOf(s);
+    const hot = { ...CALM, load1: 40 };
+    expect(sampleState(null, T)).toEqual({ state: "missing", age_s: null });
+    expect(sampleState({ ...hot, observed_at: null }, T)).toEqual({ state: "missing", age_s: null });
+    expect(sampleState({ ...hot, observed_at: T - 90 }, T)).toEqual({ state: "fresh", age_s: 90 });
+    expect(sampleState({ ...hot, observed_at: T - 91 }, T)).toEqual({ state: "stale", age_s: 91 });
+    expect(hostCritHit({ ...hot, observed_at: T - 91 }, line, T)).toBeNull();
+    expect(hostCritHit(null, line, T)).toBeNull();
+    expect(brakeView(s, T)).toMatchObject({ sample: "missing", age_s: null, hit: null });
+    sample(s, { load1: 40, observed_at: T - 200 });
+    expect(brakeView(s, T)).toMatchObject({ sample: "stale", age_s: 200, hit: null });
+  });
+
+  test("brakeView: one host hit, every project listed with its setting, and nothing written", () => {
+    const s = fixture();
+    brake(s, "on", "fx");
+    brake(s, "off", "fy");
+    sample(s, { load1: 36.72 });                                      // 153% of 24 cores
+    const count = () => (s.db.query("SELECT (SELECT COUNT(*) FROM events) + (SELECT COUNT(*) FROM picks) AS n").get() as { n: number }).n;
+    const before = count();
+    const v = brakeView(s, T);
+    expect(v).toEqual({ setting: "builder_host_brake", sample: "fresh", age_s: 0,
+      hit: { metric: "load", value: 153, crit: 150, key: "machine_load_crit_pct", unit: "%" },
+      projects: [{ project: "fx", on: true }, { project: "fy", on: false }] });
+    expect(count()).toBe(before);
+    // It agrees with the brake itself: fx's next Builder waits on that line, fy's starts.
+    expect(waits(builder(s, { member: asks(s) })).reason).toBe("WAIT host: load 153% ≥ crit 150%");
+    starts(builder(s, { project: "fy", member: asks(s, { project: "fy" }) }));
+    // A project's own line is read when the board asks for that project.
+    s.upsert("config", { project: "fy", file: "limits.conf", key: "machine_load_crit_pct" }, { value: "200", observed_at: T });
+    expect(brakeView(s, T, "fy").hit).toBeNull();
+    expect(brakeView(s, T, "fx").hit?.crit).toBe(150);
   });
 });
 
