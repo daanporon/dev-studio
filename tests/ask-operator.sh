@@ -216,6 +216,19 @@ before="$(jq -c . "$SU")"
 "$A" "$SU" typo lead true --unit missing --title T --question Q --option A a --option B b --recommend 1 --why w >/dev/null 2>&1
 eq "an unknown unit is refused" "$?" "2"
 eq "an unknown unit changes nothing" "$(jq -c . "$SU")" "$before"
+out="$("$A" "$SU" typo lead true --unit U2 --title T --question Q --option A a --option B b --recommend 1 --why w 2>&1)"
+eq "an unknown unit names itself and lists the slugs" "$(printf '%s' "$out" | grep -c "^ask-operator: unknown unit 'U2' in $SU — this squad's units: u29$")" "1"
+eq "... with no usage line" "$(printf '%s' "$out" | grep -c 'usage:')" "0"
+SU2="$TMP/unit2.json"; printf '{"run_id":"run_1","status":"running","units":[{"slug":"u1-a","plan_unit":"U1","status":"dispatched","pr":"31"},{"slug":"u2-b","plan_unit":"U2","status":"planned"}],"waiting_on_you":[]}' > "$SU2"
+out="$("$A" "$SU2" typo lead true --unit nosuch --title "About #31" --question Q --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+eq "an unknown unit plus a PR mention reports the unit" "$rc" "2"
+eq "... listing both units with their plan ids" "$(printf '%s' "$out" | grep -c "this squad's units: u1-a (U1), u2-b (U2)$")" "1"
+eq "... and no PR refusal" "$(printf '%s' "$out" | grep -c 'loop asks')" "0"
+eq "... nothing written" "$(jq '.waiting_on_you | length' "$SU2")" "0"
+SU0="$TMP/unit0.json"; printf '{"run_id":"run_1","status":"running","waiting_on_you":[]}' > "$SU0"
+out="$("$A" "$SU0" typo lead true --unit u1 --title T --question Q --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+eq "a squad with no units says so" "$rc" "2"
+eq "... and what to do" "$(printf '%s' "$out" | grep -c 'has no units yet — register the plan first, or leave out --unit$')" "1"
 out="$("$A" "$S6" old lead false "Q?" "a" "b" 2>&1)"
 eq "an old positional call is nudged"        "$(printf '%s' "$out" | grep -c 'old form')" "1"
 
@@ -276,7 +289,7 @@ printf '{"run_id":"run_1","status":"running","waiting_on_you":[]}' > "$SP"
 PA() { "$A" "$SP" "$@" --title T --question Q --option A a --option B b --recommend 1 --why w; }
 out="$(PA pq1 lead true --pr 1 2>&1)"; rc=$?
 eq "--pr from a Lead is refused (the loop asks)" "$rc" "1"
-eq "... with the loop message"                "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; finish your unit and stop')" "1"
+eq "... with the loop message"                "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; #')" "1"
 out="$(PA pq1 thinker true --pr 1 2>&1)"; rc=$?
 eq "--pr on a conflicting PR is refused"      "$rc" "1"
 eq "... naming PR and reasons"                "$(printf '%s' "$out" | grep -c 'PR #1 is not ready (conflicting,checks-failing): send its Builder to fix it first')" "1"
@@ -340,10 +353,46 @@ eq "one PR in the title and one in the question are refused too" "$rc" "2"
 SPU="$TMP/squ.json"; printf '{"run_id":"run_1","status":"running","waiting_on_you":[],"units":[{"slug":"u1","status":"dispatched","pr":"21223"}]}' > "$SPU"
 out="$("$A" "$SPU" unit-q lead true --title "Approve #21223" --question "Please approve #21223." --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
 eq "a Lead naming its unit PR is refused (the loop asks)" "$rc" "1"
-eq "... with the loop message"             "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; finish your unit and stop')" "1"
+eq "... with the loop message"             "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; #')" "1"
 out="$("$A" "$SPU" unit2-q builder-u1 true --title "T" --question "Approve #21223 and #13?" --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
 eq "a Builder naming its unit PR plus another is refused" "$rc" "1"
-eq "... with the loop message"             "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; finish your unit and stop')" "1"
+eq "... with the loop message"             "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; #')" "1"
+# the refusal names its poster: (a) an open loop question, (b) only human gates, (c) not ready, (d) unread.
+(cd "$ROOT" && DS_STATE_ROOT="$R" bun -e '
+  import { open } from "./bin/loop/core/store.ts";
+  const s = open(process.env.DS_STATE_ROOT!);
+  const pr = (n: number, set: object) => s.upsert("observed_prs", { project: "proj", ref: `o/r#${n}` }, { pr: n, repo: "o/r", state: "OPEN", observed_at: 1, ...set });
+  pr(51, { verdict: "waiting", reasons: JSON.stringify("required:signoff") });
+  pr(52, { verdict: "blocked", reasons: JSON.stringify("conflicting,checks-failing") });
+  pr(53, { verdict: "waiting", reasons: JSON.stringify("required:signoff") });
+  s.close();') || echo "  FAIL: seeding loop.db (refusals)" >&2
+SPR="$R/proj/squads/sq-refusals.json"
+printf '%s' '{"run_id":"run_1","status":"running","units":[{"slug":"u1-a","status":"dispatched","pr":"51"},{"slug":"u2-b","status":"dispatched","pr":"52"},{"slug":"u3-c","status":"dispatched","pr":"53"},{"slug":"u4-d","status":"dispatched","pr":"54"}],"waiting_on_you":[{"id":"loop-pr-53","asker":"loop","pr":"53","blocking":false,"question":"q"}]}' > "$SPR"
+rf() { out="$("$A" "$SPR" "$1" "$2" true --title "About #$3" --question Q --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?; }
+cnt() { printf '%s' "$out" | grep -c -- "$1"; }
+nw() { jq '.waiting_on_you | length' "$SPR"; }
+rf r1 lead 53
+eq "(a) open loop question: exit 1" "$rc" "1"
+eq "(a) ... names the question id and that nothing is to post" "$(cnt "#53 already has its question on the board as loop-pr-53 — nothing to post")" "1"
+rf r2 lead 51
+eq "(b) human gates only: exit 1" "$rc" "1"
+eq "(b) ... the loop posts it once the Builder finished" "$(cnt "#51 has only human gates left, so the loop posts it once its Builder has finished — nothing to post")" "1"
+rf r3 lead 52
+eq "(c) not ready, Lead: exit 1" "$rc" "1"
+eq "(c) ... gives the reasons" "$(cnt "#52 is not ready (conflicting,checks-failing), so nobody asks yet")" "1"
+eq "(c) ... sends the Lead to the Builder" "$(cnt 'send-role.sh sq-refusals builder-u2-b ')" "1"
+eq "(c) ... and to --unit for a decision" "$(cnt 'ask about the unit with --unit u2-b and no PR number')" "1"
+rf r4 builder-u2-b 52
+eq "(c) not ready, Builder: exit 1" "$rc" "1"
+eq "(c) ... fix it in its unit, Lead via send-role" "$(cnt 'fix it in your unit, and if the cause is outside your unit tell your Lead: ~/.dev-studio/bin/role/send-role.sh sq-refusals lead')" "1"
+rf r5 lead 54
+eq "(d) unread PR state, Lead: exit 1" "$rc" "1"
+eq "(d) ... says the loop has not read it, with the Lead step" "$(cnt '#54 is in a state the loop has not read yet')" "1"
+out="$("$A" "$SPR" r6 lead true --pr 77 --title T --question Q --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+eq "an explicit --pr that is no unit's: exit 1 with the general rule" "$rc" "1"
+eq "... starts with the loop rule" "$(cnt '^ask-operator: the loop asks PR questions; #77 is not one of this squad')" "1"
+eq "every refusal writes nothing" "$(nw)" "1"
+eq "... nor changes the status" "$(jq -r .status "$SPR")" "running"
 out="$("$A" "$SP" two-mention lead true --title "T" --question "Close #12 and #13?" --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
 eq "a Lead mentioning two non-unit numbers enqueues" "$rc" "0"
 Q86 issu-q lead true --title "T" --question "PRD-18424 for U6?" >/dev/null 2>&1
