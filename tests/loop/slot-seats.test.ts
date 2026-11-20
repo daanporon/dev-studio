@@ -145,7 +145,7 @@ test("seatable: one free seat, a light and a normal unit waiting; slot() agrees 
   f.unit("l1", "dispatched", { light: true }); f.waiting("l1");     // the free light seat
   expect(seated(f)).toEqual(["l1"]);
   expect(ask(f, "l1").ok).toBe(true);
-  expect(ask(f, "n3").ok).toBe(false);
+  expect(ask(f, "n3")).toMatchObject({ ok: false, ahead: 0 });     // l1, seated behind it, is not ahead
   // Single lane, one free seat: only the first in line.
   const g = setup(2);
   g.unit("a", "dispatched"); g.running("a", "working");

@@ -411,9 +411,9 @@ export function slot(store: Store, project: string, who: Asker, now: number, rol
   ], c.focus);
   const light = c.light, seat = walk(line, n, light, c.used, c.live), mine = line.findIndex((p) => p.me);
   if (light > 0) {
-    // Ahead: every other entry the walk seats (the asker has none).
+    // Ahead: the entries before the asker that the walk seats.
     if (seat[mine]) return { ok: true, limit: n + light };
-    return { ok: false, limit: n + light, live: c.used.normal + c.used.light, ahead: seat.filter(Boolean).length,
+    return { ok: false, limit: n + light, live: c.used.normal + c.used.light, ahead: seat.slice(0, mine).filter(Boolean).length,
       why: `WAIT slot: ${project} normal ${c.used.normal}/${n}, light ${c.used.light}/${light}${next()}` };
   }
   if (seat[mine]) return { ok: true, limit: n };
