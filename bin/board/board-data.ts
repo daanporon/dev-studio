@@ -2291,7 +2291,7 @@ export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] 
   { name: "Review", prefixes: ["review_"] },
   { name: "Board & machine", keys: ["board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
   { name: "Morning brief", prefixes: ["briefing_"] },
-  { name: "Host tidy", keys: ["host_tidy"], prefixes: ["cleanup_"] },
+  { name: "Host tidy", keys: ["host_tidy"], prefixes: ["cleanup_", "disk_"] },
 ];
 export function limitGroup(key: string): string {
   return (LIMIT_GROUPS.find((g) => g.keys?.includes(key)) ?? LIMIT_GROUPS.find((g) => g.prefixes?.some((p) => key.startsWith(p))))?.name ?? "Other";
@@ -2313,7 +2313,7 @@ export function lastChange(db: Db, project: string, file: string, key: string) {
 // of conventions/limits.conf with its value and source (env | override | default | unset).
 // Limits the board shows as read-only text: globs and a command run in worktrees are edited in
 // through `ds config import` (docs/settings.md), never from a web form. `reset` of an override stays allowed.
-export const FILE_ONLY_LIMITS = new Set(["cleanup_tmp_globs", "cleanup_on_close"]);
+export const FILE_ONLY_LIMITS = new Set(["cleanup_tmp_globs", "cleanup_on_close", "disk_watch_paths"]);
 export function limitsJson(project: string, root = stateRoot()) {
   return withDb((db) => {
     const limits = db.all("SELECT key, value, comment FROM config WHERE project = '' AND file = 'limits.conf' ORDER BY rowid").map((d) => {
