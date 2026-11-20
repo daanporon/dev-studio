@@ -219,8 +219,10 @@ Review thresholds apply when a Builder runs `bin/review/review-unit.sh`:
 | `cleanup_tmp_globs` | `-` | Comma- or space-separated absolute globs of host temp files the loop may clear: wildcard in the last path segment only, at least 3 literal characters there, and a parent that is not `/`, the home dir, the dev-studio root, the state dir, a workspaces dir or a repo clone. An invalid glob matches nothing. `-` means none. Read whole (`limitLine`), unlike other keys |
 | `cleanup_tmp_age_h` | `48` | Hours a match must be untouched before it is cleared; non-negative integer, else 48 |
 | `cleanup_on_close` | `-` | Command run in a member's worktree before the loop removes it (read whole, e.g. `docker compose down -v`). A ` #` starts a comment, so point it at a script when the command needs one. `-` means none |
+| `disk_card_free_pct` | `20` | A Studio card `Disk <path> low: <free> free (<pct>%)` opens when a disk's free share drops below this percent and names up to 8 consumers (Docker build cache, images and volumes, the Host tidy rows, `disk_watch_paths`). It clears once free space is above the value plus 5 points. `0` = off. The card deletes nothing. |
+| `disk_watch_paths` | `-` | Host-level (read from the default row, a project value is ignored): comma- or space-separated absolute paths (a leading `~/` is the home; no `..`, no wildcard) the disk card sizes with `du -sk`, e.g. `~/.bun/install/cache,~/.claude/projects`. Set it through an import like `cleanup_tmp_globs`. |
 
-`cleanup_tmp_globs` and `cleanup_on_close` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
+`cleanup_tmp_globs`, `cleanup_on_close` and `disk_watch_paths` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
 
 For example, `/ds-limits <project> review_risk_paths contracts/*.sol,src/auth/*`
 uses the risky threshold for those files. Globs match the whole path; `*` also

@@ -12,6 +12,7 @@
 // documents rows (plans, closed squads), the config rows (limits, ship mode) and the requests rows.
 // It never runs a command and never reads a state file, so it renders with orca, gh and git off
 // PATH, and with the loop stopped it shows the last data behind a "loop down" banner.
+import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
 import { basename, join } from "node:path";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { cardPlace } from "./card-place.ts";
@@ -2034,7 +2035,20 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   decorateResources(db, label, squads);
   const machine = machineSummary(db, label, out.live_worktrees, db && live.backendOk ? terminals : null, squads);
   const update = updateSummary(db, label);
-  return { ...out, ...(update ? { update } : {}), accounts_summary: accountsSummary(db, label, accts), header: headerSummary(db, label, squads, out.needs_you, loop), flow: flowFor(db, labels, squads), ...(machine ? { machine, as_of: { ...out.as_of, machine: machine.observed_at } } : {}) };
+  const disk = diskSummary(db, label);
+  return { ...out, ...(update ? { update } : {}), ...(disk.length ? { disk } : {}), accounts_summary: accountsSummary(db, label, accts), header: headerSummary(db, label, squads, out.needs_you, loop), flow: flowFor(db, labels, squads), ...(machine ? { machine, as_of: { ...out.as_of, machine: machine.observed_at } } : {}) };
+}
+
+// The open disk-pressure spells of this project (disk-pressure U3): the episodes, the machine row's disk and the
+// consumers the card names — the board adds no read of its own beyond them.
+function diskSummary(db: Db | null, label: string) {
+  if (!db) return [];
+  try {
+    const open = new Set(db.all("SELECT subject FROM episodes WHERE project = ? AND kind = 'disk-pressure' AND ended_at IS NULL", label).map((r) => String(r.subject).slice("disk-pressure.".length)));
+    if (!open.size) return [];
+    const list = consumers(db.s).map(consumerLine);
+    return disksOf(db.s).filter((d) => open.has(d.path)).map((d) => ({ path: d.path, free_kb: d.free_kb, free_pct: Math.round(d.free_pct), title: titleOf(d), consumers: list }));
+  } catch { return []; } // a loop.db the migrations have not reached yet
 }
 
 // The dev-studio update banner (board-update-button U3): the `observed_update` row alone, plus this
@@ -2145,6 +2159,7 @@ export function renderText(b: Board): string {
   if (b.spent_total) o.push(`SPENT  ≈${compact(b.spent_total.spent)} since ${dayOf(b.spent_total.since)} (all squads, archived included)`, RULE);
   if (b.accounts.length) o.push(`ACCOUNTS  ${b.accounts.map((a) => a.text + (a.disabled ? " · disabled" : "") + (a.users_count ? ` · ${a.users_count} roles` : "")).join(" | ")}`, RULE);
   if (b.machine) o.push(machineLine(b.machine), RULE);
+  for (const d of b.disk ?? []) o.push(`DISK  ⚠ ${d.title}${d.consumers.length ? ` — ${d.consumers[0]}` : ""}`, RULE);
   { const bl = buildersText(b.header); if (bl) o.push(`BUILDERS  ${bl}`, RULE); }
   if (b.loop.stalling) o.push(`LOOP  ⚠ the loop keeps stalling — ${b.loop.restarts_recent} restarts in the last ${b.loop.stall_window_min} min; see loop.log / journalctl --user -u ds-loop.service`, RULE);
   if (b.loop.down) o.push(`LOOP  ⚠ loop down — ${b.loop.tick_at == null ? "it has never ticked" : `data as of ${clock(b.loop.tick_at)} (${Math.floor((b.loop.age_s ?? 0) / 60)} min ago)`}; pokes, restarts and PR status are paused. Start it: bin/loop/loop.sh --ensure`, RULE);
