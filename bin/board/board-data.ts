@@ -1335,21 +1335,7 @@ function studioOf(db: Db, label: string, accts: any[]) {
   const ctx = c?.ctx == null ? null : Number(c.ctx);
   const handle = (m?.handle as string | null) ?? null;
   return { label, wt, handle, adopted: !!handle, agent, walk: (w?.walk as string | null) ?? null, model_label: f.model_label,
-    account: f.account_real ?? f.account_cfg, account_label: f.account_real_label ?? f.account_cfg_label, ctx, ctx_level: ctxLevel(db, ctx, label),
-    moved: studioMoved(db, label, accts) };
-}
-
-// U264: the loop's last move of the Studio to another account (a `studio_moved` event) in the past day.
-function studioMoved(db: Db, label: string, accts: any[]) {
-  const e = db.one("SELECT at, payload FROM events WHERE project = ? AND kind = 'studio_moved' ORDER BY id DESC LIMIT 1", label);
-  if (!e || NOW() - Number(e.at) > 86400) return null;
-  let p: Row = {};
-  try { p = JSON.parse(String(e.payload ?? "{}")) ?? {}; } catch { /* no payload */ }
-  // "<agent>:<account>" with the account's board label in place of its id.
-  const name = (who: string) => { const j = who.indexOf(":"); return j > 0 ? `${who.slice(0, j)}:${cardOf(accts, who.slice(0, j), who.slice(j + 1), true)?.label ?? who.slice(j + 1)}` : who; };
-  const to = String(p.to ?? "");
-  return { at: Number(e.at), to, to_label: name(to), from: (p.from as string | null) ?? null, from_label: p.from ? name(String(p.from)) : null,
-    handle: (p.handle as string | null) ?? null };
+    account: f.account_real ?? f.account_cfg, account_label: f.account_real_label ?? f.account_cfg_label, ctx, ctx_level: ctxLevel(db, ctx, label) };
 }
 
 // The live roles on each account card (a real account first, else the configured one). On a
@@ -2177,7 +2163,6 @@ export function renderText(b: Board): string {
     o.push(`studio ${st.label}: ` + (st.adopted
       ? [`${st.agent}${st.model_label ? " " + st.model_label : ""}`, st.account_label ? `@${st.account_label}` : null, st.ctx == null ? null : `ctx ${compact(st.ctx)}`, st.handle].filter(Boolean).join(" · ")
       : "no Studio terminal adopted — see the studio.adopt card"));
-    if (st.moved) o.push(`studio ${st.label}: Studio moved to ${st.moved.to_label}${st.moved.from_label ? ` from ${st.moved.from_label}` : ""} at ${clock(st.moved.at)} — the previous account hit its usage limit · shown for 24 h`);
   }
   if (b.studio.length) o.push(RULE);
   if (b.squads.some((s) => ["held-only", "paused", "suspended", "on-hold"].includes(s.display_key))) o.push(`not working: ${STATE_LEGEND.join(" · ")}`);

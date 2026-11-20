@@ -1201,13 +1201,12 @@ jt "studio: on the claude account, its walk not unknown" "$TMP/studio.json" '.st
 st="$(DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" 2>&1)"
 has "studio: the text board's Studio line" "$st" "studio $SL: claude"
 has "studio: the line names the account" "$st" "@acct-studio"
-jt "studio: no move yet" "$TMP/studio.json" '.studio[0].moved == null'
-# U264: the loop moved the Studio to another account: the board says where to, the text board too.
+# U5: after a Studio move the board shows no Studio moved line (the event stays in the Event log).
 DS_STATE_ROOT="$SR" bun "$ROOT/tests/board-studio-db.ts" "$SL" --moved
 DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" --json > "$TMP/studio-moved.json"
-jt "studio: the move is on the Studio row" "$TMP/studio-moved.json" '.studio[0].moved | .to == "claude:B" and .from == "claude:acct-a" and .handle == "term_studio"'
+jt "studio: a seeded studio_moved event adds no moved field" "$TMP/studio-moved.json" '.studio[0] | has("moved") | not'
 st="$(DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" 2>&1)"
-has "studio: the text board says where the Studio moved" "$st" "Studio moved to claude:B"
+case "$st" in *"Studio moved"*) fail=$((fail+1)); echo "  FAIL: studio: the text board has no Studio moved line" >&2;; *) pass=$((pass+1));; esac
 
 # U266: a member whose planned restart waits on its journal checkpoint shows it, like a pausing one.
 mq sc-sq running ',{"role":"builder","suffix":"u1","wt":"wsc"}' '[{"slug":"u1","status":"dispatched"}]'

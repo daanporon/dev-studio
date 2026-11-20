@@ -614,8 +614,8 @@ has "web page: the switch choice is stored under b:machine-sort" "$mt" 'lstore.s
 has "web page: the heading follows the switch" "$mt" 'Top by ${sort === "cpu" ? "CPU" : "RAM"}'
 has "web page: the heading tooltip says RAM is RSS" "$mt" 'RAM here is RSS'
 has "web page: the outside block is under the table" "$mt" 'Outside this project'
-# U264: a Studio the loop moved to another account reads "Studio moved to <agent>:<account>" on the page.
-has "web page: the Studio move line" "$(grep -F 'studio-moved' "$ROOT/web/board.html")" 'Studio moved to <span class="mono">${st.moved.to_label}</span>'
+# U5: the page has no Studio moved line.
+if grep -qF 'studio-moved' "$ROOT/web/board.html"; then fail=$((fail+1)); echo "  FAIL: web page: no Studio moved line" >&2; else pass=$((pass+1)); fi
 rc="$(sed -n '/^function ResourceCard/,/^}/p;/^function UtilBar/,/^}/p' "$ROOT/web/board.html")"
 has "web page: the card is titled Resource utilization with the project" "$rc" 'Resource utilization${project ? " · " + project : ""}'
 has "web page: the card sits under the tiles, before the table" "$mp" '<${ResourceCard} M=${M} project=${data.project} />'
