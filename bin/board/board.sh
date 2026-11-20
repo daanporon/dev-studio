@@ -6,10 +6,14 @@
 #     --json          print the board's data as one JSON document (what the web page renders)
 #     --serve [port]  keep the live web board (web/board.html + /board.json) running on :port (default
 #                     8787, or the port asked for before): writes the wish (`ds want board`, a `services`
-#                     row in loop.db) and prints the URL; the loop starts it and keeps it up (U16)
+#                     row in loop.db) and prints the URL; the loop starts it and keeps it up (U16). When
+#                     another process holds the port the loop takes the next free one (up to
+#                     DS_BOARD_PORT_TRIES, 20, further) and keeps it for that scope; the line printed
+#                     names the port really bound and `(<asked> was taken)`
 #     --ensure        gone: says the loop runs the board and exits 0
 #     --stop          the wish set to stopped: the loop stops the board
-#     --serve-fg [port]  the server itself, in the foreground (by hand; the loop runs board-server.ts)
+#     --serve-fg [port]  the server itself, in the foreground (by hand; the loop runs board-server.ts),
+#                     on the next free port when the asked one is taken
 #     (default: render text once, all projects)
 #
 # The server is a singleton per SCOPE (all / <project> / <project>+<topic>): one `services` row per
