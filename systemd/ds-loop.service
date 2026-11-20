@@ -1,0 +1,23 @@
+# ds-loop.service — the dev-studio loop daemon (bin/loop/main.ts) as a systemd user unit.
+# bin/host/install.sh renders the @…@ fields into ~/.config/systemd/user/ds-loop.service and enables it;
+# the cron line `bin/loop/loop.sh --ensure` starts it and restarts it when it stops ticking.
+# The line after PATH is left out unless the host keeps Orca's data somewhere other than the default.
+# on-failure, not always: a loop that finds the state root's lock taken (one loop.sh started
+# outside systemd) exits 0, and restarting that every RestartSec would only churn.
+[Unit]
+Description=dev-studio loop (@ROOT@)
+# `git checkout main` is the rollback: with bin/loop/main.ts gone from the checkout systemd starts nothing.
+ConditionPathExists=@ROOT@/bin/loop/main.ts
+
+[Service]
+Type=simple
+ExecStart=@BUN@ @ROOT@/bin/loop/main.ts
+Environment="DS_STATE_ROOT=@STATE_ROOT@"
+Environment="PATH=@PATH@"
+@ORCA_DATA_ENV@
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

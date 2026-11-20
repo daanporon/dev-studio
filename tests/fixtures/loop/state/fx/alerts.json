@@ -1,0 +1,10 @@
+{
+  "alerts": [
+    {
+      "id": "a1",
+      "at": 1793100000,
+      "kind": "limit",
+      "text": "fx demo lead hit its weekly limit"
+    }
+  ]
+}

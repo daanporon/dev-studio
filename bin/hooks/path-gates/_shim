@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Hook shim (U235): lavish-axi, gh-axi and chrome-devtools-axi link here. claude_tab (bin/backend/orca.sh)
+# starts every role with this folder first on PATH, so the bare tool a SessionStart hook runs lands here.
+# It gates ONLY the hook call -- no arguments, stdin a JSON with "hook_event_name":"SessionStart" -- through
+# `ds hook-gate <name> -- <real tool>` (conventions/skills.conf `hook:<name>`); every other call (a role's own,
+# with arguments or other stdin) runs the real tool untouched. No real tool on PATH: exit 0, print nothing,
+# like a hook whose binary is missing.
+name="$(basename "$0")"
+here="$(cd "$(dirname "$0")" && pwd)"
+real=""
+IFS=: read -ra dirs <<<"$PATH"
+for d in "${dirs[@]}"; do
+  [ -n "$d" ] || continue
+  [ "$(cd "$d" 2>/dev/null && pwd)" = "$here" ] && continue
+  if [ -x "$d/$name" ] && [ ! -d "$d/$name" ]; then real="$d/$name"; break; fi
+done
+[ -n "$real" ] || exit 0
+if [ "$#" -gt 0 ] || [ -t 0 ]; then exec "$real" "$@"; fi
+in=""
+IFS= read -r -d '' -t 2 in || true
+if [[ "$in" == *'"hook_event_name"'*:*'"SessionStart"'* ]]; then
+  ds="${DS_HOOK_GATE_BIN:-$here/../../ds}"
+  [ -x "$ds" ] || ds="$HOME/.dev-studio/bin/ds"
+  [ -x "$ds" ] || { printf '%s' "$in" | "$real"; exit $?; }
+  printf '%s' "$in" | "$ds" hook-gate "$name" -- "$(printf %q "$real")"
+  exit $?
+fi
+printf '%s' "$in" | "$real"

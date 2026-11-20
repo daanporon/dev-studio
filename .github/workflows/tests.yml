@@ -1,0 +1,38 @@
+# Every PR into main runs the loop tests through tests/ci.sh.
+name: tests
+
+# `edited` is here for a retarget: a PR moved to another base without a push still gets a run. Every
+# other edit (a title, a body) does no work, and it must not disturb the result the PR already has.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches: [main]
+
+# A new push cancels the older run on the same PR. A retarget waits for it instead: the head is the same,
+# so a cancelled run would stay on it and read checks-failing. Any other edit gets a group of its own,
+# because a group shared with the real run would cancel it.
+concurrency:
+  group: ${{ (github.event.action != 'edited' || github.event.changes.base) && format('tests-{0}', github.event.pull_request.number) || format('tests-noop-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event.action != 'edited' }}
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    # A skipped job still posts a check under its name, so it must not be called `tests`. GitHub prints
+    # this expression unevaluated on a skip, one row per edit; that is the price, and it is not `tests`.
+    name: ${{ (github.event.action != 'edited' || github.event.changes.base) && 'tests' || 'edit-no-tests' }}
+    if: github.event.action != 'edited' || github.event.changes.base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install shellcheck
+        run: sudo apt-get install -y --no-install-recommends shellcheck
+      # One test script per core: tests/ci.sh still prints its lines in name order.
+      - name: Run tests/ci.sh
+        run: CI_JOBS="$(nproc)" tests/ci.sh

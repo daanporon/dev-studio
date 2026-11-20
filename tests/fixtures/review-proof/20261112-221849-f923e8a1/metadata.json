@@ -1,0 +1,55 @@
+{
+  "branch": "acme-org/ds-dev-studio-builder-u4-host-brake-on-builder-adaptive-builder-capacity",
+  "completed_at": "2026-11-12T21:19:14Z",
+  "cost": {
+    "host": "claude",
+    "scope": {
+      "changed_lines": 16,
+      "deleted_band": "none",
+      "depth": "lite",
+      "exec_nontest_lines": 6,
+      "size_band": "small",
+      "unclassified_lines": 0
+    },
+    "stages": [
+      {
+        "elapsed_seconds": 24.673,
+        "ended_at": "2026-11-12T21:19:14.331953+00:00",
+        "facts": {
+          "changed_lines": 16,
+          "deleted_band": "none",
+          "depth": "lite",
+          "exec_nontest_lines": 6,
+          "size_band": "small",
+          "unclassified_lines": 0
+        },
+        "stage": "scope",
+        "started_at": "2026-11-12T21:18:49.658776+00:00"
+      },
+      {
+        "candidates": 0,
+        "elapsed_seconds": 0.085,
+        "ended_at": "2026-11-12T21:19:14.416461+00:00",
+        "stage": "review",
+        "started_at": "2026-11-12T21:19:14.331953+00:00"
+      },
+      {
+        "elapsed_seconds": 0.086,
+        "ended_at": "2026-11-12T21:19:14.502556+00:00",
+        "stage": "receipt",
+        "started_at": "2026-11-12T21:19:14.416461+00:00"
+      }
+    ],
+    "status": "complete",
+    "totals": {
+      "artifact_bytes": 2228,
+      "candidates": 0,
+      "elapsed_seconds": 24.844,
+      "reviewers": 0
+    },
+    "truncated_events": 0
+  },
+  "head_sha": "cd85118453497b427d94f12a38e06ff67c4f660e",
+  "run_id": "20261112-221849-f923e8a1",
+  "verdict": "Ready to merge"
+}

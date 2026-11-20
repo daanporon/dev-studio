@@ -1,0 +1,3 @@
+{"squads":[{"project":"fixture","squad":"alpha","group":"live"},{"project":"fixture","squad":"old-one","group":"closed"}],"studio":true,"studios":["fixture"],
+ "crew":[{"wt":"wt-lead","name":"lead","gone":false},{"wt":"wt-b1","name":"builder-u1","gone":true}],
+ "kinds":["unit_done","tick_slow","member_started"],"cats":[{"key":"work","label":"Work"},{"key":"crew","label":"Crew"},{"key":"other","label":"Other"}],"noise":["tick_slow"]}

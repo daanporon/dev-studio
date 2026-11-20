@@ -1,0 +1,3 @@
+agent	account	session_pct	session_reset	weekly_pct	weekly_reset	limited_until	updated	label	note
+claude	acct-a	64	1793391599	45	1793638799	-	1793375760	fixture account a	-
+claude	acct-b	-	-	-	-	1793473200	1793375760	fixture account b	expired

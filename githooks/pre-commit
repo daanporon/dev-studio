@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# pre-commit — dev-studio's leak guard on what this commit adds (public-readiness U8).
+# Turned on by githooks/setup.sh (bun install, or a Claude session in the repo): core.hooksPath = the relative
+# githooks, so each worktree runs its own branch's hooks and its own tests/leak-guard.sh. core.hooksPath turns off
+# .git/hooks: any later hook goes in this folder. A refusal is fixed, never retried with --no-verify or a
+# core.hooksPath override (.github/CONTRIBUTING.md).
+set -uo pipefail
+here="$(cd "$(dirname "$0")" && pwd -P)"
+guard="$here/../tests/leak-guard.sh"
+if [ ! -f "$guard" ]; then
+  echo "pre-commit: refused — the leak guard is missing ($guard); restore tests/leak-guard.sh from main" >&2
+  exit 1
+fi
+if ! command -v python3 > /dev/null; then
+  echo "pre-commit: refused — python3 is needed to run the leak guard; install it" >&2
+  exit 1
+fi
+# The guard scans the repo git is committing (its current repo and inherited GIT_INDEX_FILE), never another one.
+unset LEAK_GUARD_ROOT
+if ! LEAK_GUARD_SELFTEST=0 bash "$guard" --staged; then
+  echo "pre-commit: refused by the leak guard (above). Fix the file and commit again; never --no-verify." >&2
+  echo "  A made-up value that trips it: change the value. A new picture or binary: open it, check it, then add" >&2
+  echo "  its path and blob hash to tests/leak-guard.allow." >&2
+  exit 1
+fi

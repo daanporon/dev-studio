@@ -1,0 +1,62 @@
+bin/backend/orca.ts: error TS2365: Operator '+' cannot be applied to types 'string | number' and 'string | number'.
+bin/board/board-data.ts: error TS18046: 'e' is of type 'unknown'.
+bin/board/board-data.ts: error TS18046: 'e' is of type 'unknown'.
+bin/board/board-data.ts: error TS18046: 'e' is of type 'unknown'.
+bin/board/board-data.ts: error TS18046: 'e' is of type 'unknown'.
+bin/board/board-data.ts: error TS2339: Property 'id' does not exist on type '{}'.
+bin/board/board-data.ts: error TS2339: Property 'id' does not exist on type '{}'.
+bin/board/board-data.ts: error TS2339: Property 'since' does not exist on type '{}'.
+bin/board/board-data.ts: error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'string'.
+bin/board/board-data.ts: error TS7006: Parameter 'd' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'd' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'd' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'd' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'd' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'd' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'd' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'd' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'r' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'u' implicitly has an 'any' type.
+bin/board/board-data.ts: error TS7006: Parameter 'u' implicitly has an 'any' type.
+bin/board/board-server.ts: error TS18047: 'm' is possibly 'null'.
+bin/board/board-server.ts: error TS18047: 'm' is possibly 'null'.
+bin/board/board-server.ts: error TS18047: 'm' is possibly 'null'.
+bin/board/board-server.ts: error TS18047: 'm' is possibly 'null'.
+bin/board/board-server.ts: error TS18047: 'm' is possibly 'null'.
+bin/board/board-server.ts: error TS18047: 'm' is possibly 'null'.
+bin/board/board-server.ts: error TS18047: 'm' is possibly 'null'.
+bin/board/board-server.ts: error TS18047: 'm' is possibly 'null'.
+bin/board/board-server.ts: error TS2345: Argument of type '(s: Store) => Response | undefined' is not assignable to parameter of type '(s: Store) => Response | 
+bin/board/skills-data.ts: error TS2339: Property 'description' does not exist on type '{ level: string; default: string; edited: boolean; required: boolean; rea
+bin/commands/briefing-input.ts: error TS2345: Argument of type '[string, unknown, unknown, unknown]' is not assignable to parameter of type 'SQLQueryBindings[] 
+bin/commands/hook-gate.ts: error TS2345: Argument of type 'Database | null' is not assignable to parameter of type '{ query: (q: string) => { all: (...a: unknow
+bin/commands/roles-ts.ts: error TS2322: Type '{}[]' is not assignable to type 'string[]'.
+bin/commands/skills.ts: error TS2345: Argument of type 'Database | null' is not assignable to parameter of type '{ query: (q: string) => { all: (...a: unknown[]
+bin/loop/core/actuator.ts: error TS2345: Argument of type 'Row' is not assignable to parameter of type '{ agent: unknown; model: unknown; effort?: unknown; acco
+bin/loop/core/actuator.ts: error TS2769: No overload matches this call.
+bin/loop/core/actuator.ts: error TS2769: No overload matches this call.
+bin/loop/core/decide.ts: error TS2339: Property 'why' does not exist on type '{ act: "stop"; why: string; } | { act: "checkpoint"; why: string; } | { act: "tell
+bin/loop/core/store.ts: error TS2345: Argument of type '[unknown, string, {}]' is not assignable to parameter of type 'SQLQueryBindings[] | [null] | [string] | 
+bin/loop/fulfil/cleanup-act.ts: error TS2322: Type 'string | null' is not assignable to type 'string | undefined'.
+bin/loop/fulfil/pending.ts: error TS2345: Argument of type '[unknown, unknown, string, unknown]' is not assignable to parameter of type 'SQLQueryBindings[] | [n
+bin/loop/fulfil/studio.ts: error TS2322: Type '(a: Action, x: Exec) => Promise<{ failed: string; done?: undefined; result?: undefined; wait?: undefined; at?: un
+bin/loop/fulfil/studio.ts: error TS2722: Cannot invoke an object which is possibly 'undefined'.
+bin/loop/io/tidy.ts: error TS2365: Operator '/' cannot be applied to types 'number | bigint' and 'number'.
+bin/loop/observers/reviews.ts: error TS2322: Type 'unknown' is not assignable to type 'SQLQueryBindings'.
+bin/loop/observers/reviews.ts: error TS2322: Type 'unknown' is not assignable to type 'SQLQueryBindings'.
+bin/loop/observers/reviews.ts: error TS2322: Type 'unknown' is not assignable to type 'SQLQueryBindings'.
+bin/loop/pause/stop-checkpoint.ts: error TS2353: Object literal may only specify known properties, and 'scope' does not exist in type 'Target'.
+bin/loop/reconcilers/limits.ts: error TS18047: 'stamp' is possibly 'null'.
+bin/loop/reconcilers/limits.ts: error TS2322: Type 'number | null' is not assignable to type 'number'.
+bin/loop/reconcilers/liveness.ts: error TS2339: Property 'content' does not exist on type '{}'.
+bin/loop/reconcilers/phases.ts: error TS2339: Property 'pr' does not exist on type '{}'.
+bin/loop/reconcilers/phases.ts: error TS2339: Property 'pr' does not exist on type '{}'.
+bin/loop/reconcilers/phases.ts: error TS2339: Property 'pr' does not exist on type '{}'.
+bin/loop/reconcilers/phases.ts: error TS2339: Property 'pr' does not exist on type '{}'.
+bin/loop/reconcilers/phases.ts: error TS2339: Property 'pr' does not exist on type '{}'.
+bin/loop/reconcilers/phases.ts: error TS2339: Property 'pr' does not exist on type '{}'.
+bin/loop/reconcilers/phases.ts: error TS2339: Property 'slug' does not exist on type '{}'.
+bin/loop/squad/cancel.ts: error TS2345: Argument of type '[unknown, unknown, unknown]' is not assignable to parameter of type 'SQLQueryBindings[] | [null] | [st
+bin/loop/squad/cancel.ts: error TS2345: Argument of type '[{}, unknown, unknown, unknown]' is not assignable to parameter of type 'SQLQueryBindings[] | [null] |
+bin/loop/squad/exposed.ts: error TS2345: Argument of type 'Row' is not assignable to parameter of type '{ project: unknown; squad: unknown; owner_wt: unknown; }
+bin/loop/squad/squad-state.ts: error TS2339: Property 'topic' does not exist on type 'Backend'.

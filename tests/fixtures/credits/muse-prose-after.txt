@@ -1,0 +1,4 @@
+  ❯ Build unit U7
+  ◆ Reading the plan
+◆ model failed: API error 402 [request_id=req_7]: Billing verification failed. Billing Issue. To use this API key, your team needs to resolve a billing issue first. To resolve this issue, go here: https://dev.meta.ai/billing/?team_id=1111 (billing_error)
+◆ I will look at why the API returned 402 and the billing error next.

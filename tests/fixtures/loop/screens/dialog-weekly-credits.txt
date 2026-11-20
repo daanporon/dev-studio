@@ -1,0 +1,8 @@
+  ⎿  You've hit your weekly limit · resets Nov 2, 6pm (Europe/Berlin)
+✻ Baked for 0s · done 11:50 AM
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   What do you want to do?
+   ❯ 1. Stop and wait for limit to reset
+     2. Wait here, then continue automatically at Nov 2, 6pm
+     3. Switch to usage credits
+   Enter to confirm · Esc to cancel

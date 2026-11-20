@@ -1,0 +1,2 @@
+● Grep(402)
+  ⎿  docs/billing.md: the loop sees API Error: 402 and a billing problem

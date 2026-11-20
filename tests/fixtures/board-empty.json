@@ -1,0 +1,227 @@
+{
+ "accounts": [],
+ "accounts_summary": {
+  "credits": [],
+  "free": 0,
+  "level": "ok",
+  "limited": [],
+  "near": [],
+  "total": 0
+ },
+ "archived": [],
+ "as_of": {
+  "accounts": null,
+  "documents": null,
+  "prs": null,
+  "spend": null,
+  "squads": null,
+  "tokens": null,
+  "workers": null
+ },
+ "backend_ok": true,
+ "briefing_schedule": {
+  "days": "mon-fri",
+  "next": null,
+  "on": false,
+  "time": "off"
+ },
+ "briefings": [],
+ "capacity": null,
+ "flow": {
+  "cards": [],
+  "counts": {
+   "building": 0,
+   "merged_today": 0,
+   "merging": 0,
+   "needs_you": 0,
+   "open_prs": 0,
+   "pr_open": 0,
+   "queued": 0,
+   "slow": 0,
+   "stuck": 0
+  },
+  "median_total_s": null,
+  "merged": [],
+  "per_day": [
+   {
+    "day": "2026-10-19",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-20",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-21",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-22",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-23",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-24",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-25",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-26",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-27",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-28",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-29",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-30",
+    "merged": 0
+   },
+   {
+    "day": "2026-10-31",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-01",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-02",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-03",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-04",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-05",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-06",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-07",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-08",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-09",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-10",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-11",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-12",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-13",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-14",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-15",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-16",
+    "merged": 0
+   },
+   {
+    "day": "2026-11-17",
+    "merged": 0
+   }
+  ],
+  "queued_order": [],
+  "squads": {},
+  "typical_s": {}
+ },
+ "generated_at": "2026-11-17T15:27:29Z",
+ "gh": {
+  "ok": true
+ },
+ "header": {
+  "blocking": 0,
+  "builders_of": 0,
+  "builders_of_kind": "ready",
+  "builders_working": 0,
+  "ci_failing": 0,
+  "ci_running": 0,
+  "drafts": 0,
+  "needs": 0,
+  "prs_open": 0,
+  "quiet": 0,
+  "ready_units": 0,
+  "squads_active": 0,
+  "tick_age_s": null,
+  "tick_ms": null,
+  "tick_slow": false,
+  "tick_slowest": null,
+  "units_left": 0
+ },
+ "live_waiting": [],
+ "live_worktrees": null,
+ "loop": {
+  "age_s": null,
+  "down": true,
+  "last_restart_at": null,
+  "restarts_24h": 0,
+  "restarts_recent": 0,
+  "stale_after_s": 60,
+  "stall_window_min": 60,
+  "stalling": false,
+  "tick_at": null,
+  "tick_ms": null,
+  "tick_no": null,
+  "tick_s": 5,
+  "tick_slow": false,
+  "tick_slowest": null
+ },
+ "loop_notes": [],
+ "needs_count": 0,
+ "needs_you": [],
+ "overrides": [],
+ "prerequisites": [],
+ "project": null,
+ "project_url": null,
+ "projects": [],
+ "requests": [],
+ "running": [],
+ "spent_total": null,
+ "squads": [],
+ "stall": null,
+ "studio": [],
+ "studio_alerts": []
+}

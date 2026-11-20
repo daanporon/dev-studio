@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# pre-push — dev-studio's leak guard on everything a push sends (public-readiness U8).
+# For each pushed ref (deletes skipped) it scans what the push target does not have yet: `<local sha> --not
+# <every tip the target advertises that this clone holds>`, which is the whole history on a first push to an
+# empty repo and works for a new branch. The tips come from `git ls-remote <url>` (the URL git pushes to, a
+# pushurl included), never from refs/remotes/<remote>: those can describe another repo after a set-url, a
+# pushurl or a recreated remote, and would hide the old history. No answer from the target refuses the push. It runs this worktree's guard twice, --commits (every blob
+# any of those commits adds or changes) and --messages, and refuses a range that holds a root commit listed in
+# githooks/blocked-roots: the old history must never reach the new repo. A push to a remote that already has
+# that history never meets those roots.
+# Turned on by githooks/setup.sh (core.hooksPath = the relative githooks). A refusal is fixed, never retried with
+# --no-verify or a core.hooksPath override (.github/CONTRIBUTING.md).
+set -uo pipefail
+# Every command inside the ref loop reads /dev/null: the loop's stdin is git's ref list.
+here="$(cd "$(dirname "$0")" && pwd -P)"
+guard="$here/../tests/leak-guard.sh"
+blocked="$here/blocked-roots"
+url="${2:-${1:-}}"
+if [ ! -f "$guard" ]; then
+  echo "pre-push: refused — the leak guard is missing ($guard); restore tests/leak-guard.sh from main" >&2
+  exit 1
+fi
+if ! command -v python3 > /dev/null; then
+  echo "pre-push: refused — python3 is needed to run the leak guard; install it" >&2
+  exit 1
+fi
+unset LEAK_GUARD_ROOT
+roots_blocked=""
+if [ -f "$blocked" ]; then roots_blocked="$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$blocked" | grep -E '^[0-9a-f]{40,64}$' || true)"; fi
+
+# What the target already holds: each advertised tip this clone has (others cannot be in a local range).
+if ! advertised="$(git ls-remote "$url" < /dev/null 2>&1)"; then
+  echo "pre-push: refused — could not list what $url holds ($advertised); push again when it answers" >&2
+  exit 1
+fi
+# One cat-file for all of them: a commit (or a tag peeled to one) prints its id, anything else "<input> missing".
+have=()
+while read -r sha; do
+  if [[ "$sha" =~ ^[0-9a-f]{40,64}$ ]]; then have+=("$sha"); fi
+done < <(awk '$1 ~ /^[0-9a-f]+$/ {print $1 "^{commit}"}' <<< "$advertised" | sort -u \
+  | git cat-file --batch-check='%(objectname)' 2> /dev/null | sort -u)
+
+rc=0
+while read -r lref lsha rref _rsha; do
+  [ -n "${lsha:-}" ] || continue
+  # A delete sends nothing.
+  if [[ "$lsha" =~ ^0+$ ]]; then continue; fi
+  range=("$lsha" --not "${have[@]}")
+  if ! roots="$(git rev-list --max-parents=0 "${range[@]}" 2>&1 < /dev/null)"; then
+    echo "pre-push: refused — could not list the commits $lref sends ($roots)" >&2
+    rc=1; continue
+  fi
+  if [ -n "$roots" ] && [ -n "$roots_blocked" ]; then
+    while read -r r; do
+      if grep -qxF "$r" <<< "$roots_blocked"; then
+        echo "pre-push: refused — $lref -> $rref holds the old-history root commit ${r:0:12} (githooks/blocked-roots); the old history must not reach this remote" >&2
+        rc=1
+      fi
+    done <<< "$roots"
+  fi
+  LEAK_GUARD_SELFTEST=0 bash "$guard" --commits "${range[@]}" < /dev/null || rc=1
+  LEAK_GUARD_SELFTEST=0 bash "$guard" --messages "${range[@]}" < /dev/null || rc=1
+done
+if [ "$rc" != 0 ]; then
+  echo "pre-push: refused (above). Fix the commits (amend or rebase out the file or message) and push again; never --no-verify." >&2
+fi
+exit "$rc"

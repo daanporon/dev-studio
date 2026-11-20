@@ -1,0 +1,1 @@
+switch: demo thinker to claude/acct-b — weekly limit

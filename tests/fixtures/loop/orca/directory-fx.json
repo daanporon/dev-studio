@@ -1,0 +1,5 @@
+[
+{"squad":"demo","role":"lead","suffix":"","name":"lead","wt":"0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-lead-demo","live":true,"kind":"run","address":"run_fixture01","run_id":"run_fixture01","reason":null,"terminals":["term_lead2","term_lead1"]},
+{"squad":"demo","role":"thinker","suffix":"","name":"thinker","wt":"0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-thinker-demo","live":true,"kind":"worktree","address":"0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-thinker-demo","run_id":"run_fixture01","reason":null,"terminals":["term_think"]},
+{"squad":"demo","role":"builder","suffix":"u1-spike-loop-as-coordinator","name":"builder-u1-spike-loop-as-coordinator","wt":"0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-builder-u1-spike-loop-as-coordinator-demo","live":true,"kind":"worktree","address":"x","run_id":"run_fixture01","reason":null,"terminals":["term_b1"]}
+]

@@ -1,0 +1,449 @@
+// U289: the real board page rendered in a DOM, plus a tag-balance check over every html`` template.
+// Why: #587's AccountDetail left two divs open; htm then returns its raw build array, React throws error #31
+// only when an account row is opened, and the grep-only tests/board-page.sh let it (and #561's Details) ship.
+//   1. render: web/board.html's own script runs in happy-dom on the pinned React/htm builds (no network), fed a
+//      fixture board.json; every openable thing (aria-expanded rows, closed <details>) is opened, and nothing may
+//      throw or console.error. It names no project, account or squad.
+//   2. balance: each html`…` literal is parsed with the real htm; an unclosed tag makes htm return
+//      ["tag", props, …children] instead of an element, which is what this flags (with the template's line).
+import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { mount as mountPage, type Run } from "./board-mount";
+
+const root = join(import.meta.dir, "../..");
+const page = readFileSync(join(root, "web/board.html"), "utf8");
+const nm = (p: string) => readFileSync(join(root, "node_modules", p), "utf8");
+const scriptStart = page.indexOf("<script>\n") + "<script>\n".length;
+const pageScript = page.slice(scriptStart, page.indexOf("</script>", scriptStart));
+
+// ---- the fixture: one account with a usable free-reset grant, a used one, a disabled one; no emails, no tokens.
+const now = Math.floor(Date.now() / 1000);
+const grant = { id: "g1", label: "Weekly reset", refills: ["weekly"], total: 2, left: 1, use_by: now + 86400 * 5, usable_now: true };
+const account = (over: any) => ({
+  agent: "claude", account: "acct-a", label: "acct-a", plan: "max", disabled: false, limited: false, session_pct: 40, weekly_pct: 20,
+  session_reset: now + 3600, weekly_reset: now + 86400, note: "", users: [], users_other: 0, skills: "ok", ...over,
+});
+// board-empty.json is a real `board.sh --json` over an empty state root; the accounts are the fixture's.
+const board = {
+  ...JSON.parse(readFileSync(join(root, "tests/fixtures/board-empty.json"), "utf8")),
+  project: "fixture", page_version: "v1", as_of: { accounts: now },
+  accounts_summary: { total: 3, free: 3, limited: [], near: [], level: "ok" },
+  accounts: [
+    account({ resets: { state: "reported", count: 1, first_use_by: grant.use_by, grants: [grant] }, reset_last: { outcome: "used", at: now - 600, detail: "ok" } }),
+    account({ account: "acct-b", label: "acct-b", resets: { state: "reported", count: 0, grants: [] } }),
+    account({ agent: "codex", account: "acct-c", label: "acct-c", disabled: true, resets: { state: "not_reported" } }),
+  ],
+};
+
+const mount = (b: any = board, open = true) => mountPage(b, open);
+
+test("the board page renders and every openable row and details opens without an error", async () => {
+  const r = await mount();
+  try {
+    expect(r.root.children.length).toBeGreaterThan(0);
+    expect(r.opened).toBeGreaterThan(0);
+    // An opened account shows its detail panel (the #587 regression: opening one blanked the page).
+    expect(r.root.querySelector(".ainfo")).not.toBeNull();
+    expect(r.errors).toEqual([]);
+    expect(r.root.textContent!.length).toBeGreaterThan(0);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+// ---- U6: every Flow card opens a details window. Squads: one on the board (with the unit "live"), the rest gone.
+const flowCard = (over: any) => ({ key: "fixture/gone/x", project: "fixture", squad: "gone", slug: "x", stage: "building", pr: null, needs_you: false, ask: null, stuck: false, slow: false, group: null, in_stage_s: 60, ...over });
+const flowBoard = {
+  ...board,
+  squads: [{ label: "fixture", topic: "live", status: "running", members: [], display_status: "running", units: [{ slug: "u-live", state: "done", title: "A live unit", deps: [], dependents: [], ext_deps: [] }] }],
+  flow: {
+    ...board.flow,
+    cards: [
+      flowCard({ key: "fixture/gone/b1", slug: "b1", stage: "building", pr: { num: 7, url: "https://example.test/pull/7" } }),
+      flowCard({ key: "fixture/gone/n1", slug: "n1", stage: "needs_you", needs_you: true, ask: "fixture/gone/q1" }),
+    ],
+    merged: [
+      { key: "fixture/live/u-live", project: "fixture", squad: "live", slug: "u-live", focus: "muted", pr: 5, pr_url: "https://example.test/pull/5", at: now - 600, took_s: 5400 },
+      { key: "fixture/gone/m1", project: "fixture", squad: "gone", slug: "m1", pr: 6, pr_url: "https://example.test/pull/6", at: now - 1200, took_s: 3600 },
+    ],
+  },
+};
+test("every Flow card opens a details window; a PR number opens the PR, not the window", async () => {
+  const r = await mount(flowBoard, false);
+  const w = r.window, doc = w.document;
+  const opened: string[] = [];
+  w.open = (u: string) => { opened.push(u); };
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await new Promise((x) => setTimeout(x, 30)); };
+  const card = (slug: string) => [...doc.querySelectorAll(".fcard")].find((c: any) => c.querySelector(".t .tn").textContent.trim() === slug) as any;
+  const close = async () => { const b = doc.querySelector(".ud-close"); if (b) await click(b); };
+  try {
+    doc.getElementById("flow").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    // every card, merged included, is a button that opens a dialog
+    for (const slug of ["b1", "n1", "u-live", "m1"]) { expect(card(slug).getAttribute("role")).toBe("button"); expect(card(slug).tabIndex).toBe(0); }
+    // 1. merged card of a squad on the board: that unit's UnitDetails
+    await click(card("u-live"));
+    expect(doc.querySelector(".ud-title")?.textContent).toBe("A live unit");
+    await close();
+    // 2. merged card of a closed squad: FlowCardDetails with the PR link, merged ago and took
+    await click(card("m1"));
+    expect(doc.querySelector(".fcd")).not.toBeNull();
+    expect(doc.querySelector(".fcd-pr a")?.getAttribute("href")).toBe("https://example.test/pull/6");
+    expect(doc.querySelector(".fcd-merged")?.textContent).toContain("ago");
+    expect(doc.querySelector(".fcd-took")?.textContent).toBe("1h");
+    expect(doc.querySelector(".fcd-gone")?.textContent).toContain("no longer on the board");
+    expect(doc.querySelector(".fcd-answer")).toBeNull();
+    await close();
+    // 3. Building card of a gone squad opens the window, not the PR
+    await click(card("b1"));
+    expect(doc.querySelector(".fcd-stage")?.textContent).toBe("building");
+    expect(opened).toEqual([]);
+    await close();
+    // 4. Needs-you card of a gone squad: Answer
+    await click(card("n1"));
+    expect(doc.querySelector(".fcd-answer")).not.toBeNull();
+    await close();
+    // 5. a click on #num opens the PR and not the window (open card and merged card)
+    for (const slug of ["b1", "m1"]) { await click(card(slug).querySelector("a")); expect(doc.querySelector(".ud")).toBeNull(); }
+    // 6. Enter on a focused merged card opens the window
+    card("m1").dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await new Promise((x) => setTimeout(x, 30));
+    expect(doc.querySelector(".fcd")).not.toBeNull();
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
+// U291: a member row's button reads Inbox (with its unread count) and opens a panel titled Inbox · <member>.
+test("a member with 2 unread messages shows 'Inbox 2' and opens the 'Inbox · <member>' panel", async () => {
+  const member = { role: "thinker", label: "thinker", wt: "/w/thinker", state: "idle", unread: 2, reply_due: 0 };
+  const squad = { label: "fixture", topic: "one", type: "feature", autonomy: "orchestration", ship_mode: "ce-pipeline", display_status: "working", display_key: "working", phase: "build", status: "active", members: [member], units: [], questions: [] };
+  const r = await mount({ ...board, squads: [squad] });
+  try {
+    const doc = r.window.document;
+    const btn = () => [...doc.querySelectorAll("button")].find((b: any) => /^Inbox/.test(b.textContent.trim()));
+    const until = async (f: () => any) => { for (let k = 0; k < 40 && !f(); k++) await new Promise((res) => setTimeout(res, 25)); };
+    await until(() => doc.querySelector(".row.squad"));
+    const sq = doc.querySelector(".row.squad");
+    sq.dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await until(btn);
+    expect(btn()).toBeTruthy();
+    expect(btn().textContent.trim()).toBe("Inbox 2");
+    expect(btn().getAttribute("title")).toBe("Messages sent to thinker, newest first (view only: nothing is marked read)");
+    btn().dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await until(() => doc.querySelector(".mhd"));
+    expect(doc.querySelector(".mhd").textContent).toContain("Inbox · thinker");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+// ---- board-start-squad-box U1: the Start squad dialog.
+async function startDialog(reply: (body: any) => any) {
+  const r = await mount(board, false);
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) !== "api/request") return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    const body = JSON.parse(init.body); posts.push(body);
+    const x = await reply(body);
+    return { ok: x.status < 400, status: x.status, json: async () => x.body, text: async () => JSON.stringify(x.body) };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await wait(); };
+  const set = async (sel: string, v: string, ev = "input") => { const el = doc.querySelector(sel); el.value = v; el.dispatchEvent(new w.Event(ev, { bubbles: true })); await wait(); };
+  const btn = (re: RegExp) => [...doc.querySelectorAll("button")].find((b: any) => re.test(b.textContent.trim())) as any;
+  for (let k = 0; k < 80 && !btn(/^Start squad$/); k++) await wait(25); // a loaded host renders late
+  await click(btn(/^Start squad$/));
+  expect(doc.querySelector('[role="dialog"][aria-label="Start squad"]')).not.toBeNull();
+  return { r, w, doc, posts, wait, click, set, btn, text: () => doc.querySelector(".start-text") };
+}
+const BRIEF = "Line one\n\n\tindented 'q' \"d\" $x `b` \\ é\n- bullet";
+test("Start squad: a multi-line brief and the fields are one POST that keeps every newline; a second press does nothing", async () => {
+  const d = await startDialog(async () => { await new Promise((x) => setTimeout(x, 60)); return { status: 202, body: { ok: true, id: 7 } }; });
+  try {
+    expect(d.text().getAttribute("maxlength")).toBeNull();
+    await d.set(".start-text", BRIEF); await d.set(".start-slug", "my-topic");
+    await d.set(".start-type", "feature", "change"); await d.set(".start-autonomy", "lfg", "change"); await d.set(".start-start", "plan", "change");
+    expect(d.doc.querySelector(".start-count").textContent).toContain("4 lines");
+    await d.click(d.btn(/^Send$/)); await d.click(d.btn(/^Sending…$/));
+    d.text()?.dispatchEvent(new d.w.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+    await d.wait(120);
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan" }]);
+    expect(d.doc.querySelector('[role="dialog"][aria-label="Start squad"]')).toBeNull();
+    expect(d.doc.body.textContent).toContain("sent to the Studio: start squad my-topic (request #7)");
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+test("Start squad: empty, oversized and bad-slug texts say what is wrong and post nothing", async () => {
+  const d = await startDialog(() => ({ status: 202, body: { id: 1 } }));
+  try {
+    await d.click(d.btn(/^Send$/));
+    expect(d.doc.querySelector(".start-err")?.textContent).toBe("say what the squad should do: the text is empty");
+    await d.set(".start-text", "x".repeat(32 * 1024 + 1));
+    expect(d.doc.querySelector(".start-count")?.className).toContain("bad");
+    await d.click(d.btn(/^Send$/));
+    expect(d.doc.querySelector(".start-err")?.textContent).toBe("the text is 32.0 KiB; the limit is 32 KiB");
+    await d.set(".start-text", "ok"); await d.set(".start-slug", ".bad slug");
+    await d.click(d.btn(/^Send$/));
+    expect(d.doc.querySelector(".start-err")?.textContent).toBe("topic slug may only use letters, digits, . _ - and must not start with .");
+    expect(d.posts).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+test("Start squad: a 400 keeps the dialog and the text; testing disables Start and leaves it out", async () => {
+  const d = await startDialog(() => ({ status: 400, body: { error: "the text has a control character on line 2" } }));
+  try {
+    await d.set(".start-text", "a\nb"); await d.set(".start-start", "plan", "change");
+    await d.set(".start-type", "testing", "change");
+    expect(d.doc.querySelector(".start-start").disabled).toBe(true);
+    await d.click(d.btn(/^Send$/));
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "a\nb", type: "testing", autonomy: "checkpoints" }]);
+    expect(d.doc.querySelector(".start-text").value).toBe("a\nb");
+    expect(d.doc.body.textContent).toContain("not sent: the text has a control character on line 2");
+    expect(d.btn(/^Send$/)).toBeTruthy();
+    // Escape with text asks before discarding
+    d.text().dispatchEvent(new d.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await d.wait();
+    expect(d.doc.querySelector(".start-discard")?.textContent).toContain("Discard this brief?");
+    await d.click(d.doc.querySelector(".start-discard-yes"));
+    expect(d.doc.querySelector('[role="dialog"][aria-label="Start squad"]')).toBeNull();
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+
+// ---- the static check
+// End of the template literal whose opening backtick is at `i`; `${…}` nests code, which nests templates.
+function templateEnd(src: string, i: number): number {
+  for (let k = i + 1; k < src.length; k++) {
+    const c = src[k];
+    if (c === "\\") k++;
+    else if (c === "`") return k;
+    else if (c === "$" && src[k + 1] === "{") k = exprEnd(src, k + 2);
+  }
+  throw new Error("unterminated template at offset " + i);
+}
+// Index of the `}` closing a `${` whose code starts at `i`.
+function exprEnd(src: string, i: number): number {
+  let depth = 1;
+  for (let k = i; k < src.length; k++) {
+    const c = src[k];
+    if (c === "`") k = templateEnd(src, k);
+    else if (c === '"' || c === "'") { for (k++; src[k] !== c; k++) if (src[k] === "\\") k++; }
+    else if (c === "/" && src[k + 1] === "/") k = src.indexOf("\n", k);
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return k;
+  }
+  throw new Error("unterminated expression at offset " + i);
+}
+// The literal pieces of a template body (between its backticks) split at each top-level `${…}`.
+function pieces(body: string): string[] {
+  const out: string[] = []; let from = 0;
+  for (let k = 0; k < body.length; k++) {
+    if (body[k] === "\\") k++;
+    else if (body[k] === "$" && body[k + 1] === "{") { out.push(body.slice(from, k)); k = exprEnd(body, k + 2); from = k + 1; }
+  }
+  out.push(body.slice(from));
+  return out;
+}
+const cook = (s: string): string => (0, eval)("`" + s + "`");
+
+type Tpl = { line: number; strings: string[] };
+function templates(src: string): Tpl[] {
+  const found: Tpl[] = [];
+  const scan = (from: number, to: number) => {
+    for (let k = from; k < to; k++) {
+      const c = src[k];
+      if (c === "`") {
+        const end = templateEnd(src, k);
+        if (/\bhtml$/.test(src.slice(Math.max(0, k - 5), k))) found.push({ line: src.slice(0, k).split("\n").length, strings: pieces(src.slice(k + 1, end)) });
+        // nested templates live inside the ${…} of this one
+        for (let j = k + 1; j < end; j++) {
+          if (src[j] === "\\") j++;
+          else if (src[j] === "$" && src[j + 1] === "{") { const e = exprEnd(src, j + 2); scan(j + 2, e); j = e; }
+        }
+        k = end;
+      } else if (c === '"' || c === "'") { for (k++; src[k] !== c; k++) if (src[k] === "\\") k++; }
+      else if (c === "/" && src[k + 1] === "/") k = src.indexOf("\n", k);
+    }
+  };
+  scan(0, src.length);
+  return found;
+}
+
+test("every html`` template in web/board.html closes its tags", () => {
+  const htm = new Function("module", "exports", nm("htm/dist/htm.js") + "\nreturn module.exports;")({ exports: {} }, {});
+  const H = Symbol("h");
+  const build = htm.bind((...a: any[]) => ({ [H]: true, a }));
+  const tpls = templates(pageScript);
+  expect(tpls.length).toBeGreaterThan(100);
+  const startLine = page.slice(0, scriptStart).split("\n").length - 1;
+  const bad: string[] = [];
+  for (const t of tpls) {
+    const strings: any = t.strings.map(cook); strings.raw = strings;
+    const res = build(strings, ...t.strings.slice(1).map(() => null));
+    // htm's signature for an unclosed tag: the raw build array, tag name first, then its props.
+    if (Array.isArray(res) && typeof res[0] === "string" && /^[A-Za-z][\w.:-]*$/.test(res[0]) && res.length > 1 && (res[1] === null || (typeof res[1] === "object" && !(H in res[1]))))
+      bad.push(`web/board.html:${startLine + t.line}: unclosed <${res[0]}> in html\`${t.strings[0].slice(0, 60).replace(/\s+/g, " ")}…`);
+  }
+  expect(bad).toEqual([]);
+});
+
+test("the tag-balance check flags a template that leaves a tag open", () => {
+  const htm = new Function("module", "exports", nm("htm/dist/htm.js") + "\nreturn module.exports;")({ exports: {} }, {});
+  const res = htm.bind((...a: any[]) => a)`<div class="ainfo"><div class="ai-sec"><span>x</span></div>`;
+  expect(Array.isArray(res) && res[0] === "div").toBe(true);
+});
+
+// ---- unit-detail-cleanup U2: the window's heading, status line, filled rows only and bottom bar, on three units.
+const udUnit = (slug: string, over: any) => ({ slug, state: "planned", title: null, about: null, done_text: null, check_text: null, plan: null, plan_unit: null, deps: [], dependents: [], ext_deps: [], builder_wt: null, builder: null, tier: null, pr: null, held: false, ...over });
+const udBoard = {
+  ...board,
+  squads: [{
+    label: "fixture", topic: "sq", status: "running", display_status: "running", topic_plan: null,
+    plans: [{ name: "sq-plan.md", mtime: now - 3600, markdown: "# plan\n\nU6 text" }],
+    members: [{ role: "builder", label: "builder-u6", wt: "wt-b", state: "working" }],
+    exposed: [{ id: 1, name: "stack", url: "http://localhost:3000", role: "builder-u6", state: "open", status: "up", reach: "remote", age_s: 60, legacy: false },
+      { id: 2, name: "old", url: "http://localhost:3001", role: "builder-u6", state: "down", status: "down", reach: "down", age_s: 60, legacy: false }],
+    units: [
+      udUnit("u1-titled", { state: "done", title: "A titled unit", dependents: ["adhoc-done", "u9-bare"] }),
+      udUnit("adhoc-done", { state: "done", about: "Fixes the stale lane label on the flow card. It also renames a key.", deps: ["u1-titled"], pr: { num: 24508, status: "merged", url: "https://example.test/pull/24508" }, done_at: now - 7200, builder_wt: "wt-gone", tier: "std" }),
+      udUnit("u6-building", { state: "working", title: "Building unit", done_text: "it opens.", check_text: "tests/x.sh", plan: "/p/sq-plan.md", plan_unit: "U6", deps: ["u1-titled"], builder_wt: "wt-b", tier: "hard·sonnet-5.5 ⚠opus-5.5", builder: { model_label: "sonnet-5.5", model: "opus-5.5", model_mismatch: true } }),
+      udUnit("u9-bare", { deps: ["u1-titled", "u6-building"] }),
+    ],
+  }],
+  flow: { ...board.flow, cards: ["u6-building", "u9-bare"].map((slug) => flowCard({ key: "fixture/sq/" + slug, squad: "sq", slug, stage: "building" })), merged: [{ key: "fixture/sq/adhoc-done", project: "fixture", squad: "sq", slug: "adhoc-done", pr: 24508, pr_url: "https://example.test/pull/24508", at: now - 7200, took_s: 60 }] },
+};
+test("the unit window: title, status line, only filled rows, Builder model, Plan link, buttons in the bottom bar", async () => {
+  const r = await mount(udBoard, false);
+  const w = r.window, doc = w.document;
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await new Promise((x) => setTimeout(x, 30)); };
+  const card = (slug: string) => [...doc.querySelectorAll(".fcard")].find((c: any) => c.querySelector(".t").textContent.trim() === slug) as any;
+  const rows = () => [...doc.querySelectorAll(".ud dd")].map((d: any) => d.className);
+  const text = (sel: string) => doc.querySelector(sel)?.textContent ?? "";
+  try {
+    doc.getElementById("flow").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    // 1. done ad-hoc unit: title from about, status line, What it did, titled Needs/none, no Builder/Plan/Done/Check rows
+    console.log("STEP1"); await click(card("adhoc-done")); console.log("STEP1b");
+    expect(text(".ud-title")).toBe("Fixes the stale lane label on the flow card");
+    expect(text(".ud-slug")).toBe("adhoc-done");
+    expect(text(".ud-status")).toContain("done");
+    expect(text(".ud-status")).toContain("#24508 · merged");
+    expect(text(".ud-merged")).toBe("merged 2h ago");
+    expect(rows()).toEqual(["ud-about", "ud-waits"]);
+    expect(doc.querySelector(".ud dt")?.textContent).toBe("What it did");
+    expect(text(".ud-waits")).toContain("✓ A titled unit");
+    expect(doc.querySelector(".ud-bar")).toBeNull(); // done: no button applies
+    expect(text(".ud").includes("not stored") || text(".ud").includes("add-unit")).toBe(false);
+    await click(doc.querySelector(".ud-close"));
+    // 2. building plan unit: title, Done when, Check, Needs ✓, Builder with tier and the running model + the set one, Plan link, buttons in the bar
+    await click(card("u6-building"));
+    expect(text(".ud-title")).toBe("Building unit");
+    expect(text(".ud-slug")).toBe("u6-building · plan U6");
+    expect(rows()).toEqual(["ud-done", "ud-check", "ud-waits", "ud-builder", "ud-runs", "ud-plan"]);
+    expect(text(".ud-waits")).toContain("✓ A titled unit");
+    expect(text(".ud-builder")).toContain("builder-u6 · working · hard · sonnet-5.5 (set: opus-5.5)");
+    // U2 (exposed-optimise): the Builder row lists its open entries as links, never the down one
+    const bl = [...doc.querySelectorAll(".ud-builder a")];
+    expect(bl.map((x: any) => x.textContent)).toEqual(["stack"]);
+    expect((bl[0] as any).getAttribute("href")).toBe("http://localhost:3000/");
+    // ... and Show in squad lands on its crew row: the chip counts the open entry, the ⋯ menu opens it, no Down entry in it
+    await click(doc.querySelector(".ud-show"));
+    expect(text(".link-chip")).toContain("1");
+    const row = doc.querySelector(".link-chip")?.closest(".m") as any;
+    await click(row.querySelector(".acts-btn"));
+    const items = [...row.querySelectorAll(".mlink-item")];
+    expect(items.map((x: any) => x.textContent)).toEqual(["open stack"]);
+    expect((items[0] as any).getAttribute("href")).toBe("http://localhost:3000/");
+    doc.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await click(card("u6-building"));
+    const bar = doc.querySelector(".ud-bar");
+    expect(bar?.querySelector(".ud-chat")).not.toBeNull();
+    expect(bar?.querySelector(".ud-cancel")).not.toBeNull();
+    expect(doc.querySelector(".ud-planlink")?.textContent).toBe("sq-plan.md");
+    await click(doc.querySelector(".ud-planlink"));
+    expect(doc.querySelector(".ud")).toBeNull();
+    expect(doc.querySelector(".mbox .mhd span")?.textContent).toBe("sq-plan.md");
+    doc.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise((x) => setTimeout(x, 30));
+    // 3. bare planned unit: title from the slug, only Needs (titles, state for an open dep), Cancel in the bar
+    await click(card("u9-bare"));
+    expect(text(".ud-title")).toBe("bare");
+    expect(rows()).toEqual(["ud-waits", "ud-runs"]);
+    expect(text(".ud-waits")).toContain("Building unit · working");
+    expect(doc.querySelector(".ud-bar .ud-cancel")).not.toBeNull();
+    expect(doc.querySelector(".ud-chat")).toBeNull();
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+// ---- hold-cancels-queue-undo-approval U3: the Plans list's approved chip and "Take back approval".
+test("the Plans list: an approved plan shows its chip and a menu item that opens the confirm", async () => {
+  const sq = { ...udBoard.squads[0], plans: [
+    { name: "sq-a-plan.md", mtime: now - 3600, markdown: "# a", approved: true, queued: 2, started: 1 },
+    { name: "sq-b-plan.md", mtime: now - 7200, markdown: "# b", approved: false, revoked_at: "2026-11-18T10:00:00Z", queued: 0, started: 0 }] };
+  const r = await mount({ ...udBoard, squads: [sq] }, false);
+  const w = r.window, doc = w.document;
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await new Promise((x) => setTimeout(x, 30)); };
+  try {
+    doc.getElementById("squads").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    await click(doc.querySelector(".row.squad"));
+    expect(doc.querySelectorAll(".plan-approved").length).toBe(1);
+    expect(doc.querySelectorAll(".plan-menu-btn").length).toBe(1);
+    expect(doc.querySelector(".plan-revoked")?.textContent).toBe("approval taken back");
+    await click(doc.querySelector(".plan-menu-btn"));
+    await click(doc.querySelector(".plan-revoke"));
+    expect(doc.querySelector(".revoke-what")?.textContent).toContain("2 queued Builders are dropped, 1 started Builder is paused");
+    const go = doc.querySelector(".revoke-go") as any;
+    expect(go.disabled).toBe(true);
+    const why = doc.querySelector(".revoke-why") as any;
+    why.value = "misread ok"; why.dispatchEvent(new w.Event("input", { bubbles: true }));
+    await new Promise((x) => setTimeout(x, 30));
+    expect((doc.querySelector(".revoke-go") as any).disabled).toBe(false);
+    await click(doc.querySelector(".revoke-keep"));
+    expect(doc.querySelector(".revoke-what")?.textContent).not.toContain("paused");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+test("the dim ★ on a Merged card reads at opacity .7, dimmer than the bright ★ (U6)", async () => {
+  const bright = { ...flowBoard.flow.cards[0], focus: "on", key: "fixture/gone/bright", slug: "bright" };
+  const r = await mount({ ...flowBoard, flow: { ...flowBoard.flow, cards: [bright, ...flowBoard.flow.cards] } }, false);
+  const doc = r.window.document;
+  const css = readFileSync(join(import.meta.dir, "../../web/board.html"), "utf8").match(/<style>([\s\S]*?)<\/style>/)![1];
+  const st = doc.createElement("style"); st.textContent = css; doc.head.appendChild(st);
+  doc.getElementById("flow").open = true;
+  await new Promise((x) => setTimeout(x, 30));
+  const dim = doc.querySelector('.fcard[data-key="fixture/live/u-live"] .umark.focus.held') as any;
+  expect(dim).not.toBeNull();
+  expect(dim.getAttribute("title")).toBe("focus squad");
+  expect(doc.querySelector('.fcard[data-key="fixture/gone/m1"] .umark')).toBeNull();
+  const op = (el: any) => Number(r.window.getComputedStyle(el).opacity || 1);
+  expect(op(dim)).toBeGreaterThanOrEqual(0.6);
+  expect(op(dim)).toBeLessThan(op(doc.querySelector(".fcard .umark.focus:not(.held)")));
+});
+
+test("the ★ and ⚡ come before the unit name, outside the part that is cut (U7)", async () => {
+  const slug = "u7-marks-in-front-of-the-unit-nm"; // 32 characters
+  expect(slug.length).toBe(32);
+  const card = { ...flowBoard.flow.cards[0], key: "fixture/live/" + slug, slug, focus: "on", urgent: true };
+  const sq = { ...flowBoard.squads[0], units: [{ slug, state: "building", focus: "on", urgent: true, title: "t", deps: [], dependents: [], ext_deps: [], tier: "standard" }] };
+  const r = await mount({ ...flowBoard, squads: [sq], flow: { ...flowBoard.flow, cards: [card, ...flowBoard.flow.cards] } }, false);
+  const doc = r.window.document;
+  const css = readFileSync(join(import.meta.dir, "../../web/board.html"), "utf8").match(/<style>([\s\S]*?)<\/style>/)![1];
+  const st = doc.createElement("style"); st.textContent = css; doc.head.appendChild(st);
+  doc.getElementById("flow").open = true; doc.getElementById("squads").open = true;
+  await new Promise((x) => setTimeout(x, 30));
+  const before = (a: any, b: any) => !!(a.compareDocumentPosition(b) & 4); // b follows a
+  const ell = (el: any) => r.window.getComputedStyle(el).textOverflow;
+  const t = doc.querySelector(`.fcard[data-key="fixture/live/${slug}"] .t`) as any;
+  expect(before(t.querySelector(".umark.urgent"), t.querySelector(".tn"))).toBe(true);
+  expect(before(t.querySelector(".umark.focus"), t.querySelector(".tn"))).toBe(true);
+  expect(t.querySelector(".tn").textContent).toBe(slug);
+  expect(ell(t.querySelector(".tn"))).toBe("ellipsis");
+  expect(ell(t.querySelector(".umark"))).not.toBe("ellipsis");
+  doc.querySelector(".row.squad")!.dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+  await new Promise((x) => setTimeout(x, 30));
+  const un = doc.querySelector(".detail .u .un") as any;
+  expect(before(un.querySelector(".umark.focus"), un.querySelector(".unit-open"))).toBe(true);
+  expect(before(un.querySelector(".umark.urgent"), un.querySelector(".unit-open"))).toBe(true);
+  expect(ell(un.querySelector(".unit-open"))).toBe("ellipsis");
+  expect(ell(un.querySelector(".umark"))).not.toBe("ellipsis");
+  expect(doc.querySelector('.fcard[data-key="fixture/gone/m1"] .umark')).toBeNull();
+});

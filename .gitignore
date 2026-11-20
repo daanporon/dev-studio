@@ -1,0 +1,45 @@
+# Live runtime per-project state, not source (conventions/state.md).
+# Ignores everything under state/ except the tracked schema.
+state/*
+!state/SCHEMA.json
+
+# Agent-jotted dev-studio feedback (bin/role/ds-feedback.sh) — host-local, operator-reviewed.
+# A bare file under state/, so state/*/ (dirs only) doesn't cover it.
+state/dev-studio-feedback
+
+# The sweep's per-worker token spend for the board (bin/sweep.sh step 0), plus its .tmp/.lock.
+state/tokens.tsv*
+
+# Project clones from `up.sh <git-url>` (like firstmate — never pushed).
+repos/
+
+# The all-projects `board.sh --serve` pidfile (per-project ones live under state/<p>/).
+state/board-serve*.pid
+
+# Per-account credits + limits for the picker and board (bin/lib/accounts-refresh.sh), its episodes, tmp and lock.
+state/accounts.tsv*
+state/.accounts.episodes*
+
+# Per-worktree agent wiring (bin/hooks/arm-rewake.sh writes the rewake Stop hook here) — never source.
+.claude/settings.local.json
+
+# The loop's SQLite store (bin/loop/core/store.ts) and its WAL/shm files.
+state/loop.db*
+
+# The loop daemon's runtime files (bin/loop/loop.sh, bin/loop/main.ts) and the loop/sweep cron lines' logs (bin/host/install.sh).
+state/loop.log
+state/loop.lock
+state/loop.pid
+state/loop-cron.log
+state/sweep-cron.log
+
+# The skill listing `ds skills list` caches (bin/loop/settings/skills.ts).
+state/skills-listing.json
+node_modules/
+
+# SQLite files anywhere in the repo (a copy of loop.db must never be committed; tests/leak-guard.sh also refuses one by its header).
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3

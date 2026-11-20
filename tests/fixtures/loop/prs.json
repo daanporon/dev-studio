@@ -1,0 +1,19 @@
+{
+  "acme/app": {
+    "defaultBranch": "main",
+    "prs": [
+      { "number": 92, "fixture": "merged", "title": "u1 spike", "head": "ds/u1", "mergedAt": "2026-10-30T10:00:00Z" },
+      { "number": 93, "fixture": "threads", "title": "u2 store", "head": "ds/u2" },
+      { "number": 101, "fixture": "ready", "title": "ready one", "head": "feat/ready" },
+      { "number": 102, "fixture": "conflicting", "title": "conflicting one", "head": "feat/conflict" },
+      { "number": 103, "fixture": "checks-running", "title": "running one", "head": "feat/running" },
+      { "number": 104, "fixture": "draft", "title": "draft one", "head": "feat/draft" }
+    ]
+  },
+  "acme/lib": {
+    "defaultBranch": "trunk",
+    "prs": [
+      { "number": 7, "fixture": "failing-check", "title": "lib fix", "head": "fix/lib" }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+agent	account	session_pct	session_reset	weekly_pct	weekly_reset	limited_until	updated	label	note
+claude	acct-a	50	1800003600	40	1800086400	-	1800000000	fill first	-
+claude	acct-b	30	1800007200	30	1800172800	-	1800000000	second reset	-
+claude	acct-c	10	1800014400	20	1800259200	-	1800000000	freshest	-

@@ -1,0 +1,1 @@
+ALTER TABLE health ADD COLUMN progress_at INTEGER;

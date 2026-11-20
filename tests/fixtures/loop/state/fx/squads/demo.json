@@ -1,0 +1,189 @@
+{
+  "task_id": "task_fixture01",
+  "run_id": "run_fixture01",
+  "lead_wt": "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-lead-demo",
+  "members": [
+    {
+      "role": "lead",
+      "suffix": "",
+      "wt": "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-lead-demo",
+      "owns": [],
+      "for": "",
+      "agent": "claude",
+      "model": "sonnet",
+      "effort": "low",
+      "host": "",
+      "since": "2026-10-30T09:58:53Z",
+      "account": "6b9a19e7-e78f-4a78-ba77-b573b3c9f95d"
+    },
+    {
+      "role": "thinker",
+      "suffix": "",
+      "wt": "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-thinker-demo",
+      "owns": [],
+      "for": "",
+      "agent": "claude",
+      "model": "opus",
+      "effort": "high",
+      "host": "",
+      "since": "2026-10-30T09:58:55Z",
+      "account": "6b9a19e7-e78f-4a78-ba77-b573b3c9f95d"
+    },
+    {
+      "role": "builder",
+      "suffix": "u1-spike-loop-as-coordinator",
+      "wt": "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-builder-u1-spike-loop-as-coordinator-demo",
+      "owns": [
+        "u1-spike-loop-as-coordinator"
+      ],
+      "for": "",
+      "agent": "claude",
+      "model": "opus",
+      "effort": "high",
+      "host": "",
+      "since": "2026-10-30T15:47:12Z",
+      "account": "6b9a19e7-e78f-4a78-ba77-b573b3c9f95d"
+    }
+  ],
+  "worktrees": [
+    "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-builder-u1-spike-loop-as-coordinator-demo",
+    "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-lead-demo",
+    "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-thinker-demo"
+  ],
+  "units": [
+    {
+      "slug": "u1-spike-loop-as-coordinator",
+      "status": "done",
+      "builder_wt": "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-builder-u1-spike-loop-as-coordinator-demo",
+      "plan": "/state/fx/squads/demo-loop-plan.md",
+      "plan_unit": "U1",
+      "deps": [],
+      "hold": false,
+      "tier": "hard",
+      "pr": "92"
+    },
+    {
+      "slug": "u2-sqlite-store-migrations-and",
+      "status": "dispatched",
+      "builder_wt": "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-builder-u2-sqlite-store-migrations-and-demo",
+      "plan": "/state/fx/squads/demo-loop-plan.md",
+      "plan_unit": "U2",
+      "deps": [],
+      "hold": false,
+      "tier": "hard",
+      "pr": "93"
+    },
+    {
+      "slug": "u3-loop-daemon-skeleton-health",
+      "status": "planned",
+      "builder_wt": "",
+      "plan": "/state/fx/squads/demo-loop-plan.md",
+      "plan_unit": "U3",
+      "deps": [
+        "u1-spike-loop-as-coordinator"
+      ],
+      "hold": false,
+      "tier": "hard"
+    },
+    {
+      "slug": "u4-orca-state-file-config",
+      "status": "planned",
+      "builder_wt": "",
+      "plan": "/state/fx/squads/demo-loop-plan.md",
+      "plan_unit": "U4",
+      "deps": [
+        "u2-sqlite-store-migrations-and"
+      ],
+      "hold": false,
+      "tier": "hard"
+    },
+    {
+      "slug": "u5-folded",
+      "status": "cancelled",
+      "builder_wt": "",
+      "plan": "/state/fx/squads/demo-plan.md",
+      "plan_unit": "U5",
+      "deps": [],
+      "hold": false,
+      "tier": "standard",
+      "superseded_by": "u6-takes-u5",
+      "cancel_reason": "folded",
+      "cancelled_at": 1793000000
+    },
+    {
+      "slug": "u6-takes-u5",
+      "status": "planned",
+      "builder_wt": "",
+      "plan": "/state/fx/squads/demo-plan.md",
+      "plan_unit": "U6",
+      "deps": [
+        "u5-folded"
+      ],
+      "hold": false,
+      "tier": "standard"
+    },
+    {
+      "slug": "u7-held",
+      "status": "planned",
+      "builder_wt": "",
+      "plan": "/state/fx/squads/demo-plan.md",
+      "plan_unit": "U7",
+      "deps": [],
+      "hold": true,
+      "tier": "standard"
+    },
+    {
+      "slug": "u8-waits",
+      "status": "planned",
+      "builder_wt": "",
+      "plan": "/state/fx/squads/demo-plan.md",
+      "plan_unit": "U8",
+      "deps": [],
+      "hold": false,
+      "tier": "standard",
+      "wait_until": 4102444800
+    },
+    {
+      "slug": "u9-ext-archived",
+      "status": "planned",
+      "builder_wt": "",
+      "plan": "/state/fx/squads/demo-plan.md",
+      "plan_unit": "U9",
+      "deps": [],
+      "hold": false,
+      "tier": "standard",
+      "ext_deps": [
+        "peer/p1-done"
+      ]
+    },
+    {
+      "slug": "u10-ext-missing",
+      "status": "planned",
+      "builder_wt": "",
+      "plan": "/state/fx/squads/demo-plan.md",
+      "plan_unit": "U10",
+      "deps": [],
+      "hold": false,
+      "tier": "standard",
+      "ext_deps": [
+        "peer/p2-never"
+      ]
+    }
+  ],
+  "leftovers": [],
+  "devenv": null,
+  "cleanup": [],
+  "assignments": [],
+  "repo": "path:/nonexistent/fixture-repo",
+  "host": null,
+  "framing": "Brainstorm moving the minutely cron sweep (the removed sweep) to a long-running run-loop style process: what the sweep does today, what a loop would change (latency, state, failure modes, restart safety, cost), options and a recommendation. Brainstorm only first, no implementation.",
+  "type": "feature",
+  "autonomy": "checkpoints",
+  "status": "running",
+  "waiting_on_you": [],
+  "lfg_assumptions": [],
+  "approved_plans": [
+    "/state/fx/squads/demo-plan.md"
+  ],
+  "proposed_squads": []
+}

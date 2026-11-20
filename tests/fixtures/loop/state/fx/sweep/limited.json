@@ -1,0 +1,18 @@
+[
+  {
+    "wt": "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-thinker-demo",
+    "who": "demo thinker",
+    "topic": "demo",
+    "line": "weekly limit · resets Oct 31",
+    "since": 1793290000,
+    "wait_until": 1793473200
+  },
+  {
+    "wt": "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-lead-demo",
+    "who": "demo lead",
+    "topic": "demo",
+    "line": "session limit",
+    "since": 1793290100,
+    "switching": true
+  }
+]

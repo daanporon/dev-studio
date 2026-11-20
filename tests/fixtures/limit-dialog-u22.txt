@@ -1,0 +1,13 @@
+❯ dev-studio sweep: PR #19892 for your unit u22-console-gateway-detail is not merge-ready (checks-running,threads:1). Fix it —
+  rebase/resolve conflicts, fix the red check, address the open review threads — push, then babysit with ce-babysit-pr until
+  ~/.dev-studio/bin/finish-unit.sh /home/user/dev-studio/state/acme//squads/deposit-withdraw.json
+  u22-console-gateway-detail --check prints ready, and stop. If a blocker needs a reviewer or the Lead (changes requested, a
+  thread you disputed), orch.sh ask your Lead instead of changing code. Don't send worker_done again.
+  ⎿  You've hit your weekly limit · resets Oct 31, 9pm (Europe/Berlin)
+✻ Crunched for 0s · done 2:12 PM
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   What do you want to do?
+   ❯ 1. Stop and wait for limit to reset
+     2. Wait here, then continue automatically at Oct 31, 9pm
+     3. Add funds to continue with usage credits
+   Enter to confirm · Esc to cancel

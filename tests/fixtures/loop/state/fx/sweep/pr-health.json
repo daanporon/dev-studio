@@ -1,0 +1,18 @@
+{
+  "at": 1793375760,
+  "units": {
+    "demo/u2-sqlite-store-migrations-and": {
+      "pr": 93,
+      "verdict": "waiting",
+      "reasons": [
+        "ci pending"
+      ]
+    }
+  },
+  "merged": {
+    "demo/u1-spike-loop-as-coordinator": {
+      "pr": 92,
+      "at": 1793363761
+    }
+  }
+}

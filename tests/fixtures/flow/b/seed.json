@@ -1,0 +1,31 @@
+{
+ "_comment": "tests/loop/flow-fixture.ts: project b of the Flow fixture (its own typical times)",
+ "workers": [
+  ["wtLeadB", "working"],
+  ["wtC1", "working"]
+ ],
+ "repos": {"path:/r/other": "acme/other"},
+ "events": [
+  {"squad": "other", "unit": "u11-done", "kind": "unit_dispatched", "ago": 2050},
+  {"squad": "other", "unit": "u11-done", "kind": "unit_pr", "ago": 1950},
+  {"squad": "other", "unit": "u11-done", "kind": "auto_merge_armed", "ago": 1850},
+  {"squad": "other", "unit": "u11-done", "kind": "unit_done", "ago": 1800, "payload": {"pr": "51"}},
+  {"squad": "other", "unit": "u12-done", "kind": "unit_dispatched", "ago": 88550},
+  {"squad": "other", "unit": "u12-done", "kind": "unit_pr", "ago": 88350},
+  {"squad": "other", "unit": "u12-done", "kind": "auto_merge_armed", "ago": 88250},
+  {"squad": "other", "unit": "u12-done", "kind": "unit_done", "ago": 88200, "payload": {"pr": "52"}},
+  {"squad": "other", "unit": "u13-done", "kind": "unit_dispatched", "ago": 175050},
+  {"squad": "other", "unit": "u13-done", "kind": "unit_pr", "ago": 174750},
+  {"squad": "other", "unit": "u13-done", "kind": "auto_merge_armed", "ago": 174650},
+  {"squad": "other", "unit": "u13-done", "kind": "unit_done", "ago": 174600, "payload": {"pr": "53"}},
+  {"squad": "other", "unit": "u14-done", "kind": "unit_dispatched", "ago": 261550},
+  {"squad": "other", "unit": "u14-done", "kind": "unit_pr", "ago": 261150},
+  {"squad": "other", "unit": "u14-done", "kind": "auto_merge_armed", "ago": 261050},
+  {"squad": "other", "unit": "u14-done", "kind": "unit_done", "ago": 261000, "payload": {"pr": "54"}},
+  {"squad": "other", "unit": "u15-done", "kind": "unit_dispatched", "ago": 348050},
+  {"squad": "other", "unit": "u15-done", "kind": "unit_pr", "ago": 347550},
+  {"squad": "other", "unit": "u15-done", "kind": "auto_merge_armed", "ago": 347450},
+  {"squad": "other", "unit": "u15-done", "kind": "unit_done", "ago": 347400, "payload": {"pr": "55"}},
+  {"squad": "other", "unit": "u1-quick", "kind": "unit_dispatched", "ago": 1000}
+ ]
+}

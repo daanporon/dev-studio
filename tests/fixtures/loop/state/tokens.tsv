@@ -1,0 +1,2 @@
+worker	topic	role	model	turns	input	cache_write	cache_read	output	ctx
+-home-fx-ds-dev-studio-lead-demo	demo	lead	claude-sonnet-5-5	40	4442	41908	558790	7662	104655

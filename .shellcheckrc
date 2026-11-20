@@ -1,0 +1,8 @@
+# Style notes this repo writes on purpose, so `shellcheck` as in AGENTS.md's Verify exits 0 and CI
+# (tests/ci.sh) can fail on anything new. Warnings and errors stay on.
+#   SC2015  A && B || C: the shell idiom used throughout bin/ and tests/
+#   SC2016  single quotes that hold jq, awk or stub-script text
+#   SC2002  cat file | cmd
+#   SC2012  ls instead of find, on test temp dirs with known names
+#   SC2035  bare globs, on known file names
+disable=SC2015,SC2016,SC2002,SC2012,SC2035

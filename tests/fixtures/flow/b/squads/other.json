@@ -1,0 +1,10 @@
+{
+  "run_id": "run_other", "status": "running", "type": "feature", "repo": "path:/r/other",
+  "worktrees": ["wtLeadB", "wtC1"],
+  "members": [{"role": "lead", "wt": "wtLeadB"}, {"role": "builder", "suffix": "u1-quick", "wt": "wtC1"}],
+  "units": [
+    {"slug": "u1-quick", "status": "dispatched", "builder_wt": "wtC1"},
+    {"slug": "u11-done", "status": "done"}, {"slug": "u12-done", "status": "done"}, {"slug": "u13-done", "status": "done"},
+    {"slug": "u14-done", "status": "done"}, {"slug": "u15-done", "status": "done"}
+  ]
+}

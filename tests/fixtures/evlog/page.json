@@ -1,0 +1,4 @@
+{"events":[
+ {"id":3,"at":__NEW__,"project":"fixture","squad":"alpha","unit":null,"member":null,"kind":"unit_done","sev":"ok","cat":"work","payload":{}},
+ {"id":2,"at":__OLD__,"project":"fixture","squad":"alpha","unit":null,"member":"wt-lead","kind":"member_started","sev":null,"cat":"crew","payload":{}}],
+ "older":null,"newer":null,"names":{}}

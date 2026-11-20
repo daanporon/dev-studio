@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# ds — the loop's CLI (U2): reads print JSON, writes go through bin/loop/core/store.ts as a fact, a
+# wish or a request (KTD15). Subcommands are bin/commands/*.ts, found by glob (KTD14).
+#
+#   ds [--state <root>] <command> [args]      ds help — the list
+#
+# --state (or DS_STATE_ROOT) picks the state root; default state/ beside this checkout.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# ~/.bun/bin is where bun's installer puts it; a shell that didn't load the profile misses it.
+bun="$(command -v bun 2>/dev/null || true)"
+[ -n "$bun" ] || [ ! -x "$HOME/.bun/bin/bun" ] || bun="$HOME/.bun/bin/bun"
+[ -n "$bun" ] || { echo "ds needs bun — install it once: curl -fsSL https://bun.sh/install | bash" >&2; exit 1; }
+exec "$bun" "$ROOT/bin/ds.ts" "$@"

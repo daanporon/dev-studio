@@ -1,0 +1,15 @@
+{"timestamp":"2026-11-17T10:00:00Z","type":"session_meta","payload":{"id":"s1","cwd":"__CWD__","originator":"codex_cli_rs"}}
+{"timestamp":"2026-11-17T10:00:00Z","type":"turn_context","payload":{"cwd":"__CWD__","model":"gpt-5.5","effort":"high"}}
+{"timestamp":"2026-11-17T10:00:00Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"DEVELOPER PROMPT"}]}}
+{"timestamp":"2026-11-17T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for __CWD__\n\nAGENTS BODY"}]}}
+{"timestamp":"2026-11-17T10:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>ENVIRONMENT BODY</environment_context>"}]}}
+{"timestamp":"2026-11-17T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Please fix the failing test"}]}}
+{"timestamp":"2026-11-17T10:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"Please fix the failing test"}}
+{"timestamp":"2026-11-17T10:00:02Z","type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"ENCRYPTED REASONING"}}
+{"timestamp":"2026-11-17T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looking at the test."}]}}
+{"timestamp":"2026-11-17T10:00:03Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"ls tests\"]}","call_id":"c1"}}
+{"timestamp":"2026-11-17T10:00:03Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"SECRET TOOL OUTPUT"}}
+{"timestamp":"2026-11-17T10:00:04Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"text(await tools.exec_command({cmd:\"cat AGENTS.md\"}))","call_id":"c2"}}
+{"timestamp":"2026-11-17T10:00:04Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c2","output":[{"type":"input_text","text":"SECOND TOOL OUTPUT"}]}}
+{"timestamp":"2026-11-17T10:00:05Z","type":"event_msg","payload":{"type":"agent_message","message":"Done."}}
+{"timestamp":"2026-11-17T10:00:05Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done; the token __GHP__ was in the log."}]}}

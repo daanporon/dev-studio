@@ -1,0 +1,18 @@
+#!/bin/sh
+# githooks/gh-text-check — this repo checks the text a Claude session would post to GitHub (public-readiness U12).
+# The PreToolUse hook on Bash in .claude/settings.json runs it with Claude Code's hook input on stdin. A command
+# that runs no gh passes at once; the rest goes to gh-text-check.py beside it, which reads the command as written
+# and refuses (exit 2, the reason on stderr) a gh call whose posted text fails tests/leak-guard.sh or cannot be
+# seen. Exit 0 lets the command run. Without python3 a command that names gh is refused: it cannot be checked.
+here="$(cd "$(dirname "$0")" && pwd -P)" || exit 2
+input="$(cat)"
+case "$input" in *gh*) ;; *) exit 0 ;; esac
+if ! command -v python3 > /dev/null 2>&1; then
+  echo "gh-text-check: refused — no python3, so the text this gh call would post cannot be checked; nothing ran" >&2
+  exit 2
+fi
+printf '%s' "$input" | python3 -I -B "$here/gh-text-check.py"
+rc=$?
+case "$rc" in 0 | 2) exit "$rc" ;; esac
+echo "gh-text-check: refused — the check itself failed (exit $rc), so nothing ran" >&2
+exit 2

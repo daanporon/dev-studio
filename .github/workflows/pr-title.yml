@@ -1,0 +1,26 @@
+# The PR title follows conventional commits (public-readiness U10): tests/pr-title.sh holds the rule, and
+# CONTRIBUTING.md states it. With squash merging the PR title is the only message that reaches main.
+# Like the tests workflow it stays off with the rest of Actions until the switch
+# (`gh workflow enable pr-title`); githooks/gh-text-check checks the same rule on a Claude session's gh calls.
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # The title goes in through env, never into the script text, so a title cannot run as shell.
+      - name: Check the PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: bash tests/pr-title.sh "$TITLE"

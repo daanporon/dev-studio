@@ -1,0 +1,1 @@
+{"cwd":"/tmp/wt-thinker","session_id":"ses_rec1","tool_input":{"questions":[{"header":"Style","multiSelect":false,"options":[{"description":"bold look","label":"Red (warm)"},{"description":"calm look","label":"Blue"}],"question":"Which color for the banner?"}]},"tool_name":"AskUserQuestion","tool_use_id":"toolu_abc1234567890","transcript_path":"/tmp/ses_rec1.jsonl"}

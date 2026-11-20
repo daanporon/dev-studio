@@ -1,0 +1,10 @@
+# Files tests/leak-guard.sh cannot read as text (pictures, PDFs, anything with a NUL in its first 8 KB after
+# .gz decompression) that someone opened and checked for emails, words of the host-local list, ts.net hosts and
+# home paths. One line per checked version: `<git blob hash>  <path>` (`git ls-files -s <path>` prints the hash).
+# Add a line only after opening that exact version; a changed file needs a new line. A SQLite file is never allowed.
+0ccb09749c14dc04e35fc8103f67c1328146ef6b  docs/img/board-full.png
+19a0419fa086c314d9e6c3080156fc51d165e00a  docs/img/board.png
+274b4e9bc2ee58ba0a9d1726ab08d1c3d22d0fa7  docs/screenshots/brief-lists/new-desktop.png
+8f01f8ca4a7242ebcbacce9d2614282ec25f1d12  docs/screenshots/brief-lists/new-phone.png
+d8e840e252d4cea74725d1118116f1e842398dc3  docs/screenshots/brief-lists/thu-desktop.png
+25ad539f4724a13854c1ac389e50741ab35b4346  docs/screenshots/brief-lists/thu-phone.png

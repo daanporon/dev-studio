@@ -1,0 +1,9 @@
+# The root commits of dev-studio's old history (public-readiness U8). githooks/pre-push refuses a push whose
+# range holds any of them, so the old history (and the files it leaked) never reaches the new public repo.
+# A push to a remote that already has this history (the archive) never meets them.
+# every root of the old origin's refs (git rev-list --max-parents=0 --remotes=origin), old branches included
+1da346c90c2efd65fbe4d7b701aad40ad4930efb
+42e5cbeb24cd2122d6260978696526e0020a91c7
+4356c5e2f84938fb7fae048c0e6049562083d084
+5467cc0d9bd065ae634905a6911707eadba843eb
+582e49fc64ffe6e70e563bd8d5a32ffcf51a5a81

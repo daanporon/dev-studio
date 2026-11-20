@@ -1,0 +1,232 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Squad state file",
+  "description": "Per-squad state the Lead owns and writes. Carries only what Orca does not already model; activity, lineage, and agent status come from `orca worktree ps` and the orchestration Run.",
+  "type": "object",
+  "required": ["task_id", "run_id", "type", "autonomy", "status", "waiting_on_you", "lfg_assumptions"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "type": ["string", "null"],
+      "description": "The squad's orchestration task id (`task_...`, from task-create at spawn). Checkpoint gates target this task."
+    },
+    "run_id": {
+      "type": ["string", "null"],
+      "description": "The squad's orchestration Run id (`run_...`). The Lead `run-use`s it to become its coordinator; the board reads gate/inbox state from it."
+    },
+    "lead_wt": {
+      "type": ["string", "null"],
+      "description": "The Lead's worktree id. Lets the Lead fan out more workers under itself via bin/commands/add-role.sh (parallel Builders, on-demand roles)."
+    },
+    "members": {
+      "type": "array",
+      "description": "The squad's full roster — one entry per member, 1:1 with a worktree. The single source of truth for who is in the squad and what each owns; worktrees[] and assignments[] are DERIVED from it. Enough to recreate the squad (respawn) and to answer 'who was doing what' after a restart. Live status (working/idle) is NOT stored here — it comes from `worker-states` at render time.",
+      "items": {
+        "type": "object",
+        "required": ["role", "wt"],
+        "additionalProperties": false,
+        "properties": {
+          "role": { "type": "string", "description": "lead | thinker | builder | reviewer | tester | researcher." },
+          "suffix": { "type": "string", "description": "Distinguishes members of the same role (e.g. `checkout`, `t2`); empty for a base role." },
+          "wt": { "type": "string", "description": "The member's worktree id (the key — one member per worktree)." },
+          "owns": { "type": "array", "items": { "type": "string" }, "description": "What this member is responsible for — a Thinker's plan file(s), a Builder's unit slug(s), the Tester's env. A list, so a Thinker can own several plans." },
+          "for": { "type": "string", "description": "(Builders) the Thinker scope this worker reports to; drives Builder→Thinker question routing." },
+          "agent": { "type": "string" },
+          "model": { "type": "string" },
+          "effort": { "type": "string" },
+          "host": { "type": "string", "description": "The saved env this member runs on (empty = default host). Recorded so a respawn recreates it in place." },
+          "account": { "type": "string", "description": "The account id the member runs on (backend `account-list`). Missing = the agent's default login (the first account-list line for its agent), so old squads keep working." },
+          "fallback": { "type": "boolean", "description": "True when the picker put the member on one of its role's fallback models rather than the role's own. Stored, not derived: the roster can change after spawn." },
+          "since": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "worktrees": {
+      "type": "array",
+      "description": "DERIVED from members[].wt (every worktree id this squad created). Kept so bin/commands/close-squad.sh and other readers that just need the ids don't have to walk members[]. Do not write directly on a squad that uses members[] — add-member/remove-member maintain it.",
+      "items": { "type": "string" }
+    },
+    "repo": { "type": ["string", "null"], "description": "Repo selector the squad was spawned with (replication input for respawn)." },
+    "host": { "type": ["string", "null"], "description": "Saved env the squad was spawned on, or null for the default host (replication input)." },
+    "framing": { "type": ["string", "null"], "description": "The operator's framing sentence that seeded the squad (replication input)." },
+    "start": { "type": ["string", "null"], "enum": ["plan", "brainstorm", "ask", "investigate", null], "description": "The start the Studio named at spawn (spawn-squad.sh --start); the feature squad's Thinker sees it in its first start prompt. Null = the Thinker picks by its Start triage." },
+    "debrief": { "type": ["string", "null"], "description": "The Lead's short debrief of the squad (set out to do / shipped with PR numbers / learned / still open / cost), written with set-debrief. set-status done refuses without one. It rides in the doc, so the archive keeps it. Absent = none yet." },
+    "units": {
+      "type": "array",
+      "description": "The plan's work items — the durable queue that makes a dropped handoff recoverable. The Lead records a unit `planned` when the Thinker hands off, `dispatched` (with the Builder's worktree id) when it fans out a Builder, `done` when complete. `cancelled` (via cancel-unit, through close-role.sh --cancel) means the work folded elsewhere or was dropped: the sweep never restarts or questions it, and ready-units counts it for a dependent only when its work landed somewhere (folded into the dependent, into a done unit, or into a merged PR). watch.sh and the board derive their WORK ITEMS view from this: a `planned` unit with no Builder and a `dispatched` unit whose worktree is GONE are the two failures surfaced.",
+      "items": {
+        "type": "object",
+        "required": ["slug", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "slug": { "type": "string", "description": "Short unit identifier (e.g. `checkout`); matches the Builder's suffix." },
+          "status": { "type": "string", "enum": ["planned", "dispatched", "done", "cancelled"] },
+          "superseded_by": { "type": "string", "description": "(cancelled units) what the work folded into: a unit slug, or `PR#<n>`. Absent = the work was dropped, not folded — dependents stay blocked until the Lead drops the dep or replans." },
+          "cancel_reason": { "type": "string", "description": "(cancelled units) why it was cancelled (cancel-unit --why)." },
+          "cancelled_at": { "type": "string", "format": "date-time", "description": "(cancelled units) when it was cancelled." },
+          "into_merged": { "type": "boolean", "description": "(cancelled units with a PR# superseded_by) true once the sweep sees that PR merged — dependents unblock. Set by set-into-merged; absent reads as false." },
+          "builder_wt": { "type": "string", "description": "The worktree id of the Builder working this unit (set at dispatch); empty while planned." },
+          "plan": { "type": "string", "description": "The plan file this unit came from, so units stay grouped when a Thinker owns several plans." },
+          "hold": { "type": "boolean", "description": "Held planned work: ready-units and ready pokes skip it. With hold_reason, set-unit-hold off releases it; without a reason, the operator promotes it explicitly at triage. Absent = not held." },
+          "hold_by": { "type": "string", "enum": ["plan", "parked"], "description": "Where a reasonless hold came from, set by register-plan: plan = a HELD line (released when the line drops HELD and the plan is registered again), parked = an add-unit --hold follow-up a plan line adopted. Absent on older holds." },
+          "hold_reason": { "type": "string", "description": "Operator freeze reason, set by set-unit-hold on --why on planned units; the board shows held · <reason>. set-unit-hold off removes it. Absent on parked follow-ups and plan HELD lines." },
+          "revalidated": { "type": "boolean", "description": "U3: on a unit held with hold_reason `revalidate after resume`, set by approve-plan of its plan (approved again after a suspend's resume); the next register-plan of that plan releases the hold. set-unit-hold off and a new resume hold remove it." },
+          "urgent": { "type": "boolean", "description": "Unit the operator needs first: its Builder ranks ahead of every non-urgent candidate and starts even at max_builders. Set by set-unit-urgent on (a planned or dispatched unit); off releases it. Absent = not urgent." },
+          "urgent_why": { "type": "string", "description": "Why the unit was marked urgent (set-unit-urgent --why). Absent when unmarked or no reason was given." },
+          "lane": { "type": "string", "enum": ["light", "normal"], "description": "Lane from the plan line's `Lane:` field (register-plan). Absent = normal." },
+          "title": { "type": "string", "description": "The unit line's title from the plan (register-plan), shown in the board's unit overlay; updated when the plan is registered again." },
+          "about": { "type": "string", "description": "What the unit does: the plan's `What:` text (register-plan, 1200 characters at most) or add-unit --about. Absent = not stored." },
+          "done": { "type": "string", "description": "The plan's `Done:` line for the unit (register-plan, 400 characters at most). Absent = not stored." },
+          "check": { "type": "string", "description": "The plan's `Check:` line for the unit (register-plan, 400 characters at most). Absent = not stored." },
+          "lane_rule": { "type": "string", "description": "The shared lane rule id from `Lane: light (rule: <id>)`. Absent when the plan line names none." },
+          "wait_on": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Waits recorded by wait-on / a plan's `— blocks:` line: dep (a same-squad slug, or `<squad>/<slug>` for an ext dep) -> why. The dep is also in deps/ext_deps; the loop pauses the Builder of a dispatched unit until each is done. register-plan keeps these deps; wait-off removes the entry. Absent = none." },
+          "wait_until": { "type": "number", "description": "Epoch seconds. Set (set-unit-wait) when no account/model is free for the unit's Builder; ready-units skips the unit until it passes; cleared when the Builder starts (set-unit-status dispatched)." },
+          "deps": { "type": "array", "items": { "type": "string" }, "description": "Same-squad unit slugs this unit waits on (the Thinker's DAG); ready-units holds it until each is `done`." },
+          "ext_deps": { "type": "array", "items": { "type": "string", "pattern": "^[^/]+/[^/]+$" }, "description": "Other squads' units this unit waits on, as `<squad>/<slug>` in the same label. ready-units holds it until each is `done` in squads/<squad>.json or an archive/<squad>-*.json; a missing squad or unit blocks (fail-closed) until the Lead runs drop-ext-dep. Absent = none." },
+          "tier": { "type": "string", "enum": ["standard", "hard"], "description": "The Thinker's Builder tier (add-unit --tier); absent reads as hard." },
+          "escalated": { "type": "boolean", "description": "Set when set-unit-tier raised the unit standard -> hard." },
+          "pr": { "type": "string", "description": "The PR number the unit's Builder opened (set-unit-pr)." },
+          "plan_unit": { "type": "string", "pattern": "^U[0-9]+[a-z]?$", "description": "The unit's id in its plan (`U1`, `U24b`), set by register-plan; a re-run matches on (plan, plan_unit) so a renamed title keeps its slug." }
+        }
+      }
+    },
+    "leftovers": {
+      "type": "array",
+      "description": "Worktrees that couldn't be removed without losing work (close-role keeps one instead of force-deleting; the sweep removes it once clean and pushed/merged, close-squad refuses to archive while one is unsafe). Nothing here is ever force-deleted by automation.",
+      "items": {
+        "type": "object",
+        "required": ["wt", "path", "branch", "reason", "waits_on", "files", "n_files", "unpushed", "recorded_at"],
+        "additionalProperties": false,
+        "properties": {
+          "wt": { "type": "string", "description": "The worktree id (upsert key; rekey-member follows it, add-member clears it when the worktree is reused)." },
+          "path": { "type": "string", "description": "The worktree's local path." },
+          "branch": { "type": "string", "description": "The branch the worktree was on." },
+          "reason": { "type": "string", "description": "Why it was kept (e.g. `uncommitted changes`, `unpushed commits`, `unknown (probe failed)`)." },
+          "waits_on": { "type": "string", "description": "What it waits on (e.g. `PR#19717`, a unit slug, or `the Lead/operator decision`)." },
+          "unit": { "type": "string", "description": "The unit slug whose Builder left it, when known." },
+          "files": { "type": "array", "items": { "type": "string" }, "description": "Up to the first 20 uncommitted file names." },
+          "n_files": { "type": "number", "description": "Total uncommitted file count." },
+          "unpushed": { "type": "number", "description": "Commits on HEAD not on any remote." },
+          "recorded_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "devenv": {
+      "type": ["string", "null"],
+      "description": "Where a shared env is reachable (URL/address + note), or null if none. The Lead records it when a role reports an env is up, so everyone uses that one env instead of starting their own. Project-agnostic: null for projects with no shared env."
+    },
+    "cleanup": {
+      "type": "array",
+      "description": "Teardown commands to run when the squad closes (bin/commands/close-squad.sh runs each). Project-agnostic: any role that starts something DETACHED (a dev server, a docker stack, a watcher) that removing its worktree won't stop registers how to stop it here, so it doesn't outlive the squad. dev-studio never interprets the commands.",
+      "items": { "type": "string" }
+    },
+    "assignments": {
+      "type": "array",
+      "description": "DERIVED from members[] (each Builder with a `for`): which worker, on what unit, owned by which Thinker. Makes Builder->Thinker routing durable, which matters once a squad has more than one Thinker. Maintained by add-member/remove-member; don't write directly.",
+      "items": {
+        "type": "object",
+        "required": ["builder", "unit", "thinker"],
+        "additionalProperties": false,
+        "properties": {
+          "builder": { "type": "string", "description": "The worker's suffix/scope (e.g. `checkout`)." },
+          "unit": { "type": "string", "description": "Short description of what it's working on." },
+          "thinker": { "type": "string", "description": "The owning Thinker's scope (e.g. `authbug`); its questions route there." }
+        }
+      }
+    },
+    "autonomy": {
+      "type": "string",
+      "enum": ["checkpoints", "lfg"],
+      "description": "Autonomy mode: checkpoints (stop at gates) or lfg (fire-and-forget, decide-log-continue)."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["feature", "testing"],
+      "description": "Squad type: a feature squad builds a topic; a testing squad runs the env, intakes manual-testing observations, and fixes issues."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "blocked", "waiting-on-you", "suspended", "done", "failed"],
+      "description": "Semantic status the board reads. `waiting-on-you` = a question reached the operator (the Lead pinged); `failed` = spawn aborted partway (kept visible so it can be torn down, not deleted); `suspended` = worktrees removed by /ds-suspend, resumable."
+    },
+    "waiting_on_you": {
+      "type": "array",
+      "description": "Pending questions mirrored from the Run inbox for the board's blocked-first queue.",
+      "items": {
+        "type": "object",
+        "required": ["id", "asker", "blocking", "question", "since"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "asker": { "type": "string", "description": "Role that raised it, e.g. `builder`." },
+          "blocking": { "type": "boolean", "description": "true = work is stalled (pushes); false = soft, waits on the board." },
+          "question": { "type": "string" },
+          "suggestion": { "type": "string", "description": "The asker's suggested answer (ask-operator.sh requires it); /ds-q offers it as 'Accept'." },
+          "why": { "type": "string", "description": "Why the asker suggests it." },
+          "card_wt": { "type": "string", "description": "The worktree whose card carries the NEEDS YOU note; resolve-question clears it." },
+          "options": { "type": "array", "items": { "type": "string" }, "description": "Answer options offered to the operator." },
+          "title": { "type": "string" },
+          "pr": { "type": "integer", "description": "The PR the question is about (ask-operator.sh --pr); the loop closes the question if the PR stops being ready." },
+          "doc_path": { "type": "string", "description": "A document the question links (ask-operator.sh --doc; a plan-* question gets its plan by the id rule): path relative to the state root, `<label>/squads/<file>.md` or `<label>/archive/<file>.md`. The board shows it as Open plan / Open doc." },
+          "choices": { "type": "array", "description": "Structured answer choices ({label, does})." },
+          "since": { "type": "string", "format": "date-time" },
+          "source": { "type": "string", "description": "\"picker\" when the entry mirrors a terminal AskUserQuestion picker (bin/hooks/picker-hook.sh); absent for questions raised through ask-operator.sh by an agent." },
+          "tool_use_id": { "type": "string", "description": "(picker entries) the AskUserQuestion tool_use_id, so the post hook and the sweep can tell whether the picker is still open." },
+          "transcript_path": { "type": "string", "description": "(picker entries) the agent transcript carrying the picker's tool_result once it is answered or dismissed." },
+          "picker_answerable": { "type": "boolean", "description": "(picker entries) true only for a single-question, single-select picker — the only shape the board can answer by keystroke." }
+        }
+      }
+    },
+    "approved_plans": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Plans the operator approved (approve-plan); the Lead dispatches only units of an approved plan."
+    },
+    "revoked_plans": {
+      "type": "array",
+      "description": "Plan approvals taken back (revoke-plan), oldest first; approving the plan again keeps the history.",
+      "items": {
+        "type": "object",
+        "required": ["plan", "why", "at", "by"],
+        "additionalProperties": false,
+        "properties": {
+          "plan": { "type": "string", "description": "The plan's canonical path, as approved_plans held it." },
+          "why": { "type": "string", "description": "The --why given." },
+          "at": { "type": "string", "format": "date-time" },
+          "by": { "type": "string", "description": "DS_WHO, else the caller's role, else \"operator\"." }
+        }
+      }
+    },
+    "proposed_squads": {
+      "type": "array",
+      "description": "A testing squad's proposed fix squads (propose-squad), for operator approval.",
+      "items": {
+        "type": "object",
+        "required": ["id", "topic", "repo", "framing", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "topic": { "type": "string" },
+          "repo": { "type": "string" },
+          "framing": { "type": "string" },
+          "status": { "type": "string", "enum": ["proposed", "approved", "spawned"] },
+          "since": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "lfg_assumptions": {
+      "type": "array",
+      "description": "Assumptions an lfg squad logged instead of blocking, shown on the board for after-the-fact review.",
+      "items": {
+        "type": "object",
+        "required": ["decision", "rationale", "at"],
+        "additionalProperties": false,
+        "properties": {
+          "decision": { "type": "string" },
+          "rationale": { "type": "string" },
+          "at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,192 @@
+// host-brake.test.ts — U4: with `builder_host_brake on`, no new Builder agent starts while the latest
+// observed_machine sample crosses a machine_*_crit line (bin/loop/capacity/pick.ts hostBrake, levels from
+// bin/loop/capacity/machine-level.ts, the board's own). Off (the default), a stale or missing sample, a live
+// Builder replacing its own agent and every other role go ahead. The picks reconciler, the actuator's
+// ladder pick and `ds pick` read the wait as a start wait (no reset time), never an error.
+import { afterEach, describe, expect, test } from "bun:test";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
+import { importConfig } from "../../bin/loop/db/import-config.ts";
+import { accountRows } from "../../bin/loop/db/import-json.ts";
+import { pick, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
+import { reconcile } from "../../bin/loop/capacity/picks.ts";
+import { ladderPick } from "../../bin/loop/core/actuator.ts";
+import { hostCrit, machineLevels, worst } from "../../bin/loop/capacity/machine-level.ts";
+import type { Member } from "../../bin/loop/drivers/types.ts";
+import type { TickCtx } from "../../bin/loop/core/plugins.ts";
+
+const ROOT = join(import.meta.dir, "..", "..");
+const DS = join(ROOT, "bin", "ds");
+const T = 1_800_000_000;
+const ENV = ["DS_LIMIT_BUILDER_HOST_BRAKE", "DS_LOOP_MACHINE_S", "DS_LIMIT_MACHINE_PSI_CRIT", "DS_LIMIT_MAX_BUILDERS"];
+
+const temps: string[] = [], stores: Store[] = [];
+afterEach(() => {
+  for (const s of stores.splice(0)) { try { s.close(); } catch { /* closed */ } }
+  for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
+  for (const e of ENV) delete process.env[e];
+});
+function fixture(): Store {
+  const d = mkdtempSync(join(tmpdir(), "zzhostbrake-")), conv = mkdtempSync(join(tmpdir(), "zzhostbrake-conv-"));
+  temps.push(d, conv);
+  cpSync(join(ROOT, "conventions"), conv, { recursive: true });
+  for (const p of ["fx", "fy"]) mkdirSync(join(d, p, "squads"), { recursive: true });
+  copyFileSync(join(ROOT, "tests", "fixtures", "loop", "accounts.tsv"), join(d, "accounts.tsv"));
+  const s = open(d);
+  stores.push(s);
+  importConfig(s, d, conv);
+  for (const r of accountRows(d)) s.upsert(r.table, r.key, r.set);
+  for (const p of ["fx", "fy"]) s.upsert("squads", { project: p, topic: "demo" }, { status: "running", observed_at: T, updated_at: T });
+  return s;
+}
+
+const at = { observed_at: T, updated_at: T };
+// A calm host: 24 cores at load 6, half the memory used, no swap in use, no pressure.
+const CALM: Row = { host: "h", cores: 24, load1: 6, load5: 6, load15: 6, mem_total_kb: 64_000_000, mem_avail_kb: 32_000_000, swap_total_kb: 8_000_000, swap_free_kb: 8_000_000,
+  psi_cpu_some: 1, psi_mem_some: 0, psi_mem_full: 0, psi_io_some: 0, psi_io_full: 0, disks: "[]", groups: "[]", observed_at: T };
+const sample = (s: Store, set: Row = {}) => s.upsert("observed_machine", { host: "h" }, { ...CALM, ...set });
+const brake = (s: Store, value = "on", project = "fx") => s.upsert("config", { project, file: "limits.conf", key: "builder_host_brake" }, { value, observed_at: T });
+let n = 0;
+function member(s: Store, set: Row): number {
+  const row: Row = { project: "fx", squad: "demo", role: "builder", suffix: `u${++n}`, ...at, ...set };
+  const ks = Object.keys(row);
+  return Number(s.db.run(`INSERT INTO members (${ks.join(", ")}) VALUES (${ks.map(() => "?").join(", ")})`, ks.map((k) => row[k] as string | number | null)).lastInsertRowid);
+}
+// A Builder that asks to start (an open wish, no agent), and one whose agent runs.
+const asks = (s: Store, set: Row = {}) => member(s, { want: "running", want_at: T, tier: "hard", ...set });
+function live(s: Store, project = "fx"): number {
+  const id = member(s, { project, status: "running", wt: `wt-live-${n + 1}`, tier: "hard" });
+  const wt = String((s.db.query("SELECT wt FROM members WHERE id = ?").get(id) as Row).wt);
+  s.upsert("observed_workers", { project, wt }, { state: "working", presence: "running", observed_at: T });
+  return id;
+}
+const builder = (s: Store, req: Partial<PickReq> = {}) => pick(s, { project: "fx", role: "builder", tier: "hard", phase: "build", squad: "demo", ...req }, T);
+const starts = (p: unknown) => { expect(p).not.toHaveProperty("wait"); expect(p).not.toHaveProperty("error"); return p as Picked; };
+const waits = (p: unknown) => { expect(p).toHaveProperty("wait"); return p as Waiting; };
+const ctx = (s: Store) => ({ store: s, project: "", tick: 1, now: T, fired: [], poked: new Set() } as TickCtx);
+
+describe("U4: the Builder host brake", () => {
+  test("crit CPU pressure with the brake on: a new Builder waits with WAIT host and no reset time", () => {
+    const s = fixture();
+    brake(s);
+    sample(s, { psi_cpu_some: 31.24 });
+    const p = waits(builder(s, { member: asks(s) }));
+    expect(p).toMatchObject({ why: "host", known: false, wait: T, reason: "WAIT host: psi cpu 31.2 ≥ crit 25" });
+    expect(p.slot).toBeUndefined();
+    // A start with no member row yet (add-role) is braked the same way.
+    expect(waits(builder(s, { suffix: "fresh" })).why).toBe("host");
+  });
+
+  test("off (the conventions default) the same host starts the Builder", () => {
+    const s = fixture();
+    sample(s, { psi_cpu_some: 40 });
+    starts(builder(s, { member: asks(s) }));
+    brake(s, "off");
+    starts(builder(s, { member: asks(s) }));
+  });
+
+  test("a stale or missing sample never brakes", () => {
+    const s = fixture();
+    brake(s);
+    starts(builder(s, { member: asks(s) }));                           // no observed_machine row at all
+    sample(s, { psi_cpu_some: 40, observed_at: T - 91 });               // older than 3 x the default 30 s
+    starts(builder(s, { member: asks(s) }));
+    sample(s, { psi_cpu_some: 40, observed_at: T - 90 });               // exactly 3 x: still fresh
+    expect(waits(builder(s, { member: asks(s) })).why).toBe("host");
+    process.env.DS_LOOP_MACHINE_S = "10";                               // a faster cadence makes 90 s stale
+    starts(builder(s, { member: asks(s) }));
+  });
+
+  test("a live Builder replacing its own agent, a Lead, a Thinker and the rest are never braked", () => {
+    const s = fixture();
+    brake(s);
+    sample(s, { psi_cpu_some: 40 });
+    starts(builder(s, { member: live(s) }));
+    for (const role of ["lead", "thinker", "tester", "reviewer", "researcher"])
+      expect(pick(s, { project: "fx", role, phase: "build" }, T)).not.toHaveProperty("wait");
+  });
+
+  test("every crit line brakes: load, memory, swap with memory pressure, cpu/mem/io pressure; full swap alone does not", () => {
+    const s = fixture();
+    brake(s);
+    const cases: [Row, string | null][] = [
+      [{ load1: 40 }, "load 166.7% ≥ crit 150%"],
+      [{ mem_avail_kb: 2_000_000 }, "mem 96.9% ≥ crit 95%"],
+      [{ swap_free_kb: 400_000, psi_mem_some: 12 }, "swap 95% ≥ crit 90%"],
+      [{ swap_free_kb: 400_000, psi_mem_some: 2 }, null],               // the board reads this warn, so does the brake
+      [{ psi_mem_full: 26 }, "psi mem 26 ≥ crit 25"],
+      [{ psi_io_some: 30 }, "psi io 30 ≥ crit 25"],
+      [{ load1: 30, mem_avail_kb: 6_000_000 }, null],                    // warn levels only
+      [{ disks: JSON.stringify([{ path: "/", total_kb: 100, free_kb: 1 }]) }, null],   // a full disk is the board's, not the brake's
+    ];
+    for (const [set, reason] of cases) {
+      sample(s, set);
+      const p = builder(s, { member: asks(s) });
+      if (reason) expect(waits(p).reason).toBe(`WAIT host: ${reason}`);
+      else starts(p);
+    }
+  });
+
+  test("the lines are the project's: an override moves them, a project row turns the brake on for that project only", () => {
+    const s = fixture();
+    brake(s);
+    sample(s, { psi_cpu_some: 31 });
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "machine_psi_crit" }, { value: "50", observed_at: T });
+    starts(builder(s, { member: asks(s) }));
+    process.env.DS_LIMIT_MACHINE_PSI_CRIT = "30";                      // the env var wins, as on the board
+    expect(waits(builder(s, { member: asks(s) })).reason).toBe("WAIT host: psi cpu 31 ≥ crit 30");
+    delete process.env.DS_LIMIT_MACHINE_PSI_CRIT;
+    starts(builder(s, { project: "fy", member: asks(s, { project: "fy" }) }));
+    process.env.DS_LIMIT_BUILDER_HOST_BRAKE = "on";                     // DS_LIMIT_<KEY> turns it on everywhere
+    expect(waits(builder(s, { project: "fy", member: asks(s, { project: "fy" }) })).why).toBe("host");
+  });
+
+  test("max_builders comes first: a Builder over the limit waits for a slot, not the host", () => {
+    const s = fixture();
+    brake(s);
+    sample(s, { psi_cpu_some: 40 });
+    process.env.DS_LIMIT_MAX_BUILDERS = "1";
+    live(s);
+    expect(waits(builder(s, { member: asks(s) })).why).toBe("slot");
+  });
+
+  test("the board and the brake read one function: crit on the panel iff the brake names a line", () => {
+    const s = fixture();
+    const line = (k: string) => Number(String((s.get("config", { project: "", file: "limits.conf", key: k }) as Row).value).split(/\s+/)[0]);
+    for (const set of [{}, { load1: 40 }, { psi_cpu_some: 26 }, { swap_free_kb: 0, psi_mem_some: 1 }, { swap_free_kb: 0, psi_mem_some: 11 }, { mem_avail_kb: 0 }]) {
+      const row = { ...CALM, ...set }, m = machineLevels(row, line);
+      const crit = worst(m.lv.load, m.lv.mem, m.lv.swap, ...m.psi.map((p) => p.level)) === "crit";
+      expect(hostCrit(row, line, T) !== null).toBe(crit);
+    }
+  });
+});
+
+describe("U4: the brake through the loop and the CLI", () => {
+  test("the picks reconciler keeps a braked member waiting with the reason and no slot; the actuator reads it as a start wait", async () => {
+    const s = fixture();
+    brake(s);
+    sample(s, { psi_cpu_some: 40 });
+    const id = asks(s);
+    const go = reconcile(ctx(s));
+    expect(go.has(id)).toBe(false);
+    const row = s.get("picks", { member: id }) as Row;
+    expect(row).toMatchObject({ slot: 0, wait_until: null, reason: "WAIT host: psi cpu 40 ≥ crit 25" });
+    const m = { ...(s.db.query("SELECT * FROM members WHERE id = ?").get(id) as Row), id } as unknown as Member;
+    expect(await ladderPick(s, m, { at: T })).toEqual({ wait: null, slot: "WAIT host: psi cpu 40 ≥ crit 25" });
+    expect(await ladderPick(s, m, { at: T, fresh: true })).toEqual({ wait: T, slot: "WAIT host: psi cpu 40 ≥ crit 25" });
+    // The host calms down: the next tick picks it.
+    sample(s, { psi_cpu_some: 1 });
+    expect(reconcile(ctx(s)).has(id)).toBe(true);
+  });
+
+  test("ds pick prints WAIT host with exit 3", () => {
+    const s = fixture();
+    brake(s);
+    sample(s, { load1: 48 });
+    const p = Bun.spawnSync([DS, "--state", s.root, "pick", "fx", "builder", "--tier", "hard", "--squad", "demo", "--suffix", "cli"],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env, DS_NOW: String(T) } });
+    expect({ code: p.exitCode, out: p.stdout.toString().trim() }).toEqual({ code: 3, out: "WAIT host: load 200% ≥ crit 150%" });
+  });
+});

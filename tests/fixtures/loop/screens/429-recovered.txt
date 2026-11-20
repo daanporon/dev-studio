@@ -1,0 +1,7 @@
+⏺ Running the build.
+  ⎿  API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}
+⏺ Retrying the build.
+  ⎿  ok
+╭──────╮
+❯ 
+╰──────╯
