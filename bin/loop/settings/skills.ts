@@ -77,6 +77,15 @@ export function requiredOf(name: string, role: string, shipped: Rule[], proj = f
   return b?.required ? b : undefined;
 }
 
+// Why a project rule `<role> <name> <level>` can't be stored, or null: an unknown level, or a lower level
+// for a name a shipped `required` rule pins. One check for the board's Skills tab (fulfil/skills.ts) and
+// a settings import (settings.ts); the role itself is the caller's to check.
+export function skillRuleProblem(role: string, name: string, level: string, shipped: Rule[], proj = false): string | null {
+  if (!(LEVELS as readonly string[]).includes(level)) return `${name}: unknown level ${level}`;
+  const req = requiredOf(name, role, shipped, proj);
+  return req && level !== req.level ? `${name} is required for ${role}; it can't be lowered` : null;
+}
+
 // Does any shipped or project rule other than a bare `*` name this skill (for any role)?
 export function isNamed(name: string, shipped: Rule[], project: Rule[], proj = false): boolean {
   return [...shipped, ...project].some((r) => r.pattern !== "*" && matches(r.pattern, name, proj));

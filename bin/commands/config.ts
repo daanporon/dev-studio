@@ -35,7 +35,9 @@ function backupFiles(path: string, file: string | undefined): [string, string][]
   const text = readFileSync(path, "utf8");
   if (text.split("\n").some((l) => l.startsWith(EXPORT_SECTION))) {
     const parts = exportSections(text);
-    return SETTINGS_FILES.map((f) => [f, parts[f] ?? ""]);
+    // skills.conf only when the export has that section: a backup from before skills were exported
+    // leaves the skills rows alone.
+    return [...SETTINGS_FILES.map((f): [string, string] => [f, parts[f] ?? ""]), ...(parts["skills.conf"] !== undefined ? [["skills.conf", parts["skills.conf"]] as [string, string]] : [])];
   }
   const f = file ?? SETTINGS_FILES.find((n) => { const b = basename(path); return b === n || b.startsWith(`${n}.imported-`); });
   if (!f) throw new SettingsError(`can't tell which settings file ${path} is: pass --file <file>`);
