@@ -110,6 +110,15 @@ const fixtures = {
     f.focus("one");
     return f;
   },
+  // (7d) The focus squad has nothing ready (its only unit held): an older leaf of another squad and a newer root.
+  focusIdle: (off = false) => {
+    const f = setup(3, 0, off);
+    f.unit("two", "oleaf", "planned");
+    f.unit("two", "root", "planned"); f.kids("two", "root", 3);
+    f.unit("one", "fleaf", "planned", { hold: true });
+    f.focus("one");
+    return f;
+  },
   // (7b) The focus squad holds one seat (focus room 1): its newer root takes the room before its older leaf.
   focusRoot: (off = false) => {
     const f = setup(3, 0, off);
@@ -217,11 +226,9 @@ describe("the next free seat", () => {
     expect(slotted(b.store, "p", T)).toEqual(new Set(["one\0froot", "two\0o"]));
     const c = fixtures.focusFull();
     expect([ok(c, "two", "root"), ok(c, "two", "leaf"), ok(c, "one", "f3")]).toEqual([true, false, false]);
-    // Nothing of the focus squad is ready: the root still beats the older leaf.
-    const d = fixtures.focusLeaf();
-    d.unit("one", "fleaf", "planned", { hold: true });
-    d.unit("two", "oleaf", "planned");
-    expect(order(d)).toEqual(["two/root", "two/oleaf"]);
+    // Nothing of the focus squad is ready: the newer root still beats the older leaf; off, age wins.
+    expect(order(fixtures.focusIdle())).toEqual(["two/root", "two/oleaf"]);
+    expect(order(fixtures.focusIdle(true))).toEqual(["two/oleaf", "two/root"]);
   });
 });
 
