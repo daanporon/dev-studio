@@ -16,8 +16,9 @@
 //             per `account_disabled` event (the key carries its id): switching it off again later
 //             moves members again, a replay does not. Nowhere to go (a pin to that account makes the
 //             pick wait) -> it keeps running. Never a limited one (its limit row moves it, off it too).
-//   fallback  a Thinker (the only role that moves back up, as U110) idle on a lower rung with
-//             the top rung free -> stop when idle, at most once per `fallback_return_min`,
+//   fallback  a member whose ladder row says `up` (configurable-role-elevation U1: roles.conf
+//             column 8, roster.ts resolveBackUp; shipped on for the Thinker only) idle on a lower
+//             rung with the top rung free -> stop when idle, at most once per `fallback_return_min`,
 //             and only with no live sub-agents and no open
 //             background step. U180: the stop needs a start slot whose pick (picks.ts, with every
 //             earlier stop of the tick counted as load) still lands above `from`; the stop reserves
@@ -33,7 +34,10 @@ import { liveSquads, stepOpen } from "../reconcilers/liveness.ts";
 import { worker, type Worker } from "../reconcilers/limits.ts";
 import { envInt } from "../core/tick.ts";
 import { BABYSIT } from "../reconcilers/phases.ts";
-import { agentOf, ladder, limit, overrideOf, pick, placeRung, sameModel } from "./pick.ts";
+import { agentOf, ladder, limit, overrideOf, pick, placeRung, sameModel, workDone } from "./pick.ts";
+import { backUpOf } from "../settings/roster.ts";
+import { memberUnit, mergedUnit } from "../pause/pause-conditions.ts";
+import type { Target } from "../pause/pause.ts";
 import { accountDisabled } from "./accounts.ts";
 import { lastStart, view } from "../squad/member-state.ts";
 import type { Row, Store } from "../core/store.ts";
@@ -146,21 +150,26 @@ function accountStop(store: Store, m: Row, w: Worker, now: number): Switch | nul
   return { why: "account", episode: `stop:account:${agent}/${account}@${ev?.id ?? 0}` };
 }
 
-// A Thinker's move back up (U66, from reconcilers/fallback.ts): idle on a lower rung with the
-// top rung free. Only Thinkers move back up; a pinned or limited member is left to its row.
+// A member's move back up (U66, from reconcilers/fallback.ts): idle on a lower rung with the top
+// rung free. Only a member whose ladder row (the row its models come from) resolves `up` moves back
+// up (configurable-role-elevation U1; shipped: the Thinker); a pinned or limited member is left to
+// its row, and a Builder whose unit is finished waits to be retired, not moved.
 function fallbackStop(store: Store, m: Row, w: Worker, now: number): Switch | null {
-  const project = String(m.project);
-  if (String(m.role) !== "thinker" || overrideOf(store, m)) return null;
+  const project = String(m.project), role = String(m.role);
+  if (overrideOf(store, m)) return null;
   if (Number(m.limited_until ?? 0) > now || limitedEp(store, m, now)) return null;
   if (w.state !== "idle" && w.state !== "done") return null;
   if (w.ow.sub_agents != null || stepOpen(store, String(m.wt))) return null;
   const repo = (store.get("squads", { project, topic: String(m.squad) })?.repo as string | null) ?? null;
   const { tier, phase } = tierPhase(store, project, m);
-  const lad = ladder(store, { project, role: "thinker", tier, phase, squad: String(m.squad) }, repo);
-  if (!lad) return null;
+  const lad = ladder(store, { project, role, tier, phase, squad: String(m.squad) }, repo);
+  if (!lad || !backUpOf(store, project, lad.row)) return null;
+  if (workDone(store, m)) return null;
+  const unit = memberUnit(store, m as Target);
+  if (unit && mergedUnit(store, unit)) return null;
   const here = rungOf(store, lad, m, w, now);
   if (here === 0 || (here === null && !flagged(m))) return null;
-  const p = pick(store, { project, role: "thinker", tier, phase, squad: String(m.squad), member: Number(m.id) }, now);
+  const p = pick(store, { project, role, tier, phase, squad: String(m.squad), member: Number(m.id) }, now);
   if ("error" in p || "wait" in p) return null;
   const to = p.rung - 1, from = here ?? lad.rungs.length;
   if (to >= from) return null;
