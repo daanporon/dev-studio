@@ -27,7 +27,7 @@ for the backup and how to put one back.
 Default roster: `conventions/roles.conf`. One row per role:
 
 ```
-name  agent  model  spawn  [effort]  [fallbacks]
+name  agent  model  spawn  [effort]  [fallbacks]  [plan]  [return]
 ```
 
 - `agent` — which agent runs the role (`claude`, `muse`). The agent and its
@@ -42,6 +42,15 @@ name  agent  model  spawn  [effort]  [fallbacks]
   `-` or blank = the model's default).
 - `fallbacks` — optional ordered `agent:model[:effort],…` list. The picker
   tries the role's own model first, then each fallback in order. `-` = none.
+- `plan` — optional: restricts the first step to that observed account plan. `-` = any.
+- `return` — optional: `up` moves an idle member started from this row back up to a higher
+  rung once it has room (after a limit moved it down), at most once per `fallback_return_min`;
+  `stay` keeps it where it is. `-` or omitted inherits: the default row of the same name, then
+  the base role's row (`builder-standard` from `builder`), else `stay`. The default roster
+  sets `up` on `thinker` alone. `up` is refused on an `elevate` row and on `studio`. A Builder
+  whose unit is done or merged is never moved; one stopped to move up keeps its seat under
+  `max_builders` until it is placed again. `roles.sh list` shows the resolved value as
+  `back up`.
 
 The default roster:
 
@@ -92,7 +101,7 @@ Six rows need one extra line:
 Change it per project (the normal way):
 
 - `/ds-roles` — `bin/commands/roles.sh list [<project>]` shows the effective roster;
-  `set <project> <role> <agent> <model> [spawn] [effort] [fallbacks]` writes that one
+  `set <project> <role> <agent> <model> [spawn] [effort] [fallbacks] [plan] [up|stay]` writes that one
   role's row for the project; every role the project has no row for runs the default
   row (U267); `reset <project> <role>` (or `rm`) drops the project's row, so the role
   follows the default again.
@@ -126,7 +135,7 @@ key's source.
 | `pick_load_hard` / `pick_load_standard` | Session % one hard / standard (or untiered) member adds to its account while it counts as newly placed | 20 / 10 | non-negative integer | `DS_LIMIT_PICK_LOAD_HARD` / `DS_LIMIT_PICK_LOAD_STANDARD` |
 | `pick_load_lead` / `pick_load_thinker` | Session % one Lead / Thinker adds to its account while it counts as newly placed, whatever its tier (U180). Measured on 2026-11-09/10: the real 5-hour % rose at most 3% on a Max account in a Lead or Thinker's first 10 minutes, so 1 × the Max scale of 4 | 1 / 1 | non-negative integer | `DS_LIMIT_PICK_LOAD_LEAD` / `DS_LIMIT_PICK_LOAD_THINKER` |
 | `pick_ttl_s` | Seconds a newly placed member's load counts (a start or a `run-switch`); also how long a limit switch the actuator holds back keeps its first pick before it picks again, and how long a fallback stop holds its reservation (below) | 600 | non-negative integer | `DS_LIMIT_PICK_TTL_S` |
-| `fallback_return_min` | Loop: an idle member on a fallback rung (any rung below the first of its `roles.conf` row, on any agent) is moved to the highest rung above it that has room again; this is the minutes between tries per member. `0` turns it off. In one tick the moves share the room: a member is stopped only when its pick, with the tick's earlier picks and moves counted as load, still lands above its rung, so three Thinkers aiming at room for one stop one. The stop reserves that place until the member is placed or `pick_ttl_s` passes: other picks count it as load, and its own start keeps it while it still fits. A start that lands on another agent or model anyway logs `fallback_missed` with the pick's reason, and the member waits out this window | 15 | non-negative integer | `DS_LIMIT_FALLBACK_RETURN_MIN` |
+| `fallback_return_min` | Loop: an idle member whose `roles.conf` row resolves `return` to `up` (column 8; the default roster: the Thinker), on a fallback rung (any rung below the first of its row, on any agent), is moved to the highest rung above it that has room again; this is the minutes between tries per member. `0` turns it off. In one tick the moves share the room: a member is stopped only when its pick, with the tick's earlier picks and moves counted as load, still lands above its rung, so three Thinkers aiming at room for one stop one. The stop reserves that place until the member is placed or `pick_ttl_s` passes: other picks count it as load, and its own start keeps it while it still fits. A start that lands on another agent or model anyway logs `fallback_missed` with the pick's reason, and the member waits out this window | 15 | non-negative integer | `DS_LIMIT_FALLBACK_RETURN_MIN` |
 | `unit_token_x` | Runaway-unit alert: × the median of done units of its tier | 3 | non-negative integer | `DS_UNIT_TOKEN_X` |
 | `unit_token_max` | …or this absolute cache-write cap | 20000000 | non-negative integer | `DS_UNIT_TOKEN_MAX` |
 | `max_builders` | Live Builder agents the project runs at once (U145). A Builder start over it (add-role, a restart, a resume after pause, a crash restart) waits for a slot: `add-role.sh` exits 3 `WAIT slot: <project> at max_builders <n>` and leaves the unit planned; the loop leaves the wish open and asks again each tick. A free slot goes to the oldest work first: a dispatched unit before a planned one, then the lower unit id. Live = not paused and its agent runs; a live Builder's own restart (hung restart, run-switch, limit move, phase switch) never waits. The check lives in the account pick (`bin/loop/capacity/pick.ts`, so `bin/ds pick` answers it too); Leads, Thinkers and the other roles are never limited | - (no limit) | positive integer, or `-` | `DS_LIMIT_MAX_BUILDERS` |

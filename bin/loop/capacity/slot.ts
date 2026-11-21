@@ -48,7 +48,7 @@ import { failedResume, intents, type Target } from "../pause/pause.ts";
 import { lastStart, lock, view } from "../squad/member-state.ts";
 import { existsSync } from "node:fs";
 import { dependencyReasons, memberUnit } from "../pause/pause-conditions.ts";
-import { limit } from "./pick.ts";
+import { limit, reservationOf } from "./pick.ts";
 import { focusSquad, NOT_LIVE } from "../squad/focus.ts";
 import type { Row, Store } from "../core/store.ts";
 
@@ -96,7 +96,8 @@ function agentRuns(store: Store, project: string, wt: string, strict: boolean): 
 //   starting    its lifecycle lock is held, it holds a loop start slot (picks.slot = 1), a start or restart
 //               in the spawn grace, or a `running` member the observer has not seen yet
 //   pausing     a pause intent is on it and its agent still runs
-//   restarting  U153: a restart newer than its observed process start keeps the seat
+//   restarting  U153: a restart newer than its observed process start keeps the seat; a Builder stopped
+//               to move back up keeps it while its fallback-reserve is open (configurable-role-elevation U1)
 //   working     its agent runs and the observer reads it working
 //   idle        its agent runs in any other state (at its prompt, waiting for its PR's merge, unknown)
 export type SeatWhy = "starting" | "pausing" | "restarting" | "working" | "idle";
@@ -124,6 +125,10 @@ export function liveWhy(store: Store, m: Row, now: number): SeatWhy | null {
     const w = store.db.query("SELECT started_at FROM observed_workers WHERE project = ? AND wt = ?").get(String(m.project), wt) as { started_at: number | null } | null;
     if (Number(m.restart_at) > Math.max(Number(w?.started_at ?? 0), lastStart(m))) return "restarting";
   }
+  // configurable-role-elevation U1: a Builder stopped to move back up (switches.ts fallbackStop) holds
+  // its seat while its fallback-reserve is open (until it is placed or pick_ttl_s ends), so its
+  // restart never queues behind other units at max_builders. The stop sets no restart_at.
+  if (open(m) && reservationOf(store, Number(m.id), now)) return "restarting";
   if (!wt) return null;
   const w = store.db.query("SELECT presence, gone_at, state FROM observed_workers WHERE project = ? AND wt = ?").get(String(m.project), wt) as { presence: string | null; gone_at: number | null; state: string | null } | null;
   // Never observed yet (a start the observer has not seen): its `running` status says so.

@@ -509,11 +509,17 @@ bin/commands/roles.sh set  your-app thinker claude fable         # thinker -> fa
 bin/commands/roles.sh set  your-app thinker-deep claude opus elevate  # hard-topic planning model
 bin/commands/roles.sh set  your-app builder claude opus always high   # ...with high reasoning effort
 bin/commands/roles.sh set  your-app builder claude opus "" - claude:sonnet  # fall back to sonnet when no account has opus left
+bin/commands/roles.sh set  your-app builder claude opus "" "" "" "" up     # ...and move an idle Builder back to opus once it has room
 bin/commands/roles.sh reset your-app thinker                     # back to the default row
 ```
 
 The optional 5th column is **effort** — the model's reasoning effort
 (`low|medium|high|xhigh|max`; blank = the model's default).
+
+The optional 8th column is **return**: `up` moves an idle member back up to a higher
+rung of its row once it has room, `stay` keeps it on its fallback, `-` or omitted inherits
+(the default row, then the base role's row, else `stay`). The default roster moves only the
+Thinker back up; `roles.sh list` shows the resolved value in its `back up` column.
 
 `thinker-deep` is an `elevate` row: it never starts a terminal. It names the model
 the Thinker hands one hard planning step to (`conventions/thinker-routing.md`); its

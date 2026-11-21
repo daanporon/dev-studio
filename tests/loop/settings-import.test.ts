@@ -92,6 +92,17 @@ describe("planImport", () => {
     expect(historyOf(s, DST).length).toBe(before);
   });
 
+  test("configurable-role-elevation U1: an import keeps column 8 and refuses `up` on an elevate row", () => {
+    const { s, o } = fixture();
+    raw(s, SRC, "roles.conf", "lead", "claude sonnet always - - - up");
+    raw(s, SRC, "roles.conf", "builder-review", "claude opus elevate - - - up");
+    const plan = planImport(s, DST, { project: SRC }, o);
+    expect(find(plan, "roles.conf", "lead")).toMatchObject({ action: "add", value: "claude sonnet always - - - up" });
+    const br = find(plan, "roles.conf", "builder-review");
+    expect([br.action, br.can_pick]).toEqual(["skip", false]);
+    expect(br.why).toMatch(/^refused: .*can't go on 'builder-review': it is an elevate row/);
+  });
+
   test("replace: a target row the source lacks is a remove (picked); a project-specific one is a tickable skip", () => {
     const { s, o } = fixture();
     devStudioLike(s);
