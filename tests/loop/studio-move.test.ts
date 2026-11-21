@@ -466,6 +466,11 @@ describe("configurable-role-elevation U3: the Studio moves back up", () => {
     expect(cardsIn(s, "loop-studio.up-")).toEqual([]);
     expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" })!.ended_at).toBe(T + 60);
     expect(m.orca.of("terminal-close")).toEqual([]);
+    // Owed again on the same place and rung: a new card, not the cleared one's key.
+    s.upsert("config", { project: "fx", file: "roles.conf", key: "studio" }, { value: `${ROW} up` });
+    await m.tick(T + 120);
+    await m.tick(T + 180);
+    expect(cardsIn(s, "loop-studio.up-")).toHaveLength(1);
   });
 
   test("a limited Studio takes the limit move, and its studio:approved is not cleared by the move-up", async () => {

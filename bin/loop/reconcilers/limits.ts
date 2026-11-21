@@ -523,12 +523,16 @@ function backUp(ctx: TickCtx, w: Worker, pick: Picker, actions: Action[]): void 
         why: "back-up", notice: `moving back up to ${p.model}` } });
     return;
   }
-  // ask: one card per place and target rung; a card for another one is cleared first.
-  const ep = `up|${w.agent}:${w.model}@${w.account || "-"}|rung${o.to + 1}`;
+  // ask: one card per place and target rung; a card for another one is cleared first, and one the
+  // loop cleared (the move stopped being owed) comes back as a new card (`@<now>`).
+  const base = `up|${w.agent}:${w.model}@${w.account || "-"}|rung${o.to + 1}`;
   const sent = store.get("episodes", { project: P, subject: UP, kind: "action:alert" });
   const prev = typeof sent?.episode_key === "string" ? sent.episode_key : null;
-  if (prev === ep) return;
-  if (prev) clearUp(ctx, w, actions, prev);
+  const same = prev !== null && (prev === base || prev.startsWith(`${base}@`));
+  const cleared = prev !== null && store.get("episodes", { project: P, subject: UP, kind: "action:alert-clear" })?.episode_key === `cleared@${prev}`;
+  if (same && !cleared) return;
+  if (prev && !cleared) clearUp(ctx, w, actions, prev);
+  const ep = same ? `${base}@${t}` : base;
   actions.push({ project: P, squad: null, member: w.wt, subject: UP, kind: "alert", episode: ep, payload: {
     card: "studio_move_up", title: "Studio can move back up",
     text: `Studio can move back up to ${where} (it runs on ${w.agent}:${w.model || "?"}@${w.account || "-"}, rung ${o.from + 1} of its ladder); answer "move it" and the loop moves it once it is idle with an empty prompt (its tab only, briefed from its journal)`,
