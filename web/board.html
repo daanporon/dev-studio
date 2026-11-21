@@ -375,6 +375,7 @@ button.fchip,button.gtog{display:inline-flex;align-items:center;justify-content:
 @keyframes flowmoved{0%{box-shadow:0 0 0 2px var(--blue)}100%{box-shadow:0 0 0 0 transparent}}
 @media (prefers-reduced-motion:reduce){.fcard.moved{animation:none;outline:2px solid var(--blue)}}
 .flow-col .fmore{font:11px var(--mono);color:var(--mut);background:none;border:0;padding:2px 0;cursor:pointer;text-decoration:underline dotted}
+.back-up-row { margin: 6px 0; } .back-up-box { display: flex; align-items: center; gap: 8px; min-height: 44px; flex-wrap: wrap; } .back-up-box input { width: 22px; height: 22px; flex: none; } .back-up-box span { flex: 1 1 12em; min-width: 0; overflow-wrap: anywhere; } .back-up-row .hint { color: var(--muted, #888); font-size: 12px; } .back-up-row .link { background: none; border: 0; color: inherit; text-decoration: underline; cursor: pointer; padding: 0 4px; }
 </style>
 </head>
 <body>
@@ -3139,7 +3140,17 @@ function RolesTab({ project, toast }) {
     const d = rowOf(x);
     const steps = pipelineOf(d);
     const setSteps = (next) => setDraft((o) => ({ ...o, [x.role]: { ...(o[x.role] || {}), ...draftOfPipeline(normalizeSteps(next)) } }));
-    const set = (k, v) => setDraft((o) => ({ ...o, [x.role]: { ...(o[x.role] || {}), [k]: v } }));
+    const set = (k, v) => setDraft((o) => {
+      const n = { ...(o[x.role] || {}), [k]: v };
+      // an elevate row never runs a terminal, so it has no move-back-up value: drop the draft's, and clear the row's own
+      if (k === "spawn" && v === "elevate") { if (x.return) n.return = ""; else delete n.return; }
+      return { ...o, [x.role]: n };
+    });
+    // configurable-role-elevation U2: "move back up", the row's own value (draft first) or what it inherits
+    const canBack = (d.spawn === "always" || d.spawn === "ondemand") && x.role !== "studio";
+    const ownRet = "return" in (draft[x.role] || {}) ? draft[x.role].return : (x.return || "");
+    const backUp = ownRet ? ownRet === "up" : "return" in (draft[x.role] || {}) ? !!x.default?.back_up : !!x.back_up;
+    const backNote = ownRet ? "set on this row" : x.back_up_from === "default" ? "from default" : x.back_up_from && x.back_up_from !== "row" ? "from " + x.back_up_from : "";
     const move = (i, j) => { const r = [...steps]; [r[i], r[j]] = [r[j], r[i]]; setSteps(r); };
     const first = data.catalog[0] || { agent: d.agent, model: "" };
     const bad = steps.some((r) => !r.model);
@@ -3152,7 +3163,7 @@ function RolesTab({ project, toast }) {
         <button class="role-name" aria-expanded=${isOpen} title=${x.role} onClick=${() => setOpen((o) => ({ ...o, [x.role]: !isOpen }))}>${x.role}</button>
         <select class="sp" title="spawn" value=${d.spawn} onChange=${(e) => set("spawn", e.target.value)}>${["always", "ondemand", "elevate"].map((a) => html`<option key=${a}>${a}</option>`)}</select>
         <span class="role-sum" title=${summary}>${summary}</span>
-        <span class="role-act">${busy[x.role] && html`<span class="tag">saving…</span>`}${dirty && html`<span class="tag dirty">edited</span>`}${!dirty && html`<span class="tag" title=${x.source === "project" ? "this project's own row" : "follows the default row; saving an edit gives this project its own row"}>${x.source === "project" ? "custom" : "default"}</span>`}${action}</span></div>
+        <span class="role-act">${canBack && backUp && html`<span class="tag back-up" title="moves back up when there is room">↑</span>`}${busy[x.role] && html`<span class="tag">saving…</span>`}${dirty && html`<span class="tag dirty">edited</span>`}${!dirty && html`<span class="tag" title=${x.source === "project" ? "this project's own row" : "follows the default row; saving an edit gives this project its own row"}>${x.source === "project" ? "custom" : "default"}</span>`}${action}</span></div>
       ${isOpen && html`<div class="steps">
         <span class="hd">#</span><span class="hd">model</span><span class="hd">effort</span><span class="hd">plan</span><span class="hd"></span>
         ${steps.map((r, i) => {
@@ -3166,6 +3177,8 @@ function RolesTab({ project, toast }) {
               <button class="ibtn" title="down" aria-label="move down" disabled=${i === steps.length - 1} onClick=${() => move(i, i + 1)}>↓</button>
               <button class="ibtn" title="remove" aria-label="remove step" disabled=${steps.length === 1} onClick=${() => setSteps(steps.filter((_, k) => k !== i))}>✕</button></span></div>`; })}</div>
         <div class="steps-foot"><button class="btn sm" onClick=${() => setSteps([...steps, { agent: first.agent, model: first.model, effort: "default" }])}>+ add step</button></div>`}
+      ${isOpen && canBack && html`<div class="back-up-row"><label class="back-up-box"><input type="checkbox" checked=${backUp} onChange=${(e) => set("return", e.target.checked ? "up" : "stay")} /> <span>Move back up when there is room</span></label>
+        <div class="hint">restarts the agent once, when it is idle${backNote ? " · " + backNote : ""}${ownRet ? html` <button class="link" onClick=${() => set("return", "")}>use inherited</button>` : ""}</div></div>`}
       ${bad && html`<div class="err">every step needs a model</div>`}
       ${!dirty && html`<${ChangeNote} c=${x.changed} busy=${saving} onUndo=${() => undoOne(x.role, x.changed.id)} />`}
       ${msg[x.role] && html`<div class="err">${msg[x.role]}</div>`}</div>`;
@@ -3187,6 +3200,7 @@ function RolesTab({ project, toast }) {
       <li>Each role tries its steps in order: step 1 is its own model, the rest are fallbacks.</li>
       <li>A step without its own effort runs at step 1's effort on step 1's agent, otherwise at the agent's default.</li>
       <li>A plan choice uses only accounts on that plan; Any uses all accounts of the agent.</li>
+      <li><b>Move back up when there is room</b> restarts the agent once, when it is idle, on its stronger model; a row without its own setting follows the default (then its base role).</li>
       <li><code>builder</code> = hard units, <code>builder-standard</code> = standard units.</li></ul></details>
     ${msg._ && html`<div class="err">${msg._}</div>`}
     ${data && html`<div>${grouped(present, resetBtn)}

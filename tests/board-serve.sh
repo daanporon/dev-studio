@@ -489,6 +489,19 @@ ff
 eq "roles: roles.sh list shows minimal" "$(rl builder | cut -d' ' -f1-3)" "muse muse-spark-1.3 minimal"
 eq "roles: put builder back"         "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"reset\":true}")" "202"
 ff
+jt "roles: GET carries return and back_up (thinker up, lead stay, builder-review stay)" <(curl -s "$RU?project=$LBL") '([.roles[]|select(.role=="thinker")|.back_up]==[true]) and ([.roles[]|select(.role=="lead")|.back_up]==[false]) and ([.roles[]|select(.role=="builder-review")|.back_up]==[false]) and (.roles[]|select(.role=="thinker")|.default.back_up)==true'
+eq "roles: return up is 202"         "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"up\"}")" "202"
+eq "roles: the request carries return" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.role, .payload.return]')" '["roles","lead","up"]'
+ff
+eq "roles: roles.sh list shows lead up" "$(DS_STATE_ROOT="$DBR" "$ROOT/bin/commands/roles.sh" list "$LBL" | awk '$1=="lead"{print ($0 ~ /up/)}')" "1"
+eq "roles: return stay is 202"       "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"stay\"}")" "202"
+ff
+eq "roles: bad return is 400"        "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"maybe\"}")" "400"
+eq "roles: return up on an elevate row is 400" "$(rp "{\"project\":\"$LBL\",\"role\":\"builder-review\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"elevate\",\"return\":\"up\"}")" "400"
+has "roles: the elevate refusal names the row" "$(cat "$TMP/post.out")" "builder-review"
+eq "roles: return up on studio is 400" "$(rp "{\"project\":\"$LBL\",\"role\":\"studio\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"up\"}")" "400"
+eq "roles: put lead back"            "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"reset\":true}")" "202"
+ff
 eq "roles: bad effort is 400"        "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"ondemand\",\"effort\":\"turbo\"}")" "400"
 eq "roles: bad spawn is 400"         "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"never\"}")" "400"
 eq "roles: bad model is 400"         "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"agent\":\"claude\",\"model\":\"a b;rm\",\"spawn\":\"ondemand\"}")" "400"

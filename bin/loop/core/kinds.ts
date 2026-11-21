@@ -63,7 +63,7 @@ export const REQUESTS = {
   "request-restart": obj({ target: opt(str), key: opt(str), who: opt(str), topic: opt(str), cause: opt(str), since: opt(num), what: opt(str), command: opt(str), path: opt(str), text: opt(str) }),
   "request-switch": obj({ target: opt(str), key: opt(str), who: opt(str), topic: opt(str), cause: opt(str), since: opt(num), what: opt(str), command: opt(str), path: opt(str), text: opt(str) }),
   "request.file": obj({ target: opt(str), key: opt(str), who: opt(str), topic: opt(str), cause: opt(str), since: opt(num), what: opt(str), command: opt(str), path: opt(str), text: opt(str) }),
-  roles: obj({ role: str, agent: opt(str), model: opt(str), effort: opt(str), spawn: opt(str), fallbacks: opt(str), reset: opt(bool), plan: opt(str) }),
+  roles: obj({ role: str, agent: opt(str), model: opt(str), effort: opt(str), spawn: opt(str), fallbacks: opt(str), reset: opt(bool), plan: opt(str), return: opt(str) }),
   "send-peer": replay,
   "send-role": replay,
   skills: obj({ role: opt(str), reset: opt(bool), set: opt(rec) }),
