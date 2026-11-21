@@ -14,6 +14,8 @@ import { pokeCap, pokeGap, allDone as allDoneWake } from "../../bin/loop/pause/w
 import { allDone as allDoneIn, retestDue } from "../../bin/loop/squad/retest.ts";
 import { pokeSettled } from "../../bin/loop/reconcilers/alerts.ts";
 import { open as askOpen, answer } from "../../bin/loop/messages/questions.ts";
+import { queue } from "../../bin/loop/capacity/slot.ts";
+import { readyLine } from "../../bin/loop/reconcilers/ready.ts";
 import lifecycle from "../../bin/loop/reconcilers/lifecycle.ts";
 import { fakeGithub, fromFixture } from "../../bin/loop/fakes/github.ts";
 import { githubObserver } from "../../bin/loop/observers/github.ts";
@@ -557,6 +559,27 @@ describe("10: all-done nudge (finish nudge, sweep-required U9)", () => {
     expect(String((acted[0].payload as Row).text)).toContain("tell the operator to run /ds-close-squad lc");
     expect(await l.tick(T + 5)).toEqual([]);
     expect(events(s, "squad_all_done").length).toBe(1);
+  });
+
+  test("register-plan of a new plan on a done squad: running again, all_done_at cleared, the new unit queued", async () => {
+    const { s, root } = merged(), l = loop(s);
+    await l.tick(T);
+    expect(sq(s).all_done_at).toBe(T);
+    s.db.run("UPDATE squads SET status = 'done', doc = json_set(doc, '$.status', 'done') WHERE project = 'fx' AND topic = 'lc'");
+    writeFileSync(join(root, ".loop-migrated"), "");
+    const plan = join(root, "fx", "squads", "lc-more.md");
+    writeFileSync(plan, "U1 — More work — deps: none — Tier: standard\n");
+    const res = Bun.spawnSync([join(import.meta.dir, "..", "..", "bin", "role", "squad-state.sh"), join(root, "fx", "squads", "lc.json"), "register-plan", plan],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env, DS_STATE_ROOT: root, BACKEND: "true" } });
+    expect(res.exitCode, res.stderr.toString()).toBe(0);
+    expect(res.stderr.toString()).toContain("set back to running");
+    await l.tick(T + 5);
+    expect(sq(s).status).toBe("running");
+    expect(sq(s).all_done_at ?? null).toBeNull();
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "max_builders" }, { value: "3", observed_at: T });
+    const ln = readyLine(s, "fx", T + 5);
+    expect(ln.map((c) => c.topic)).toContain("lc");
+    expect(queue(s, "fx", T + 5, ln.map((c) => ({ squad: c.topic, suffix: c.slug }))).map((p) => p.squad)).toContain("lc");
   });
 
   test("an open PR, a dispatched unit, or a Lead quiet for less than DS_SWEEP_DONE_IDLE_MIN: no nudge", async () => {

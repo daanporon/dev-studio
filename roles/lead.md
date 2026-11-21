@@ -73,7 +73,7 @@ Orca brief says — you stay running between turns and report through `ds` and `
       can be dropped** — `bin/role/squad-state.sh <state> register-plan <report-path>`
       (one command for the whole plan: plan path, deps and tier land on every unit,
       and they show `○ planned` on the board) — **then the loop dispatches their
-      Builders** (a **feature** squad). If `register-plan` **refuses** (exit 1, naming
+      Builders** (a **feature** squad). On a squad set to `done`, `register-plan` (or `add-unit`) of open work sets it back to `running` by itself — never run `set-status running` by hand. If `register-plan` **refuses** (exit 1, naming
       the bad line), register nothing: send the plan back to the Thinker to fix that
       line, and never register its units by hand. A registered, ready unit flips to
       `dispatched` when the loop's Builder starts and ties itself to the worker.
