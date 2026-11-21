@@ -7,7 +7,7 @@
 //               its own. A key changed since the board showed it (a newer history row) is refused.
 //   settings-import {text|from, name?, picks: [{file, key, expect}]}  the board's Import dialog: applyImport (settings.ts)
 //               writes the picked rows as actor `board`; the result lists written, skipped (why) and stale
-//   roles   {role, reset: true} | {role, agent, model, spawn, effort, fallbacks, plan}
+//   roles   {role, reset: true} | {role, agent, model, spawn, effort, fallbacks, plan, return}
 // The row is written before the request is done, so a done request means the board's GET already
 // shows the change. No file is written: there is none to disagree about where roles.conf lives. A root
 // the config observer has not cut over yet is cut over first (settings-migrate.ts), so the edit lands
@@ -17,7 +17,7 @@ import { migrateSettings } from "../settings/settings-migrate.ts";
 import { applyImport, historyOf, reset, rm, set, SettingsError, type Change, type ImportPick, type ImportSource } from "../settings/settings.ts";
 import type { Store } from "../core/store.ts";
 
-type P = { file?: string; history?: number; key?: string; value?: string | null; role?: string; reset?: boolean; agent?: string; model?: string; spawn?: string; effort?: string; fallbacks?: string; plan?: string };
+type P = { file?: string; history?: number; key?: string; value?: string | null; role?: string; reset?: boolean; agent?: string; model?: string; spawn?: string; effort?: string; fallbacks?: string; plan?: string; return?: string };
 
 export const BOARD_ACTOR = "board";
 
@@ -45,7 +45,10 @@ function edit(kind: string, project: string, p: P): { ran: string; go: (s: Store
   if (p.reset) return { ran: `reset ${project} roles.conf ${role}`, go: (s) => reset(s, project, "roles.conf", role, BOARD_ACTOR) };
   if (!p.agent || !p.model || !p.spawn) return null;
   // An empty field is `-`, so a later one keeps its place; an absent plan keeps the row's own.
-  const value = [p.agent, p.model, p.spawn, p.effort || "-", p.fallbacks || "-", ...(p.plan === undefined ? [] : [p.plan || "-"])].join(" ");
+  // configurable-role-elevation U2: a present `return` (up, stay, "" = inherit) is column 8 and always
+  // writes the plan column too so it keeps its place; an absent one keeps the row's own.
+  const tail = p.return === undefined ? (p.plan === undefined ? [] : [p.plan || "-"]) : [p.plan || "-", p.return || "-"];
+  const value = [p.agent, p.model, p.spawn, p.effort || "-", p.fallbacks || "-", ...tail].join(" ");
   return { ran: `set ${project} roles.conf ${role} ${value}`, go: (s) => set(s, project, "roles.conf", role, value, BOARD_ACTOR) };
 }
 

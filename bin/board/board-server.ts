@@ -477,6 +477,7 @@ async function rolesPost(req: Request) {
   const pr = await readPost(req);
   if ("r" in pr) return pr.r;
   const { project, role, agent, model, effort, spawn, fallbacks, plan, reset } = pr.b;
+  const ret = pr.b.return;
   if (!NAME.test(project ?? "")) return json(400, { error: "need project" });
   const shown = rolesJson(project);
   if (!shown) return json(503, NO_DB);
@@ -500,7 +501,11 @@ async function rolesPost(req: Request) {
   if (typeof fb !== "string" || (fb !== "" && !FALLBACKS.test(fb))) return bad("fallbacks must be agent:model[:effort[:plan]][,agent:model[:effort[:plan]]...]");
   const chosenPlan = plan === undefined ? row.plan : plan === null || plan === "-" ? "" : plan;
   if (typeof chosenPlan !== "string" || (chosenPlan !== "" && !WORD.test(chosenPlan))) return bad("plan must be letters, digits, . _ - or empty for Any");
-  return write((s) => board(s, "roles", { role, agent, model, spawn, effort: eff, fallbacks: fb, plan: chosenPlan }, { project }));
+  // configurable-role-elevation U2: `return` is up, stay or "" (inherit); up never goes on an elevate or studio row.
+  if (ret !== undefined && ret !== null && ret !== "up" && ret !== "stay" && ret !== "") return bad("return must be up, stay or empty (inherit)");
+  if (ret === "up" && (spawn === "elevate" || role === "studio")) return bad(`'up' (move back up) can't go on '${role}': ${role === "studio" ? "studio_move moves the Studio" : "it is an elevate row, which never runs a terminal"}`);
+  const extra = ret === undefined || ret === null ? {} : { return: ret };
+  return write((s) => board(s, "roles", { role, agent, model, spawn, effort: eff, fallbacks: fb, plan: chosenPlan, ...extra }, { project }));
 }
 
 // skills (U230): a role's skill levels. {set: {<name>: level}} edits, {reset: true} drops the role's

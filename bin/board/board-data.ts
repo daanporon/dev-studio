@@ -12,6 +12,7 @@
 // documents rows (plans, closed squads), the config rows (limits, ship mode) and the requests rows.
 // It never runs a command and never reads a state file, so it renders with orca, gh and git off
 // PATH, and with the loop stopped it shows the last data behind a "loop down" banner.
+import { resolveBackUp, returnOf } from "../loop/settings/roster.ts";
 import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
 import { basename, join } from "node:path";
 import { isTestProject } from "../loop/settings/projects.ts";
@@ -2423,17 +2424,24 @@ export function limitsJson(project: string, root = stateRoot()) {
 // "project" for a row the project set, "default" for one it follows; and the model catalog the
 // pickers offer (models.conf, plus any agent:model a roster uses that it lacks, flagged custom).
 const ROLE_ORDER = ["studio", "lead", "thinker", "thinker-deep", "builder", "builder-standard", "builder-hard-babysit", "builder-standard-babysit", "builder-review", "builder-review-standard", "review-leaf", "reviewer", "tester", "researcher"];
+const backOf = (role: string, own: Map<string, string>, dflt: Map<string, string>) => {
+  const b = resolveBackUp(role, own, dflt);
+  return { back_up: b.back_up, back_up_from: b.from };
+};
 export function rolesJson(project: string, root = stateRoot()) {
   return withDb((db) => {
-    type Role = { agent: string; model: string; spawn: string; effort: string; fallbacks: string; plan: string };
+    type Role = { agent: string; model: string; spawn: string; effort: string; fallbacks: string; plan: string; return: string };
     const roster = (p: string) => new Map(db.all("SELECT key, value FROM config WHERE project = ? AND file = 'roles.conf' ORDER BY rowid", p).map((r) => {
       const [agent = "", model = "", spawn = "", effort = "-", fallbacks = "-", plan = "-"] = String(r.value ?? "").trim().split(/\s+/);
-      return [String(r.key), { agent, model, spawn, effort: effort === "-" ? "" : effort, fallbacks: fallbacks === "-" ? "" : fallbacks, plan: plan === "-" ? "" : plan } as Role];
+      const ret = returnOf(String(r.value ?? ""));
+      return [String(r.key), { agent, model, spawn, effort: effort === "-" ? "" : effort, fallbacks: fallbacks === "-" ? "" : fallbacks, plan: plan === "-" ? "" : plan, return: ret } as Role];
     }));
     // U267/U268: one roster rule. A project row overrides its role, the default row fills every other
     // role; each role is listed once, "project" when the project has a row of its own, else "default".
     const dflt = roster(""), own = roster(project), conf = new Map([...dflt, ...own]);
-    const roles = [...conf].map(([role, r]) => ({ role, ...r, source: own.has(role) ? "project" : "default", default: dflt.get(role) ?? null,
+    const val = (m: Map<string, Role>) => new Map([...m].map(([k, r]) => [k, [r.agent, r.model, r.spawn, "-", "-", "-", r.return || "-"].join(" ")]));
+    const ownV = val(own), dfltV = val(dflt);
+    const roles = [...conf].map(([role, r]) => ({ role, ...r, ...backOf(role, ownV, dfltV), default: dflt.get(role) ? { ...dflt.get(role)!, ...backOf(role, new Map(), dfltV) } : null, source: own.has(role) ? "project" : "default",
       changed: own.has(role) ? lastChange(db, project, "roles.conf", role) : null }));
     const rank = (n: string) => { const i = ROLE_ORDER.indexOf(n); return i < 0 ? ROLE_ORDER.length : i; };
     roles.sort((a, b) => rank(a.role) - rank(b.role) || (rank(a.role) === ROLE_ORDER.length ? a.role.localeCompare(b.role) : 0));

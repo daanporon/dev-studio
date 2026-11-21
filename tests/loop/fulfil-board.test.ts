@@ -143,6 +143,33 @@ describe("config", () => {
     expect(s.db.query("SELECT value FROM config WHERE project = ? AND file = 'roles.conf' AND key = 'builder'").get(RL)).toBeNull();
   });
 
+  test("configurable-role-elevation U2: a roles edit writes `return` as column 8, and rolesJson shows the resolved value", async () => {
+    const s = imported(), { tick } = rig(s);
+    for (const [k, v] of [["thinker", "claude opus always - - - up"], ["lead", "claude opus always"], ["builder", "claude opus ondemand - - - up"], ["builder-standard", "claude sonnet ondemand"], ["builder-review", "claude opus elevate"]])
+      s.db.run("INSERT OR IGNORE INTO config (project, file, key, value, observed_at) VALUES ('', 'roles.conf', ?, ?, 1)", [k, v]);
+    const row = (role: string) => rolesJson(RL, s.root)!.roles.find((x) => x.role === role)! as any;
+    const stored = (role: string) => String((s.db.query("SELECT value FROM config WHERE project = ? AND file = 'roles.conf' AND key = ?").get(RL, role) as Row | null)?.value);
+    expect(row("thinker")).toMatchObject({ back_up: true, back_up_from: "default" });
+    expect(row("lead")).toMatchObject({ back_up: false, return: "" });
+    expect(row("builder-standard")).toMatchObject({ back_up: true, back_up_from: "builder" });
+    expect(row("builder-review")).toMatchObject({ back_up: false });
+    const up = board(s, "roles", { role: "lead", agent: "claude", model: "opus", spawn: "always", effort: "", fallbacks: "", plan: "", return: "up" }, { project: RL });
+    await tick();
+    expect(result(s, up)).toMatchObject({ done: true, ok: true });
+    expect(stored("lead")).toBe("claude opus always - - - up");
+    expect(row("lead")).toMatchObject({ return: "up", back_up: true, back_up_from: "row" });
+    // an absent return keeps the row's own; "" writes `-` (inherit)
+    board(s, "roles", { role: "lead", agent: "claude", model: "sonnet", spawn: "always", effort: "", fallbacks: "" }, { project: RL });
+    await tick(T + 1);
+    expect(stored("lead")).toBe("claude sonnet always - - - up");
+    board(s, "roles", { role: "lead", agent: "claude", model: "sonnet", spawn: "always", effort: "", fallbacks: "", plan: "", return: "" }, { project: RL });
+    await tick(T + 2);
+    expect(row("lead")).toMatchObject({ return: "", back_up: false });
+    const bad = board(s, "roles", { role: "builder-review", agent: "claude", model: "opus", spawn: "elevate", effort: "", fallbacks: "", plan: "", return: "up" }, { project: RL });
+    await tick(T + 3);
+    expect(result(s, bad)).toMatchObject({ done: true, ok: false });
+  });
+
   test("a roles edit upserts a row the project's roster lacks (U85)", async () => {
     const s = imported(), { tick } = rig(s);
     rmSync(join(s.root, RL), { recursive: true, force: true });

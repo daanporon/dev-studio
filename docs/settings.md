@@ -105,7 +105,7 @@ Change it per project (the normal way):
   role's row for the project; every role the project has no row for runs the default
   row (U267); `reset <project> <role>` (or `rm`) drops the project's row, so the role
   follows the default again.
-- Web board: ⚙ Settings → **Roles** tab (the same row, via `POST /api/roles`).
+- Web board: ⚙ Settings → **Roles** tab (the same row, via `POST /api/roles`). An `always`/`ondemand` row has a **Move back up when there is room** checkbox (column 8: ticked writes `up`, unticked `stay`, "use inherited" writes `-`; absent on `elevate` rows and `studio`, and `up` on those is a 400).
   A change applies to the next spawn, not to running roles.
 
 ## Limits: thresholds the board and loop use
