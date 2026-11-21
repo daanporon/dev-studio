@@ -99,7 +99,7 @@ test("every refusal in the contract says why and files nothing", async () => {
     ["long slug", { ...ok, slug: "a".repeat(65) }, 400, "topic slug may only use"],
     ["bad type", { ...ok, type: "other" }, 400, "type must be one of feature, testing"],
     ["bad autonomy", { ...ok, autonomy: "yolo" }, 400, "autonomy must be one of checkpoints, lfg"],
-    ["bad start", { ...ok, start: "later" }, 400, "start must be one of plan, brainstorm, ask, investigate, auto"],
+    ["bad start", { ...ok, start: "later" }, 400, "start must be one of plan, brainstorm, ask, investigate, fix, auto"],
     ["start with testing", { ...ok, type: "testing", start: "plan" }, 400, "a testing squad has no start"],
     ["unknown project", { ...ok, project: "nope" }, 409, "no project nope on this board"],
   ];
@@ -111,6 +111,7 @@ test("every refusal in the contract says why and files nothing", async () => {
   expect((f.store.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'").get() as Row).n).toBe(0);
   // auto and testing without start are fine
   expect((await f.post({ ...ok, start: "auto" })).status).toBe(202);
+  expect((await f.post({ ...ok, start: "fix" })).status).toBe(202);
   expect((await f.post({ ...ok, type: "testing", start: "auto" })).status).toBe(202);
 });
 

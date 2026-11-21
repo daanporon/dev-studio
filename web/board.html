@@ -2354,7 +2354,7 @@ function StartSquad({ project, projects, toast, onClose }) {
           <label>Project<br/>${labels.length > 1 ? html`<select class="start-project" value=${proj} onChange=${(e) => setProj(e.target.value)}>${labels.map((l) => html`<option key=${l} value=${l}>${l}</option>`)}</select>` : html`<span class="mono">${proj}</span>`}</label>
           <label>Type<br/><select class="start-type" value=${type} onChange=${(e) => { setType(e.target.value); if (e.target.value === "testing") setStart("auto"); }}><option value="feature">feature</option><option value="testing">testing</option></select></label>
           <label>Autonomy<br/><select class="start-autonomy" value=${autonomy} onChange=${(e) => setAutonomy(e.target.value)}><option value="checkpoints">checkpoints</option><option value="lfg">lfg</option></select></label>
-          <label>Start<br/><select class="start-start" value=${start} disabled=${type === "testing"} onChange=${(e) => setStart(e.target.value)}>${["auto", "plan", "brainstorm", "ask", "investigate"].map((v) => html`<option key=${v} value=${v}>${v}</option>`)}</select></label>
+          <label>Start<br/><select class="start-start" value=${start} disabled=${type === "testing"} onChange=${(e) => setStart(e.target.value)}>${["auto", "plan", "brainstorm", "ask", "investigate", "fix"].map((v) => html`<option key=${v} value=${v}>${v}</option>`)}</select></label>
         </div>
         ${discard && html`<div class="start-discard bad" style=${{ marginTop: "10px" }}>Discard this brief? <button class="btn sm start-discard-yes" onClick=${onClose}>Discard</button> <button class="btn sm" onClick=${() => setDiscard(false)}>Keep editing</button></div>`}
       </div>

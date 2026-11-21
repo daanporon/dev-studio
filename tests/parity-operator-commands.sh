@@ -51,7 +51,7 @@ fresh_state() {
 }
 export DS_STATE_ROOT="$TMP/state" DS_SPAWN="$TMP/DS_SPAWN"
 pass=0; fail=0
-norm() { sed -E "s# \[--start plan\|brainstorm\|ask\|investigate\]##; s#$TMP/(old|new)#<tree>#g; s#$TMP/realds#<tree>/bin/ds#g; s#$TMP/state#<state>#g; s#[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z#<ts>#g"; }
+norm() { sed -E "s# \[--start plan\|brainstorm\|ask\|investigate\|fix\]##; s#$TMP/(old|new)#<tree>#g; s#$TMP/realds#<tree>/bin/ds#g; s#$TMP/state#<state>#g; s#[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z#<ts>#g"; }
 same() { # <name> <script path relative to a tree> [args…]
   local name="$1" rel="$2"; shift 2
   local res=() t

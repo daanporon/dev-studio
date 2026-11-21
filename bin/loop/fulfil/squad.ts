@@ -62,7 +62,7 @@ function alwaysRoles(store: Store, project: string, type: string): string[] | nu
   return out;
 }
 
-export const STARTS = ["plan", "brainstorm", "ask", "investigate"];
+export const STARTS = ["plan", "brainstorm", "ask", "investigate", "fix"];
 
 // A feature squad's Thinker first start prompt adds the framing and, when the Studio named one, the start (U2).
 export function thinkerExtra(r: Row): string {
