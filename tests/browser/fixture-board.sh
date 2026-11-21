@@ -8,6 +8,13 @@ BASH_ARGV0="$ROOT/tests/fixture-board.sh"   # board-setup.sh finds ROOT from $0 
 . "$ROOT/tests/lib/state-root.sh"
 # shellcheck source=tests/lib/board-setup.sh
 . "$ROOT/tests/lib/board-setup.sh"
+# Events for the event-log view: the seed is JSON, so add a few rows (one long sentence) before the db is made.
+python3 - "$SEED" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["events"] = [{"ago": 60 * i, "squad": "manual-testing", "kind": k} for i, k in enumerate(["unit_dispatched", "pr_opened", "merge_waiting_on_a_long_named_reconciler_check", "member_started"])]
+json.dump(d, open(sys.argv[1], "w"))
+PY
 mkdb "$LBL"
 DS_STATE_ROOT="$DBR" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$1" &
 pid=$!

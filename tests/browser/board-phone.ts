@@ -59,17 +59,27 @@ const MEASURE = `(() => {
   const foot = box && [...box.children].filter((c) => /qfoot|mhd/.test(c.className)).pop();
   const prim = box && [...box.querySelectorAll(".qfoot .btn.pri, .mhd .btn.pri")].filter(vis).pop();
   const fonts = inputs.map((e) => Math.round(parseFloat(getComputedStyle(e).fontSize)));
-  return { vw, vh, popup: r(box), docW: document.documentElement.scrollWidth, boxScrollW: box ? box.scrollWidth : null, inputs: inputs.length, small, fonts, btns: btns.length, tiny,
+  const bv = (sel) => [...document.querySelectorAll(sel)].filter(vis);
+  const flowLefts = bv(".flow-col").map((e) => Math.round(e.getBoundingClientRect().left));
+  const units = bv(".units .u:not(.head)").map((e) => { const n = e.querySelector(".un .unit-open") || e.querySelector(".un"), d = e.querySelector(".dot"), t = e.querySelector(".tier"); return { nameW: Math.round(n.getBoundingClientRect().width), clipped: n.scrollWidth > n.clientWidth + 1, h: Math.round(e.getBoundingClientRect().height), dotY: Math.round(d.getBoundingClientRect().top), tierY: t ? Math.round(t.getBoundingClientRect().top) : null }; });
+  const evs = bv(".ev").slice(0, 8).map((e) => { const s = e.querySelector(".s"); return { timeY: Math.round(e.children[0].getBoundingClientRect().top), textY: s ? Math.round(s.getBoundingClientRect().top) : null, textW: s ? Math.round(s.getBoundingClientRect().width) : null }; });
+  const menu = r(bv(".amenu")[0]), menuTiny = bv(".amenu .btn").filter((e) => e.getBoundingClientRect().height < 44).length;
+  const tinyList = btns.filter((e) => { const b = e.getBoundingClientRect(); return b.width < 44 || b.height < 44; }).slice(0, 12).map((e) => e.className.slice(0, 22) + "|" + e.textContent.trim().slice(0, 14) + "|" + Math.round(e.getBoundingClientRect().width) + "x" + Math.round(e.getBoundingClientRect().height));
+  return { tinyList, flowLefts, units, evs, menu, menuTiny, vw, vh, popup: r(box), docW: document.documentElement.scrollWidth, boxScrollW: box ? box.scrollWidth : null, inputs: inputs.length, small, fonts, btns: btns.length, tiny,
     close: r(close), primary: r(prim), foot: r(foot), out };
 })()`;
 
 type Open = (p: any) => Promise<boolean>;
 const click = async (p: any, sel: string, text?: RegExp) => { const l = text ? p.locator(sel).filter({ hasText: text }).first() : p.locator(sel).first(); if (!(await l.count())) return false; await l.click(); await p.waitForTimeout(500); return true; };
-const VIEWS: { name: string; strict: boolean; open: Open }[] = [
-  { name: "page", strict: false, open: async () => true },
+const VIEWS: { name: string; strict: boolean; kind?: string; open: Open }[] = [
   { name: "question", strict: true, open: (p) => click(p, ".qrow, .qnote") },
   { name: "chat", strict: true, open: async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) },
   { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
+  { name: "page", strict: true, kind: "page", open: async () => true },
+  { name: "squad", strict: true, kind: "page", open: (p) => click(p, ".row.squad") },
+  { name: "flow", strict: true, kind: "page", open: async (p) => { await p.locator("#flow").scrollIntoViewIfNeeded(); await p.waitForTimeout(300); return (await p.locator(".flow-col").count()) > 1; } },
+  { name: "evlog", strict: true, kind: "page", open: async (p) => { const d = p.locator("details#events"); if (!(await d.count())) return false; await d.locator("summary").first().click(); await p.waitForTimeout(800); return (await p.locator(".ev").count()) > 0; } },
+  { name: "menu", strict: true, kind: "page", open: (p) => click(p, ".row.squad .acts-btn") },
   { name: "settings", strict: true, open: async (p) => { await p.evaluate(() => { location.hash = "#settings"; }); await p.waitForTimeout(800); return (await p.locator("#settings").count()) > 0; } },
 ];
 
@@ -93,7 +103,18 @@ for (const size of SIZES) for (const v of VIEWS) {
   const key = `${size.w}/${v.name}`; const { opened, m } = await shoot(size, v.name, false);
   report[key] = { opened, m };
   if (!opened) { if (v.strict) breaks.push(`${key}: did not open`); continue; }
-  if (size.phone && v.name !== "page" && m) {
+  if (size.phone && v.kind === "page" && m) {
+    const need = (ok: boolean, why: string) => { if (!ok) breaks.push(`${key}: ${why}`); };
+    need(m.docW <= m.vw, `page scrolls sideways (scrollWidth ${m.docW} > ${m.vw})`);
+    need(m.out.length === 0, `sticks out past the right edge: ${m.out}`);
+    need(m.tiny === 0, `${m.tiny} of ${m.btns} buttons under 44 px: ${m.tinyList.join(" ; ")}`);
+    need(m.small === 0, `${m.small} input(s) under 16 px (${m.fonts})`);
+    if (v.name === "flow") need(m.flowLefts.length > 1 && new Set(m.flowLefts).size === 1, `Flow stages not stacked: left edges ${m.flowLefts}`);
+    if (v.name === "squad") { need(m.units.length > 0, "no unit rows"); for (const u of m.units) { need(u.nameW >= 44 && !u.clipped, `unit name clipped/narrow ${JSON.stringify(u)}`); need(u.tierY === null || u.tierY > u.dotY, `unit row not two lines ${JSON.stringify(u)}`); } }
+    if (v.name === "evlog") for (const e of m.evs) need(e.textY === null || e.textY > e.timeY, `event text not under time ${JSON.stringify(e)}`);
+    if (v.name === "menu") { need(!!m.menu && m.menu.x >= 0 && m.menu.x + m.menu.w <= m.vw && m.menu.y >= 0 && m.menu.y + m.menu.h <= m.vh, `menu ${JSON.stringify(m.menu)} not inside the screen`); need(m.menuTiny === 0, `${m.menuTiny} menu items under 44 px`); }
+  }
+  if (size.phone && v.kind !== "page" && m) {
     const need = (ok: boolean, why: string) => { if (!ok && v.strict) breaks.push(`${key}: ${why}`); };
     const pp = m.popup;
     need(!!pp && pp.x === 0 && pp.y === 0 && pp.w === m.vw && Math.abs(pp.h - m.vh) <= 1, `popup box ${JSON.stringify(pp)} is not the ${m.vw}x${m.vh} viewport`);
@@ -106,7 +127,7 @@ for (const size of SIZES) for (const v of VIEWS) {
   }
   if (!size.phone) {
     const b = await shoot(size, v.name, true); report[`${key}@base`] = b;
-    const pick = (x: any) => x.m && { popup: x.m.popup, fonts: x.m.fonts, btns: x.m.btns, close: x.m.close && { w: x.m.close.w, h: x.m.close.h }, foot: x.m.foot && { h: x.m.foot.h }, docW: x.m.docW };
+    const pick = (x: any) => x.m && { popup: x.m.popup, fonts: x.m.fonts, btns: x.m.btns, flowLefts: x.m.flowLefts, units: x.m.units, evs: x.m.evs, menu: x.m.menu, close: x.m.close && { w: x.m.close.w, h: x.m.close.h }, foot: x.m.foot && { h: x.m.foot.h }, docW: x.m.docW };
     const a = JSON.stringify(pick({ m })), c = JSON.stringify(pick(b));
     if (a !== c) breaks.push(`${key}: desktop differs from ${BASE}\n    now  ${a}\n    base ${c}`);
   }
