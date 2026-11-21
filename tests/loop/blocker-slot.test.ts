@@ -112,7 +112,7 @@ test("six live Builders, two wait on a fix: both pause, the fix starts on a free
   expect(slotted(f.store, "p", T)).toEqual(new Set(["one\0u110"]));
 });
 
-test("U6 placeOf: urgent, then blocking, then focus (squad-priority U1), then dispatched, then the lower units.id", () => {
+test("U6 placeOf: urgent, then blocking, then focus (squad-priority U1), then dispatched, then unlocks (picker-prefers-unblocking-units U1), then the lower units.id", () => {
   const f = setup(9);
   f.unit("plain-old", "planned"); f.unit("plain-new", "planned");
   f.unit("blocker", "planned"); f.unit("child", "dispatched", { deps: ["blocker"] });
@@ -121,7 +121,8 @@ test("U6 placeOf: urgent, then blocking, then focus (squad-priority U1), then di
   const cmp = (a: number[], b: number[]) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; };
   const order = ["plain-new", "plain-old", "blocker", "urgent", "child"].sort((x, y) => cmp(at(x), at(y)));
   expect(order).toEqual(["urgent", "blocker", "child", "plain-old", "plain-new"]);
-  expect(at("plain-old")[4]).toBeLessThan(at("plain-new")[4]);
-  expect(placeOf(f.store, "p", null)).toEqual([1, 1, 1, 1, Number.MAX_SAFE_INTEGER]);
+  expect(at("plain-old")[5]).toBeLessThan(at("plain-new")[5]);
+  expect(placeOf(f.store, "p", null)).toEqual([1, 1, 1, 1, 0, Number.MAX_SAFE_INTEGER]);
   expect(placeOf(f.store, "p", null, true)[2]).toBe(0);
+  expect(placeOf(f.store, "p", null, false, 3)[4]).toBe(-3);
 });

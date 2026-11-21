@@ -135,6 +135,7 @@ export function limitValueProblem(key: string, val: string): string {
   if (key === "auto_merge" && !["off", "squash", "merge", "rebase"].includes(val)) return `${key} must be off, squash, merge or rebase (got '${val}')`;
   if (key === "base_update" && !["merge", "rebase"].includes(val)) return `${key} must be merge or rebase (got '${val}')`;
   if (key === "builder_host_brake" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
+  if (key === "unblock_first" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
   switch (key) {
     case "review_block_severity": case "review_block_severity_risky":
       if (!["P0", "P1", "P2", "P3"].includes(val)) return `${key} must be P0, P1, P2 or P3 (got '${val}')`;

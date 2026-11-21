@@ -165,7 +165,7 @@ const ACTIONS: Record<string, { topic: boolean; cmd: (p: string, t: string, role
 };
 
 // The start dialog's fields (contract of board-start-squad-box U1). An error string, or the clean fields.
-const START_ENUMS = { type: ["feature", "testing"], autonomy: ["checkpoints", "lfg"], start: ["plan", "brainstorm", "ask", "investigate", "auto"] } as const;
+const START_ENUMS = { type: ["feature", "testing"], autonomy: ["checkpoints", "lfg"], start: ["plan", "brainstorm", "ask", "investigate", "fix", "auto"] } as const;
 function startFields(b: any): { error: string } | { framing: string; slug?: string; type?: string; autonomy?: string; start?: string } {
   if (typeof b.text !== "string") return { error: "say what the squad should do: the text is empty" };
   // CRLF and a lone CR become LF; nothing else changes.

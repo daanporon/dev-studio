@@ -21,6 +21,7 @@ function allowedFor(key: string): string[] | null {
   if (key === "studio_move") return ["auto", "ask", "off"];
   if (key === "auto_merge") return ["off", "squash", "merge", "rebase"];
   if (key === "builder_host_brake") return ["off", "on"];
+  if (key === "unblock_first") return ["on", "off"];
   if (key === "base_update") return ["merge", "rebase"];
   return null;
 }

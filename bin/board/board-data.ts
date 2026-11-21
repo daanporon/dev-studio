@@ -35,7 +35,7 @@ import { canonPath } from "../loop/squad/plan-approved.ts";
 import { unitWishes } from "../loop/squad/queued-builder.ts";
 import { now as clockNow, openReadOnly, pendingWishes, stateRoot, type Pending, type Row, type Store } from "../loop/core/store.ts";
 import { effective, memberKey, paused, projection } from "../loop/pause/pause.ts";
-import { laneNow, placeOf, queue, seatable, seats } from "../loop/capacity/slot.ts";
+import { laneNow, placeOf, queue, seatable, seats, unblockFirst, unlocksOf, type Unlocks } from "../loop/capacity/slot.ts";
 import { brakeView } from "../loop/capacity/pick.ts";
 import { focusSquad, focusValue, NO_FOCUS } from "../loop/squad/focus.ts";
 import { flowLine, flowOf, type FlowEvent, type FlowPick, type FlowReview, type FlowUnit } from "./flow.ts";
@@ -56,19 +56,24 @@ const NOW = () => clockNow();
 // The ready units that hold the focus key now (squad-priority U1), as `<squad>\0<slug>`: the loop's own
 // line (ready.ts readyLine, slot.ts queue), read once per project per buildBoard. Empty with no limit or no
 // focus, or on a loop.db an older loop has not migrated.
-// `held`: the focus squad's queued units whose key is off now (the squad holds its share).
-type FocusLine = { on: Set<string>; held: Set<string>; squad: string | null };
+// `held`: the focus squad's queued units whose key is off now (the squad holds its share). `rank`: each line entry's
+// place (slot.ts lineOrder, without the member id), so the Flow orders the queue as the loop does; `count`: the open
+// dependents of any unit, for a planned unit not in the line (picker-prefers-unblocking-units U1).
+type FocusLine = { on: Set<string>; held: Set<string>; squad: string | null; rank: Map<string, number[]>; count: Unlocks; unblock: boolean };
 const focusMemo = new Map<string, FocusLine>();
 function focusLine(store: Store, label: string): FocusLine {
   let got = focusMemo.get(label);
   if (got) return got;
-  got = { on: new Set(), held: new Set(), squad: null };
+  got = { on: new Set(), held: new Set(), squad: null, rank: new Map(), count: () => 0, unblock: false };
   try {
     const now = NOW();
     const fs = focusSquad(store, label);
     got.squad = fs ?? null;
+    got.count = unlocksOf(store, label);
+    got.unblock = unblockFirst(store, label);
     for (const p of queue(store, label, now, readyLine(store, label, now).map((c) => ({ squad: c.topic, suffix: c.slug })))) {
       const k = `${p.squad}\0${p.suffix}`;
+      if (!got.rank.has(k)) got.rank.set(k, p.rank.slice(0, 6));
       if (p.focus) got.on.add(k); else if (fs && p.squad === fs) got.held.add(k);
     }
   } catch { /* an older loop.db: no focus marks */ }
@@ -82,7 +87,12 @@ const focusMark = (store: Store, label: string, squad: string, slug: string): "o
   const f = focusLine(store, label), k = `${squad}\0${slug}`;
   return f.on.has(k) ? "on" : f.held.has(k) ? "held" : f.squad && f.squad === squad ? "muted" : null;
 };
-const focusedUnits = (store: Store, label: string): Set<string> => focusLine(store, label).on;
+// A planned unit's Flow place: its rank in the loop's line, else (not in it: its deps are not done yet) placeOf with
+// its focus key and, under `unblock_first`, its open dependents, so it keeps its place in its group.
+const placeIn = (store: Store, label: string, squad: string, slug: string): number[] => {
+  const f = focusLine(store, label), k = `${squad}\0${slug}`, u = store.get("units", { project: label, squad, slug });
+  return f.rank.get(k) ?? placeOf(store, label, u, f.on.has(k), f.unblock ? f.count(u) : 0);
+};
 
 // The shell's '…' quoting, for commands the operator copies (an agent-written id/topic can't inject).
 const shq = (v: unknown) => (typeof v === "string" ? `'${v.replace(/'/g, `'\\''`)}'` : String(v));
@@ -1648,7 +1658,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
           question: ask ? { id: ask.id == null ? null : String(ask.id), since: Number.isFinite(askAt) ? Math.floor(askAt / 1000) : null } : null,
           pr: pr ? { ref: repo ? `${repo}#${pr.num}` : null, num: pr.num, url: pr.url, status: pr.status ?? null,
             updated_at: (obByNum.get(pr.num)?.updated_at as number | null | undefined) ?? null } : null,
-          place: us === "planned" ? placeOf(db.s, label, db.s.get("units", { project: label, squad: topic, slug }), focusedUnits(db.s, label).has(`${topic}\0${slug}`)) : null,
+          place: us === "planned" ? placeIn(db.s, label, topic, slug) : null,
           urgent: x?.urgent === true, focus: us === "cancelled" ? null : focusMark(db.s, label, topic, slug),
           ...unitLane(db, label, x, unitCpuFor(db, label).get(`${topic}/${slug}`)),
           verdict: h?.verdict ?? null, reasons,
@@ -2350,7 +2360,7 @@ function withDb<T>(fn: (db: Db) => T, root = stateRoot()): T | null {
 export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] }[] = [
   { name: "Context & compaction", keys: ["studio_move"], prefixes: ["context_", "compact_", "auto_compact_"] },
   { name: "Accounts & model picking", keys: ["limit_pct", "limit_wait_max", "credits_hold_h", "fallback_return_min"], prefixes: ["pick_"] },
-  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "builder_host_brake", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "msg_chase_min", "msg_reply_alert_min", "notes_cap"] },
+  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "msg_chase_min", "msg_reply_alert_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
   { name: "Board & machine", keys: ["board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },

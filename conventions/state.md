@@ -89,6 +89,13 @@ Carries only the gaps Orca leaves:
   of one seat ignores it. Only a live feature squad can be the focus; a suspended one keeps the key
   without effect, a closed, done or gone one has it cleared by the loop. Each change logs one
   `focus_set` event (`from`, `to`, `by`).
+- **Unlocks first** (picker-prefers-unblocking-units U1) is not a state field either: the limits key
+  `unblock_first` (default `on`). After urgent, blocks-started, focus and resumed work, a queued unit
+  with more open dependents (the `planned` or `dispatched` units that wait on it through `deps` and
+  `ext_deps`, each once, not held or superseded, in a live squad) takes the next free seat before an
+  older one. Inside the focus squad's room it always counts; outside it only while the lane has
+  unlock room (its seats − 1 − its live seats whose unit has open dependents), so the last seat of
+  each lane still goes oldest first. `off` gives the oldest-first order back.
 
 - `units[].wait_on` — a started unit that waits on another unit: `squad-state.sh <file> wait-on
   <slug> <dep-slug> [--ext-dep <squad>/<slug>] --why "<text>"` adds the dep to `deps` (or

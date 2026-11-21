@@ -10,7 +10,7 @@ import { accountOwner, canon, exists, isDir, isFile, isLink } from "./install";
 /** The skills the roles invoke (roles/*.md). ONE list: the check reads it, and tests/install-ce-accounts.sh
  *  greps roles/*.md so a new role skill can't be added without the check learning it. */
 export const ROLE_CE_SKILLS = ["ce-code-review", "ce-work", "ce-plan", "ce-brainstorm", "ce-babysit-pr", "ce-commit-push-pr",
-  "ce-compound", "ce-doc-review", "ce-debug", "ce-pov", "ce-resolve-pr-feedback", "ce-simplify-code", "ce-test-browser", "lfg"];
+  "ce-compound", "ce-doc-review", "ce-debug", "ce-explain", "ce-pov", "ce-resolve-pr-feedback", "ce-simplify-code", "ce-test-browser", "lfg"];
 /** User skills under <config dir>/skills: missing = broken. */
 export const ROLE_USER_SKILLS = ["no-mistakes"];
 /** Missing only warns. */

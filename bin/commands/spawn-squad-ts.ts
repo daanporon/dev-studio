@@ -7,7 +7,7 @@ import { readRoster } from "../loop/settings/settings";
 
 export const help = `--repo <selector> --topic <slug> [--type t] [--autonomy a] [--host h] [--framing f | --framing-file path] [--start s] — write a squad's running wish (spawn-squad.sh)`;
 
-const USAGE = "usage: spawn-squad.sh --repo <selector> --topic <slug> [--type feature|testing] [--autonomy checkpoints|lfg] [--host <saved-env>] [--framing <text>] [--start plan|brainstorm|ask|investigate]\n";
+const USAGE = "usage: spawn-squad.sh --repo <selector> --topic <slug> [--type feature|testing] [--autonomy checkpoints|lfg] [--host <saved-env>] [--framing <text>] [--start plan|brainstorm|ask|investigate|fix]\n";
 
 export async function run(raw: string[]): Promise<number> {
   const la = dsLoopArgs("spawn-squad.sh", raw);
@@ -29,7 +29,7 @@ export async function run(raw: string[]): Promise<number> {
     if (framing === "") { writeErr(`spawn-squad: --framing-file ${framingFile} is empty\n`); return 2; }
   }
   if (type !== "feature" && type !== "testing") { writeErr("spawn-squad: --type must be feature|testing\n"); return 2; }
-  if (start !== "" && !["plan", "brainstorm", "ask", "investigate"].includes(start)) { writeErr(USAGE); return 2; }
+  if (start !== "" && !["plan", "brainstorm", "ask", "investigate", "fix"].includes(start)) { writeErr(USAGE); return 2; }
   if (autonomy !== "checkpoints" && autonomy !== "lfg") { writeErr("spawn-squad: --autonomy must be checkpoints|lfg\n"); return 2; }
   if (topic.startsWith(".") || /[^A-Za-z0-9._-]/.test(topic)) { writeErr("spawn-squad: --topic must be [A-Za-z0-9._-] and not start with '.'\n"); return 2; }
 

@@ -21,8 +21,8 @@ Spawn a squad for it, deriving what the operator didn't spell out:
      Several -> ask which. None -> tell the operator to `/ds-up <git-url>` first and stop.
    - Honor intent in the wording: "testing"/"run the env" -> `--type testing`;
      "fire and forget"/"lfg" -> `--autonomy lfg`.
-   - `--start plan|brainstorm|ask|investigate` (optional, feature squads): cues "investigate", "why does",
-     "what is" -> `investigate`; "think about", "brainstorm", "how can we improve", "what makes sense" ->
+   - `--start plan|brainstorm|ask|investigate|fix` (optional, feature squads): the operator's own `--start` or Start-dialog pick wins over cues. Cues by meaning: something broken the operator wants gone -> `fix`; "investigate", "why does",
+     "what is", to understand -> `investigate`; "think about", "brainstorm", "how can we improve", "what makes sense" ->
      `brainstorm`; "small fix", a ticket or note with the decisions made -> `plan`. Unsure -> leave `--start` off
      (the Thinker's Start triage in `roles/thinker.md` picks).
 3. **Show the derived slug, repo, and framing**, then run

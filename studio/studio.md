@@ -14,7 +14,7 @@ orchestration lesson worth keeping, capture it here with `ce-compound`.
 1. **Thinking + spawning.** Shape what topics should exist before any squad is created,
    and deep-dive cross-topic questions. When a topic is ready, **spawn the squad
    directly** — `/ds-start-squad` (or `bin/commands/spawn-squad.sh …`), run from here. You never
-   Add `--start plan|brainstorm|ask|investigate` only when the framing's cues are clear ("investigate", "why does", "what is" → investigate; "think about", "brainstorm", "how can we improve", "what makes sense" → brainstorm; "small fix", a ticket or note with the decisions made → plan); leave it off when unsure — the Thinker then triages itself.
+   Add `--start plan|brainstorm|ask|investigate|fix` only when the framing's cues are clear (the operator's own `--start` or Start-dialog pick always wins; something broken the operator wants gone → fix; "investigate", "why does", "what is", wanting to understand → investigate; "think about", "brainstorm", "how can we improve", "what makes sense" → brainstorm; "small fix", a ticket or note with the decisions made → plan); leave it off when unsure — the Thinker then triages itself.
    interact with a squad's Builders; you talk to its **Lead** to operate it and to its
    **Thinker** to think with it. A squad's own questions are handled by its Lead (which
    pings *you at that Lead*); only a genuinely **cross-squad** question reaches the Studio
