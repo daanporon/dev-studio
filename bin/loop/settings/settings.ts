@@ -21,6 +21,7 @@ import { confRows, confText } from "../db/import-config.ts";
 import { limitEnv } from "./limits.ts";
 import { FOCUS_KEY, focusProblem, NO_FOCUS } from "../squad/focus.ts";
 import { levelOf, PROJECT_PATTERN, ROLES, shippedRules, skillRuleProblem } from "./skills.ts";
+import { RETURNS } from "./roster.ts";
 import { dbPath, now as clock, openReadOnly, ROOT, stateRoot, type Store } from "../core/store.ts";
 
 export const SETTINGS_FILES = ["limits.conf", "roles.conf", "models.conf", "ship-mode"] as const;
@@ -109,14 +110,15 @@ function inCatalog(cat: Set<string>, agent: string, model: string): boolean {
   return cat.has(`${agent}|${model}`) || cat.has(`${agent}|${model.replace(/-[0-9]+(\.[0-9]+)?$/, "")}`);
 }
 
-// A roster value `agent model [spawn] [effort] [fallbacks] [plan]` checked and filled as roles.sh set
-// does: an omitted spawn is the current row's, the default's, else always; omitted fallbacks are the
-// current row's (else the default's) and an omitted plan the current row's, `-` clearing either.
+// A roster value `agent model [spawn] [effort] [fallbacks] [plan] [return]` checked and filled as roles.sh
+// set does: an omitted spawn is the current row's, the default's, else always; omitted fallbacks are the
+// current row's (else the default's) and an omitted plan or return the current row's, `-` clearing either.
 // Normalized to single spaces with `-` for an empty field before a later one.
 function rosterValue(store: Store, project: string, role: string, value: string, o: Opts, exact = false): string {
   const def = shipped("roles.conf", o).get(role)?.value, cur = rowOf(store, project, "roles.conf", role)?.value ?? undefined;
   if (def === undefined && cur === undefined) fail(`unknown role '${role}' (not in the default roster or ${project}'s)`);
-  const [agent = "", model = "", spawn0 = "", effort0 = "", fb0 = "", plan0 = ""] = value.trim().split(/\s+/);
+  const [agent = "", model = "", spawn0 = "", effort0 = "", fb0 = "", plan0 = "", ret0 = "", ...extra] = value.trim().split(/\s+/);
+  if (extra.length) fail(`a roster row has at most 8 columns: name agent model spawn effort fallbacks plan return (got '${value}')`);
   if (!NAME.test(agent) || !NAME.test(model)) fail(`a roster row needs an agent and a model (got '${value}')`);
   if (!inCatalog(catalog(store, project, o), agent, model)) fail(`unknown model '${agent}:${model}' (not in the model catalog)`);
   const spawn = spawn0 || cur?.split(/\s+/)[2] || def?.split(/\s+/)[2] || "always";
@@ -126,7 +128,14 @@ function rosterValue(store: Store, project: string, role: string, value: string,
   if (effort && !NAME.test(effort)) fail(`bad effort '${effort}'`);
   if (fb && !new RegExp(`^${FALLBACK}(,${FALLBACK})*$`).test(fb)) fail(`fallbacks must be agent:model[:effort[:plan]][,agent:model[:effort[:plan]]...] (got '${fb}')`);
   if (plan && !NAME.test(plan)) fail(`bad plan '${plan}'`);
-  const fields = [agent, model, spawn, effort, fb, plan];
+  // configurable-role-elevation U1: column 8 (`return`, roster.ts resolveBackUp): an omitted one keeps
+  // the current row's, `-` clears it (inherit). `up` never goes on an elevate row (it runs no
+  // terminal) or on studio (studio_move moves it).
+  const ret = dash(ret0 || (exact ? "" : field(cur, 6)));
+  if (ret && !(RETURNS as readonly string[]).includes(ret)) fail(`return (column 8) must be up, stay or - (got '${ret}' on row '${role}')`);
+  if (ret === "up" && spawn === "elevate") fail(`'up' (move back up) can't go on '${role}': it is an elevate row, which never runs a terminal`);
+  if (ret === "up" && role === "studio") fail(`'up' (move back up) can't go on 'studio': studio_move moves the Studio`);
+  const fields = [agent, model, spawn, effort, fb, plan, ret];
   while (fields.length > 3 && fields[fields.length - 1] === "") fields.pop();
   return fields.map((f) => f || "-").join(" ");
 }
