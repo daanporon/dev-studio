@@ -538,6 +538,32 @@ function main(argv: string[]): void {
   const need = (n: number) => { if (a.length < n) usage(); };
   const b = backend(file, cmd, a);
   const set = <T,>(fn: (doc: Doc) => T): T => b.update(fn);
+  // A done squad that gets open work is running again in the same write, so the loop seats its Builders
+  // (slot.ts leaves out every done squad). Only status `done` moves; a close in flight (squads.want = 'gone')
+  // keeps it done. A held unit alone does not reopen it (settle()'s planned/dispatched lists).
+  type Reopen = { kind: "none" } | { kind: "closing" } | { kind: "reopened"; n: number };
+  const reopenDone = (d: Doc): Reopen => {
+    if (raw(alt(d.status, "")) !== "done") return { kind: "none" };
+    const f = settle({ type: d.type, units: arr(d.units), members: [] });
+    const n = f.planned.length + f.dispatched.length;
+    if (!n) return { kind: "none" };
+    if (b instanceof StoreBackend) {
+      const w = b.store.db.query("SELECT want FROM squads WHERE project = ? AND topic = ?").get(b.project, b.topic) as { want?: string | null } | null;
+      if (w?.want === "gone") return { kind: "closing" };
+    }
+    d.status = "running";
+    return { kind: "reopened", n };
+  };
+  const reopenNote = (r: Reopen): void => {
+    if (r.kind === "closing") return warn("squad-state: note: squad is closing; left done");
+    if (r.kind !== "reopened") return;
+    warn(`squad-state: note: squad was done; set back to running for ${r.n} open unit(s)`);
+    const sd = dirname(file);
+    if (basename(sd) !== "squads") return;
+    const j = spawnSync(join(dirname(dirname(import.meta.dir)), "role", "journal.sh"), [basename(dirname(sd)), basename(file, ".json"), "lead", "add", "decision",
+      "squad set back to running", "register-plan/add-unit added open work to a done squad"], { stdio: "ignore" });
+    if (j.status !== 0) warn("squad-state: warning: journal note failed (continuing)");
+  };
   const units = (doc: Doc, fn: (u: J) => J) => { doc.units = unitsOf(doc).map((u) => (u?.slug === a[0] ? fn(u) : u)); };
   const value = (i: number, msg: string) => { if (i + 1 >= a.length) die(2, msg); return a[i + 1]; };
 
@@ -689,11 +715,13 @@ function main(argv: string[]): void {
       // A unit's plan is stored canonical absolute (like register-plan and approve-plan), so a
       // relative plan still matches the approval whatever the caller typed.
       const planArg = pos[1] ?? "";
-      return set((d) => {
+      const reopened = set((d) => {
         const us = unitsOf(d);
         d.units = us.some((u) => u?.slug === slug) ? us : [...us, { slug, status: "planned", builder_wt: pos[0] ?? "", plan: planArg === "" ? "" : cliPlanPath(planArg),
           deps: (pos[2] ?? "").split(",").filter((x) => x !== ""), hold, ...(tier === "" ? {} : { tier }), ...(about === "" ? {} : { about }), ...(ext.length ? { ext_deps: ext } : {}) }];
+        return reopenDone(d);
       });
+      return reopenNote(reopened);
     }
     case "register-plan": {
       // Register every unit line of an approved plan (conventions/plan-shape.md step d) in one go,
@@ -702,8 +730,10 @@ function main(argv: string[]): void {
       let planText: string;
       const planPath = cliPlanPath(a[0]);
       try { if (!statSync(planPath).isFile()) throw new Error(); planText = readFileSync(planPath, "utf8"); } catch { return die(1, `squad-state: register-plan: cannot read plan '${a[0]}'`); }
-      const res = set((d) => registerPlan(d, planText, planPath));
+      let reopened: Reopen = { kind: "none" };
+      const res = set((d) => { const r = registerPlan(d, planText, planPath); reopened = reopenDone(d); return r; });
       for (const n of res.notes) warn(`squad-state: ${n}`);
+      reopenNote(reopened);
       // U46: a ref to a squad or unit that does not exist is reported, not refused; the unit waits and the loop raises one card.
       for (const x of res.ext) if (extStatus(file, b, x.ref) === "missing") warn(`squad-state: note: ${interp(x.slug)} waits on ${interp(x.ref)}, which is not a known squad unit — fix it with drop-ext-dep / add-ext-dep`);
       for (const r of res.rows) say(r);

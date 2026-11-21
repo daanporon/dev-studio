@@ -251,6 +251,60 @@ describe("plan paths canonicalize to the absolute form (U181)", () => {
     expect(doc(file).units[0].plan).toBe(abs);
   });
 
+  describe("open work on a done squad sets it back to running", () => {
+    const FIX = join(ROOT, "tests", "fixtures", "register-plan.md");
+    const doneSquad = () => {
+      const x = root(true);
+      expect(ss(x.root, x.file, "set-debrief", "shipped #1\nTry it: nothing to try by hand — docs only").code).toBe(0);
+      expect(ss(x.root, x.file, "set-status", "done").code).toBe(0);
+      return x;
+    };
+    const status = (r: string) => rows(store(r), "SELECT status FROM squads WHERE project = 'p' AND topic = 's'")[0].status;
+
+    test("register-plan reopens a done squad, in the row and the export, with a note", () => {
+      const { root: r, file } = doneSquad();
+      const res = ss(r, file, "register-plan", FIX);
+      expect(res.code, res.err).toBe(0);
+      expect(res.err).toContain("squad-state: note: squad was done; set back to running for ");
+      expect(status(r)).toBe("running");
+      expect(doc(file).status).toBe("running");
+    });
+    test("add-unit reopens a done squad; --hold leaves it done; a suspended squad stays suspended", () => {
+      const a = doneSquad();
+      const held = ss(a.root, a.file, "add-unit", "x", "", "", "--tier", "standard", "--hold");
+      expect(held.code, held.err).toBe(0);
+      expect(status(a.root)).toBe("done");
+      const res = ss(a.root, a.file, "add-unit", "y", "", "", "--tier", "standard");
+      expect(res.code, res.err).toBe(0);
+      expect(res.err).toContain("set back to running for 1 open unit(s)");
+      expect(status(a.root)).toBe("running");
+      const b = root(true);
+      expect(ss(b.root, b.file, "set-status", "suspended").code).toBe(0);
+      expect(ss(b.root, b.file, "add-unit", "x", "", "", "--tier", "standard").code).toBe(0);
+      expect(status(b.root)).toBe("suspended");
+    });
+    test("a done squad with a close in flight stays done, with a note", () => {
+      const { root: r, file } = doneSquad();
+      store(r).db.run("UPDATE squads SET want = 'gone' WHERE project = 'p' AND topic = 's'");
+      const res = ss(r, file, "register-plan", FIX);
+      expect(res.code, res.err).toBe(0);
+      expect(res.err).toContain("squad-state: note: squad is closing; left done");
+      expect(status(r)).toBe("done");
+    });
+    test("a re-run of a plan whose units are all done leaves the squad done", () => {
+      const { root: r, file } = doneSquad();
+      const plan = join(tmp(), "p.md");
+      writeFileSync(plan, "U1 — First — deps: none — Tier: standard\n");
+      expect(ss(r, file, "register-plan", plan).code).toBe(0);
+      const slug = doc(file).units[0].slug;
+      expect(ss(r, file, "cancel-unit", slug, "--why", "test").code).toBe(0);
+      expect(ss(r, file, "set-status", "done").code).toBe(0);
+      const again = ss(r, file, "register-plan", plan);
+      expect(again.code, again.err).toBe(0);
+      expect(status(r)).toBe("done");
+    });
+  });
+
   test("approve-plan stores the absolute path; plan-approved agrees in every form", () => {
     const { base, root: r, file } = devRoot();
     const abs = join(realpathSync(base), rel);

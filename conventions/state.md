@@ -31,7 +31,7 @@ Per-project role notes live beside it in `state/<project>/notes/<role>.md`, writ
 Carries only the gaps Orca leaves:
 
 - `task_id` — the squad's orchestration task (checkpoint gates target it).
-- `status` — the semantic status enum (`running` / `blocked` / `waiting-on-you` / `done`). `set-status done` on a feature squad refuses while any unit is dispatched, planned or held (each named with the command that settles it) without a debrief, and (feature squad) a debrief without a `Try it` line; a Tester member or no units does not refuse, and a testing squad refuses only for a dispatched unit.
+- `status` — the semantic status enum (`running` / `blocked` / `waiting-on-you` / `done`). `set-status done` on a feature squad refuses while any unit is dispatched, planned or held (each named with the command that settles it) without a debrief, and (feature squad) a debrief without a `Try it` line; a Tester member or no units does not refuse, and a testing squad refuses only for a dispatched unit. `register-plan` or `add-unit` that leaves a planned or dispatched unit (a held one alone does not count) on a `done` squad sets it back to `running` in the same write (note on stderr, a Lead journal decision); a suspended, failed or closing (`want = 'gone'`) squad keeps its status.
 - `waiting_on_you` — pending questions, for the board's blocked-first queue.
 - `lfg_assumptions` — assumptions an `lfg` squad logged instead of blocking.
 - `units[].title`, `about`, `done`, `check` — the unit's text for the board's unit overlay (click a row
