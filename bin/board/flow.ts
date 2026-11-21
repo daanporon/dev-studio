@@ -241,9 +241,11 @@ export function mergedPerDay(events: FlowEvent[], now: number, days = 30, done =
 }
 
 // Pickup order of the queued cards, per project (U6): waiting for an account (by wait_until, unknown
-// last, then place), waiting for a slot (by place), then units waiting on another unit (by place, so
-// units.id) and held, which cannot start and get no position. Sets `queue_pos` on the cards; returns
-// their keys in that order. The place comes from slot.ts placeOf, so the board and the loop agree.
+// last, then place), waiting for a slot (by place), then units waiting on another unit and held (by place too:
+// urgent, blocks started, focus, dispatched, most open dependents, units.id), which cannot start and get no
+// position. Every queued unit has a place (board-data.ts placeIn). Sets `queue_pos` on the cards; returns
+// their keys in that order, which `flow.cards` follows for its queued cards. The place comes from slot.ts
+// placeOf, so the board and the loop agree.
 const PLACE_LAST = [Infinity];
 const cmpPlace = (a: number[] | null | undefined, b: number[] | null | undefined) => {
   const x = a ?? PLACE_LAST, y = b ?? PLACE_LAST;
@@ -263,6 +265,15 @@ function queueOrder(cards: { key: string; project: string; stage: Stage; group: 
     if (c.group === "waiting for an account" || c.group === "waiting for the host" || c.group === "waiting for a slot") { const k = (n.get(c.project) ?? 0) + 1; n.set(c.project, k); c.queue_pos = k; }
   }
   return q.map((c) => c.key);
+}
+
+// The cards with the queued ones in `queued_order` (the other stages keep their places): the queued cards take
+// the queued slots of the array, so the page, which groups cards in the order it gets them, draws each group in rule order.
+function inQueuedOrder<T extends { key: string; stage: Stage }>(cards: T[], order: string[]): T[] {
+  const by = new Map(cards.filter((c) => c.stage === "queued").map((c) => [c.key, c]));
+  const sorted = order.map((k) => by.get(k)).filter((c): c is T => !!c);
+  let i = 0;
+  return cards.map((c) => (c.stage === "queued" ? sorted[i++] : c));
 }
 
 export function flowOf(input: FlowInput) {
@@ -329,7 +340,7 @@ export function flowOf(input: FlowInput) {
       stuck: cards.filter((c) => c.stuck).length, slow: cards.filter((c) => c.slow).length, open_prs: cards.filter((c) => c.open_pr).length,
       merged_today: perDay[perDay.length - 1].merged,
     },
-    cards: cards.map(({ open_pr, ...c }) => c),
+    cards: inQueuedOrder(cards, queued_order).map(({ open_pr, ...c }) => c),
     queued_order,
     merged,
     per_day: perDay,
