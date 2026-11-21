@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <title>dev-studio board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -271,6 +271,25 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .chat-left{font:11px var(--mono);color:var(--dim)} .chat-left.low{color:var(--amber)}
 @media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;height:100dvh;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px}}
 .qfoot .err{font-size:12px;color:var(--red)} .qfoot .ok{font-size:12px;color:var(--green)}
+/* Phone: every popup is a full-screen sheet (the box fills the viewport; only its body scrolls; header, tabs and footer stay put) and no input is under 16px, so a tap never zooms the page. */
+@media (max-width:600px){
+.modal{padding:0;align-items:stretch}
+.mbox{width:100%!important;max-width:none!important;height:100%;height:100dvh;max-height:none;border:0;border-radius:0;min-width:0}
+.mbox>*{min-width:0}
+.mbox>.mhd:first-child,.mbox>.tabs{flex:none;flex-wrap:nowrap;gap:8px;padding-top:max(8px,env(safe-area-inset-top));overflow-wrap:anywhere}
+.mbox>.tabs{overflow-x:auto;align-items:center}
+.mbox>.tabs>.mclose{position:sticky;right:0;margin-left:auto}
+.mclose{flex:none;min-width:44px;min-height:44px;margin-left:auto;font-size:16px}
+.mbox>.md,.mbox>.qbody,.mbox>.msg-list,.mbox>.chat-wrap,.mbox>.set-body{flex:1 1 auto;min-height:0;overflow:auto}
+.mbox>.chat-wrap{overflow:visible}
+.mbox>.mhd[style*="border-top"],.mbox>.qfoot{flex:none;flex-wrap:wrap;gap:8px;padding:10px 12px max(10px,env(safe-area-inset-bottom))}
+.mbox>.mhd[style*="border-top"]>.btn,.mbox>.qfoot>.btn{min-height:44px}
+.mbox>.mhd[style*="border-top"]>.btn.pri,.mbox>.qfoot>.btn.pri{flex:1 1 100%;order:99}
+.qfoot .chat-in{flex:1 1 100%}
+.qbody .top{flex-wrap:wrap}
+.qbody{padding:12px 14px}
+input,textarea,select{font-size:16px!important}
+}
 @media (max-width:1000px){.qrow{grid-template-columns:80px minmax(0,1fr) 48px}.qrow .sq,.qrow .fr{display:none}
   .box .qrow{grid-template-columns:72px minmax(0,1fr) 48px}.box .qrow .fr{display:none}
   .dgrid{grid-template-columns:1fr}
@@ -783,7 +802,7 @@ function EvRows({ page, evs, toast, empty, exact }) {
       return html`${sep && html`<div key=${"d" + (e.key || e.id)} class="evday">${d}</div>`}${row(e, false)}`; })}</div>
     ${open && html`<div class="modal" data-ev="data" onClick=${(e) => { if (e.target === e.currentTarget) setOpen(null); }}>
       <div class="mbox" role="dialog" aria-label="Event data"><div class="mhd"><span>${open.msg ? "message #" + open.msg.id : open.kind} · ${when(open)}</span><span class="sp"></span>
-        <button class="btn sm" onClick=${() => copy(full, (m) => toast(m && "copied the data of event #" + open.id))}>Copy</button> <button class="btn sm" title="Close" onClick=${() => setOpen(null)}>✕</button></div>
+        <button class="btn sm" onClick=${() => copy(full, (m) => toast(m && "copied the data of event #" + open.id))}>Copy</button> <button class="btn sm mclose" title="Close" onClick=${() => setOpen(null)}>✕</button></div>
         <p class="mut" style=${{ margin: "10px 16px 0" }}>${say(open)}</p><pre class="evdata">${full}</pre></div></div>`}
     ${msgOf && html`<${MessagesPanel} project=${msgOf.project} topic=${msgOf.squad} wt=${msgOf.to_wt || ""} label=${(msgOf.to_wt ? msgOf.to + " in " : "squad ") + sqName(msgOf)} onClose=${() => setMsgOf(null)} />`}`;
 }
@@ -1121,7 +1140,7 @@ function FlowCardDetails({ card, now, onAsk, onClose }) {
   useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k); }, []);
   return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox ud fcd" style=${{ width: "min(560px,100%)" }} role="dialog" aria-modal="true" aria-label=${"Details of " + card.slug}>
-      <div class="mhd">${card.slug}<span class="sp"></span><button class="btn sm ud-close" autofocus onClick=${onClose}>✕</button></div>
+      <div class="mhd">${card.slug}<span class="sp"></span><button class="btn sm mclose ud-close" autofocus onClick=${onClose}>✕</button></div>
       <div class="md"><dl>
         <dt>Squad</dt><dd class="fcd-squad">${card.project + "/" + card.squad}</dd>
         <dt>Stage</dt><dd class="fcd-stage">${card.stage}</dd>
@@ -1563,7 +1582,7 @@ function RevokePlan({ s, p, toast, onClose }) {
   };
   return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox" style=${{ width: "min(520px,100%)" }} role="dialog" aria-label=${"Take back approval of " + p.name}>
-      <div class="mhd">Take back approval<span class="sp"></span><button class="btn sm" onClick=${onClose}>✕</button></div>
+      <div class="mhd">Take back approval<span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       <div class="md revokeform">
         <p class="revoke-what"><b>${p.name}</b> goes back to unapproved. ${q} queued Builder${q === 1 ? " is" : "s are"} dropped${keep ? "" : ", " + st + " started Builder" + (st === 1 ? " is" : "s are") + " paused until you approve it again"}. The Lead is told.</p>
         <div><label><b>Why</b> <span class="mut">(the Lead is told this)</span></label><br/>
@@ -1899,7 +1918,7 @@ function MessagesPanel({ project, topic, wt, label, onClose }) {
       <div class="mhd">${wt ? "Inbox" : "Messages"} · ${label}<span class="mut" data-msg-counts> · ${data ? data.unread + " unread · " + data.reply_due + " waiting for a reply" + (data.ended ? " · " + data.ended + " to or from ended members (not counted)" : "") : ""} · view only</span><span class="sp"></span>
         <button class=${"btn sm" + (mode === "open" ? " on" : "")} data-msg-show="open" onClick=${() => { setData(null); setShow("open"); }}>Open</button>
         <button class=${"btn sm" + (mode === "all" ? " on" : "")} data-msg-show="all" onClick=${() => { setData(null); setShow("all"); }}>All</button>
-        <button class="btn sm" onClick=${onClose}>✕</button></div>
+        <button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       <div class="msg-list">${err ? html`<div class="mut">${err}</div>` : list.length ? list.map((m) => html`<div key=${m.id} class=${"msg" + (m.state === "unread" || m.state === "waiting" ? " unread" : m.state === "ended" || m.state === "answered" ? " ended" : "")}>
         <div class="mh"><span class="sj">${m.subject}</span><span>${m.from} → ${m.to}</span><span>sent ${msgTime(m.sent_at)}</span>
           <span class=${m.read_at ? "" : "un"}>${m.read_at ? "read " + msgTime(m.read_at) : "unread"}</span>
@@ -2034,7 +2053,7 @@ function ChatPanel({ project, topic, wt, label, onClose }) {
   const left = CHAT_MAX - text.length;
   return html`<div class="modal chat-modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox chat">
-      <div class="mhd">Chat · ${label}<span class="mut"> · ${topic === "_studio" ? "Studio" : topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span><button class="btn sm" onClick=${onClose}>✕</button></div>
+      <div class="mhd">Chat · ${label}<span class="mut"> · ${topic === "_studio" ? "Studio" : topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll}>${rows.length ? rows.map((r, i) => chatTurn(r, data.source, i))
         : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
         ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
@@ -2093,7 +2112,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
       <div class="tabs">${items.map((m, j) => html`<button key=${nkey(m)} title=${m.title}
         class=${"tab" + (j === i ? " on" : "") + (m.id && sentQ.has(nkey(m)) ? " done" : m.kind === "blocking" ? " blk" : "")}
         onClick=${() => setAt(nkey(m))}>${m.id && sentQ.has(nkey(m)) ? "✓" : "□"} ${sqName(m)}: ${m.title}</button>`)}
-        <span class="sp" style=${{ flex: 1 }}></span><button class="btn sm" onClick=${onClose}>✕</button></div>
+        <span class="sp" style=${{ flex: 1 }}></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       <div class="qbody">
         <div class="top"><span class=${"kind " + n.kind}>${n.kind}</span><span>${sqName(n)}${n.about ? " · " + n.about : ""}</span>${n.from && html`<span>· from ${n.from}</span>`}<span>· ${fmtAge(n.age_min)}</span><span class="sp" style=${{ flex: 1 }}></span><span>${i + 1} / ${items.length}</span></div>
         ${n.pr && html`<div class="prline"><${QPr} pr=${n.pr} /><span class="mut"> — opens the PR on GitHub</span></div>`}
@@ -2281,7 +2300,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, card })
   return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     ${chat && html`<${ChatPanel} project=${s.label} topic=${s.topic} wt=${chat.wt} label=${chat.label} onClose=${() => setChat(null)} />`}
     <div class="mbox ud" style=${{ width: "min(680px,100%)" }} role="dialog" aria-modal="true" aria-label=${"Details of " + u.slug}>
-      <div class="mhd"><span class="ud-head"><span class="ud-title">${unitTitle(u)}</span><span class="ud-slug mono mut">${u.slug}${u.plan_unit ? " · plan " + u.plan_unit : ""}</span></span><span class="sp"></span><button class="btn sm ud-close" autofocus onClick=${onClose}>✕</button></div>
+      <div class="mhd"><span class="ud-head"><span class="ud-title">${unitTitle(u)}</span><span class="ud-slug mono mut">${u.slug}${u.plan_unit ? " · plan " + u.plan_unit : ""}</span></span><span class="sp"></span><button class="btn sm mclose ud-close" autofocus onClick=${onClose}>✕</button></div>
       <div class="md">
         <div class="ud-status"><b class=${"ust " + String(u.state).replace(" ", "")}>${u.state}</b>${u.pr ? html` · <${PrChip} pr=${u.pr} />` : ""}${done && u.done_at ? html` · <span class="ud-merged">merged ${docAge(u.done_at)} ago</span>` : ""}${open && u.wait_label ? html` · <span class="ud-wait mut">${u.wait_label}</span>` : ""}</div>
         <dl>${rows.map(([c, k, v]) => html`<${React.Fragment} key=${c}><dt>${k}</dt><dd class=${c}>${v}</dd></${React.Fragment}>`)}</dl>
@@ -2342,7 +2361,7 @@ function StartSquad({ project, projects, toast, onClose }) {
   };
   return html`<div class="modal startsq" onClick=${(e) => { if (e.target === e.currentTarget) tryClose(); }} onKeyDown=${onKey}>
     <div class="mbox" style=${{ width: "min(720px,100%)" }} role="dialog" aria-label="Start squad">
-      <div class="mhd">Start squad<span class="sp"></span><button class="btn sm" onClick=${tryClose}>✕</button></div>
+      <div class="mhd">Start squad<span class="sp"></span><button class="btn sm mclose" onClick=${tryClose}>✕</button></div>
       <div class="md cancelform" style=${{ overflowY: "auto" }}>
         <label><b>What should the squad do?</b> <span class="mut">(paste the whole brief; Ctrl/Cmd+Enter sends)</span></label>
         <textarea class="start-text" ref=${refs.text} rows="16" style=${{ width: "100%", resize: "vertical", fontFamily: "inherit" }} value=${text} onInput=${(e) => { setText(e.target.value); setErr(null); setDiscard(false); }}></textarea>
@@ -2368,7 +2387,7 @@ function CancelUnit({ s, u, toast, onClose }) {
   const go = () => { onClose(); unitAction(s, u, "cancel", why.trim(), toast); };
   return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox" style=${{ width: "min(520px,100%)" }} role="dialog" aria-label=${"Cancel " + u.slug}>
-      <div class="mhd">Cancel ${u.slug}<span class="sp"></span><button class="btn sm" onClick=${onClose}>✕</button></div>
+      <div class="mhd">Cancel ${u.slug}<span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       <div class="md cancelform">
         <div><label><b>Why</b> <span class="mut">(the Lead is told this)</span></label><br/>
           <input class="cancel-why" type="text" style=${{ width: "100%" }} value=${why} maxlength="500" autofocus onInput=${(e) => setWhy(e.target.value)} /></div>
@@ -2690,7 +2709,7 @@ function PinForm({ s, m, toast, onClose }) {
   };
   return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox" style=${{ width: "min(520px,100%)" }} role="dialog" aria-label=${"Pin " + m.label}>
-      <div class="mhd">Pin ${m.label} until its work is done<span class="sp"></span><button class="btn sm" onClick=${onClose}>✕</button></div>
+      <div class="mhd">Pin ${m.label} until its work is done<span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       <div class="md pinform">
         ${!data ? html`<div class="mut">loading…</div>` : html`
           <div style=${{ marginBottom: "12px" }}><label><b>For</b></label><br/>
@@ -2785,7 +2804,7 @@ function Settings({ project, toast, onClose }) {
     <div class="mbox set-box" role="dialog" aria-label="Settings"><div class="mhd"><span>Settings · ${project}</span><span class="sp"></span>
       <a class="btn sm" id="settings-export" href=${"api/settings-export?project=" + encodeURIComponent(project)} download=${project + "-settings.txt"} title="Download this project's settings as a text file another project (or host) can import">Export</a>
       <button class="btn sm" id="settings-import" style=${{ marginLeft: 6 }} title="Copy settings in from a file or another project, choosing row by row" onClick=${() => setImporting(!importing)}>Import</button>
-      <button class="btn sm" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
+      <button class="btn sm mclose" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
       ${importing ? html`<div class="set-body"><${ImportPane} project=${project} toast=${toast} onBack=${() => setImporting(false)} onApplied=${() => setRev((n) => n + 1)} /></div>` : html`<div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
       <div class="set-body" key=${rev}>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}</div>`}</div></div>`;
 }
@@ -3543,7 +3562,7 @@ function App() {
 
     ${ask && html`<${AskOverlay} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}
     ${plan && html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) setPlan(null); }}>
-      <div class="mbox"><div class="mhd"><span>${plan.name}</span><span class="sp"></span>${plan.changes && html`<button class="btn sm" data-ev="plan-switch" onClick=${() => setPlan({ ...plan, view: plan.view === "changes" ? "full" : "changes" })}>${plan.view === "changes" ? "Show full plan" : "What changed"}</button> `}<button class="btn sm" onClick=${() => setPlan(null)}>✕</button></div>
+      <div class="mbox"><div class="mhd"><span>${plan.name}</span><span class="sp"></span>${plan.changes && html`<button class="btn sm" data-ev="plan-switch" onClick=${() => setPlan({ ...plan, view: plan.view === "changes" ? "full" : "changes" })}>${plan.view === "changes" ? "Show full plan" : "What changed"}</button> `}<button class="btn sm mclose" onClick=${() => setPlan(null)}>✕</button></div>
         ${plan.changes && plan.view === "changes"
           ? html`<div class="md pdiff" data-ev="plan-diff">${plan.changes.diff.length ? plan.changes.diff.map((d, di, all) => html`<div key=${di}>${(di === 0 || all[di - 1].heading !== d.heading) && html`<h4>${d.heading}</h4>`}${d.unit && html`<h5 class="pdiff-unit" data-ev="plan-diff-unit">${d.unit}</h5>`}${d.lines.map((l, k) => html`<div key=${k} class=${"dl " + (l.t === "+" ? "add" : "del")}>${(l.t === "+" ? "+ " : "- ") + l.text}</div>`)}</div>`) : html`<p class="mut">No lines differ from the approved copy.</p>`}
             ${plan.changes.truncated && html`<p class="mut">Showing the first ${plan.changes.diff.reduce((a, d) => a + d.lines.length, 0)} of ${plan.changes.changed_lines} changed lines.</p>`}</div>`

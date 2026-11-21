@@ -1,0 +1,119 @@
+// board-phone.ts — the phone proof for the web board: opens each popup at 375x812 and 414x896 (touch) and at 1280x800 on the
+// tests/lib/board-setup.sh fixture board and checks the phone rules. Not part of tests/ci.sh (no browser there).
+//
+//   bun tests/browser/board-phone.ts [--out <dir>] [--base <git ref, default origin/main>] [--url <running board>]
+//
+// Strict at 375/414: the popup box is the viewport, its close ✕ and primary button are on screen and >= 44 px, every input is
+// >= 16 px, nothing sticks out past the right edge. At 1280 each view's measures must equal the same page from the base ref
+// (the base html is served through a route). Every non-GET /api call is aborted: nothing is sent. Needs playwright-core and a
+// Chromium (PLAYWRIGHT_CORE=<path to playwright-core/index.mjs>, else the bunx cache or node_modules). Exit 1 on a break.
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+
+const ROOT = resolve(import.meta.dir, "../..");
+const arg = (k: string, d = "") => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : d; };
+const OUT = resolve(arg("--out", join(ROOT, ".scratch/board-phone")));
+const BASE = arg("--base", "origin/main");
+mkdirSync(OUT, { recursive: true });
+
+async function loadPlaywright() {
+  const found: string[] = [];
+  if (process.env.PLAYWRIGHT_CORE) found.push(process.env.PLAYWRIGHT_CORE);
+  found.push("playwright-core");
+  for (const root of ["/tmp", join(homedir(), ".bun/install/cache")]) {
+    try { for (const d of readdirSync(root)) if (/playwright/.test(d)) found.push(join(root, d, "node_modules/playwright-core/index.mjs"), join(root, d, "index.mjs")); } catch {}
+  }
+  for (const f of found) { if (f.startsWith("/") && !existsSync(f)) continue; try { return await import(f); } catch {} }
+  throw new Error("playwright-core not found: set PLAYWRIGHT_CORE=<path>/playwright-core/index.mjs");
+}
+const freePort = () => new Promise<number>((ok) => { const s = createServer().listen(0, "127.0.0.1", () => { const p = (s.address() as any).port; s.close(() => ok(p)); }); });
+
+let url = arg("--url"); let fixture: ReturnType<typeof spawn> | null = null;
+if (!url) {
+  const port = await freePort();
+  fixture = spawn("bash", [join(ROOT, "tests/browser/fixture-board.sh"), String(port)], { stdio: "ignore" });
+  url = `http://127.0.0.1:${port}/`;
+  for (let i = 0; i < 100; i++) { try { if ((await fetch(url + "board.json")).ok) break; } catch {} await Bun.sleep(300); }
+}
+const baseHtml = spawnSync("git", ["-C", ROOT, "show", `${BASE}:web/board.html`], { encoding: "utf8", maxBuffer: 1 << 26 });
+if (baseHtml.status !== 0) { console.error(`cannot read web/board.html at ${BASE}: ${baseHtml.stderr}`); process.exit(2); }
+
+const { chromium } = await loadPlaywright();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined });
+
+// What a view measures, run in the page. `popup` is the topmost .modal .mbox.
+const MEASURE = `(() => {
+  const vw = innerWidth, vh = innerHeight, r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); return { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) }; };
+  const boxes = [...document.querySelectorAll(".modal .mbox")], box = boxes[boxes.length - 1] || null, root = box || document.body;
+  const vis = (e) => { const b = e.getBoundingClientRect(); const s = getComputedStyle(e); return b.width > 0 && b.height > 0 && s.visibility !== "hidden" && s.display !== "none"; };
+  const scrolls = (e) => { for (let p = e.parentElement; p && p !== root.parentElement; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if (o === "auto" || o === "scroll" || o === "hidden") return true; if (p === root) break; } return false; };
+  const inputs = [...root.querySelectorAll("input:not([type=checkbox]):not([type=radio]):not([type=hidden]),textarea,select")].filter(vis);
+  const small = inputs.filter((e) => parseFloat(getComputedStyle(e).fontSize) < 16).length;
+  const btns = [...root.querySelectorAll("button")].filter(vis);
+  const tiny = btns.filter((e) => { const b = e.getBoundingClientRect(); return b.width < 44 || b.height < 44; }).length;
+  const out = [...root.querySelectorAll("*")].filter((e) => vis(e) && e.getBoundingClientRect().right > vw + 1 && !scrolls(e)).slice(0, 5).map((e) => e.tagName.toLowerCase() + "." + String(e.className).slice(0, 30));
+  const close = box && (box.querySelector(".mclose") || [...box.querySelectorAll("button")].find((b) => b.textContent.trim() === "✕"));
+  const foot = box && [...box.children].filter((c) => /qfoot|mhd/.test(c.className)).pop();
+  const prim = box && [...box.querySelectorAll(".qfoot .btn.pri, .mhd .btn.pri")].filter(vis).pop();
+  const fonts = inputs.map((e) => Math.round(parseFloat(getComputedStyle(e).fontSize)));
+  return { vw, vh, popup: r(box), docW: document.documentElement.scrollWidth, boxScrollW: box ? box.scrollWidth : null, inputs: inputs.length, small, fonts, btns: btns.length, tiny,
+    close: r(close), primary: r(prim), foot: r(foot), out };
+})()`;
+
+type Open = (p: any) => Promise<boolean>;
+const click = async (p: any, sel: string, text?: RegExp) => { const l = text ? p.locator(sel).filter({ hasText: text }).first() : p.locator(sel).first(); if (!(await l.count())) return false; await l.click(); await p.waitForTimeout(500); return true; };
+const VIEWS: { name: string; strict: boolean; open: Open }[] = [
+  { name: "page", strict: false, open: async () => true },
+  { name: "question", strict: true, open: (p) => click(p, ".qrow, .qnote") },
+  { name: "chat", strict: true, open: async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) },
+  { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
+  { name: "settings", strict: true, open: async (p) => { await p.evaluate(() => { location.hash = "#settings"; }); await p.waitForTimeout(800); return (await p.locator("#settings").count()) > 0; } },
+];
+
+const SIZES = [{ w: 375, h: 812, phone: true }, { w: 414, h: 896, phone: true }, { w: 1280, h: 800, phone: false }];
+const report: any = {}; const breaks: string[] = [];
+const shoot = async (size: any, view: string, base: boolean) => {
+  const ctx = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: 2, isMobile: size.phone, hasTouch: size.phone });
+  const p = await ctx.newPage();
+  await p.route("**/api/**", (r: any) => (r.request().method() === "GET" ? r.continue() : r.abort()));
+  if (base) await p.route(url!, (r: any) => r.fulfill({ status: 200, contentType: "text/html", body: baseHtml.stdout }));
+  await p.goto(url!, { waitUntil: "networkidle" }); await p.waitForTimeout(1200);
+  const v = VIEWS.find((x) => x.name === view)!;
+  const opened = await v.open(p);
+  const m = opened ? await p.evaluate(MEASURE) : null;
+  if (opened && !base) await p.screenshot({ path: join(OUT, `${size.w}-${view}.png`) });
+  await ctx.close();
+  return { opened, m };
+};
+
+for (const size of SIZES) for (const v of VIEWS) {
+  const key = `${size.w}/${v.name}`; const { opened, m } = await shoot(size, v.name, false);
+  report[key] = { opened, m };
+  if (!opened) { if (v.strict) breaks.push(`${key}: did not open`); continue; }
+  if (size.phone && v.name !== "page" && m) {
+    const need = (ok: boolean, why: string) => { if (!ok && v.strict) breaks.push(`${key}: ${why}`); };
+    const pp = m.popup;
+    need(!!pp && pp.x === 0 && pp.y === 0 && pp.w === m.vw && Math.abs(pp.h - m.vh) <= 1, `popup box ${JSON.stringify(pp)} is not the ${m.vw}x${m.vh} viewport`);
+    const onScreen = (b: any) => b && b.x >= 0 && b.y >= 0 && b.x + b.w <= m.vw + 1 && b.y + b.h <= m.vh + 1;
+    need(onScreen(m.close) && m.close.w >= 44 && m.close.h >= 44, `close ✕ ${JSON.stringify(m.close)} not on screen at >= 44 px`);
+    if (m.primary) need(onScreen(m.primary) && m.primary.h >= 44, `primary button ${JSON.stringify(m.primary)} not on screen at >= 44 px`);
+    else if (v.name === "question") need(false, "no primary button found");
+    need(m.small === 0, `${m.small} input(s) under 16 px (${m.fonts})`);
+    need(m.out.length === 0 && m.boxScrollW <= m.vw + 1, `sticks out past the right edge: ${m.out} (box scrollWidth ${m.boxScrollW})`);
+  }
+  if (!size.phone) {
+    const b = await shoot(size, v.name, true); report[`${key}@base`] = b;
+    const pick = (x: any) => x.m && { popup: x.m.popup, fonts: x.m.fonts, btns: x.m.btns, close: x.m.close && { w: x.m.close.w, h: x.m.close.h }, foot: x.m.foot && { h: x.m.foot.h }, docW: x.m.docW };
+    const a = JSON.stringify(pick({ m })), c = JSON.stringify(pick(b));
+    if (a !== c) breaks.push(`${key}: desktop differs from ${BASE}\n    now  ${a}\n    base ${c}`);
+  }
+}
+
+writeFileSync(join(OUT, "report.json"), JSON.stringify(report, null, 1));
+await browser.close(); fixture?.kill();
+for (const [k, r] of Object.entries<any>(report)) if (!k.includes("@")) console.log(`${r.opened ? "ok  " : "skip"} ${k}${r.m ? `  popup=${r.m.popup ? r.m.popup.w + "x" + r.m.popup.h : "-"} small-inputs=${r.m.small}/${r.m.inputs} tiny-buttons=${r.m.tiny}/${r.m.btns} out=${r.m.out.length}` : ""}`);
+if (breaks.length) { console.error(`\nFAIL (${breaks.length}):\n  ` + breaks.join("\n  ")); process.exit(1); }
+console.log(`\nboard-phone: pass; screenshots and report.json in ${OUT}`);
