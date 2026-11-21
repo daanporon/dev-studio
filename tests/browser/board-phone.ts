@@ -71,6 +71,7 @@ const MEASURE = `(() => {
 
 type Open = (p: any) => Promise<boolean>;
 const click = async (p: any, sel: string, text?: RegExp) => { const l = text ? p.locator(sel).filter({ hasText: text }).first() : p.locator(sel).first(); if (!(await l.count())) return false; await l.click(); await p.waitForTimeout(500); return true; };
+const openSettings: Open = async (p) => { await p.evaluate(() => { location.hash = "#settings"; }); await p.waitForTimeout(800); return (await p.locator("#settings").count()) > 0; };
 const VIEWS: { name: string; strict: boolean; kind?: string; open: Open }[] = [
   { name: "question", strict: true, open: (p) => click(p, ".qrow, .qnote") },
   { name: "chat", strict: true, open: async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) },
@@ -80,7 +81,12 @@ const VIEWS: { name: string; strict: boolean; kind?: string; open: Open }[] = [
   { name: "flow", strict: true, kind: "page", open: async (p) => { await p.locator("#flow").scrollIntoViewIfNeeded(); await p.waitForTimeout(300); return (await p.locator(".flow-col").count()) > 1; } },
   { name: "evlog", strict: true, kind: "page", open: async (p) => { const d = p.locator("details#events"); if (!(await d.count())) return false; await d.locator("summary").first().click(); await p.waitForTimeout(800); return (await p.locator(".ev").count()) > 0; } },
   { name: "menu", strict: true, kind: "page", open: (p) => click(p, ".row.squad .acts-btn") },
-  { name: "settings", strict: true, open: async (p) => { await p.evaluate(() => { location.hash = "#settings"; }); await p.waitForTimeout(800); return (await p.locator("#settings").count()) > 0; } },
+  { name: "settings", strict: true, open: openSettings },
+  ...["Roles", "Skills", "Pins"].map((t) => ({ name: `settings-${t.toLowerCase()}`, strict: true, open: async (p: any) => (await openSettings(p)) && (await click(p, ".set-tab", new RegExp("^" + t))) })),
+  { name: "flow-card", strict: true, open: (p) => click(p, ".fcard") },
+  { name: "unit-details", strict: true, open: async (p) => (await click(p, ".row.squad")) && (await click(p, ".units .u.openable")) && (await p.locator(".mbox.ud").count()) > 0 },
+  { name: "plan-viewer", strict: true, open: async (p) => (await click(p, ".row.squad")) && (await click(p, '.docbox .plan, .docbox button, [data-ev="open-doc"]')) },
+  { name: "event-data", strict: true, open: async (p) => { await p.evaluate(() => { const d = document.querySelector("#events") as any; if (d) d.open = true; }); await p.waitForTimeout(500); return click(p, '#events .ev[role="button"], #events .evmore'); } },
 ];
 
 const SIZES = [{ w: 375, h: 812, phone: true }, { w: 414, h: 896, phone: true }, { w: 1280, h: 800, phone: false }];
@@ -89,6 +95,8 @@ const shoot = async (size: any, view: string, base: boolean) => {
   const ctx = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: 2, isMobile: size.phone, hasTouch: size.phone });
   const p = await ctx.newPage();
   await p.route("**/api/**", (r: any) => (r.request().method() === "GET" ? r.continue() : r.abort()));
+  // the fixture has no loop events: give the event log one (a long payload line, to prove the data popup wraps) so its data popup can open
+  await p.route("**/api/events?*", (r: any) => r.request().url().includes("/lists") ? r.continue() : r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ events: [{ id: 1, at: Math.floor(Date.now() / 1000) - 60, project: "x", squad: "sq", member: null, kind: "spawn", sev: "ok", payload: { note: "a long unbroken value " + "x".repeat(200), list: ["a", "b"] } }], older: null, newer: null, names: {}, messages: {}, squads: [], kinds: ["spawn"] }) }));
   if (base) await p.route(url!, (r: any) => r.fulfill({ status: 200, contentType: "text/html", body: baseHtml.stdout }));
   await p.goto(url!, { waitUntil: "networkidle" }); await p.waitForTimeout(1200);
   const v = VIEWS.find((x) => x.name === view)!;
@@ -122,6 +130,8 @@ for (const size of SIZES) for (const v of VIEWS) {
     need(onScreen(m.close) && m.close.w >= 44 && m.close.h >= 44, `close ✕ ${JSON.stringify(m.close)} not on screen at >= 44 px`);
     if (m.primary) need(onScreen(m.primary) && m.primary.h >= 44, `primary button ${JSON.stringify(m.primary)} not on screen at >= 44 px`);
     else if (v.name === "question") need(false, "no primary button found");
+    need(m.tiny === 0, `${m.tiny} button(s) under 44 px`);
+    need(m.tiny === 0, `${m.tiny} of ${m.btns} buttons under 44 px`);
     need(m.small === 0, `${m.small} input(s) under 16 px (${m.fonts})`);
     need(m.out.length === 0 && m.boxScrollW <= m.vw + 1, `sticks out past the right edge: ${m.out} (box scrollWidth ${m.boxScrollW})`);
   }

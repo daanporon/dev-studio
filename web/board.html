@@ -290,6 +290,22 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .qbody{padding:12px 14px}
 input,textarea,select{font-size:16px!important}
 }
+/* Phone, inside the sheets: Settings tabs scroll in one row, the Limits table stacks, footers wrap, every tap target is 44px. */
+@media (max-width:600px){
+.set-tabs{flex:none;overflow-x:auto;flex-wrap:nowrap;padding:0 12px;gap:2px;-webkit-overflow-scrolling:touch} .set-tab{flex:none;min-height:44px;white-space:nowrap}
+.set-body{padding:10px 12px 0} .set-box .mhd{flex-wrap:wrap}
+.lim,.lim tbody{display:block;width:100%} .lim thead{display:none} .lim tr{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:8px 0;border-top:1px solid var(--line,#8883)} .lim td{display:block;border:0;padding:0;min-width:0;overflow-wrap:anywhere}
+.lim td:nth-child(3){order:2} .lim td:nth-child(4){order:1} .lim td:nth-child(2){order:3;display:flex;flex-wrap:wrap;gap:8px;align-items:center} .lim td:nth-child(2)>input,.lim td:nth-child(2)>select{flex:1 1 140px;width:auto;min-height:44px;min-width:0}
+.lim td:nth-child(2)>.err,.lim td:nth-child(2)>.set-note,.lim td:nth-child(2)>code{flex:1 1 100%}
+.roles-tab select,.steps select,.model-free input,.sk-table select{min-height:44px}
+.rt-save{bottom:0;margin:12px -12px 0;padding:10px 12px max(10px,env(safe-area-inset-bottom));flex-wrap:wrap}
+.mbox .btn,.mbox button:not(.mclose),.mbox .opt,.mbox a.btn,.set-tab,.role-name{min-height:44px;min-width:44px}
+.mbox .opt{width:100%} .mbox .link-chip,.mbox .chip-btn{min-height:44px;display:inline-flex;align-items:center}
+.mbox .ud dl{grid-template-columns:minmax(0,1fr)} .ud dl,.fcd dl{grid-template-columns:minmax(0,1fr);gap:2px 0} .ud dd{margin-bottom:8px}
+.mbox>.md{padding-left:12px;padding-right:12px;overflow-wrap:anywhere} .mbox>.md pre,.mbox>.md table,.mbox pre{max-width:100%;overflow-x:auto} .mbox .ev-data,.mbox .evdata{white-space:pre-wrap;overflow-wrap:anywhere}
+.mbox>.mhd{flex-wrap:wrap} .mbox>.mhd>.btn{flex:none}
+.mbox form,.mbox label{max-width:100%} .mbox label>input,.mbox label>textarea,.mbox label>select{max-width:100%}
+}
 /* Phone page: the Flow stacks top to bottom, a unit row is two lines, an event is two lines, the machine table truncates its first column, and every button and menu item can be tapped (44px). */
 @media (max-width:600px){
 .flow-sec .flow-cols{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:minmax(0,1fr);overflow-x:visible}
