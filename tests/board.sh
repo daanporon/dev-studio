@@ -322,6 +322,7 @@ mq su-sq running '' '[{"slug":"u1","status":"dispatched"}]'
 mq st-sq running '' '[{"slug":"u1","status":"dispatched"}]'
 mq rs-sq suspended '' '[{"slug":"u1","status":"planned"}]'
 mq ok-sq suspended '' '[{"slug":"u1","status":"planned"}]'
+mq ul-sq running '' '[{"slug":"leaf","status":"planned"},{"slug":"root","status":"planned"},{"slug":"d1","status":"planned","deps":["root"]},{"slug":"d2","status":"planned","deps":["d1"]},{"slug":"d3","status":"planned","deps":["root"]}]'
 board "$LBL" > /dev/null
 NOWS=$(date +%s)
 dbw "UPDATE members SET want='running', wt=NULL, want_result=NULL WHERE project='$LBL' AND role='builder'"
@@ -346,8 +347,11 @@ jt "want running on a suspended squad shows resuming"     "$TMP/q.json" "$(ds_of
 jt "a granted wish shows the stored status"               "$TMP/q.json" "$(ds_of ok-sq '.display_status=="suspended"')"
 TXT="$(render "$LBL")"
 grep -qF -- "queued: waiting for a Builder" <<<"$TXT" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board queued note" >&2; }
+# picker-prefers-unblocking-units U2: a unit others wait on prints unlocks:N (its whole chain), a leaf prints none.
+grep -E -- "root.*unlocks:3" <<<"$TXT" >/dev/null && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board unlocks:3 on the root" >&2; }
+grep -E -- "leaf.*unlocks:" <<<"$TXT" >/dev/null && { fail=$((fail+1)); echo "  FAIL: text board leaf has no unlocks" >&2; } || pass=$((pass+1))
 grep -qF -- "⚠stuck" <<<"$TXT" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board stuck flag" >&2; }
-rm -f "$SD"/{q,qd,qb,qh,qn,ar,su,st,rs,ok}-sq.json
+rm -f "$SD"/{q,qd,qb,qh,qn,ar,su,st,rs,ok,ul}-sq.json
 
 # Wrapping up (U2; squad-done-definition U1): a running feature squad with >=1 unit, every
 # unit done or cancelled and no done unit's PR open (squad-finish.ts) shows it; dispatched,

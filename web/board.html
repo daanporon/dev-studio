@@ -96,7 +96,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .ucount{font:12px var(--mono);color:var(--mut);margin-top:5px}
 .prs{font:13px var(--mono)} .prs .bad{color:var(--red)}
 .detail{border-top:1px solid var(--line);border-left:3px solid var(--blue);padding:16px 16px 20px 48px;background:#13171e}
-.umark{font-size:11px;flex:none;margin-right:.3em} .fcard .t,.u .un{display:flex;min-width:0} .fcard .t .tn,.u .un .unit-open{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .fcard .t .fpos{flex:none;margin-right:.3em} .umark.focus{color:#e3b341} .umark.held{opacity:.7} .dbar-more{margin-left:auto} .dbar .chip{padding:1px 7px;border:1px solid var(--line);border-radius:10px;font-size:11px} .amenu .mutedline{margin:4px 9px 2px;font-size:11px;color:var(--mut)}
+.umark{font-size:11px;flex:none;margin-right:.3em} .fcard .t,.u .un{display:flex;min-width:0} .fcard .t .tn,.u .un .unit-open{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .fcard .t .fpos{flex:none;margin-right:.3em} .umark.focus{color:#e3b341} .umark.unlock{color:#58a6ff} .umark.held{opacity:.7} .dbar-more{margin-left:auto} .dbar .chip{padding:1px 7px;border:1px solid var(--line);border-radius:10px;font-size:11px} .amenu .mutedline{margin:4px 9px 2px;font-size:11px;color:var(--mut)}
 .dbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;font:12px var(--mono);color:var(--mut)}
 .flag{font:12px var(--mono);padding:2px 8px;border-radius:4px;background:var(--red-bg);color:var(--red)} .flag.soft{background:#23272f;color:var(--mut)}
 .dgrid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}
@@ -305,6 +305,29 @@ input,textarea,select{font-size:16px!important}
 .mbox>.md{padding-left:12px;padding-right:12px;overflow-wrap:anywhere} .mbox>.md pre,.mbox>.md table,.mbox pre{max-width:100%;overflow-x:auto} .mbox .ev-data,.mbox .evdata{white-space:pre-wrap;overflow-wrap:anywhere}
 .mbox>.mhd{flex-wrap:wrap} .mbox>.mhd>.btn{flex:none}
 .mbox form,.mbox label{max-width:100%} .mbox label>input,.mbox label>textarea,.mbox label>select{max-width:100%}
+}
+/* Phone page: the Flow stacks top to bottom, a unit row is two lines, an event is two lines, the machine table truncates its first column, and every button and menu item can be tapped (44px). */
+@media (max-width:600px){
+.flow-sec .flow-cols{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:minmax(0,1fr);overflow-x:visible}
+.flow-sec .flow-col{min-height:0}
+.flow-sec .flow-col.empty{padding:6px 8px} .flow-sec .flow-col.empty>h4{margin:0}
+.units .u.head{display:none}
+.units .u{display:flex;flex-wrap:wrap;align-items:center;gap:0 10px;padding:4px}
+.units .u>.dot{order:1;flex:none} .units .u>.un{order:2;flex:1 1 0;min-width:0} .units .u>.acts{order:3;margin-left:auto}
+.units .u::after{content:"";order:4;flex:1 1 100%;height:0}
+.units .u>:nth-child(n+3):not(.acts){order:5;flex:0 1 auto;min-width:0;max-width:100%;font-size:12px} .units .u>.tier{margin-left:24px}
+.units .u .unit-open,.acts-btn{min-height:44px;min-width:44px}
+.ev{grid-template-columns:auto auto minmax(0,1fr);gap:0 10px;padding:6px 12px}
+.ev>.s,.ev.msg>.s{grid-column:1/-1;white-space:normal;overflow-wrap:anywhere}
+.ev.msg .sl{white-space:normal;overflow-wrap:anywhere}
+.evmore{min-width:44px;min-height:44px}
+.mtop .mg{grid-template-columns:minmax(0,1fr) 70px 50px 40px;gap:6px}
+.mtop .mg>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .mtop .mg>span:first-child:focus{white-space:normal;overflow-wrap:anywhere;outline:0}
+.amenu{max-width:calc(100vw - 16px);min-width:min(220px,calc(100vw - 16px))} .amenu .btn{min-height:44px}
+.btn,.chip,button.chip,.seg button{min-height:44px}
+.chip{display:inline-flex;align-items:center}
+button.fchip,button.fgrp,button.gtog{min-height:44px;min-width:44px}
+button.fchip,button.gtog{display:inline-flex;align-items:center;justify-content:center}
 }
 @media (max-width:1000px){.qrow{grid-template-columns:80px minmax(0,1fr) 48px}.qrow .sq,.qrow .fr{display:none}
   .box .qrow{grid-template-columns:72px minmax(0,1fr) 48px}.box .qrow .fr{display:none}
@@ -1126,7 +1149,7 @@ function BrakeBanner({ br }) {
 }
 // ⚡ on an urgent unit and ★ on a queued unit of the focus squad (muted when the squad holds its share): the same marks the loop ranks by.
 function UnitMarks({ u }) {
-  return html`${u.urgent && html`<span class="umark urgent" title="urgent: starts next, even over the limit">⚡</span> `}${u.focus === "on" && html`<span class="umark focus" title="focus squad: goes first inside the limit">★</span> `}${u.focus === "held" && html`<span class="umark focus held" title="focus squad holds its share: waits by age now">★</span> `}${u.focus === "muted" && html`<span class="umark focus held" title=${u.status === "done" || u.state === "done" || u.merged ? "focus squad" : "focus squad: not next in line for a seat"}> ★</span>`}`;
+  return html`${u.urgent && html`<span class="umark urgent" title="urgent: starts next, even over the limit">⚡</span> `}${u.focus === "on" && html`<span class="umark focus" title="focus squad: goes first inside the limit">★</span> `}${u.focus === "held" && html`<span class="umark focus held" title="focus squad holds its share: waits by age now">★</span> `}${u.focus === "muted" && html`<span class="umark focus held" title=${u.status === "done" || u.state === "done" || u.merged ? "focus squad" : "focus squad: not next in line for a seat"}> ★</span>`}${u.unlocks > 0 && html`<span class=${"umark unlock" + (u.unlock === "on" ? "" : " held")} title=${"unlocks " + u.unlocks + " waiting unit" + (u.unlocks === 1 ? "" : "s") + (u.unlock === "on" ? ": goes first inside the limit" : ": not ranked first now")}>⬆${u.unlocks}</span> `}`;
 }
 // The `Runs on` row of both details windows (squad-priority U5): tier and model as tierLabel says them, the lane, and what puts the unit first.
 const runsOn = (u) => {
@@ -1134,7 +1157,7 @@ const runsOn = (u) => {
   if (u.lane === "light") out.push("light (rule: " + (u.lane_rule || "?") + ")");
   else if (u.lane === "moved") out.push("moved to normal: " + u.lane_cpu_h + " of " + u.lane_limit_h + " CPU-h");
   else out.push("normal");
-  const done = u.status === "done" || u.state === "done", marks = [u.focus ? (done ? "★ focus squad" : "★ focus squad: goes first inside the limit") : null, u.urgent ? "⚡ urgent: starts next, even over the limit" : null].filter(Boolean);
+  const done = u.status === "done" || u.state === "done", marks = [u.focus ? (done ? "★ focus squad" : "★ focus squad: goes first inside the limit") : null, u.urgent ? "⚡ urgent: starts next, even over the limit" : null, u.unlocks > 0 && !done ? "⬆ unlocks " + u.unlocks + (u.unlock === "on" ? ": goes first inside the limit" : ": waiting units, but not ranked first now") : null].filter(Boolean);
   return html`${out.join(" · ")}${marks.map((m) => html`<br key=${m} /><span class="ud-marks">${m}</span>`)}`;
 };
 function FlowCard({ card, typicalS, moved, onOpen, showProject, pos, now }) {
@@ -1225,8 +1248,8 @@ function MachineTop({ M, lstore, showProject }) {
     ${rows.length > 0 && html`<div class="mhead"><b>Top by ${sort === "cpu" ? "CPU" : "RAM"}</b><span class="mtip" title=${once ? "RAM here is memory charged to each worktree's cgroups, counted once, so the rows and the breakdown add up to used memory. Hover a figure for its RSS." : "RAM here is RSS: shared pages are counted once per process, so rows can add up to more than the machine uses."}>?</span>
       <span class="seg"><button aria-pressed=${sort === "ram"} onClick=${() => pick("ram")}>RAM</button><button aria-pressed=${sort === "cpu"} onClick=${() => pick("cpu")}>CPU</button></span></div>
       <div class="mg head"><span>Worktree</span><span>RAM</span><span>CPU</span><span>procs</span></div>
-      ${rows.map((g) => html`<div class="mg" key=${g.project + g.label}><span>${g.label} ${showProject && html`<small class="mut">${g.project}</small>`}</span>${ramCell(g)}<span>${cpuText(g.cpu_pct)}</span><span>${g.procs}</span></div>`)}`}
-    ${O.length > 0 && html`<div class="mout"><b>Outside this project</b>${O.map((o) => html`<div class="mg" key=${o.label}><span>${o.label}</span><span class=${o.ram_hit ? "warn" : ""} title=${once ? "RSS " + kbText(o.rss_kb) : null}>${kbText(o.ram_kb)}</span><span class=${o.cpu_hit ? "warn" : ""}>${cpuText(o.cpu_pct)}</span><span></span></div>`)}</div>`}
+      ${rows.map((g) => html`<div class="mg" key=${g.project + g.label}><span tabindex="0" title=${g.label}>${g.label} ${showProject && html`<small class="mut">${g.project}</small>`}</span>${ramCell(g)}<span>${cpuText(g.cpu_pct)}</span><span>${g.procs}</span></div>`)}`}
+    ${O.length > 0 && html`<div class="mout"><b>Outside this project</b>${O.map((o) => html`<div class="mg" key=${o.label}><span tabindex="0" title=${o.label}>${o.label}</span><span class=${o.ram_hit ? "warn" : ""} title=${once ? "RSS " + kbText(o.rss_kb) : null}>${kbText(o.ram_kb)}</span><span class=${o.cpu_hit ? "warn" : ""}>${cpuText(o.cpu_pct)}</span><span></span></div>`)}</div>`}
   </div>`;
 }
 function FlowSection({ flow, lstore, focus, onOpen, now, showProject }) {
