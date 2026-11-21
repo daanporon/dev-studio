@@ -123,6 +123,8 @@ const shoot = async (size: any, view: string, base: boolean) => {
   await p.route("**/api/events?*", (r: any) => r.request().url().includes("/lists") ? r.continue() : r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ events: [{ id: 1, at: Math.floor(Date.now() / 1000) - 60, project: "x", squad: "sq", member: null, kind: "spawn", sev: "ok", payload: { note: "a long unbroken value " + "x".repeat(200), list: ["a", "b"] } }], older: null, newer: null, names: {}, messages: {}, squads: [], kinds: ["spawn"] }) }));
   if (base) await p.route(url!, (r: any) => r.fulfill({ status: 200, contentType: "text/html", body: baseHtml.stdout }));
   await p.goto(url!, { waitUntil: "networkidle" }); await p.waitForTimeout(1200);
+  // A spinning status dot's box changes with its angle: stop animations so a measure never depends on the moment.
+  await p.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" });
   const opened = await v.open(p);
   if (v.kind === "keyboard") {
     if (!opened || !(await p.locator(v.field!).count())) { await ctx.close(); return { opened: false, m: null }; }
