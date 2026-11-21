@@ -96,7 +96,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .ucount{font:12px var(--mono);color:var(--mut);margin-top:5px}
 .prs{font:13px var(--mono)} .prs .bad{color:var(--red)}
 .detail{border-top:1px solid var(--line);border-left:3px solid var(--blue);padding:16px 16px 20px 48px;background:#13171e}
-.umark{font-size:11px;flex:none;margin-right:.3em} .fcard .t,.u .un{display:flex;min-width:0} .fcard .t .tn,.u .un .unit-open{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .fcard .t .fpos{flex:none;margin-right:.3em} .umark.focus{color:#e3b341} .umark.held{opacity:.7} .dbar-more{margin-left:auto} .dbar .chip{padding:1px 7px;border:1px solid var(--line);border-radius:10px;font-size:11px} .amenu .mutedline{margin:4px 9px 2px;font-size:11px;color:var(--mut)}
+.umark{font-size:11px;flex:none;margin-right:.3em} .fcard .t,.u .un{display:flex;min-width:0} .fcard .t .tn,.u .un .unit-open{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .fcard .t .fpos{flex:none;margin-right:.3em} .umark.focus{color:#e3b341} .umark.unlock{color:#58a6ff} .umark.held{opacity:.7} .dbar-more{margin-left:auto} .dbar .chip{padding:1px 7px;border:1px solid var(--line);border-radius:10px;font-size:11px} .amenu .mutedline{margin:4px 9px 2px;font-size:11px;color:var(--mut)}
 .dbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;font:12px var(--mono);color:var(--mut)}
 .flag{font:12px var(--mono);padding:2px 8px;border-radius:4px;background:var(--red-bg);color:var(--red)} .flag.soft{background:#23272f;color:var(--mut)}
 .dgrid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}
@@ -1110,7 +1110,7 @@ function BrakeBanner({ br }) {
 }
 // ⚡ on an urgent unit and ★ on a queued unit of the focus squad (muted when the squad holds its share): the same marks the loop ranks by.
 function UnitMarks({ u }) {
-  return html`${u.urgent && html`<span class="umark urgent" title="urgent: starts next, even over the limit">⚡</span> `}${u.focus === "on" && html`<span class="umark focus" title="focus squad: goes first inside the limit">★</span> `}${u.focus === "held" && html`<span class="umark focus held" title="focus squad holds its share: waits by age now">★</span> `}${u.focus === "muted" && html`<span class="umark focus held" title=${u.status === "done" || u.state === "done" || u.merged ? "focus squad" : "focus squad: not next in line for a seat"}> ★</span>`}`;
+  return html`${u.urgent && html`<span class="umark urgent" title="urgent: starts next, even over the limit">⚡</span> `}${u.focus === "on" && html`<span class="umark focus" title="focus squad: goes first inside the limit">★</span> `}${u.focus === "held" && html`<span class="umark focus held" title="focus squad holds its share: waits by age now">★</span> `}${u.focus === "muted" && html`<span class="umark focus held" title=${u.status === "done" || u.state === "done" || u.merged ? "focus squad" : "focus squad: not next in line for a seat"}> ★</span>`}${u.unlocks > 0 && html`<span class=${"umark unlock" + (u.unlock === "on" ? "" : " held")} title=${"unlocks " + u.unlocks + " waiting unit" + (u.unlocks === 1 ? "" : "s") + (u.unlock === "on" ? ": goes first inside the limit" : ": not ranked first now")}>⬆${u.unlocks}</span> `}`;
 }
 // The `Runs on` row of both details windows (squad-priority U5): tier and model as tierLabel says them, the lane, and what puts the unit first.
 const runsOn = (u) => {
@@ -1118,7 +1118,7 @@ const runsOn = (u) => {
   if (u.lane === "light") out.push("light (rule: " + (u.lane_rule || "?") + ")");
   else if (u.lane === "moved") out.push("moved to normal: " + u.lane_cpu_h + " of " + u.lane_limit_h + " CPU-h");
   else out.push("normal");
-  const done = u.status === "done" || u.state === "done", marks = [u.focus ? (done ? "★ focus squad" : "★ focus squad: goes first inside the limit") : null, u.urgent ? "⚡ urgent: starts next, even over the limit" : null].filter(Boolean);
+  const done = u.status === "done" || u.state === "done", marks = [u.focus ? (done ? "★ focus squad" : "★ focus squad: goes first inside the limit") : null, u.urgent ? "⚡ urgent: starts next, even over the limit" : null, u.unlocks > 0 && !done ? "⬆ unlocks " + u.unlocks + (u.unlock === "on" ? ": goes first inside the limit" : ": waiting units, but not ranked first now") : null].filter(Boolean);
   return html`${out.join(" · ")}${marks.map((m) => html`<br key=${m} /><span class="ud-marks">${m}</span>`)}`;
 };
 function FlowCard({ card, typicalS, moved, onOpen, showProject, pos, now }) {

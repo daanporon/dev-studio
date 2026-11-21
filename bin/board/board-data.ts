@@ -59,12 +59,12 @@ const NOW = () => clockNow();
 // `held`: the focus squad's queued units whose key is off now (the squad holds its share). `rank`: each line entry's
 // place (slot.ts lineOrder, without the member id), so the Flow orders the queue as the loop does; `count`: the open
 // dependents of any unit, for a planned unit not in the line (picker-prefers-unblocking-units U1).
-type FocusLine = { on: Set<string>; held: Set<string>; squad: string | null; rank: Map<string, number[]>; count: Unlocks; unblock: boolean };
+type FocusLine = { on: Set<string>; held: Set<string>; squad: string | null; rank: Map<string, number[]>; count: Unlocks; unblock: boolean; unlock: Set<string> };
 const focusMemo = new Map<string, FocusLine>();
 function focusLine(store: Store, label: string): FocusLine {
   let got = focusMemo.get(label);
   if (got) return got;
-  got = { on: new Set(), held: new Set(), squad: null, rank: new Map(), count: () => 0, unblock: false };
+  got = { on: new Set(), held: new Set(), squad: null, rank: new Map(), count: () => 0, unblock: false, unlock: new Set() };
   try {
     const now = NOW();
     const fs = focusSquad(store, label);
@@ -74,6 +74,7 @@ function focusLine(store: Store, label: string): FocusLine {
     for (const p of queue(store, label, now, readyLine(store, label, now).map((c) => ({ squad: c.topic, suffix: c.slug })))) {
       const k = `${p.squad}\0${p.suffix}`;
       if (!got.rank.has(k)) got.rank.set(k, p.rank.slice(0, 6));
+      if (p.unlock) got.unlock.add(k);
       if (p.focus) got.on.add(k); else if (fs && p.squad === fs) got.held.add(k);
     }
   } catch { /* an older loop.db: no focus marks */ }
@@ -92,6 +93,15 @@ const focusMark = (store: Store, label: string, squad: string, slug: string): "o
 const placeIn = (store: Store, label: string, squad: string, slug: string): number[] => {
   const f = focusLine(store, label), k = `${squad}\0${slug}`, u = store.get("units", { project: label, squad, slug });
   return f.rank.get(k) ?? placeOf(store, label, u, f.on.has(k), f.unblock ? f.count(u) : 0);
+};
+
+// ⬆N on an open unit others wait on (picker-prefers-unblocking-units U2): `unlocks` is its open-dependents count, the
+// loop's own (slot.ts unlocksOf); `unlock` is "on" while the line ranks it with the unlock key now (same queue() walk as
+// focus), else absent, so the board dims the mark when the key is off, out of room or the unit is not in line.
+const unlockFacts = (store: Store, label: string, squad: string, slug: string, status: string): { unlocks?: number; unlock?: "on" } => {
+  if (status !== "planned" && status !== "dispatched") return {};
+  const f = focusLine(store, label), n = f.count(store.get("units", { project: label, squad, slug }));
+  return n > 0 ? { unlocks: n, ...(f.unlock.has(`${squad}\0${slug}`) ? { unlock: "on" as const } : {}) } : {};
 };
 
 // The shell's '…' quoting, for commands the operator copies (an agent-written id/topic can't inject).
@@ -1659,14 +1669,14 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
           pr: pr ? { ref: repo ? `${repo}#${pr.num}` : null, num: pr.num, url: pr.url, status: pr.status ?? null,
             updated_at: (obByNum.get(pr.num)?.updated_at as number | null | undefined) ?? null } : null,
           place: us === "planned" ? placeIn(db.s, label, topic, slug) : null,
-          urgent: x?.urgent === true, focus: us === "cancelled" ? null : focusMark(db.s, label, topic, slug),
+          urgent: x?.urgent === true, focus: us === "cancelled" ? null : focusMark(db.s, label, topic, slug), ...unlockFacts(db.s, label, topic, slug, us),
           ...unitLane(db, label, x, unitCpuFor(db, label).get(`${topic}/${slug}`)),
           verdict: h?.verdict ?? null, reasons,
           stale: (h?.verdict === "blocked" && (h.poked != null || !x?.builder_wt)) || (us === "dispatched" && (b === "gone" || b === "unknown")),
         });
       }
       return {
-        slug, status: us, urgent: x?.urgent === true && us !== "done" && us !== "cancelled", focus: us === "cancelled" ? null : focusMark(db.s, label, topic, slug), deps, ext_deps: extDeps, builder_wt: x?.builder_wt ?? null, tier: tier || null, builder: bf,
+        slug, status: us, urgent: x?.urgent === true && us !== "done" && us !== "cancelled", focus: us === "cancelled" ? null : focusMark(db.s, label, topic, slug), ...unlockFacts(db.s, label, topic, slug, us), deps, ext_deps: extDeps, builder_wt: x?.builder_wt ?? null, tier: tier || null, builder: bf,
         waiting_on: waiting ? { id: waiting.id, title: waitTitle } : null,
         wait_until: null, wait_label: waitTitle ? `waiting · ${waitTitle}` : heldPlanned ? (x.hold_reason ? `held · ${x.hold_reason}` : "held") : planBlocked ? "ready, plan not approved" : null,
         reasons,
@@ -2313,7 +2323,7 @@ export function renderText(b: Board): string {
     const sw = Math.max(4, ...s.units.map((u) => u.slug.length)), tw = Math.max(4, ...s.units.map((u) => (u.tier ?? "").length));
     if (s.units.length) o.push(`      ${"".padEnd(1)} ${"UNIT".padEnd(sw)} ${"TIER".padEnd(tw)} ${"SPENT".padStart(8)} ${"CPU-H".padStart(6)}  STATE`);
     for (const u of s.units) {
-      const mk = ((u as any).urgent ? " ⚡" : "") + ((u as any).focus ? (u as any).focus === "on" ? " ★" : " ☆" : "");
+      const mk = ((u as any).urgent ? " ⚡" : "") + ((u as any).focus ? (u as any).focus === "on" ? " ★" : " ☆" : "") + ((u as any).unlocks ? ` unlocks:${(u as any).unlocks}` : "");
       const ut = (u as any).tokens ? `≈${compact((u as any).tokens.spent)}` : "";
       const cell = `${u.slug.padEnd(sw)} ${(u.tier ?? "").padEnd(tw)} ${ut.padStart(8)} ${cpuH((u as any).cpu).padStart(6)}`;
       const dep = u.state === "blocked" && u.deps.length ? ` · ${u.deps.length} deps` : "";
@@ -2400,7 +2410,7 @@ export function limitsJson(project: string, root = stateRoot()) {
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
       const hint = key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
-      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" ? ["off", "on"] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
+      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
     const used = new Set(limits.map((l) => l.group));
     return { project, groups: [...LIMIT_GROUPS.map((g) => g.name).filter((n) => used.has(n)), ...(used.has("Other") ? ["Other"] : [])], limits };
