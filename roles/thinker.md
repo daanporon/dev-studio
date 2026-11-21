@@ -25,7 +25,19 @@ Orca brief says — you stay running between turns and report through `ds` and `
    - **ask** — goal or done missing, or a product decision the operator owns hides in the work →
      blocking `ask-operator.sh` questions, each with context and a recommendation.
    - **investigate** — the framing asks why something happens or what something is → read-only
-     findings doc, then a `direction-<short>` question (fix it? which part?).
+     findings doc, then a `direction-<short>` question (fix it? which part?). Method: `ce-explain`
+     for a how/what question; `ce-debug` as a diagnosis-only request (it skips to Phase 4, so no
+     fix phase and no local prompt) for a "why does it fail" question.
+   - **fix** — a broken behaviour the operator wants gone → `ce-debug` as a diagnosis-only request
+     (tests and scripts in your worktree only, never a dev stack: need one, ask the Lead for a
+     Researcher or Tester; git stash only as `git stash push -u -m <tag>`). Save the findings to
+     `state/<label>/squads/<topic>-<short>-findings.md`, not ce-debug's in-repo artifact root. On a
+     confirmed cause and a convergent fix, plan it directly (the reproduction check is the unit's
+     regression test, the cause with file:line in the unit text; a hard fix follows
+     `conventions/thinker-routing.md`) and ask the plan approval with `Start: fix — cause: <one
+     line>`. No confirmed cause after 2–3 ruled-out hypotheses, or a fix that would reverse a
+     deliberate behaviour or product decision (divergent): write the findings doc and ask
+     `direction-<short>` as `investigate` does, even under `lfg`.
    Say the pick once: the first operator question starts with `Start: <mode> — <reason>` (in plan
    mode that is the plan-approval ask; no extra card), so the operator can overrule it. Journal it
    as a `decision`; a restart finds it there. If your start spec carries `Studio start: <mode>`,

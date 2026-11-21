@@ -106,6 +106,7 @@ describe("squad create (U158)", () => {
     wish("st1", { type: "feature", framing: "think about the board", start: "brainstorm" });
     wish("st2", { type: "feature", framing: "think about the board" });
     wish("st3", { type: "testing", framing: "run it", start: "plan" });
+    wish("st4", { type: "feature", framing: "the board crashes", start: "fix" });
     await tick();
     expect(JSON.parse(String(squad(s, "st1").doc)).start).toBe("brainstorm");
     expect(JSON.parse(String(squad(s, "st2").doc)).start).toBeNull();
@@ -115,6 +116,7 @@ describe("squad create (U158)", () => {
     expect(prompt("st2", "thinker")).not.toContain("Studio start");
     expect(prompt("st3", "thinker")).not.toContain("Studio start");
     expect(prompt("st3", "thinker")).not.toContain("Framing");
+    expect(prompt("st4", "thinker")).toContain("Studio start: fix — run the Start triage in roles/thinker.md from it; overrule it only with a reason.");
     expect(prompt("st1", "lead")).not.toContain("Studio start");
   });
 

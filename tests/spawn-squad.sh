@@ -38,6 +38,8 @@ ck "spawn bad type: nothing written" "$(sql "SELECT COUNT(*) FROM squads WHERE t
 
 run bin/commands/spawn-squad.sh --repo fx --topic t4 --start brainstorm >/dev/null
 ck "spawn --start: on the wish payload" "$(sql "SELECT json_extract(want_payload, '\$.start') FROM squads WHERE topic = 't4'")" "brainstorm"
+run bin/commands/spawn-squad.sh --repo fx --topic t4f --start fix >/dev/null
+ck "spawn --start fix: on the wish payload" "$(sql "SELECT json_extract(want_payload, '\$.start') FROM squads WHERE topic = 't4f'")" "fix"
 run bin/commands/spawn-squad.sh --repo fx --topic t5 >/dev/null
 ck "spawn: no --start, none on the payload" "$(sql "SELECT json_extract(want_payload, '\$.start') IS NULL FROM squads WHERE topic = 't5'")" "1"
 set +e; run bin/commands/spawn-squad.sh --repo fx --topic t6 --start bogus >/dev/null 2>&1; rc=$?; set -e

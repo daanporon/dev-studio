@@ -9,7 +9,7 @@ terminal, worktree, or squad member. This page is the one place the rules live;
 ## 1. Score the topic before planning
 
 Score and elevate only after the start triage (`roles/thinker.md`, step 0) has settled on `plan`, or its
-direction question is answered; a brainstorm, ask or investigate start does not call the deep model.
+direction question is answered; a brainstorm, ask or investigate start does not call the deep model; a `fix` start may call it for the fix plan only after the diagnosis confirms a cause.
 
 A topic is **hard** when any one of these holds; otherwise it is **easy**:
 
