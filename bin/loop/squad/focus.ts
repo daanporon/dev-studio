@@ -1,6 +1,7 @@
 // focus.ts — the project's focus squad (squad-priority U1): one limits key, `focus_squad` (default `-` =
 // none), so a project never has more than one. Its queued Builder work goes first for a free seat, after
-// urgent and unblocking work and inside the limit (slot.ts placeOf / lineOrder). The focus counts only
+// urgent and unblocking work and inside the limit, its units with the most open dependents first
+// (unblock_first, slot.ts placeOf / lineOrder). The focus counts only
 // while its squad is a live feature squad: a suspended one keeps the key and gets it back on resume; a
 // closed, done or gone one clears it (reconcilers/focus.ts). Written through settings.ts like any setting
 // (`ds focus`, the board's limits POST, a Settings undo), which logs one `focus_set` event per change.

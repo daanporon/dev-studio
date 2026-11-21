@@ -18,9 +18,17 @@
 //               an urgent unit before every non-urgent one, then a unit that blocks started work (a dep
 //               of another `dispatched` unit, U221) before one that does not, then a unit of the focus
 //               squad while its focus key is on (squad-priority U1: `focus_squad`, see Focus below), then a
-//               dispatched unit before a planned (or unit-less) one, then the lower units.id, then the lower
-//               member id (an asker with no row yet last). Blocking and focus never go over the limit; only urgent does. An urgent unit's Builder always gets one: the project goes one over
-//               the limit until a Builder finishes (U168).
+//               dispatched unit before a planned (or unit-less) one, then the unit that unlocks the most while its unlock key is on (see Unlock below), then the
+//               lower units.id, then the lower member id (an asker with no row yet last). Blocking, focus and
+//               unlocks never go over the limit; only urgent does. An urgent unit's Builder always gets one:
+//               the project goes one over the limit until a Builder finishes (U168).
+// Unlock (picker-prefers-unblocking-units U1; `unblock_first on|off`, default on): a unit's open dependents are
+// the units that wait on it through the whole chain (same-squad `deps`, `ext_deps` `<squad>/<slug>`), each counted
+// once (a cycle stops), only `planned` or `dispatched`, not held, not superseded, in a live squad (builders()'
+// filter); the chain stops at a unit that does not count. A unit holding the focus key always ranks by that count,
+// so the focus squad's own units go by unlocks; any other unit only while its lane's unlock room is above 0:
+// that lane's seats − 1 − its live seats whose unit has open dependents, each such entry taken in line using one.
+// So unlocking never fills a lane's last seat, and a one-seat lane ignores it. Off: the count ranks 0, today's line.
 // A Builder that is already live (a hung restart, a run-switch, a limit move, a phase switch)
 // replaces its own agent and is never refused; Studio, Leads, Thinkers and the rest are never limited.
 // Light lane (adaptive-builder-capacity U3), on when `max_light_builders` > 0 (0, the default, takes the
@@ -170,28 +178,71 @@ export function blocksOf(store: Store, project: string, u: Row | null): string[]
 // A candidate's place in line: an urgent unit first (U168, read from the unit row's doc, as
 // memberUnit returns it — urgent is a doc-only flag, no column), then a unit that blocks started
 // work (U221), then a unit of the focus squad while its focus key is on (squad-priority U1, lineOrder),
-// then a dispatched unit, then the lower unit id (no unit = last), then the lower member id, so no two
-// candidates tie.
-type Rank = [number, number, number, number, number, number];
+// then a dispatched unit, then the unit with more open dependents while its unlock key is on (stored as
+// minus the count, so more ranks first; 0 when off), then the lower unit id (no unit = last), then the
+// lower member id, so no two candidates tie.
+type Rank = [number, number, number, number, number, number, number];
 // A unit row's doc (urgent, lane: doc-only flags, no column); {} when it has none or it does not parse.
 const docOf = (u: Row | null): Row => { try { return (u?.doc ? JSON.parse(String(u.doc)) : {}) ?? {}; } catch { return {}; } };
 const urgentOf = (u: Row | null) => docOf(u).urgent === true;
-// The unit part of a candidate's place: [urgent, blocks started work, focus, dispatched, units.id].
-// `focused`: the focus key is on for this unit (lineOrder decides). The board reads it too
-// (bin/board/board-data.ts, through queue()), so the board and the loop rank the same way. Only reads.
-export function placeOf(store: Store, project: string, u: Row | null, focused = false): [number, number, number, number, number] {
-  return [urgentOf(u) ? 0 : 1, blocksOf(store, project, u).length ? 0 : 1, focused ? 0 : 1, u?.status === "dispatched" ? 0 : 1, u ? Number(u.id) : Number.MAX_SAFE_INTEGER];
+// The unit part of a candidate's place: [urgent, blocks started work, focus, dispatched, −unlocks, units.id].
+// `focused`: the focus key is on for this unit; `unlocks`: its open dependents while its unlock key is on, else 0
+// (lineOrder decides both). The board reads it too (bin/board/board-data.ts, through queue()), so the board and the
+// loop rank the same way. Only reads.
+export function placeOf(store: Store, project: string, u: Row | null, focused = false, unlocks = 0): [number, number, number, number, number, number] {
+  return [urgentOf(u) ? 0 : 1, blocksOf(store, project, u).length ? 0 : 1, focused ? 0 : 1, u?.status === "dispatched" ? 0 : 1, -unlocks || 0, u ? Number(u.id) : Number.MAX_SAFE_INTEGER];
 }
 const older = (a: Rank, b: Rank) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
 
+// Is the unlock key in use (`unblock_first`, default on)? Off gives today's line exactly.
+export function unblockFirst(store: Store, project: string): boolean {
+  return String(limit(store, project, "unblock_first") ?? "on").trim() !== "off";
+}
+const DEAD_SQUAD = ["suspended", "on-hold", "done", "failed", "closed", "gone"];
+// The project's open-dependents counter (see Unlock in the header): one query of the open units, each count
+// memoized, so a line reads the graph once. A unit with no row counts 0. Only reads.
+export type Unlocks = (u: Row | null) => number;
+export function unlocksOf(store: Store, project: string): Unlocks {
+  const rows = store.db.query(`SELECT u.squad, u.slug, u.deps, u.ext_deps, u.hold, u.superseded_by, s.status AS sq_status, s.topic AS sq
+      FROM units u LEFT JOIN squads s ON s.project = u.project AND s.topic = u.squad
+      WHERE u.project = ? AND u.status IN ('planned', 'dispatched')`).all(project) as Row[];
+  const list = (v: unknown): string[] => { try { const a = JSON.parse(String(v ?? "[]")); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
+  // Who waits on each `<squad>/<slug>`: the open units that count, by their deps and ext_deps.
+  const waiters = new Map<string, string[]>();
+  for (const r of rows) {
+    if (r.hold || r.superseded_by || r.sq == null || DEAD_SQUAD.includes(String(r.sq_status ?? "running"))) continue;
+    const me = `${r.squad}/${r.slug}`;
+    for (const dep of new Set([...list(r.deps).map((d) => `${r.squad}/${d}`), ...list(r.ext_deps)])) {
+      const w = waiters.get(dep) ?? [];
+      w.push(me); waiters.set(dep, w);
+    }
+  }
+  const memo = new Map<string, number>();
+  return (u) => {
+    if (!u) return 0;
+    const start = `${u.squad}/${u.slug}`;
+    const got = memo.get(start);
+    if (got != null) return got;
+    const seen = new Set([start]), todo = [start];
+    while (todo.length) for (const w of waiters.get(todo.pop()!) ?? []) if (!seen.has(w)) { seen.add(w); todo.push(w); }
+    memo.set(start, seen.size - 1);
+    return seen.size - 1;
+  };
+}
+
 // One candidate in line: who asks (squad, suffix, its member row when it has one), its unit and lane.
 export type Entry = { squad: string; suffix: string; m: Row | null; u: Row | null; lane: Lane };
-export type Placed<E extends Entry = Entry> = E & { rank: Rank; focus: boolean };
+// `unlocks`: the unit's open dependents; `unlock`: the line ranked it by them (its unlock key was on).
+export type Placed<E extends Entry = Entry> = E & { rank: Rank; focus: boolean; unlock: boolean; unlocks: number };
 // The focus squad (squad-priority U1) and, per lane, how many of its units still get the focus key:
 // that lane's seats − 1 − what the squad holds there, at least 0 (normal seats = max_builders, light seats =
 // max_light_builders; with the light lane off every unit is normal). So a lane with one seat gives none,
 // and the last seat of each lane always goes by the usual order. null: no focus that counts.
 type Focus = { squad: string; room: Record<Lane, number> } | null;
+// The unlock key (see Unlock in the header): the counter and, per lane, how many non-focus units may still rank by
+// it (that lane's seats − 1 − its live seats whose unit has open dependents, at least 0). `on`: `unblock_first`; off,
+// no unit ranks by it, though each Placed still carries its count. null: no counts (every unit 0).
+export type Unlock = { on: boolean; count: Unlocks; room: Record<Lane, number> } | null;
 
 function focusFor(store: Store, project: string, n: number, light: number, held: (squad: string) => Record<Lane, number>): Focus {
   const squad = focusSquad(store, project);
@@ -200,25 +251,29 @@ function focusFor(store: Store, project: string, n: number, light: number, held:
   return { squad, room: { normal: Math.max(0, n - 1 - h.normal), light: light > 0 ? Math.max(0, light - 1 - h.light) : 0 } };
 }
 
-// The line in place order. Without a focus it is a sort on placeOf, then the member id. With one, each
-// focus squad unit taken in order (an urgent or unblocking one too: it takes a seat as well) uses one of
-// its lane's room; once that room is used up, its later units rank by age like everyone else's.
-export function lineOrder<E extends Entry>(store: Store, project: string, entries: E[], focus: Focus): Placed<E>[] {
-  const left = entries.map((e) => ({ e, p: placeOf(store, project, e.u), mid: e.m ? Number(e.m.id) : Number.MAX_SAFE_INTEGER }));
-  const room = focus ? { ...focus.room } : null;
+// The line in place order. Without a focus or unlock it is a sort on placeOf, then the member id. With a focus,
+// each focus squad unit taken in order (an urgent or unblocking one too: it takes a seat as well) uses one of
+// its lane's room; once that room is used up, its later units rank by age like everyone else's. A unit with
+// the focus key ranks by its open dependents always; any other unit only while its lane's unlock room lasts,
+// and each such unit taken uses one of it.
+export function lineOrder<E extends Entry>(store: Store, project: string, entries: E[], focus: Focus, unlock: Unlock = null): Placed<E>[] {
+  const left = entries.map((e) => ({ e, p: placeOf(store, project, e.u), n: unlock ? unlock.count(e.u) : 0, mid: e.m ? Number(e.m.id) : Number.MAX_SAFE_INTEGER }));
+  const room = focus ? { ...focus.room } : null, uroom = unlock ? { ...unlock.room } : null;
   const mine = (e: E) => !!focus && e.squad === focus.squad;
   const out: Placed<E>[] = [];
   while (left.length) {
-    let best = 0, bestRank: Rank | null = null, bestFocus = false;
+    let best = 0, bestRank: Rank | null = null, bestFocus = false, bestUnlock = false;
     for (let i = 0; i < left.length; i++) {
-      const { e, p, mid } = left[i];
+      const { e, p, n, mid } = left[i];
       const f = !!room && mine(e) && room[e.lane] > 0;
-      const r: Rank = [p[0], p[1], f ? 0 : 1, p[3], p[4], mid];
-      if (!bestRank || older(r, bestRank)) { best = i; bestRank = r; bestFocus = f; }
+      const ul = !!unlock?.on && n > 0 && (f || uroom![e.lane] > 0);
+      const r: Rank = [p[0], p[1], f ? 0 : 1, p[3], ul ? -n : 0, p[5], mid];
+      if (!bestRank || older(r, bestRank)) { best = i; bestRank = r; bestFocus = f; bestUnlock = ul; }
     }
-    const [{ e }] = left.splice(best, 1);
+    const [{ e, n }] = left.splice(best, 1);
     if (room && mine(e)) room[e.lane] = Math.max(0, room[e.lane] - 1);
-    out.push({ ...e, rank: bestRank!, focus: bestFocus });
+    if (uroom && bestUnlock && !bestFocus) uroom[e.lane] = Math.max(0, uroom[e.lane] - 1);
+    out.push({ ...e, rank: bestRank!, focus: bestFocus, unlock: bestUnlock, unlocks: n });
   }
   return out;
 }
@@ -293,9 +348,12 @@ function lineCtx(store: Store, project: string, n: number, now: number, exclude:
   const laneAt = (u: Row | null): Lane => (light <= 0 ? "normal" : record ? laneOf(store, project, u, cpuH) : laneRead(store, project, u, cpuH));
   // Live now, per lane and per squad: the live members, plus the `ds pick` holds (a hold with no squad/suffix counts normal).
   const used = { normal: 0, light: 0 };
+  // Live seats per lane whose unit has open dependents: what the unlock room takes off (see Unlock).
+  const count = unlocksOf(store, project), unlocking = { normal: 0, light: 0 };
   const bySquad = new Map<string, Record<Lane, number>>();
-  const take = (sq: string | null, lane: Lane) => {
+  const take = (sq: string | null, lane: Lane, u: Row | null = null) => {
     used[lane]++;
+    if (count(u) > 0) unlocking[lane]++;
     if (sq == null) return;
     const h = bySquad.get(sq) ?? { normal: 0, light: 0 };
     h[lane]++; bySquad.set(sq, h);
@@ -305,16 +363,21 @@ function lineCtx(store: Store, project: string, n: number, now: number, exclude:
   for (const b of all) {
     if (!b.why) continue;
     const sq = String(b.m.squad), sf = String(b.m.suffix ?? ""), u = unitOf(sq, sf, b.m), lane = laneAt(u);
-    take(sq, lane);
+    take(sq, lane, u);
     holders.push({ squad: sq, suffix: sf, unit: u ? String(u.slug) : null, lane, why: b.why });
   }
-  for (const k of heldKeys) { const [sq, sf = ""] = k.startsWith("#") ? [] : k.split("\0"); take(sq ?? null, sq == null ? "normal" : laneAt(unitOf(sq, sf, null))); }
+  for (const k of heldKeys) {
+    const [sq, sf = ""] = k.startsWith("#") ? [] : k.split("\0"), u = sq == null ? null : unitOf(sq, sf, null);
+    take(sq ?? null, sq == null ? "normal" : laneAt(u), u);
+  }
   const focus = focusFor(store, project, n, light, (sq) => bySquad.get(sq) ?? { normal: 0, light: 0 });
+  const unlock: Unlock = { on: unblockFirst(store, project), count,
+    room: { normal: Math.max(0, n - 1 - unlocking.normal), light: light > 0 ? Math.max(0, light - 1 - unlocking.light) : 0 } };
   const entry = (sq: string, sf: string, m: Row | null): Entry => { const u = unitOf(sq, sf, m); return { squad: sq, suffix: sf, m, u, lane: laneAt(u) }; };
   // A planned unit whose Builder already waits is in the line once, as that member (so it takes focus room once).
   const waitingKeys = new Set(waiting.map(key));
   const unwished = (p: Asker) => !waitingKeys.has(`${p.squad}\0${p.suffix ?? ""}`);
-  return { live: liveKeys.size + heldKeys.length, used, waiting, unwished, light, focus, entry, unitOf, liveKeys, holders, holds: heldKeys.length };
+  return { live: liveKeys.size + heldKeys.length, used, waiting, unwished, light, focus, unlock, entry, unitOf, liveKeys, holders, holds: heldKeys.length };
 }
 
 // The seat walk slot() gives free seats by, oldest first: does each entry of the line get a seat now?
@@ -349,7 +412,7 @@ function lineOf(store: Store, project: string, now: number, planned: Asker[]) {
   const line = lineOrder(store, project, [
     ...c.waiting.map((m) => c.entry(String(m.squad), String(m.suffix ?? ""), m)),
     ...planned.filter(c.unwished).map((p) => c.entry(String(p.squad), String(p.suffix ?? ""), null)),
-  ], c.focus);
+  ], c.focus, c.unlock);
   return { n, c, line };
 }
 
@@ -401,15 +464,18 @@ export function slot(store: Store, project: string, who: Asker, now: number, rol
   // urgent units at once each start; the rest wait as usual.
   const myUnit = c.unitOf(squad, suffix, me);
   if (urgentOf(myUnit)) return { ok: true, limit: n };
-  // The board shows the line as is: a blocker that waits says why it is next (U221).
-  const next = () => { const b = blocksOf(store, project, myUnit); return b.length ? ` (next: blocks ${b.join(", ")})` : ""; };
   const cand = (sq: string, sf: string, m: Row | null, isMe = false) => ({ ...c.entry(sq, sf, m), me: isMe });
   const line = lineOrder(store, project, [
     ...c.waiting.map((m) => cand(String(m.squad), String(m.suffix ?? ""), m)),
     ...planned.filter((p) => !(p.squad === squad && p.suffix === suffix) && c.unwished(p)).map((p) => cand(String(p.squad), String(p.suffix ?? ""), null)),
     cand(squad, suffix, me, true),
-  ], c.focus);
+  ], c.focus, c.unlock);
   const light = c.light, seat = walk(line, n, light, c.used, c.live), mine = line.findIndex((p) => p.me);
+  // Why the asker is next when it waits: it blocks started work (U221), else it unlocks open units (its key on).
+  const next = () => {
+    const b = blocksOf(store, project, myUnit);
+    return b.length ? ` (next: blocks ${b.join(", ")})` : line[mine].unlock ? ` (next: unlocks ${line[mine].unlocks})` : "";
+  };
   if (light > 0) {
     // Ahead: the entries before the asker that the walk seats.
     if (seat[mine]) return { ok: true, limit: n + light };
