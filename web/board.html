@@ -253,7 +253,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .msg{border:1px solid var(--line);border-radius:6px;padding:8px 10px} .msg.unread{border-color:var(--amber)} .msg.ended{opacity:.55} button.chip-btn{cursor:pointer;font:inherit;color:inherit;border:1px solid var(--line);background:transparent} .msg .mh{display:flex;gap:8px;flex-wrap:wrap;font:12px var(--mono);color:var(--mut)}
 .msg .sj{font-weight:600;color:var(--fg)} .msg .bd{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin-top:4px} .msg .due{color:var(--red)} .msg .un{color:var(--amber)}
 .start-err{font-size:12px} .start-count{font-size:12px;margin-top:2px} .bad{color:var(--red)}
-@media (max-width:600px){.startsq{padding:0} .startsq .mbox{width:100%!important;height:100%;height:100dvh;max-height:none;border:0;border-radius:0}}
+@media (max-width:600px){.startsq{padding:0} .startsq .mbox{width:100%!important;height:100%;max-height:none;border:0;border-radius:0}}
 .chat-modal{z-index:55} .mbox.chat{width:min(760px,100%);height:85vh} .chat-wrap{flex:1;min-height:120px;position:relative;display:flex;flex-direction:column}
 .chat-log{flex:1;min-height:0;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:10px}
 .chat-turn{display:flex;flex-direction:column;font-size:13px;line-height:1.5;min-width:0} .chat-time{font:11px var(--mono);color:var(--dim);margin-top:3px}
@@ -269,12 +269,12 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .chat-down{position:absolute;right:18px;bottom:10px;border-radius:50%;width:32px;height:32px;padding:0}
 .chat-in{flex:1 1 100%;min-width:0;resize:none;font:13px/1.45 var(--sans);padding:7px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;max-height:calc(6 * 1.45em + 16px);overflow-y:auto}
 .chat-left{font:11px var(--mono);color:var(--dim)} .chat-left.low{color:var(--amber)}
-@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;height:100dvh;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px}}
+@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px}}
 .qfoot .err{font-size:12px;color:var(--red)} .qfoot .ok{font-size:12px;color:var(--green)}
 /* Phone: every popup is a full-screen sheet (the box fills the viewport; only its body scrolls; header, tabs and footer stay put) and no input is under 16px, so a tap never zooms the page. */
 @media (max-width:600px){
 .modal{padding:0;align-items:stretch}
-.mbox{width:100%!important;max-width:none!important;height:100%;height:100dvh;max-height:none;border:0;border-radius:0;min-width:0}
+.mbox{width:100%!important;max-width:none!important;height:100%;max-height:none;border:0;border-radius:0;min-width:0}
 .mbox>*{min-width:0}
 .mbox>.mhd:first-child,.mbox>.tabs{flex:none;flex-wrap:nowrap;gap:8px;padding-top:max(8px,env(safe-area-inset-top));overflow-wrap:anywhere}
 .mbox>.tabs{overflow-x:auto;align-items:center}
@@ -289,6 +289,16 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .qbody .top{flex-wrap:wrap}
 .qbody{padding:12px 14px}
 input,textarea,select{font-size:16px!important}
+}
+/* Phone: the sheet is the visible area above the keyboard (U4). keyboardSheets() writes --vvh/--vvtop from visualViewport while a
+   sheet is open; without them the sheet is the dynamic viewport. kb-open (keyboard up) folds the footer's secondary buttons, and
+   the chat's Send sits beside its text box. */
+@media (max-width:600px){
+.modal{top:var(--vvtop,0px);bottom:auto;height:var(--vvh,100dvh)}
+.kb-open .mbox>.qfoot>.qsec,.kb-open .mbox>.qfoot>.chat-btn{display:none}
+.kb-open .mbox.chat>.qfoot>.chat-in{flex:1 1 0}
+.kb-open .mbox.chat>.qfoot>.btn.pri{flex:none;order:0}
+.kb-open .mbox.chat>.qfoot>.chat-left:not(.low),.kb-open .mbox.chat>.qfoot>.sp{display:none}
 }
 /* Phone, inside the sheets: Settings tabs scroll in one row, the Limits table stacks, footers wrap, every tap target is 44px. */
 @media (max-width:600px){
@@ -2099,7 +2109,7 @@ function ChatPanel({ project, topic, wt, label, onClose }) {
         ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
         ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
       <div class="qfoot">
-        <textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX} value=${text} placeholder=${"Message " + label + " (typed into its terminal when it is idle; Enter sends)"}
+        <textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX} enterkeyhint="send" value=${text} placeholder=${"Message " + label + " (typed into its terminal when it is idle; Enter sends)"}
           onInput=${(e) => { setText(e.target.value); grow(e.target); }}
           onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (!e.shiftKey) send(); } }}></textarea>
         <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left} left</span><span class="sp"></span>
@@ -2136,7 +2146,12 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
       if (planOpen || chat) return;
       if (e.key === "Escape") return onClose();
       if (!n) return;
-      if (e.target.tagName === "TEXTAREA") { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && val.trim() && n.id) send(); return; }
+      // At phone width Enter sends (the key reads "send", enterkeyhint; a phone has no Ctrl+Enter).
+      if (e.target.tagName === "TEXTAREA") {
+        const phone = typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches;
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (phone && !e.shiftKey && !e.isComposing))) { if (phone) e.preventDefault(); if (val.trim() && n.id && !st.busy && !sentQ.has(nkey(n))) send(); }
+        return;
+      }
       if (e.key === "ArrowRight") go(1); else if (e.key === "ArrowLeft") go(-1);
       else if (/^[1-9]$/.test(e.key) && n && !termOnly && n.choices[+e.key - 1]) set(n.choices[+e.key - 1].label);
       else if (e.key === "Enter" && n && !termOnly && n.id && !sentQ.has(nkey(n))) { if (studioCard && n.choices.length === 0) send(""); else if (val.trim() || one !== null) send(); }
@@ -2178,7 +2193,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
               ${c.does && html`<div class="d">${c.does}</div>`}
               ${c.label === rec && n.why && html`<div class="d">Why: ${n.why}</div>`}</span></button>`)}</div>`}
           ${rec && !n.choices.some((c) => c.label === rec) && html`<div class="sugg"><b>Suggested:</b> ${rec}${n.why ? " — " + n.why : ""}</div>`}
-          ${!studioCard && html`<textarea placeholder="Or type your own answer (⌘/Ctrl+Enter sends)" value=${isChoice ? "" : val} onInput=${(e) => set(e.target.value)}></textarea>`}`)}
+          ${!studioCard && html`<textarea enterkeyhint="send" placeholder=${"Or type your own answer (" + (typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches ? "Enter" : "⌘/Ctrl+Enter") + " sends)"} value=${isChoice ? "" : val} onInput=${(e) => set(e.target.value)}></textarea>`}`)}
         ${n.plain && n.revision && html`<details class="qdetails"><summary>Whole plan in plain words</summary>${n.facts && html`<div class="qfacts">${[n.facts.steps + " steps", n.facts.hard + " hard", n.facts.start_now + " start now"].map((t) => html`<span key=${t} class="qfact">${t}</span>`)}</div>`}
           <ul class="qplain">${n.plain.map((l) => html`<li key=${l.label}><b>${l.label}</b>${l.text}</li>`)}</ul></details>`}
         ${n.plain && (n.text !== n.title || n.why) && html`<details class="qdetails"><summary>Details for the record</summary>
@@ -2186,14 +2201,14 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           ${n.why && html`<div class="qtxt">Why: ${linkedQ(n.why, n.repo_slug)}</div>`}</details>`}
       </div>
       <div class="qfoot">
-        ${(n.squad !== "_studio" || n.card_squad) && html`<button class="btn" onClick=${() => { onClose(); onShow(n.label, n.card_squad || n.squad); }}>Show squad</button>`}
+        ${(n.squad !== "_studio" || n.card_squad) && html`<button class="btn qsec" onClick=${() => { onClose(); onShow(n.label, n.card_squad || n.squad); }}>Show squad</button>`}
         ${n.act && html`<${ActBtn} n=${n} toast=${toast} />`}
         ${n.squad !== "_studio" && n.chat_wt && html`<button class="btn chat-btn" title="Read this member's recent turns and type it one line"
           onClick=${() => setChat({ project: n.label, topic: n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead" })}>Chat with ${n.chat_label || "the Lead"}</button>`}
         <span class="sp"></span>
         ${st.err && html`<span class="err">not sent: ${st.err}</span>`}
         ${sent && html`<span class="ok">${n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
-        <button class="btn" disabled=${i === 0} onClick=${() => go(-1)}>←</button><button class="btn" disabled=${i === items.length - 1} onClick=${() => go(1)}>→</button>
+        <button class="btn qsec" disabled=${i === 0} onClick=${() => go(-1)}>←</button><button class="btn qsec" disabled=${i === items.length - 1} onClick=${() => go(1)}>→</button>
         ${n.id ? (termOnly ? null
             : studioCard && n.choices.length > 0
               ? html`<button class="btn" disabled=${st.busy || !!sent} onClick=${() => send("")}>Dismiss</button>
@@ -3623,6 +3638,67 @@ function App() {
     ${toastMsg && html`<div class="toast">${toastMsg}</div>`}
   </div>`;
 }
+
+// Phone sheets above the keyboard (board-mobile-fullscreen-popups U4). iOS Safari ignores the viewport's
+// interactive-widget, so its keyboard covers the bottom of a full-screen sheet (Send included). While a .modal
+// sheet is open at <= 600 px, one listener on visualViewport (resize, scroll) writes the visible area to the root
+// as --vvh / --vvtop, which the phone sheet rule sizes .modal by; on Android the layout already shrank and they
+// change nothing. `kb-open` on the root (the visible height over 120 px under the tallest seen at this width)
+// folds the footer's secondary buttons; a focused field is scrolled into view inside the sheet, never the page.
+// A pinch zoom (scale != 1) drops the variables. Nothing is installed without visualViewport; the listeners
+// go when the last sheet closes or the width passes 600 px. Returns a teardown (the tests use it).
+function keyboardSheets(win) {
+  const vv = win.visualViewport, doc = win.document, root = doc.documentElement;
+  const mq = vv && win.matchMedia && win.MutationObserver && win.matchMedia("(max-width:600px)");
+  if (!mq || !mq.addEventListener) return () => {};
+  const FIELD = "input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]),textarea,select";
+  let on = false, stopped = false, full = 0, fullW = -1, obs = null;
+  const clear = () => { root.style.removeProperty("--vvh"); root.style.removeProperty("--vvtop"); root.classList.remove("kb-open"); };
+  // The nearest scrolling box between the field and its sheet; the field is moved into its view (block "nearest").
+  const reveal = (el) => {
+    const box = el && el.closest && el.closest(".modal .mbox");
+    if (!box) return;
+    for (let p = el.parentElement; p && p !== box; p = p.parentElement) {
+      const o = win.getComputedStyle(p).overflowY;
+      if ((o !== "auto" && o !== "scroll") || p.scrollHeight <= p.clientHeight) continue;
+      const e = el.getBoundingClientRect(), b = p.getBoundingClientRect();
+      if (e.top < b.top || e.height > b.height) p.scrollTop -= b.top - e.top + 8;
+      else if (e.bottom > b.bottom) p.scrollTop += e.bottom - b.bottom + 8;
+      return;
+    }
+  };
+  const focused = () => { const a = doc.activeElement; return a && a.matches && a.matches(FIELD) && a.closest(".modal .mbox") ? a : null; };
+  const update = () => {
+    if (win.innerWidth !== fullW) { fullW = win.innerWidth; full = 0; }
+    full = Math.max(full, win.innerHeight);
+    if (Math.abs((vv.scale || 1) - 1) > 0.01) return clear();
+    root.style.setProperty("--vvh", vv.height + "px");
+    root.style.setProperty("--vvtop", vv.offsetTop + "px");
+    const kb = full - vv.height > 120;
+    root.classList.toggle("kb-open", kb);
+    const f = kb && focused();
+    if (f) (win.requestAnimationFrame || setTimeout)(() => reveal(f));
+  };
+  const onFocus = (e) => { if (e.target && e.target.matches && e.target.matches(FIELD)) reveal(e.target); };
+  const sync = () => {
+    const want = !stopped && mq.matches && !!doc.querySelector(".modal .mbox");
+    if (want === on) return;
+    on = want;
+    const m = on ? "addEventListener" : "removeEventListener";
+    vv[m]("resize", update); vv[m]("scroll", update); doc[m]("focusin", onFocus);
+    on ? update() : clear();
+  };
+  // Watch for sheets only at phone width: the desktop gets no observer at all.
+  const watch = () => {
+    const want = !stopped && mq.matches;
+    if (want && !obs) { obs = new win.MutationObserver(sync); obs.observe(doc.body, { childList: true, subtree: true }); }
+    if (!want && obs) { obs.disconnect(); obs = null; }
+    sync();
+  };
+  mq.addEventListener("change", watch); watch();
+  return () => { stopped = true; mq.removeEventListener("change", watch); watch(); };
+}
+keyboardSheets(window);
 
 ReactDOM.createRoot(document.getElementById("root")).render(html`<${App} />`);
 </script>

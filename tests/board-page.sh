@@ -774,7 +774,7 @@ eq "U3/U5 page: a wrapping input capped at 2000, sent as one line to api/chat" "
 # crew-terminal-access U5: the panel reads as a conversation.
 chat_row_fn=$(sed -n '/^function chatTurn(/,/^}/p' "$BP")
 eq "U5 page: only a reply is HTML, and only through mdToHtml (it escapes first)" "$(printf '%s%s' "$chat_fn" "$chat_row_fn" | grep -ci 'innerHTML')$(printf '%s' "$chat_row_fn" | grep -cF 'dangerouslySetInnerHTML=${{ __html: mdToHtml(text) }}')" "11"
-eq "U5 page: at phone width the panel fills the screen" "$(grep -cF '@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;height:100dvh' "$BP")" "1"
+eq "U5 page: at phone width the panel fills the screen" "$(grep -cF '@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none' "$BP")" "1"
 eq "U5 page: a counter, Working…, the ↓ button, no send strip" "$(printf '%s' "$chat_fn" | grep -c '} left</span>')$(printf '%s' "$chat_fn" | grep -c 'data.working && html')$(printf '%s' "$chat_fn" | grep -c 'class="btn chat-down"')$(grep -c 'chat-sends\|chat-send ' "$BP")" "1110"
 # crew-terminal-access U4: the Flow card opens the unit details window, which names the Builder and offers Chat / Show in squad / Answer.
 ud_fn=$(sed -n '/^function UnitDetails(/,/^}/p' "$BP")
