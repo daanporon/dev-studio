@@ -49,7 +49,7 @@ import { lastStart, lock, view } from "../squad/member-state.ts";
 import { existsSync } from "node:fs";
 import { dependencyReasons, memberUnit } from "../pause/pause-conditions.ts";
 import { limit } from "./pick.ts";
-import { focusSquad } from "../squad/focus.ts";
+import { focusSquad, NOT_LIVE } from "../squad/focus.ts";
 import type { Row, Store } from "../core/store.ts";
 
 export type Slot = { ok: true; limit: number | null } | { ok: false; limit: number; live: number; ahead: number; why: string };
@@ -165,12 +165,14 @@ function builders(store: Store, project: string): Row[] {
     ORDER BY id`).all(project) as Row[];
 }
 
+// A units.deps / ext_deps cell as a list of strings; [] when empty or it does not parse.
+const list = (v: unknown): string[] => { try { const a = JSON.parse(String(v ?? "[]")); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
+
 // The dispatched units that wait on this unit (U221): it blocks started work. Their `deps` hold its
 // slug (same squad) or `<squad>/<slug>` in `ext_deps`; a done or cancelled dependent no longer waits.
 export function blocksOf(store: Store, project: string, u: Row | null): string[] {
   if (!u) return [];
   const rows = store.db.query("SELECT squad, slug, deps, ext_deps FROM units WHERE project = ? AND status = 'dispatched'").all(project) as Row[];
-  const list = (v: unknown): string[] => { try { const a = JSON.parse(String(v ?? "[]")); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
   return rows.filter((r) => !(r.squad === u.squad && r.slug === u.slug)
     && ((r.squad === u.squad && list(r.deps).includes(String(u.slug))) || list(r.ext_deps).includes(`${u.squad}/${u.slug}`))).map((r) => String(r.slug));
 }
@@ -198,7 +200,6 @@ const older = (a: Rank, b: Rank) => { for (let i = 0; i < a.length; i++) if (a[i
 export function unblockFirst(store: Store, project: string): boolean {
   return String(limit(store, project, "unblock_first") ?? "on").trim() !== "off";
 }
-const DEAD_SQUAD = ["suspended", "on-hold", "done", "failed", "closed", "gone"];
 // The project's open-dependents counter (see Unlock in the header): one query of the open units, each count
 // memoized, so a line reads the graph once. A unit with no row counts 0. Only reads.
 export type Unlocks = (u: Row | null) => number;
@@ -206,11 +207,10 @@ export function unlocksOf(store: Store, project: string): Unlocks {
   const rows = store.db.query(`SELECT u.squad, u.slug, u.deps, u.ext_deps, u.hold, u.superseded_by, s.status AS sq_status, s.topic AS sq
       FROM units u LEFT JOIN squads s ON s.project = u.project AND s.topic = u.squad
       WHERE u.project = ? AND u.status IN ('planned', 'dispatched')`).all(project) as Row[];
-  const list = (v: unknown): string[] => { try { const a = JSON.parse(String(v ?? "[]")); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
   // Who waits on each `<squad>/<slug>`: the open units that count, by their deps and ext_deps.
   const waiters = new Map<string, string[]>();
   for (const r of rows) {
-    if (r.hold || r.superseded_by || r.sq == null || DEAD_SQUAD.includes(String(r.sq_status ?? "running"))) continue;
+    if (r.hold || r.superseded_by || r.sq == null || NOT_LIVE.includes(String(r.sq_status ?? "running"))) continue;
     const me = `${r.squad}/${r.slug}`;
     for (const dep of new Set([...list(r.deps).map((d) => `${r.squad}/${d}`), ...list(r.ext_deps)])) {
       const w = waiters.get(dep) ?? [];
