@@ -342,6 +342,6 @@ describe("U5: merged rows carry pr_url", () => {
     const f = flowOf({ now: N, events: [], floor_min: {}, squads: [{ project: "pa", squad: S }, { project: "pb", squad: S }],
       units: [unit("a1", { project: "pa", status: "planned", pick: slotp, place: [1, 1, 1, 1] }), unit("b1", { project: "pb", status: "planned", pick: slotp, place: [1, 1, 1, 2] }),
         unit("a2", { project: "pa", status: "planned", pick: slotp, place: [1, 1, 1, 3] })] });
-    expect(f.cards.map((c) => [c.slug, c.queue_pos])).toEqual([["a1", 1], ["b1", 1], ["a2", 2]]);
+    expect(f.cards.map((c) => [c.slug, c.queue_pos])).toEqual([["a1", 1], ["a2", 2], ["b1", 1]]);   // the queued cards follow queued_order: by project, then place
   });
 });

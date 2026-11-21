@@ -89,11 +89,12 @@ const focusMark = (store: Store, label: string, squad: string, slug: string): "o
   const f = focusLine(store, label), k = `${squad}\0${slug}`;
   return f.on.has(k) ? "on" : f.held.has(k) ? "held" : f.squad && f.squad === squad ? "muted" : null;
 };
-// A planned unit's Flow place: its rank in the loop's line, else (not in it: its deps are not done yet) placeOf with
-// its focus key and, under `unblock_first`, its open dependents, so it keeps its place in its group.
+// A queued unit's Flow place (planned or dispatched): its rank in the loop's line, else (not in it: its deps are not
+// done yet, or a started unit waiting for a seat) placeOf with the focus key for a unit of the focus squad and, under
+// `unblock_first`, its open dependents, so it keeps its place in its group.
 const placeIn = (store: Store, label: string, squad: string, slug: string): number[] => {
   const f = focusLine(store, label), k = `${squad}\0${slug}`, u = store.get("units", { project: label, squad, slug });
-  return f.rank.get(k) ?? placeOf(store, label, u, f.on.has(k), f.unblock ? f.count(u) : 0);
+  return f.rank.get(k) ?? placeOf(store, label, u, f.on.has(k) || (f.squad != null && f.squad === squad), f.unblock ? f.count(u) : 0);
 };
 
 // ⬆N on an open unit others wait on (picker-prefers-unblocking-units U2): `unlocks` is its open-dependents count, the
@@ -1669,7 +1670,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
           question: ask ? { id: ask.id == null ? null : String(ask.id), since: Number.isFinite(askAt) ? Math.floor(askAt / 1000) : null } : null,
           pr: pr ? { ref: repo ? `${repo}#${pr.num}` : null, num: pr.num, url: pr.url, status: pr.status ?? null,
             updated_at: (obByNum.get(pr.num)?.updated_at as number | null | undefined) ?? null } : null,
-          place: us === "planned" ? placeIn(db.s, label, topic, slug) : null,
+          place: us === "planned" || us === "dispatched" ? placeIn(db.s, label, topic, slug) : null,
           urgent: x?.urgent === true, focus: us === "cancelled" ? null : focusMark(db.s, label, topic, slug), ...unlockFacts(db.s, label, topic, slug, us),
           ...unitLane(db, label, x, unitCpuFor(db, label).get(`${topic}/${slug}`)),
           verdict: h?.verdict ?? null, reasons,
