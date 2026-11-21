@@ -69,7 +69,7 @@ export const REQUESTS = {
   skills: obj({ role: opt(str), reset: opt(bool), set: opt(rec) }),
   squad: obj({ id: opt(num), op: opt(str) }),
   studio: obj({ action: str, topic: opt(str), line: opt(str), framing: opt(str), id: opt(str), answer: opt(str), request: opt(num), label: opt(str), date: opt(str), since: opt(num), until: opt(num), spend: opt(any), merges_upto: opt(any) }),
-  "studio-move": obj({ handle: opt(str), agent: opt(str), account: opt(str), model: opt(str), effort: opt(str), from: opt(str) }),
+  "studio-move": obj({ handle: opt(str), agent: opt(str), account: opt(str), model: opt(str), effort: opt(str), from: opt(str), why: opt(str), notice: opt(str) }),
   withdraw: obj({ of: opt(str), key: opt(str), episode: opt(str) }),
   "worktree.remove": obj({ label: opt(str), topic: opt(str), wt: opt(str), path: opt(str), unit: opt(str), merged: opt(bool) }),
   "plan-revoke": obj({ plan: str, why: str, keep_started: opt(bool) }),

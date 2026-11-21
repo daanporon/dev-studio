@@ -340,6 +340,10 @@ describe("move back up per roster row (configurable-role-elevation U1)", () => {
     expect(stops(setup("claude opus always - muse:m - stay", "muse:m", ["claude:a1=20", "muse:mu=10"]))).toEqual([]);
   });
 
+  test("configurable-role-elevation U3: a studio row set to up never gets a member stop (decide skips the Studio; studio_move moves it)", () => {
+    expect(stops(setup("claude opus ondemand - muse:m - up", "muse:m", ["claude:a1=20", "muse:mu=10"], { key: "studio", role: "studio" }))).toEqual([]);
+  });
+
   test("builder up moves a builder-standard member unless that tier row says stay", () => {
     const s = builder("claude sonnet ondemand - muse:m", "builder-standard", { tier: "standard" });
     expect(stops(s)).toEqual([]);

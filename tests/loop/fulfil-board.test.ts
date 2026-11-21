@@ -431,6 +431,18 @@ describe("studio", () => {
     }
   });
 
+  test("configurable-role-elevation U3: a move-up card (move_up: true) answered \"move it\" records studio:up-approved, not studio:approved", async () => {
+    const s = imported(), { tick } = rig(s);
+    const ids = JSON.parse(readFileSync(join(s.root, "fx", "alerts.json"), "utf8")).alerts.map((x: Row) => String(x.id));
+    const doc = JSON.parse(String((s.db.query("SELECT doc FROM observed_alerts WHERE project = 'fx' AND id = ?").get(ids[0]) as Row).doc));
+    s.db.run("UPDATE observed_alerts SET doc = ? WHERE project = 'fx' AND id = ?", [JSON.stringify({ ...doc, move: true, move_up: true, suggestion: "move it" }), ids[0]]);
+    const id = board(s, "dismiss", { id: ids[0], answer: "move it" }, { project: "fx" });
+    await tick();
+    expect(result(s, id)).toMatchObject({ done: true, ok: true, dismissed: ids[0], move: "approved" });
+    expect(s.get("episodes", { project: "fx", subject: "studio.move", kind: "studio:up-approved" })).toMatchObject({ state: "approved", ended_at: null, source: "board" });
+    expect(s.get("episodes", { project: "fx", subject: "studio.move", kind: "studio:approved" })).toBeNull();
+  });
+
   test("provider-billing-fallback U4: an out-of-credits card answered Fixed ends the hold, Switch it off disables the account, Dismiss only clears", async () => {
     for (const [answer, held, state] of [["Fixed", false, null], [" switch it off ", true, "disabled"], [undefined, true, null], ["something else", true, null]] as const) {
       const s = imported(), { tick } = rig(s);

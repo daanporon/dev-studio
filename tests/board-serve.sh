@@ -499,7 +499,11 @@ ff
 eq "roles: bad return is 400"        "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"maybe\"}")" "400"
 eq "roles: return up on an elevate row is 400" "$(rp "{\"project\":\"$LBL\",\"role\":\"builder-review\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"elevate\",\"return\":\"up\"}")" "400"
 has "roles: the elevate refusal names the row" "$(cat "$TMP/post.out")" "builder-review"
-eq "roles: return up on studio is 400" "$(rp "{\"project\":\"$LBL\",\"role\":\"studio\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"up\"}")" "400"
+eq "roles: return up on studio is 202 (configurable-role-elevation U3)" "$(rp "{\"project\":\"$LBL\",\"role\":\"studio\",\"agent\":\"claude\",\"model\":\"sonnet\",\"spawn\":\"ondemand\",\"return\":\"up\"}")" "202"
+ff
+eq "roles: roles.sh list shows studio up" "$(DS_STATE_ROOT="$DBR" "$ROOT/bin/commands/roles.sh" list "$LBL" | awk '$1=="studio"{print $8}')" "up"
+eq "roles: put studio back"          "$(rp "{\"project\":\"$LBL\",\"role\":\"studio\",\"reset\":true}")" "202"
+ff
 eq "roles: put lead back"            "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"reset\":true}")" "202"
 ff
 eq "roles: bad effort is 400"        "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"ondemand\",\"effort\":\"turbo\"}")" "400"

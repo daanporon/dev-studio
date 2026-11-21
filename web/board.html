@@ -3147,7 +3147,8 @@ function RolesTab({ project, toast }) {
       return { ...o, [x.role]: n };
     });
     // configurable-role-elevation U2: "move back up", the row's own value (draft first) or what it inherits
-    const canBack = (d.spawn === "always" || d.spawn === "ondemand") && x.role !== "studio";
+    // U3: the studio row too; it moves through studio-move (a fresh tab from its journal) and follows studio_move
+    const canBack = d.spawn === "always" || d.spawn === "ondemand";
     const ownRet = "return" in (draft[x.role] || {}) ? draft[x.role].return : (x.return || "");
     const backUp = ownRet ? ownRet === "up" : "return" in (draft[x.role] || {}) ? !!x.default?.back_up : !!x.back_up;
     const backNote = ownRet ? "set on this row" : x.back_up_from === "default" ? "from default" : x.back_up_from && x.back_up_from !== "row" ? "from " + x.back_up_from : "";
@@ -3178,7 +3179,7 @@ function RolesTab({ project, toast }) {
               <button class="ibtn" title="remove" aria-label="remove step" disabled=${steps.length === 1} onClick=${() => setSteps(steps.filter((_, k) => k !== i))}>✕</button></span></div>`; })}</div>
         <div class="steps-foot"><button class="btn sm" onClick=${() => setSteps([...steps, { agent: first.agent, model: first.model, effort: "default" }])}>+ add step</button></div>`}
       ${isOpen && canBack && html`<div class="back-up-row"><label class="back-up-box"><input type="checkbox" checked=${backUp} onChange=${(e) => set("return", e.target.checked ? "up" : "stay")} /> <span>Move back up when there is room</span></label>
-        <div class="hint">restarts the agent once, when it is idle${backNote ? " · " + backNote : ""}${ownRet ? html` <button class="link" onClick=${() => set("return", "")}>use inherited</button>` : ""}</div></div>`}
+        <div class="hint">${x.role === "studio" ? "closes the Studio tab and opens a fresh one from its journal, when idle; follows studio_move" : "restarts the agent once, when it is idle"}${backNote ? " · " + backNote : ""}${ownRet ? html` <button class="link" onClick=${() => set("return", "")}>use inherited</button>` : ""}</div></div>`}
       ${bad && html`<div class="err">every step needs a model</div>`}
       ${!dirty && html`<${ChangeNote} c=${x.changed} busy=${saving} onUndo=${() => undoOne(x.role, x.changed.id)} />`}
       ${msg[x.role] && html`<div class="err">${msg[x.role]}</div>`}</div>`;

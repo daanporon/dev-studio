@@ -41,7 +41,10 @@ test("the Skills tab shows an MCP servers group with on/off toggles only (U283)"
 
 test("the Roles tab has a Move back up box per always/ondemand row (configurable-role-elevation U2)", () => {
   for (const t of ["Move back up when there is room", "restarts the agent once, when it is idle", "use inherited", 'set("return", "")', 'set("return", e.target.checked ? "up" : "stay")', "set on this row", 'class="tag back-up"', "back-up-row"]) expect(page).toContain(t);
-  expect(page).toContain('(d.spawn === "always" || d.spawn === "ondemand") && x.role !== "studio"');
+  expect(page).toContain('const canBack = d.spawn === "always" || d.spawn === "ondemand";');
+  // configurable-role-elevation U3: the studio row has the box too, with its own hint.
+  expect(page).not.toContain('x.role !== "studio"');
+  expect(page).toContain("closes the Studio tab and opens a fresh one from its journal, when idle; follows studio_move");
   expect(page).toContain('if (k === "spawn" && v === "elevate")');
   // return is no base field of a row, so an unrelated save never pins the inherited value
   expect(page.slice(page.indexOf("const rowOf = (x) => ({ agent: x.agent"), page.indexOf("const rowBad")).includes("return")).toBe(false);

@@ -6,16 +6,18 @@
 //            requests/_studio/briefing-<request id>.txt, its first line "briefing: …".
 //   dismiss  {id, answer?}           a Studio alert answered on the board: bin/lib/alerts.sh resolve <id>;
 //            a card filed with `move: true` (limits.ts, studio_move ask) answered "move it" records the approval
-//            (episode studio.move / studio:approved), and limits.ts then moves the Studio as in auto
+//            (episode studio.move / studio:approved), and limits.ts then moves the Studio as in auto; the
+//            move-up card (configurable-role-elevation U3, `move_up: true`) records studio:up-approved instead
 //            U4: a card filed with `credits: {agent, account}` (credits-card.ts) answered "Fixed" ends the
 //            account's credits hold (accounts.ts setAccountEnabled true, which clears it), "Switch it off"
 //            switches the account off (setAccountEnabled false); by "board" either way
-//   studio-move {handle, agent, account, model, effort, from}  U264, from limits.ts: move the Studio to the
+//   studio-move {handle, agent, account, model, effort, from, why}  U264, from limits.ts: move the Studio to the
 //            picked account. Right before it closes anything the handle must still be the Studio's and
 //            studioReady() must still hold, else nothing happens (limits.ts asks again after its settle
 //            window). Then `terminal-close <handle>` (that tab only, never the worktree's), `studio-start`
 //            in the Studio worktree on the pick, briefed from studio.md plus the journal, and the new
-//            handle on the member with one `studio_moved` event. Its steps are kept in the studio:move
+//            handle on the member with one `studio_moved` event (its `why`: `limit`, or `back-up` for U3's move
+//            back up, which also stamps studio:up for the fallback_return_min window). Its steps are kept in the studio:move
 //            episode, so a replay after a crash never closes twice, and one that finds "starting" records the
 //            terminal that start opened (or waits DS_LOOP_STUDIO_MOVE_START_S, 300) instead of starting again. A start that fails after the close
 //            posts a card (subject studio.move, so limits.ts's studio.limit sweep never drops it) with the
@@ -35,14 +37,14 @@ import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
 import { MOVE, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
 
 type P = { action?: string; topic?: string; line?: string; framing?: string; id?: string; answer?: string; request?: number };
-type Move = { handle?: string; agent?: string; account?: string; model?: string; effort?: string; from?: string };
+type Move = { handle?: string; agent?: string; account?: string; model?: string; effort?: string; from?: string; why?: string };
 
 // How long a replay that finds the "starting" step waits for that start's terminal before starting again:
 // above the background timeout and studio-start's own wait for the new tab to settle.
 const moveStartS = () => envInt("DS_LOOP_STUDIO_MOVE_START_S", 300);
 
 async function move(a: Action, x: Exec) {
-  const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project;
+  const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project, up = p.why === "back-up";
   if (!P || !p.handle || !p.agent || !p.account) return { failed: "a Studio move needs a project, the Studio's handle and a pick" };
   const key = { project: P, subject: MOVE, kind: "studio:move" };
   const step = (state: string, ended = false) => store.upsert("episodes", key, { episode_key: a.episode, state, source: "loop", observed_at: at,
@@ -89,7 +91,8 @@ async function move(a: Action, x: Exec) {
   if (!handle) {
     store.upsert("episodes", key, { episode_key: a.episode, state: "starting", source: "loop", observed_at: at });
     const proj = store.get("projects", { label: P });
-    const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), `${p.from ?? "its account"} hit its limit, now on ${to}`);
+    const reason = up ? `moved back up from ${p.from ?? "a fallback"} to ${to}` : `${p.from ?? "its account"} hit its limit, now on ${to}`;
+    const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), reason);
     s = await seat.send("studio-start", [v.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt]);
     handle = s.code === 0 ? s.out.trim().split("\n").pop()!.trim() : "";
   }
@@ -104,12 +107,16 @@ async function move(a: Action, x: Exec) {
   }
   const set: Row = { handle, agent: p.agent, account: p.account === "-" ? null : p.account, limited_until: null, observed_at: at, updated_at: at };
   if (p.model && p.model !== "-") set.model = p.model;
-  const moved = { project: P, squad: "_studio", member: v.wt, payload: { handle, previous: p.handle, from: p.from ?? null, to, model: p.model ?? null } };
+  const moved = { project: P, squad: "_studio", member: v.wt, payload: { handle, previous: p.handle, from: p.from ?? null, to, model: p.model ?? null, why: up ? "back-up" : "limit" } };
   store.db.transaction(() => {
     if (v.member) store.fact("studio_moved", [{ table: "members", key: { id: v.member.id }, set }], moved);
     else store.event("studio_moved", moved);
     step("started", true);
-    store.db.run("UPDATE episodes SET ended_at = ?, state = 'ended', observed_at = ? WHERE project = ? AND subject = ? AND kind = 'studio:approved' AND ended_at IS NULL", [at, at, P, MOVE]);
+    // The started move ends the approval its why names (a move-up's studio:up-approved, else studio:approved),
+    // and a move-up stamps studio:up, which starts limits.ts's fallback_return_min window.
+    store.db.run("UPDATE episodes SET ended_at = ?, state = 'ended', observed_at = ? WHERE project = ? AND subject = ? AND kind = ? AND ended_at IS NULL",
+      [at, at, P, MOVE, up ? "studio:up-approved" : "studio:approved"]);
+    if (up) store.upsert("episodes", { project: P, subject: MOVE, kind: "studio:up" }, { episode_key: a.episode, state: "started", started_at: at, ended_at: at, source: "loop", observed_at: at });
   })();
   return { done: true, result: `moved to ${to}: ${handle}` };
 }
@@ -127,11 +134,12 @@ const studio: Fulfiller = {
       const card = store.db.query("SELECT doc FROM observed_alerts WHERE project = ? AND id = ?").get(a.project, p.id) as Row | null;
       // A move card (studio_move ask) approves the move only when answered with its own suggestion
       // ("move it"); Dismiss (an empty answer) or any other text, e.g. after restarting it by hand, only clears it.
-      let askMove = false, credits: { agent: string; account: string; enabled: boolean } | null = null;
+      let askMove = false, moveUp = false, credits: { agent: string; account: string; enabled: boolean } | null = null;
       const said = (p.answer ?? "").trim().toLowerCase();
       try {
         const doc = JSON.parse(String(card?.doc ?? "{}"));
         askMove = doc?.move === true && !!p.answer && said === String(doc.suggestion ?? "move it").trim().toLowerCase();
+        moveUp = doc?.move_up === true;
         // U4: an account out of credits (credits-card.ts) answered Fixed ends the hold, Switch it off disables it.
         const c = doc?.credits, fixed = said === FIXED.toLowerCase();
         if (c && typeof c.agent === "string" && typeof c.account === "string" && (fixed || said === SWITCH_OFF.toLowerCase()))
@@ -141,8 +149,9 @@ const studio: Fulfiller = {
       if (o.code !== 0) return { retry: errOf(o, "alerts.sh") };
       store.db.run("DELETE FROM observed_alerts WHERE project = ? AND id = ?", [a.project, p.id]);
       const acct = credits ? setAccountEnabled(store, { ...credits, by: "board" }, at) : null;
-      if (askMove) store.fact("studio_move_approved", [{ table: "episodes", key: { project: a.project, subject: MOVE, kind: "studio:approved" },
-        set: { episode_key: p.id, state: "approved", started_at: at, ended_at: null, source: "board", observed_at: at } }], { project: a.project, squad: "_studio", payload: { alert: p.id } });
+      // U3: the move-up card (fields.move_up, limits.ts backUp) records its own approval, so neither path clears the other's.
+      if (askMove) store.fact("studio_move_approved", [{ table: "episodes", key: { project: a.project, subject: MOVE, kind: moveUp ? "studio:up-approved" : "studio:approved" },
+        set: { episode_key: p.id, state: "approved", started_at: at, ended_at: null, source: "board", observed_at: at } }], { project: a.project, squad: "_studio", payload: { alert: p.id, ...(moveUp ? { why: "back-up" } : {}) } });
       finishRequest(store, a, { ok: true, dismissed: p.id, ...(askMove ? { move: "approved" } : {}),
         ...(credits && acct ? { account: `${credits.agent}/${credits.account}`, enabled: credits.enabled, cleared: acct.cleared === true } : {}) }, at);
       return { done: true };
