@@ -38,7 +38,7 @@ inherits it from the default row of the same name, then from its base role's row
 until a restart, a long stall or a phase change; this includes a member whose model is no
 longer on its row's ladder. A Builder whose unit is done or whose PR merged is never moved,
 and a Builder stopped to move up keeps its seat under `max_builders` until it is placed again
-(or `pick_ttl_s` passes). `elevate` rows and `studio` never move (`studio_move` moves the Studio). With no eligible account on any allowed model, the loop waits for the earliest
+(or `pick_ttl_s` passes). `elevate` rows never move. The Studio moves back up only when its `studio` row says `up`, through `studio_move`'s move (a fresh tab from its journal; `ask` cards first, `off` never), not the member restart. With no eligible account on any allowed model, the loop waits for the earliest
 account to become usable after all of that account’s blocking windows reset. The member records the `account` it got and `fallback`
 when it is not on its row's own model. Nothing free: the wish stays and the loop keeps
 the start pending (`no account free`, or `no room until HH:MM`) and tries it again; the board shows

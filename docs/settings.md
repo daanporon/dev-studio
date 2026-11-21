@@ -47,7 +47,8 @@ name  agent  model  spawn  [effort]  [fallbacks]  [plan]  [return]
   rung once it has room (after a limit moved it down), at most once per `fallback_return_min`;
   `stay` keeps it where it is. `-` or omitted inherits: the default row of the same name, then
   the base role's row (`builder-standard` from `builder`), else `stay`. The default roster
-  sets `up` on `thinker` alone. `up` is refused on an `elevate` row and on `studio`. A Builder
+  sets `up` on `thinker` alone. `up` is refused on an `elevate` row. On `studio` (resolved from
+  its own rows only) `up` moves the Studio back up through `studio_move` (below). A Builder
   whose unit is done or merged is never moved; one stopped to move up keeps its seat under
   `max_builders` until it is placed again. `roles.sh list` shows the resolved value as
   `back up`.
@@ -105,7 +106,7 @@ Change it per project (the normal way):
   role's row for the project; every role the project has no row for runs the default
   row (U267); `reset <project> <role>` (or `rm`) drops the project's row, so the role
   follows the default again.
-- Web board: ⚙ Settings → **Roles** tab (the same row, via `POST /api/roles`). An `always`/`ondemand` row has a **Move back up when there is room** checkbox (column 8: ticked writes `up`, unticked `stay`, "use inherited" writes `-`; absent on `elevate` rows and `studio`, and `up` on those is a 400).
+- Web board: ⚙ Settings → **Roles** tab (the same row, via `POST /api/roles`). An `always`/`ondemand` row has a **Move back up when there is room** checkbox (column 8: ticked writes `up`, unticked `stay`, "use inherited" writes `-`; absent on `elevate` rows, and `up` on one is a 400; on `studio` its hint says it closes the Studio tab and opens a fresh one from its journal, when idle, following `studio_move`).
   A change applies to the next spawn, not to running roles.
 
 ## Limits: thresholds the board and loop use
@@ -135,7 +136,7 @@ key's source.
 | `pick_load_hard` / `pick_load_standard` | Session % one hard / standard (or untiered) member adds to its account while it counts as newly placed | 20 / 10 | non-negative integer | `DS_LIMIT_PICK_LOAD_HARD` / `DS_LIMIT_PICK_LOAD_STANDARD` |
 | `pick_load_lead` / `pick_load_thinker` | Session % one Lead / Thinker adds to its account while it counts as newly placed, whatever its tier (U180). Measured on 2026-11-09/10: the real 5-hour % rose at most 3% on a Max account in a Lead or Thinker's first 10 minutes, so 1 × the Max scale of 4 | 1 / 1 | non-negative integer | `DS_LIMIT_PICK_LOAD_LEAD` / `DS_LIMIT_PICK_LOAD_THINKER` |
 | `pick_ttl_s` | Seconds a newly placed member's load counts (a start or a `run-switch`); also how long a limit switch the actuator holds back keeps its first pick before it picks again, and how long a fallback stop holds its reservation (below) | 600 | non-negative integer | `DS_LIMIT_PICK_TTL_S` |
-| `fallback_return_min` | Loop: an idle member whose `roles.conf` row resolves `return` to `up` (column 8; the default roster: the Thinker), on a fallback rung (any rung below the first of its row, on any agent), is moved to the highest rung above it that has room again; this is the minutes between tries per member. `0` turns it off. In one tick the moves share the room: a member is stopped only when its pick, with the tick's earlier picks and moves counted as load, still lands above its rung, so three Thinkers aiming at room for one stop one. The stop reserves that place until the member is placed or `pick_ttl_s` passes: other picks count it as load, and its own start keeps it while it still fits. A start that lands on another agent or model anyway logs `fallback_missed` with the pick's reason, and the member waits out this window | 15 | non-negative integer | `DS_LIMIT_FALLBACK_RETURN_MIN` |
+| `fallback_return_min` | Loop: an idle member whose `roles.conf` row resolves `return` to `up` (column 8; the default roster: the Thinker), on a fallback rung (any rung below the first of its row, on any agent), is moved to the highest rung above it that has room again; this is the minutes between tries per member (and between the Studio's moves back up, when its `studio` row says `up`). `0` turns it off. In one tick the moves share the room: a member is stopped only when its pick, with the tick's earlier picks and moves counted as load, still lands above its rung, so three Thinkers aiming at room for one stop one. The stop reserves that place until the member is placed or `pick_ttl_s` passes: other picks count it as load, and its own start keeps it while it still fits. A start that lands on another agent or model anyway logs `fallback_missed` with the pick's reason, and the member waits out this window | 15 | non-negative integer | `DS_LIMIT_FALLBACK_RETURN_MIN` |
 | `unit_token_x` | Runaway-unit alert: × the median of done units of its tier | 3 | non-negative integer | `DS_UNIT_TOKEN_X` |
 | `unit_token_max` | …or this absolute cache-write cap | 20000000 | non-negative integer | `DS_UNIT_TOKEN_MAX` |
 | `max_builders` | Live Builder agents the project runs at once (U145). A Builder start over it (add-role, a restart, a resume after pause, a crash restart) waits for a slot: `add-role.sh` exits 3 `WAIT slot: <project> at max_builders <n>` and leaves the unit planned; the loop leaves the wish open and asks again each tick. A free slot goes to the oldest work first: a dispatched unit before a planned one, then the lower unit id. Live = not paused and its agent runs; a live Builder's own restart (hung restart, run-switch, limit move, phase switch) never waits. The check lives in the account pick (`bin/loop/capacity/pick.ts`, so `bin/ds pick` answers it too); Leads, Thinkers and the other roles are never limited | - (no limit) | positive integer, or `-` | `DS_LIMIT_MAX_BUILDERS` |
@@ -164,7 +165,7 @@ key's source.
 | `compact_mode_lead` | How the loop compacts the Lead | compact | `compact`, `clear`, `off` (`off` = never) | `DS_LIMIT_COMPACT_MODE_LEAD` |
 | `compact_mode_thinker` | How the loop compacts the Thinker. `clear` types `/clear` only when nothing is open: no open question it asked, the squad past planning, every `<topic>-*-plan.md` approved, no file of its transcript dir (session and `subagents/`) written within `compact_idle_min`, no unread mail; otherwise it types `/compact`. `compact` turns clearing off. | clear | `compact`, `clear`, `off` | `DS_LIMIT_COMPACT_MODE_THINKER` |
 | `compact_mode_studio` | How the loop compacts the Studio: `compact` types `/compact` into the Studio's own terminal when it is idle and its input line is empty (see below) | compact | `compact`, `off` (`off` = only the `studio.ctx` card) | `DS_LIMIT_COMPACT_MODE_STUDIO` |
-| `studio_move` | What the loop does when the Studio's account is limited: `auto` moves it to the account the picker chooses for the `studio` role (its own tab closed and a fresh one started there from studio.md and its journal), only while it sits idle with an empty prompt; `ask` shows a card whose "move it" answer does the same; `off` only shows the card with the command to run. No adopted Studio terminal or no account with room always gives the card | auto | `auto`, `ask`, `off` | `DS_LIMIT_STUDIO_MOVE` |
+| `studio_move` | What the loop does when the Studio's account is limited: `auto` moves it to the account the picker chooses for the `studio` role (its own tab closed and a fresh one started there from studio.md and its journal), only while it sits idle with an empty prompt; `ask` shows a card whose "move it" answer does the same; `off` only shows the card with the command to run. No adopted Studio terminal or no account with room always gives the card. It also rules the move back up of a Studio whose `studio` row says `up` (`auto` moves, `ask` cards first, `off` never) | auto | `auto`, `ask`, `off` | `DS_LIMIT_STUDIO_MOVE` |
 | `compact_mode_builder` | How the loop compacts Builders | compact | `compact`, `clear`, `off` | `DS_LIMIT_COMPACT_MODE_BUILDER` |
 
 The Studio's compaction (U263) types `/compact` only into the Studio terminal the loop adopted
@@ -193,6 +194,15 @@ replay of a start that may still be running (a crash, or the background call tim
 new Studio tab it finds instead of starting another, or waits `DS_LOOP_STUDIO_MOVE_START_S` (300)
 first. With `ask`, only answering the card with its suggestion "move it" approves the move; Dismiss
 or any other answer (for instance after restarting it yourself) only clears the card.
+
+A Studio whose `studio` row says `up` (column 8, configurable-role-elevation U3) is also moved back
+up: while it is not limited, runs on a lower rung of its ladder (by agent, model and account plan;
+rungs that differ only in effort count as the first) and the picker has room on a higher one, the
+same move runs with `why: back-up` (in `studio_moved`). `auto` moves it once it is ready, with no
+time limit and no held card; `ask` first shows its own "Studio can move back up" card (subject
+`studio.up`) whose "move it" answer approves it; `off` never moves it. At most one move back up per
+`fallback_return_min` (0 = never). The card and its approval clear once the move is no longer owed,
+and a limited Studio takes the limit move instead.
 
 A red unit PR is one stretch from the read that blocks it until it is ready, merged,
 closed or waits on a `required:<context>` alone; GitHub reshuffling its reasons on one

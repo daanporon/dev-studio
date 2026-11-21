@@ -29,6 +29,10 @@
 //   studioReady() holds (U264, fulfil/studio.ts: that tab closed, a fresh one opened on the pick).
 //   A Studio whose account is switched off (U5, kind `disabled`, like `gone`: no reset, no stamp) moves
 //   the same way.
+//   configurable-role-elevation U3: a Studio that is not limited, whose `studio` roster row resolves `up`
+//   (column 8) and that runs on a lower rung of its ladder than the studio pick, is moved back up the same
+//   way (backUp below): auto once studioReady() holds, ask after its own "move it" card (subject studio.up),
+//   off never; at most once per fallback_return_min, and never with a "held" card.
 //   Otherwise one `alert` per continuous account/notice condition (payload.kind out_of_credits)
 //   naming the next pick or wait, cleared when it clears.
 // U4 (provider-billing-fallback): an account out of credits with a member stuck on it (nowhere else to
@@ -45,7 +49,8 @@ import { envInt } from "../core/tick.ts";
 import { wake } from "../pause/wake.ts";
 import { scan, type LimitRow } from "../capacity/fingerprints.ts";
 import { limit, limitInt } from "../settings/limits.ts";
-import { accountList, pick as pickAccount, sameModel, workDone } from "../capacity/pick.ts";
+import { accountList, ladder, overrideOf, pick as pickAccount, placeRung, sameModel, workDone } from "../capacity/pick.ts";
+import { backUpOf } from "../settings/roster.ts";
 import { liveAccount, liveOf } from "./record.ts";
 import { liveSquads } from "./liveness.ts";
 import { MOVE, STUDIO_SQUAD, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
@@ -428,8 +433,11 @@ function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Act
     endMoveHold(store, P, t, ["studio:hold", "studio:approved"]);
     collapse(null);
     resolve("studio.limit");
+    backUp(ctx, w, pick, actions);
     return;
   }
+  // While the Studio is limited the limit path wins: no move-up is owed.
+  upGone(ctx, w, actions);
   const { until, first } = open(ctx, w, lim, S);
   listed.push({ wt: w.wt, who: "studio", topic: "", line: lim.notice, since: quietSince(w, t) });
   const base = `limit|${w.wt}|${w.agent}/${w.account}|${lim.notice}`;
@@ -462,7 +470,7 @@ function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Act
     if (r.ready) {
       endMoveHold(store, P, t);
       actions.push({ project: P, squad: null, member: w.wt, subject: MOVE, kind: "studio-move", episode: `move|${handle}|${p.agent}:${p.account}@${t}`,
-        payload: { handle, agent: p.agent, account: p.account, model: p.model, effort: p.effort, from: `${w.agent}:${w.account || "-"}`, notice: lim.notice } });
+        payload: { handle, agent: p.agent, account: p.account, model: p.model, effort: p.effort, from: `${w.agent}:${w.account || "-"}`, why: "limit", notice: lim.notice } });
       return;
     }
     if (t - openMoveHold(store, P, t) < moveHoldS()) return;
@@ -477,11 +485,87 @@ function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Act
   else alert("studio.limit", ep, { ...card, text: `${text}; restart it on ${where} — run: ${cmd}` }, base);
 }
 
+// configurable-role-elevation U3: the Studio's move back up. Owed when its `studio` row resolves `up`
+// (roster.ts backUpOf), it is not pinned, it has an adopted handle, placeRung puts its live agent, model
+// and account on a rung below the top (a Studio on no rung is owed nothing; rungs that differ only in
+// effort place as the first of them), the studio pick lands on a higher rung, and the last move-up
+// (studio:up, stamped by fulfil/studio.ts when it started) is over fallback_return_min ago (0 = never).
+// auto (or ask once its card was answered "move it"): one studio-move with why "back-up" once
+// studioReady() holds, behind moving()'s settle guard; it waits without a time limit and never posts the
+// held card. ask: one card on subject studio.up. off: nothing. Not owed: its card and approval clear.
+function backUp(ctx: TickCtx, w: Worker, pick: Picker, actions: Action[]): void {
+  const { store, project: P, now: t } = ctx;
+  const mode = limit(store, P, "studio_move") ?? "auto";
+  const handle = (studioView(store, P)?.member?.handle as string | null) || null;
+  const owed = (): { p: Place; to: number; from: number } | null => {
+    if (mode !== "auto" && mode !== "ask") return null;
+    if (!handle || !backUpOf(store, P, "studio") || overrideOf(store, w.m)) return null;
+    const lad = ladder(store, { project: P, role: "studio" }, null);
+    if (!lad) return null;
+    const from = placeRung(store, lad.rungs, { agent: w.agent, model: w.model, account: w.account || null });
+    if (from === null || from === 0) return null;
+    const min = limitInt(store, P, "fallback_return_min", 15);
+    if (min <= 0) return null;
+    const marker = store.get("episodes", { project: P, subject: MOVE, kind: "studio:up" });
+    if (marker && t - Number(marker.started_at ?? 0) < min * 60) return null;
+    const p = pick({ project: P, squad: "", role: "studio", suffix: "", ...(w.m?.id != null ? { member: Number(w.m.id) } : {}) }, ctx);
+    if (!isPlace(p) || typeof p.rung !== "number") return null;
+    const to = p.rung - 1;
+    return to < from ? { p, to, from } : null;
+  };
+  const o = owed();
+  if (!o) { upGone(ctx, w, actions); return; }
+  const { p } = o, where = `${p.agent}:${p.model}@${p.account}`;
+  if (mode === "auto" || upApproved(store, P)) {
+    if (moving(store, P, t) || !studioReady(store, P, t).ready) return;
+    actions.push({ project: P, squad: null, member: w.wt, subject: MOVE, kind: "studio-move", episode: `up|${handle}|${p.agent}:${p.account}@${t}`,
+      payload: { handle, agent: p.agent, account: p.account, model: p.model, effort: p.effort, from: `${w.agent}:${w.account || "-"}`,
+        why: "back-up", notice: `moving back up to ${p.model}` } });
+    return;
+  }
+  // ask: one card per place and target rung; a card for another one is cleared first, and one the
+  // loop cleared (the move stopped being owed) comes back as a new card (`@<now>`).
+  const base = `up|${w.agent}:${w.model}@${w.account || "-"}|rung${o.to + 1}`;
+  const sent = store.get("episodes", { project: P, subject: UP, kind: "action:alert" });
+  const prev = typeof sent?.episode_key === "string" ? sent.episode_key : null;
+  const same = prev !== null && (prev === base || prev.startsWith(`${base}@`));
+  const cleared = prev !== null && store.get("episodes", { project: P, subject: UP, kind: "action:alert-clear" })?.episode_key === `cleared@${prev}`;
+  if (same && !cleared) return;
+  if (prev && !cleared) clearUp(ctx, w, actions, prev);
+  const ep = same ? `${base}@${t}` : base;
+  actions.push({ project: P, squad: null, member: w.wt, subject: UP, kind: "alert", episode: ep, payload: {
+    card: "studio_move_up", title: "Studio can move back up",
+    text: `Studio can move back up to ${where} (it runs on ${w.agent}:${w.model || "?"}@${w.account || "-"}, rung ${o.from + 1} of its ladder); answer "move it" and the loop moves it once it is idle with an empty prompt (its tab only, briefed from its journal)`,
+    option: "move it", why: "the studio row says move back up (roles.conf column 8)",
+    fields: { move: true, move_up: true, acts_on_answer: true } } });
+}
+
+// The move-up card's subject (its own, so the studio.limit collapse and sweep never touch it).
+const UP = "studio.up";
+// The move-up is no longer owed: clear its card and end its approval.
+function upGone(ctx: TickCtx, w: Worker, actions: Action[]): void {
+  const { store, project: P, now: t } = ctx;
+  endMoveHold(store, P, t, ["studio:up-approved"]);
+  const sent = store.get("episodes", { project: P, subject: UP, kind: "action:alert" });
+  if (typeof sent?.episode_key === "string") clearUp(ctx, w, actions, sent.episode_key);
+}
+function clearUp(ctx: TickCtx, w: Worker, actions: Action[], episode: string): void {
+  const { store, project: P } = ctx, ep = `cleared@${episode}`;
+  const done = store.get("episodes", { project: P, subject: UP, kind: "action:alert-clear" });
+  if (done?.episode_key !== ep) actions.push({ project: P, squad: null, member: w.wt, subject: UP, kind: "alert-clear", episode: ep, payload: { target: "project", id: alertId(UP, episode) } });
+}
+function upApproved(store: Store, P: string): boolean {
+  const a = store.get("episodes", { project: P, subject: MOVE, kind: "studio:up-approved" });
+  return !!a && a.ended_at == null;
+}
+
 // U264's move bookkeeping, all on subject `studio.move` (episodes):
 //   action:studio-move  the move's claim (fulfil/studio.ts); open while pending, acted or running
 //   studio:move         the last move tried (state closing|closed|started|failed|not moved), started_at
 //   studio:hold         since when the guard has kept a wanted move back
 //   studio:approved     the operator answered the ask card's "move it" (fulfil/studio.ts dismiss)
+//   studio:up-approved  the same for the move-up card (U3, fields.move_up)
+//   studio:up           when the last move back up started (fulfil/studio.ts): fallback_return_min's window
 const moveHoldS = () => envInt("DS_LOOP_STUDIO_MOVE_HOLD_S", 600);
 // After a move (made or not) the next waits this long: the observers must see the new tab and account.
 const moveSettleS = () => envInt("DS_LOOP_STUDIO_MOVE_SETTLE_S", 300);

@@ -42,7 +42,7 @@ const backUp = (role: string, own: string, dflt: string): BackUp => resolveBackU
 
 /** The `back up` cell: `up`/`stay`, with where an inherited value came from; `-` where it never applies. */
 function backUpCell(role: string, spawn: string, b: BackUp): string {
-  if (role === "studio" || spawn === "elevate") return "-";
+  if (spawn === "elevate") return "-";
   return b.from === "row" ? b.value : `${b.value} (${b.from ?? "default"})`;
 }
 

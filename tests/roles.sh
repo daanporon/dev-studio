@@ -132,7 +132,7 @@ eq "...and the role runs the default again" "$("$ROOT/bin/commands/roles.sh" lis
 UP="zzroles-up-$$"; trap 'rm -rf "$TMP" "$DS_STATE_ROOT/$RP" "$DS_STATE_ROOT/$SP" "$DS_STATE_ROOT/$OP" "$DS_STATE_ROOT/$UP"' EXIT
 bu() { "$ROOT/bin/commands/roles.sh" list "$UP" | awk -v r="$1" '$1==r{print $8, $9}' | sed 's/ $//'; }
 eq "the default: thinker up (from its default row), lead stay" "$(bu thinker)|$(bu lead)" "up (default)|stay (default)"
-eq "elevate rows and studio show no back up" "$(bu builder-review)|$(bu thinker-deep)|$(bu studio)" "-|-|-"
+eq "elevate rows show no back up; studio stays by default" "$(bu builder-review)|$(bu thinker-deep)|$(bu studio)" "-|-|stay (default)"
 out="$("$ROOT/bin/commands/roles.sh" set "$UP" lead claude sonnet always "" "" "" up)"
 eq "set takes up as the 9th argument" "$(own "$UP" | awk '$1=="lead"')" "lead claude sonnet always - - - up"
 eq "...says so" "$(printf '%s' "$out" | grep -o 'back up=[a-z]*')" "back up=up"
@@ -148,8 +148,8 @@ eq "thinker stay" "$(bu thinker)" "stay"
 eq "a project row that differs only in column 8 reads override" "$("$ROOT/bin/commands/roles.sh" list --json "$UP" | jq -r '.roles[]|select(.role=="thinker")|.source')" "override"
 rc=0; err="$("$ROOT/bin/commands/roles.sh" set "$UP" builder-review claude opus elevate "" "" "" up 2>&1 >/dev/null)" || rc=$?
 eq "up on an elevate row is refused, naming the row" "$rc:$(printf '%s' "$err" | grep -c "builder-review")" "2:1"
-rc=0; err="$("$ROOT/bin/commands/roles.sh" set "$UP" studio claude sonnet ondemand "" "" "" up 2>&1 >/dev/null)" || rc=$?
-eq "up on studio is refused" "$rc:$(printf '%s' "$err" | grep -c "'studio'")" "2:1"
+"$ROOT/bin/commands/roles.sh" set "$UP" studio claude sonnet ondemand "" "" "" up >/dev/null
+eq "configurable-role-elevation U3: up on studio is taken (studio_move moves it back up)" "$(own "$UP" | awk '$1=="studio"')|$(bu studio)" "studio claude sonnet ondemand - - - up|up"
 
 echo "roles: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

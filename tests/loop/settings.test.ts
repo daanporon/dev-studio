@@ -112,7 +112,7 @@ describe("settings module", () => {
     expect(historyOf(s, P)).toEqual([]);
   });
 
-  test("roles.conf column 8 (configurable-role-elevation U1): kept on an omitted set, cleared by -, checked, refused on elevate and studio", () => {
+  test("roles.conf column 8 (configurable-role-elevation U1, U3): kept on an omitted set, cleared by -, checked, refused on elevate, accepted on studio", () => {
     const { s, o } = fixture();
     set(s, P, "roles.conf", "lead", "claude sonnet always - - - up", "ds", o);
     expect(row(s, "roles.conf", "lead")).toBe("claude sonnet always - - - up");
@@ -125,13 +125,15 @@ describe("settings module", () => {
     expect(row(s, "roles.conf", "thinker")).toBe("claude opus always - - - stay");
     refused(() => set(s, P, "roles.conf", "lead", "claude opus always - - - yes", "ds", o), /return \(column 8\) must be up, stay or - \(got 'yes' on row 'lead'\)/);
     refused(() => set(s, P, "roles.conf", "builder-review", "claude opus elevate - - - up", "ds", o), /can't go on 'builder-review': it is an elevate row/);
-    refused(() => set(s, P, "roles.conf", "studio", "claude sonnet ondemand - - - up", "ds", o), /can't go on 'studio'/);
+    // U3: `up` on studio moves the Studio back up through studio-move.
+    set(s, P, "roles.conf", "studio", "claude sonnet ondemand - - - up", "ds", o);
+    expect(row(s, "roles.conf", "studio")).toBe("claude sonnet ondemand - - - up");
     // `stay` on an elevate row is allowed (it changes nothing).
     set(s, P, "roles.conf", "builder-review", "claude opus elevate - - - stay", "ds", o);
     refused(() => set(s, P, "roles.conf", "lead", "claude opus always - - - up extra", "ds", o), /at most 8 columns/);
   });
 
-  test("resolveBackUp (configurable-role-elevation U1): own row, default row, base role, else stay; elevate and studio always stay", () => {
+  test("resolveBackUp (configurable-role-elevation U1, U3): own row, default row, base role, else stay; elevate always stays; studio from its own rows", () => {
     const d = new Map([["thinker", "claude opus always - - - up"], ["builder", "claude opus ondemand"], ["builder-standard", "claude sonnet ondemand"],
       ["builder-review", "claude opus elevate"], ["builder-review-standard", "claude sonnet elevate medium"], ["studio", "claude sonnet ondemand"], ["lead", "claude sonnet always"]]);
     const none = new Map<string, string>();
@@ -146,7 +148,11 @@ describe("settings module", () => {
     expect(resolveBackUp("builder-hard-babysit", up, d).back_up).toBe(true);
     expect(resolveBackUp("builder-standard", new Map([...up, ["builder-standard", "claude sonnet ondemand - - - stay"]]), d).back_up).toBe(false);
     for (const r of ["builder-review", "builder-review-standard", "studio"]) expect(resolveBackUp(r, up, d).back_up).toBe(false);
-    expect(resolveBackUp("studio", new Map([["studio", "claude sonnet ondemand - - - up"]]), d).back_up).toBe(false);
+    expect(resolveBackUp("builder-review", new Map([["builder-review", "claude opus elevate - - - up"]]), d).back_up).toBe(false);
+    // U3: studio resolves from its project row, then the default studio row, else stay.
+    expect(resolveBackUp("studio", new Map([["studio", "claude sonnet ondemand - - - up"]]), d)).toEqual({ back_up: true, value: "up", from: "row" });
+    expect(resolveBackUp("studio", none, new Map([...d, ["studio", "claude sonnet ondemand - - - up"]]))).toEqual({ back_up: true, value: "up", from: "default" });
+    expect(resolveBackUp("studio", none, d)).toEqual({ back_up: false, value: "stay", from: null });
   });
 
   test("models.conf: set, get, rm, reset; the value shape confRows makes", () => {

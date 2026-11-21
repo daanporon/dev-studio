@@ -130,11 +130,10 @@ function rosterValue(store: Store, project: string, role: string, value: string,
   if (plan && !NAME.test(plan)) fail(`bad plan '${plan}'`);
   // configurable-role-elevation U1: column 8 (`return`, roster.ts resolveBackUp): an omitted one keeps
   // the current row's, `-` clears it (inherit). `up` never goes on an elevate row (it runs no
-  // terminal) or on studio (studio_move moves it).
+  // terminal); on studio it moves the Studio back up through studio-move, following studio_move (U3).
   const ret = dash(ret0 || (exact ? "" : field(cur, 6)));
   if (ret && !(RETURNS as readonly string[]).includes(ret)) fail(`return (column 8) must be up, stay or - (got '${ret}' on row '${role}')`);
   if (ret === "up" && spawn === "elevate") fail(`'up' (move back up) can't go on '${role}': it is an elevate row, which never runs a terminal`);
-  if (ret === "up" && role === "studio") fail(`'up' (move back up) can't go on 'studio': studio_move moves the Studio`);
   const fields = [agent, model, spawn, effort, fb, plan, ret];
   while (fields.length > 3 && fields[fields.length - 1] === "") fields.pop();
   return fields.map((f) => f || "-").join(" ");
