@@ -3417,7 +3417,7 @@ function App() {
   useEffect(() => { const f = (e) => showMember(e.detail.s, e.detail.m); bus.addEventListener("show-crew", f); return () => bus.removeEventListener("show-crew", f); });
   if (!data) return html`<div class="wrap"><div class="hdr"><h1>dev-studio</h1><span class="meta">${err ? "board.json failed: " + err.msg : "loading…"}</span></div></div>`;
 
-  const active = squads.filter((s) => s.status !== "done" && s.status !== "failed" && !suspendedLike(s) && (!s.pause || s.pause.state === "active"));
+  const active = squads.filter((s) => s.status !== "done" && s.status !== "failed" && !suspendedLike(s) && (!s.pause || (s.pause.state !== "pausing" && s.pause.state !== "paused")));  // a member resuming makes the squad read `resuming`: not a pause of the squad
   const quiet = squads.filter((s) => s.lead && s.lead.verdict);
   // [why, title] of an account's top-strip flag, or null: a usage limit first, then broken role skills.
   const accFlag = (a) => a.disabled ? null : a.credits ? ["out of credits", "Billing problem; open the Accounts section below"] : a.limited ? ["limited", "Usage limit; open the Accounts section below"]
