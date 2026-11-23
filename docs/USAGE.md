@@ -219,6 +219,15 @@ With explicit flags (`--repo` + `--topic`) it passes them straight through to
 /ds-start-squad --repo <project-selector> --topic add-login [--autonomy checkpoints|lfg] [--framing "what this squad should do"]
 ```
 
+The board's **Start squad** dialog does the same: its brief (up to 32 KiB) is written to
+`state/<project>/framings/board-start-<request>.md` and the Studio's line passes it as
+`--framing-file`. A start can carry up to 8 images (PNG, JPEG, WebP or GIF, at most 5 MiB each),
+uploaded while the dialog is open to `state/<project>/chat-files/_start/` (pruned after
+`chat_files_keep_d` days, like chat images). When the Studio's request is filed they are copied to
+`state/<project>/framings/board-start-<request>/` and kept with the brief, never pruned, and the
+brief ends with an `## Attached images` section listing their absolute paths, so every role that
+reads the brief can open them. Images are not checked for secrets.
+
 This creates the squad's Run + task and starts **the Lead + the Thinker** (the
 Lead `run-use`s the Run to become its coordinator). **Builders are on-demand** —
 the Lead spawns one per unit from the Thinker's plan, never before there's a plan
