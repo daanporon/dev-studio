@@ -1636,7 +1636,7 @@ function Docs({ s, onPlan, closed, toast, atArchive }) {
               ${i.p.approved === true && toast && html`<span class="acts plan-acts" onClick=${(e) => e.stopPropagation()}>
                 <button class="btn sm acts-btn plan-menu-btn" aria-haspopup="menu" aria-expanded=${menu === i.p.name ? "true" : "false"} aria-label=${"Actions for " + i.p.name} title="Actions" onClick=${() => setMenu(menu === i.p.name ? null : i.p.name)}>⋯</button>
                 ${menu === i.p.name && html`<div class="amenu plan-amenu" role="menu" style=${{ position: "absolute", marginTop: "24px" }}><button class="btn sm plan-revoke" role="menuitem" title="Undo the approval: queued Builders are dropped, started ones paused" onClick=${() => { setMenu(null); setRevoking(i.p); }}>Take back approval…</button></div>`}</span>`}</div>`
-            : html`<a key=${"l" + n} class="plan" style=${{ textDecoration: "none" }} href=${"/lavish/" + i.l.key} title=${tip + " — opens it; starts Lavish first if it stopped (a few seconds)"} target="_blank" rel="noopener">🎨 ${label} ${age}${i.l.status && i.l.status !== "open" ? html` <span class="mut">· ${i.l.status}</span>` : ""}</a>`; })}
+            : html`<a key=${"l" + n} class="plan" style=${{ textDecoration: "none" }} href=${i.l.saved ? "/page/" + i.l.saved.split("/").map(encodeURIComponent).join("/") : "/lavish/" + i.l.key} title=${i.l.saved ? tip + " — saved copy" : tip + " — opens it; starts Lavish first if it stopped (a few seconds)"} target="_blank" rel="noopener">🎨 ${label} ${age}${i.l.status && i.l.status !== "open" ? html` <span class="mut">· ${i.l.status}</span>` : ""}</a>`; })}
         ${g.items.length > 10 && html`<button class="gtog" onClick=${() => setAll({ ...all, [g.id]: !all[g.id] })}>${all[g.id] ? "show fewer" : "show all (" + g.items.length + ")"}</button>`}</div>`; })}
     ${revoking && html`<${RevokePlan} s=${s} p=${revoking} toast=${toast} onClose=${() => setRevoking(null)} />`}</div>`;
 }
@@ -2319,7 +2319,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
       await post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t });
       store.del(chatDraftKey(project, topic, to));   // a send clears that member's whole draft
       held.current[to] = [];
-      if (cur.current === to) { setText(""); setFiles([]); grow(input.current); setPinned(true); load(); }
+      if (cur.current === to) { setText(""); setFiles([]); setNote(""); grow(input.current); setPinned(true); load(); }
     } catch (e) {
       const gone = /^image (\S+) is gone/.exec(String(e.message || ""));
       if (e.status === 409 && gone) putHeld(to, heldOf(to).filter((x) => x.id !== gone[1]));   // that thumbnail goes; the rest stay

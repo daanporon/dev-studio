@@ -17,6 +17,46 @@ case "$JOBS" in '' | *[!0-9]*) JOBS=1 ;; esac
 JOBS=$((10#$JOBS)) # base 10: 08 would be a bad octal number, and no shellcheck slice would run
 [ "$JOBS" -ge 1 ] || JOBS=1
 
+# A host-wide slot, outside GitHub: at most CI_SLOTS (default 2) local runs go at once, so a few Builders
+# finishing together do not load the host. A slot is a flock on one of N lock files in CI_SLOT_DIR
+# (default ${XDG_RUNTIME_DIR:-/tmp}/ds-ci-slots), held on fd 9 for the whole run, so a killed run frees it
+# at once. A waiting run prints who holds the slots now and again every minute. CI_SLOTS=0, GITHUB_ACTIONS
+# set, or a run started by a test inside a run that holds a slot (DS_CI_SLOT_HELD): no slot. The run then
+# lowers its own priority, which every test it starts inherits.
+ci_slot() {
+  local n="${CI_SLOTS:-2}" dir i f last=0 now holders
+  case "$n" in '' | *[!0-9]*) n=2 ;; esac
+  n=$((10#$n))
+  [ "$n" -ge 1 ] && [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${DS_CI_SLOT_HELD:-}" ] || return 0
+  dir="${CI_SLOT_DIR:-${XDG_RUNTIME_DIR:-/tmp}/ds-ci-slots}"
+  mkdir -p "$dir" || return 0
+  command -v flock > /dev/null 2>&1 || return 0
+  while :; do
+    for ((i = 1; i <= n; i++)); do
+      f="$dir/slot-$i.lock"
+      exec 9> "$f" || return 0
+      if flock -n 9; then
+        printf 'pid %s  %s  since %s\n' "$$" "$ROOT" "$(date '+%F %T')" > "$f.note"
+        export DS_CI_SLOT_HELD=1
+        return 0
+      fi
+      exec 9>&-
+    done
+    now="$SECONDS"
+    if [ "$last" = 0 ] || [ $((now - last)) -ge 60 ]; then
+      holders="$(cat "$dir"/slot-*.lock.note 2> /dev/null)"
+      printf 'ci: all %s slots are taken, waiting. Holders:\n%s\n' "$n" "${holders:-  (unknown)}"
+      last="$now"
+    fi
+    sleep 2
+  done
+}
+ci_slot
+if [ -z "${GITHUB_ACTIONS:-}" ]; then
+  renice -n 10 -p "$$" > /dev/null 2>&1 || true
+  command -v ionice > /dev/null 2>&1 && { ionice -c3 -p "$$" > /dev/null 2>&1 || true; }
+fi
+
 # A test that cannot run in CI, with the reason. Prefer making a test hermetic to adding a line here.
 skip_reason() {
   case "$1" in
@@ -65,7 +105,10 @@ start="$SECONDS"
 failed=()
 
 # job <id> <cmd...>: run it into $OUT/<id>.log, then write "<rc> <seconds>" to $OUT/<id>.res. A hang fails too.
+# It drops the slot's fd 9 first (callers run it in a background or ( ) subshell), so only the run itself
+# holds the slot and a killed run frees it.
 job() {
+  exec 9>&-
   local id="$1" began="$SECONDS" rc=0
   shift
   DS_LOOP_JUNIT="$OUT/$id.junit.xml" timeout "${CI_TEST_TIMEOUT:-600}" "$@" > "$OUT/$id.log" 2>&1 < /dev/null || rc=$?
@@ -158,7 +201,7 @@ for i in "${order[@]}"; do
     wait
     flush
     # shellcheck disable=SC2086 # the command is words with no spaces inside
-    job "$i" bash ${cmds[i]}
+    ( job "$i" bash ${cmds[i]} )
     flush
     continue
   fi
