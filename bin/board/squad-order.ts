@@ -11,10 +11,12 @@ export type SquadRank = { band: number; keys: number[]; label: string; topic: st
 const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 
 // Share of units done, cancelled units left out; null for a squad with no units yet (or a broken row).
+// `progress.total` (board-data.ts `progress()`) already counts only the units that are not cancelled, so it
+// is the denominator as it is; subtracting `cancelled` again would count them twice.
 function share(s: any): { share: number; done: number } | null {
   const p = s?.progress;
   if (!p || typeof p !== "object") return null;
-  const total = num(p.total) - num(p.cancelled);
+  const total = num(p.total);
   if (total <= 0) return null;
   return { share: num(p.done) / total, done: num(p.done) };
 }
