@@ -51,6 +51,7 @@ import { dependencyReasons, memberUnit } from "../pause/pause-conditions.ts";
 import { limit, reservationOf } from "./pick.ts";
 import { focusSquad, NOT_LIVE } from "../squad/focus.ts";
 import type { Row, Store } from "../core/store.ts";
+import { memo } from "./walk-memo.ts";
 
 export type Slot = { ok: true; limit: number | null } | { ok: false; limit: number; live: number; ahead: number; why: string };
 // Who asks: a member row, or (a start with no row yet) squad + suffix.
@@ -83,7 +84,7 @@ const iso = (v: unknown) => (v ? Date.parse(String(v)) / 1000 : NaN);
 // Wished running and not given up (the decider's standing wish, U152).
 const open = (m: Row) => m.want === "running" && !String(m.want_result ?? "").startsWith("failed");
 const target = (m: Row): Target => ({ project: String(m.project), squad: String(m.squad), role: String(m.role), suffix: String(m.suffix ?? ""), member: (m.wt as string | null) ?? null });
-const hardPaused = (store: Store, m: Row) => intents(store, target(m)).length > 0;
+const hardPaused = (store: Store, m: Row) => memo(store, null, "paused", String(m.id), () => intents(store, target(m)).length > 0);
 
 // Is this Builder's worker present (U149)? `strict`: unknown presence is not proof.
 function agentRuns(store: Store, project: string, wt: string, strict: boolean): boolean {
@@ -102,14 +103,27 @@ function agentRuns(store: Store, project: string, wt: string, strict: boolean): 
 //   idle        its agent runs in any other state (at its prompt, waiting for its PR's merge, unknown)
 export type SeatWhy = "starting" | "pausing" | "restarting" | "working" | "idle";
 
-// Does this Builder member hold a live agent now, and why? null: it holds no seat.
+// Does this Builder member hold a live agent now, and why? null: it holds no seat. Read in three steps: the
+// checks before the start slot and those after it are facts a picks walk keeps (walk-memo.ts); the start
+// slot itself is read every time, since a pick earlier in the same walk may have given it one.
 export function liveWhy(store: Store, m: Row, now: number): SeatWhy | null {
+  const before = memo(store, now, "live-before", String(m.id), () => liveBefore(store, m));
+  if (before !== undefined) return before;
+  if (open(m) && store.get("picks", { member: m.id })?.slot === 1) return "starting";
+  return memo(store, now, "live-after", String(m.id), () => liveAfter(store, m, now));
+}
+// liveWhy's checks before the start slot; undefined: they decide nothing.
+function liveBefore(store: Store, m: Row): SeatWhy | null | undefined {
   if (m.status === "gone" || m.want === "gone") return null;
   if (lock(store, m)) return "starting";
   const wt = m.wt ? String(m.wt) : "";
   // Being paused: live until its agent is seen gone (a paused one reads idle with no agent).
   if (hardPaused(store, m)) return wt && agentRuns(store, String(m.project), wt, true) ? "pausing" : null;
-  if (open(m) && store.get("picks", { member: m.id })?.slot === 1) return "starting";
+  return undefined;
+}
+// liveWhy's checks after the start slot.
+function liveAfter(store: Store, m: Row, now: number): SeatWhy | null {
+  const wt = m.wt ? String(m.wt) : "";
   // A start the loop just placed (placed_at) or a restart that stamped `started`/`restarting`, not
   // parked since (`waiting`): its worker may not be observed yet, until a walk after it reads none.
   const t = Math.max(...[Number(m.placed_at ?? NaN), iso(m.started), iso(m.restarting)].filter((v) => !Number.isNaN(v)), -Infinity);
@@ -141,6 +155,9 @@ const builderLive = (store: Store, m: Row, now: number) => liveWhy(store, m, now
 
 // The (squad, suffix) keys of `ds pick` Builder slots given in the spawn grace (see `held` above).
 function holds(store: Store, project: string, now: number): Set<string> {
+  return memo(store, now, "holds", project, () => holdsRead(store, project, now));
+}
+function holdsRead(store: Store, project: string, now: number): Set<string> {
   const rows = store.db.query(`SELECT id, squad, json_extract(payload, '$.suffix') AS suffix FROM events WHERE kind = 'pick' AND at > ? AND project = ?
       AND json_extract(payload, '$.source') = 'ds pick' AND json_extract(payload, '$.role') = 'builder' AND json_extract(payload, '$.wait') IS NULL`)
     .all(now - graceS(), project) as { id: number; squad: string | null; suffix: string | null }[];
@@ -158,16 +175,19 @@ function resumable(store: Store, m: Row): boolean {
 // Does this Builder ask to run? With a `resuming` pause row (open wish or not), only when that resume
 // can go ahead; otherwise an open start wish.
 function asks(store: Store, m: Row, resume: Row | undefined): boolean {
+  return memo(store, null, "asks", String(m.id), () => asksRead(store, m, resume));
+}
+function asksRead(store: Store, m: Row, resume: Row | undefined): boolean {
   return resume ? !failedResume(m, resume) && resumable(store, m) : open(m) && view(store, m) === "running";
 }
 
 // The project's Builder members in live squads: the latest row per (squad, suffix), never a gone one.
 function builders(store: Store, project: string): Row[] {
-  return store.db.query(`SELECT * FROM members WHERE project = ?1 AND role = 'builder'
+  return memo(store, null, "builders", project, () => store.db.query(`SELECT * FROM members WHERE project = ?1 AND role = 'builder'
       AND id IN (SELECT MAX(id) FROM members WHERE project = ?1 AND role = 'builder' GROUP BY squad, suffix)
       AND COALESCE(status, '') != 'gone' AND COALESCE(want, '') != 'gone'
       AND squad IN (SELECT topic FROM squads WHERE project = ?1 AND COALESCE(status, 'running') NOT IN ('suspended', 'on-hold', 'done', 'failed', 'closed', 'gone'))
-    ORDER BY id`).all(project) as Row[];
+    ORDER BY id`).all(project) as Row[]);
 }
 
 // A units.deps / ext_deps cell as a list of strings; [] when empty or it does not parse.
@@ -177,7 +197,7 @@ const list = (v: unknown): string[] => { try { const a = JSON.parse(String(v ?? 
 // slug (same squad) or `<squad>/<slug>` in `ext_deps`; a done or cancelled dependent no longer waits.
 export function blocksOf(store: Store, project: string, u: Row | null): string[] {
   if (!u) return [];
-  const rows = store.db.query("SELECT squad, slug, deps, ext_deps FROM units WHERE project = ? AND status = 'dispatched'").all(project) as Row[];
+  const rows = memo(store, null, "dispatched", project, () => store.db.query("SELECT squad, slug, deps, ext_deps FROM units WHERE project = ? AND status = 'dispatched'").all(project) as Row[]);
   return rows.filter((r) => !(r.squad === u.squad && r.slug === u.slug)
     && ((r.squad === u.squad && list(r.deps).includes(String(u.slug))) || list(r.ext_deps).includes(`${u.squad}/${u.slug}`))).map((r) => String(r.slug));
 }
@@ -209,6 +229,9 @@ export function unblockFirst(store: Store, project: string): boolean {
 // memoized, so a line reads the graph once. A unit with no row counts 0. Only reads.
 export type Unlocks = (u: Row | null) => number;
 export function unlocksOf(store: Store, project: string): Unlocks {
+  return memo(store, null, "unlocks", project, () => unlocksRead(store, project));
+}
+function unlocksRead(store: Store, project: string): Unlocks {
   const rows = store.db.query(`SELECT u.squad, u.slug, u.deps, u.ext_deps, u.hold, u.superseded_by, s.status AS sq_status, s.topic AS sq
       FROM units u LEFT JOIN squads s ON s.project = u.project AND s.topic = u.squad
       WHERE u.project = ? AND u.status IN ('planned', 'dispatched')`).all(project) as Row[];
@@ -250,7 +273,7 @@ type Focus = { squad: string; room: Record<Lane, number> } | null;
 export type Unlock = { on: boolean; count: Unlocks; room: Record<Lane, number> } | null;
 
 function focusFor(store: Store, project: string, n: number, light: number, held: (squad: string) => Record<Lane, number>): Focus {
-  const squad = focusSquad(store, project);
+  const squad = memo(store, null, "focus", project, () => focusSquad(store, project));
   if (!squad) return null;
   const h = held(squad);
   return { squad, room: { normal: Math.max(0, n - 1 - h.normal), light: light > 0 ? Math.max(0, light - 1 - h.light) : 0 } };
@@ -327,8 +350,10 @@ export function noteLaneMove(store: Store, project: string, squad: string, slug:
 // The asker's member row: the one named, else the latest Builder row of its squad + suffix.
 function askerRow(store: Store, project: string, who: Asker): Row | null {
   if (who.member) return who.member;
-  if (!who.squad || who.suffix == null) return null;
-  return store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND role = 'builder' AND suffix = ? ORDER BY id DESC").get(project, who.squad, who.suffix) as Row | null;
+  const { squad, suffix } = who;
+  if (!squad || suffix == null) return null;
+  return memo(store, null, "asker", `${project}\0${squad}\0${suffix}`, () =>
+    store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND role = 'builder' AND suffix = ? ORDER BY id DESC").get(project, squad, suffix) as Row | null);
 }
 
 // Does this pick start a new Builder agent? A Builder asker with no live agent; a live Builder that
@@ -344,13 +369,16 @@ function lineCtx(store: Store, project: string, n: number, now: number, exclude:
   const all = builders(store, project).map((m) => { const why = liveWhy(store, m, now); return { m, why, live: why != null }; });
   const key = (m: Row) => `${m.squad}\0${m.suffix ?? ""}`, liveKeys = new Set(all.filter((b) => b.live).map((b) => key(b.m)));
   const heldKeys = [...holds(store, project, now)].filter((k) => k !== exclude && !liveKeys.has(k));
-  const resuming = new Map((store.db.query("SELECT * FROM pause_members WHERE project = ? AND role = 'builder' AND state = 'resuming'").all(project) as Row[])
-    .map((r) => [key(r), r]));
+  const resuming = memo(store, null, "resuming", project, () => new Map((store.db.query("SELECT * FROM pause_members WHERE project = ? AND role = 'builder' AND state = 'resuming'").all(project) as Row[])
+    .map((r) => [key(r), r])));
   const waiting = all.filter(({ m, live }) => !live && key(m) !== exclude && asks(store, m, resuming.get(key(m))) && !hardPaused(store, m)).map(({ m }) => m);
   const light = maxLight(store, project), cpuH = light > 0 ? lightCpuH(store, project) : 0;
-  const unitOf = (sq: string, sf: string, m: Row | null) => memberUnit(store, { project, squad: sq, role: "builder", suffix: sf, member: (m?.wt as string | null) ?? null });
+  const unitOf = (sq: string, sf: string, m: Row | null) => { const wt = (m?.wt as string | null) ?? null;
+    return memo(store, null, "unit", `${project}\0${sq}\0${sf}\0${wt ?? ""}`, () => memberUnit(store, { project, squad: sq, role: "builder", suffix: sf, member: wt })); };
   // With the light lane off every unit is normal (and no lane move is recorded).
-  const laneAt = (u: Row | null): Lane => (light <= 0 ? "normal" : record ? laneOf(store, project, u, cpuH) : laneRead(store, project, u, cpuH));
+  // A walk reads each unit's lane once (laneOf records its move at most once anyway).
+  const laneAt = (u: Row | null): Lane => (light <= 0 || !u ? "normal"
+    : memo(store, null, record ? "lane-record" : "lane", `${project}\0${u.id}`, () => record ? laneOf(store, project, u, cpuH) : laneRead(store, project, u, cpuH)));
   // Live now, per lane and per squad: the live members, plus the `ds pick` holds (a hold with no squad/suffix counts normal).
   const used = { normal: 0, light: 0 };
   // Live seats per lane whose unit has open dependents: what the unlock room takes off (see Unlock).
