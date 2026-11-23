@@ -9,6 +9,7 @@
 //
 // DS_LOOP_HANG=1 (tests only): take the lock and the pidfile and boot, then never tick — a live,
 // stalled loop.
+import { markStopping } from "./core/stopping.ts";
 import { dlopen, FFIType } from "bun:ffi";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -68,7 +69,7 @@ function finish(): never {
   closeSync(lock);
   process.exit(0);
 }
-for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; if (!busy) finish(); });
+for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; markStopping(); if (!busy) finish(); });
 
 const git = Bun.spawnSync(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"], { stdout: "pipe", stderr: "ignore" });
 // U248: what says a Run changed (its worktrees' terminals, its unread mail), read once at the start of a tick.
