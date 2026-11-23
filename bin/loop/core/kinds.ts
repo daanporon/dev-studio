@@ -43,7 +43,7 @@ export const REQUESTS = {
   "alert-clear": obj({ prefix: opt(str), id: opt(str) }),
   answer: obj({ id: str, answer: str, seq: opt(num), card_wt: opt(str), choices: opt(arr(any)), transcript: opt(str), tool_use_id: opt(str), via: opt(str) }),
   board: obj({ file: str, text: str }),
-  chat: obj({ text: str, via: opt(str), request: opt(num) }),
+  chat: obj({ text: str, via: opt(str), request: opt(num), files: opt(arr(str)) }),
   dismiss: obj({ id: str, answer: opt(str) }),
   duplicate: obj({ wt: opt(str), handle: opt(str), newest: opt(str), runHandle: opt(str), mismatch: opt(bool), first: opt(num) }),
   "finish-unit": replay,
