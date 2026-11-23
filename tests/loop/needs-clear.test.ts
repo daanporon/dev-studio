@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
-import { alertGone } from "../../bin/loop/reconcilers/alerts.ts";
+import type { TickCtx } from "../../bin/loop/core/plugins.ts";
+import { alertGone, dropAlerts } from "../../bin/loop/reconcilers/alerts.ts";
 
 const FIXTURE = join(import.meta.dir, "..", "fixtures", "loop", "state");
 const T = 1_800_000_000, NWO = "o/r", LEAD = "wt-lead::/ws/ds-lead-lc", B = "wt-b1::/ws/ds-builder-u1-lc";
@@ -109,7 +110,15 @@ describe("loopnotes U3: Lifecycle failed and archived squads", () => {
   test("the debrief, dropped-questions and stop-failed cards of a closed squad stay", () => {
     const s = fx();
     setSquad(s, { status: "closed" });
-    for (const c of [reply({ id: "sweep-debrief-lc-1", title: "Debrief: lc" }), reply({ kind: "questions_dropped", title: "Archived with a blocking question open: lc" }), reply({ title: "Stop command failed" })])
+    for (const c of [reply({ id: "sweep-debrief-lc-1", title: "Debrief: lc" }), reply({ id: "loop-debrief-lc-1uy1p7", reason: "debrief-lc", title: "Debrief: lc" }), reply({ kind: "questions_dropped", title: "Archived with a blocking question open: lc" }), reply({ title: "Stop command failed" })])
       expect(gone(s, c)).not.toBe("its squad was archived");
+  });
+  test("an old-id debrief card is never gone on its own and dropAlerts keeps it at two days", () => {
+    const s = fx();
+    setSquad(s, { status: "closed" });
+    const c = reply({ id: "loop-debrief-lc-1uy1p7", reason: "debrief-lc", title: "Debrief: lc", since: new Date((T - 2 * 86_400) * 1000).toISOString() });
+    expect(gone(s, c)).toBe(false);
+    s.db.run("INSERT INTO observed_alerts (project, id, doc, observed_at) VALUES ('fx', ?, ?, ?)", [String(c.id), JSON.stringify(c), T]);
+    expect(dropAlerts({ store: s, project: "fx", now: T + 60 } as TickCtx)).toEqual([]);
   });
 });
