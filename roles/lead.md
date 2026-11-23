@@ -533,7 +533,8 @@ the unit rows:
 Save it with `~/.dev-studio/bin/role/squad-state.sh <state> set-debrief "<text>"` (or `set-debrief --file
 <path>`; the message names the exact command) and run nothing else: no unit, status or plan change, no
 messages to your team, which is already closing. The squad then closes and the archive keeps your
-text. If you don't answer in time, it closes with the debrief the doc already holds, if any.
+text. The message comes even while you look busy. If you don't answer in time, it closes with a debrief
+that says `No debrief was written (<why>)`, and its Needs-you card says so.
 
 ### Parked squad (only held work left)
 
