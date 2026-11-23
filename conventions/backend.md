@@ -4,7 +4,144 @@ All backend access goes through a defined interface so the system is not
 hardwired to Orca (R19, KTD9). Orca is the only backend shipped now; another is
 a sibling adapter under `bin/backend/`.
 
-## Selecting the backend
+There are two contracts:
+
+- **Contract v2** (below, `bin/backend/contract.ts`): the one a new backend implements (tmux,
+  herdr, orca-lite). A backend runs terminals and nothing else; the loop keeps everything else.
+- **The Orca adapter, contract v1** (from "Selecting the backend" on): the verbs
+  `bin/backend/orca.sh` answers today. The loop still runs on it; nothing in the Orca path
+  changes until a later unit moves the loop onto v2.
+
+## Contract v2
+
+### Requests and answers
+
+Every op is one JSON request and one JSON answer, so a backend can sit in the loop's process, behind
+a unix socket, or on another host over ssh. On the wire a request is the envelope `{op, req}`.
+Every answer has `ok`: `{ok: true, …fields}` on success, or `{ok: false, error: {code, message}}`.
+
+| Error code | Meaning |
+|---|---|
+| `not_found` | No terminal with that `id` (never made, closed, or the process behind it ended). |
+| `unsupported` | The request needs a capability this backend says it lacks (keys with `keys: none`). |
+| `bad_request` | The request is outside its op's type. `handle()` answers it before the backend sees it. |
+| `failed` | Anything else: the server is down, a command failed. The message says what. |
+
+`bin/backend/contract.ts` defines each request and answer once (`bin/loop/core/schema.ts` shapes),
+which gives both the TypeScript types (`Request<op>`, `Answer<op>`, the `Backend` interface) and the
+run-time checks (`checkRequest`, `checkAnswer`, each naming the wrong field). `handle(backend,
+envelope)` is the wire entry: an unknown op or a bad request answers `bad_request`, a backend that
+throws answers `failed`. `checked(backend)` wraps a backend so a request or answer outside its type
+throws a `ContractError`; the conformance suite runs every backend through it.
+
+### Ops
+
+| Op | Request | Answer |
+|---|---|---|
+| `backend.info` | `{}` | `{name, version, capabilities}` |
+| `terminal.create` | `{cwd, env?, label, group?, parent?}` | `{terminal}` |
+| `terminal.list` | `{}` | `{terminals: [terminal]}` |
+| `terminal.close` | `{id}` | `{closed: boolean}` |
+| `terminal.send` | `{id, text?, keys?, submit?}` | `{delivery: "turn_started" \| "accepted"}` |
+| `terminal.read` | `{id, screen?, lines?}` | `{text}` |
+| `terminal.last_output` | `{id}` | `{at: epoch seconds \| null}` |
+| `agent.state` | `{id}` | `{state: "working" \| "waiting" \| "idle" \| "unknown"}` |
+
+A **terminal** is `{id, cwd, label, group, parent, gen, created_at}`:
+
+- `id` is the backend's own handle. It is opaque to the loop.
+- `gen` is the `DS_GEN` in the create's `env`, or null without one. The loop puts a fresh generation
+  in every start and matches a retried start on it, so a backend needs no idempotency of its own.
+- `group` echoes the request's `group` when `parents` is `groups`, else it is null. `parent` echoes the
+  request's `parent` when `parents` is `native`, else it is null.
+- `created_at` is in epoch seconds.
+
+The rules per op:
+
+- `terminal.create` starts a shell in `cwd` with `env` added to its environment (names
+  `[A-Za-z_][A-Za-z0-9_]*`, string values). The loop types the agent's launch line into it afterwards;
+  the backend never knows which agent runs.
+- `terminal.close` is idempotent: a terminal already gone answers `{closed: false}`, not an error, so a
+  replayed close is safe.
+- `terminal.send` carries exactly one of `text` and `keys`. `submit` (text only) presses Enter after the
+  text. `keys` are named keys (`Enter Escape Tab Backspace Up Down Left Right C-c C-d`) or one digit or
+  lowercase letter (a menu pick), and there is at least one. The answer is `turn_started` only when the
+  backend saw the agent start a turn; otherwise it is `accepted`.
+- `terminal.read` with `screen` gives the visible screen. Without it, it gives the scrollback too, at most
+  `lines` lines.
+- `terminal.last_output` is the last time the terminal printed anything. It is null when it never did,
+  or when the backend cannot tell.
+
+### Capabilities
+
+`backend.info` names what the backend can do. The loop reads the answer and does the rest itself.
+
+| Capability | `native` | other values |
+|---|---|---|
+| `parents` | The backend nests a terminal's worktree under its `parent` (Orca). | `groups`: the backend places the terminal in its `group` (a tmux session, a herdr workspace). `none`: neither; the tree is in loop.db only. |
+| `state` | `agent.state` reads the agent's state. | `none`: it always answers `unknown`, and the loop works out the state from the screen and the transcript. |
+| `turn_confirm` | A submitted send answers `turn_started` once a turn started. | `none`: a send only ever answers `accepted`, and the loop confirms the turn itself. |
+| `keys` | `terminal.send {keys}` types named keys. | `none`: it answers `unsupported`. |
+
+### What stays in the loop
+
+The contract is small because the loop keeps the rest:
+
+- **Launch drivers.** The agent's command line, its flags and model, the account it runs on, and
+  reading a menu or a limit notice off the screen.
+- **Accounts and the picker.** Account folders, usage and credentials are read on the loop's side
+  (`docs/backends/local-reads.md`).
+- **Agent state** when `state` is `none`, and the turn check when `turn_confirm` is `none`.
+- **The parents tree** when `parents` is not `native`, and **start idempotency**, through `gen`.
+- **Worktrees.** The loop makes and removes the worktree; the backend gets a `cwd`.
+
+### Backend servers live outside the loop
+
+A backend with a server of its own (a tmux server, herdr) must never run as the loop's child. Every
+loop restart (an update, the watchdog) would take every agent on it down. `bin/backend/server-unit.ts`
+starts one the way `bin/loop/fulfil/board.ts` starts the board:
+
+- `startServer({name, argv, log, cwd?, env?})` runs it in its own transient user unit
+  (`systemd-run --user --collect --unit ds-<name>`). `systemctl --user restart ds-loop` then stops the
+  loop's cgroup and not this one.
+- Without systemd (no `systemd-run`, no user bus, the unit name already taken, or
+  `DS_SERVER_SYSTEMD=0`) it starts the server detached, in its own session.
+- The handle is `{pid, via: "systemd" | "detached", unit, log}`. The server's output appends to `log`.
+  In a unit, its pid is kept in `<log>.pid` and its exit code in `<log>.exit` (`exitCodeOf`).
+- `serverAlive(pid)` and `stopServer(handle)` check and stop it.
+- The unit does not inherit the caller's environment: `env` is the server's whole environment. The
+  default is the caller's, without `ORCA_*`.
+
+### Conformance
+
+`tests/loop/backend-conformance.ts` is the suite every v2 backend must pass. An adapter's test registers
+it on its own backend: `conformance({name, make, cwd, wait?, survive?})`.
+
+- Every call goes through `checked()`, so an answer outside its type fails the case.
+- Each case holds the backend to the capabilities it states. It covers create and list (with the `gen`,
+  `group` and `parent` echoes), an idempotent close, `not_found` on a gone id, typed text on the screen,
+  `last_output`, env and cwd (`echo $NAME`, `pwd`), screen reads, keys or `unsupported`, `agent.state`,
+  and `bad_request` from the wire entry.
+- `survive` (a backend with a server): a caller starts the server through `server-unit.ts`, creates a
+  terminal and is SIGKILLed. The server and its terminal must still be there afterwards.
+
+`tests/loop/backend-contract.test.ts` runs the suite against the in-memory fake
+(`bin/loop/fakes/contract.ts`, switchable capabilities) in all 24 capability mixes, over a unix socket,
+and as a server that outlives its caller. It also shows the checks catch an answer outside its type.
+`tests/loop/server-unit.test.ts` covers `server-unit.ts` on both paths.
+
+### Adding a v2 backend
+
+1. Implement `Backend` (`call(op, req)`) under `bin/backend/<name>.ts`.
+2. Start its server, if it has one, through `server-unit.ts`.
+3. State its capabilities in `backend.info`.
+4. Pass the conformance suite in a test of its own.
+5. Anything it needs from the agents' host beyond these ops is a local read: list it in
+   `docs/backends/local-reads.md`.
+
+## The Orca adapter (contract v1)
+
+### Selecting the backend
 
 `$BACKEND` points at the adapter script, defaulting to `bin/backend/orca.sh`.
 Callers invoke `"$BACKEND" <op> [args]` and never call `orca` directly.
@@ -36,7 +173,7 @@ failure goes to stderr, so the rewake hook wakes only for a real request.
 When worker states are unavailable on a failed Lead read, the team and unit
 sections show unknown state rather than advising re-dispatch.
 
-## Operations
+### Operations
 
 Script-callable (implemented by the adapter, used by the loop's observers and fulfillers and by `bin/host/up.sh`; `spawn-squad.sh` only writes a wish and `bin/board/board.sh` reads loop.db):
 
@@ -189,9 +326,9 @@ stays the low-level same-Run op. A new backend implements `wt-terminals` (worktr
 a live terminal) so the phone book's liveness keeps working; dispatch ids are never a
 delivery address (an idle standing role's newest dispatch is `completed`).
 
-## Adding a backend
+### Adding a v1 adapter
 
-Write `bin/backend/<name>.sh` implementing the script-callable ops (and, for a
+A new backend implements contract v2 (above). A v1 adapter is a sibling of `orca.sh`: write `bin/backend/<name>.sh` implementing the script-callable ops (and, for a
 full port, the agent-facing ones), then run with `BACKEND=bin/backend/<name>.sh`.
 Nothing in the Studio, Squad helpers, or conventions should need to change — that
 is the seam's whole purpose.
