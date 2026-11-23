@@ -3218,7 +3218,7 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
     catch (e) { toast(String(e.message || e)); return false; }
     finally { setBusy(""); }
   };
-  const saveEdit = async () => { if (await act("edit" + edit.id, { action: "edit", draft: edit.id, title: edit.title, body: edit.body }, "saved the new text; the leak check runs again")) setEdit(null); };
+  const saveEdit = async () => { if (await act("edit" + edit.id, { action: "edit", draft: edit.id, ...(edit.title != null ? { title: edit.title } : {}), body: edit.body }, "saved the new text; the leak check runs again")) setEdit(null); };
   const draftCard = (d, filed) => html`<div class="fb-draft" key=${d.id}>
     <div class="fb-title"><b>${d.kind === "add-to" ? "Comment on #" + d.target : d.title}</b> <span class="mut">${d.area ? d.area + " · " : ""}${d.label || ""}</span></div>
     ${edit && edit.id === d.id ? html`<div class="fb-edit">
@@ -3234,7 +3234,7 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
         <button class="btn sm pri fb-post" disabled=${!!busy || !on || d.leak === "blocked" || d.state === "posting"}
           title=${!on ? "feedback_repo is not set: name the repo in Settings first" : d.leak === "blocked" ? "the leak check blocked this draft: edit it first" : "Send this to " + summary.repo}
           onClick=${() => act("post" + d.id, { action: "post", draft: d.id }, "posting draft " + d.id)}>Post</button>
-        <button class="btn sm fb-edit-btn" disabled=${!!busy} onClick=${() => setEdit({ id: d.id, title: d.title || "", body: d.body })}>Edit</button>
+        <button class="btn sm fb-edit-btn" disabled=${!!busy} onClick=${() => setEdit({ id: d.id, ...(d.kind === "issue" ? { title: d.title || "" } : {}), body: d.body })}>Edit</button>
         <button class="btn sm fb-dismiss-draft" disabled=${!!busy} onClick=${() => act("dismiss" + d.id, { action: "dismiss", draft: d.id }, "dismissed draft " + d.id)}>Dismiss</button>
         <input class="fb-target" placeholder="#N" size="5" value=${target[d.id] || ""} onInput=${(e) => setTarget({ ...target, [d.id]: e.target.value })} />
         <button class="btn sm fb-addto" disabled=${!!busy || !on || !/^#?\d+$/.test(target[d.id] || "")} title="Post this as a comment on that open issue instead"
