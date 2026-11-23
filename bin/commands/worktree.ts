@@ -1,5 +1,5 @@
 // ds worktree — the loop's worktree providers by hand (orca-backend-alternatives U7, bin/loop/io/worktrees.ts):
-// make, remove, list and prune worktrees through a provider (git today), each recorded in the `worktrees`
+// make, remove, list and prune worktrees through a provider (git, or treehouse's warm pool: U8), each recorded in the `worktrees`
 // table by host + path. For tests and operators; the loop calls the same functions for squads on a new
 // backend (U11). Rows are written directly: no request, no action.
 import { open } from "../loop/core/store.ts";
@@ -7,9 +7,9 @@ import { parse, print } from "../loop/core/cli.ts";
 import { dsLabel } from "../lib/shared";
 import { createWorktree, listWorktrees, pruneWorktrees, removeWorktree, worktreeLine, WorktreeError } from "../loop/io/worktrees.ts";
 
-export const help = "create --repo <path> --name <n> --branch <b> [--base <ref>] [--provider git] [--parent <path>] [--project p --squad s --role r] [--path p] | rm <path> [--force] [--delete-branch [--base <ref>]] | list [--project p] [--provider x] [--repo r] [--all] | prune [--repo r] [--provider x] — make, remove and list the loop's own worktrees (worktrees rows)";
+export const help = "create --repo <path> --name <n> --branch <b> [--base <ref>] [--provider git|treehouse] [--parent <path>] [--project p --squad s --role r] [--path p] | rm <path> [--force] [--delete-branch [--base <ref>]] | list [--project p] [--provider x] [--repo r] [--all] | prune [--repo r] [--provider x] — make, remove and list the loop's own worktrees (worktrees rows)";
 
-const USAGE = `usage: ds worktree create --repo <path> --name <name> --branch <branch> [--base <ref>] [--provider git] [--parent <path>]
+const USAGE = `usage: ds worktree create --repo <path> --name <name> --branch <branch> [--base <ref>] [--provider git|treehouse] [--parent <path>]
                           [--project <label>] [--squad <topic>] [--role <role[-suffix]>] [--path <path>] [--json]
        ds worktree rm <path> [--force] [--delete-branch [--base <ref>]] [--json]
        ds worktree list [--project <label>] [--provider <name>] [--repo <path>] [--all] [--json]
