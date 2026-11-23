@@ -255,9 +255,38 @@ backend (U11, "Started" below).
     `terminal.send` with `submit`, `turn_started` read as started, `accepted` as accepted.
   - **Finish.** `finish-unit` and `ds finish` know the squad's backend (`DS_BACKEND`, else its loop.db
     row): off Orca there is no Run, so the finish row is the whole finish and no `worker_done` is sent.
+  - **Role scripts (U11b).** See "Role scripts off Orca" below.
   - **Not yet.** Removal (close, cancel, leftovers, tidy) is U11c's; the observer that reads these
-    members' state is U12's; the role scripts' own backend calls are U11b's. `nesting.ts` skips such a
-    squad (only Orca moves a worktree under a parent).
+    members' state is U12's. `nesting.ts` skips such a squad (only Orca moves a worktree under a parent).
+
+### Role scripts off Orca
+
+The scripts a role runs (ask-operator, the watch tick, the phone book, the team listing, squad-state)
+reach the squad's own backend, not Orca (U11b). `backendPath()` (`bin/lib/shared.ts`) picks the adapter:
+`$BACKEND` when set, else `bin/backend/contract.sh` when this process belongs to a squad off Orca
+(`contractHere` in `bin/lib/contract-here.ts`, which shared.ts imports alone: `DS_BACKEND`, which every contract terminal carries, else
+the `squads.backend` of `DS_MEMBER`'s squad in loop.db, read-only), else `orca.sh`. Reads about the host
+(accounts, skills, the Orca nesting depth) use `hostBackendPath()`, which never picks the contract.
+
+`contract.sh` (`ds contract-backend`) answers the adapter verbs those scripts call, from the contract:
+
+- `current`: `local::` + `DS_WT`, else the git top level.
+- `ping`: exits 0 and writes nothing. A squad off Orca has no card note; the `waiting_on_you` question is
+  the board card, so answering it clears nothing (squad-state's resolve and the loop's answer fulfiller
+  skip a `local::` card).
+- `worker-states` and `wt-terminals`: Orca's line shapes over `terminal.list`, `agent.state` and
+  `terminal.last_output` of each project's contract squads (`contractStates`, `contractLive`). The newest
+  terminal of a worktree speaks for it. A backend with no adapter or a list that fails goes to stderr, and
+  the verb exits 1 only when no project could be read.
+- `worker-detail` prints nothing and `terminal-reap` prints `0`.
+- Any other verb exits 2 with `contract adapter: no '<verb>' off Orca`.
+
+The phone book and the team listing read each `local::` member from the contract in process and every
+other member from Orca, so a project with squads on both makes no Orca read for its contract members.
+A Lead off Orca has no Run. Its address is its worktree (`send-worker`), its watch tick reads only its
+loop.db rows (header `no Run: the squad runs on <backend>`), and ask-operator takes a state file with no
+`run_id` when the squad's row names a contract backend. `tests/loop/role-scripts-contract.test.ts`
+covers it, with a real tmux server when one is on PATH.
 
 ## The Orca adapter (contract v1)
 

@@ -7,13 +7,11 @@
 //
 // bin/backend/contract.sh answers the adapter verbs the role scripts call through $BACKEND with these
 // (`ds contract-backend`); the phone book and the team listing call them in process for the contract
-// squads of a project that also has squads on Orca. Imports no shared.ts: shared.ts imports this.
-import { Database } from "bun:sqlite";
-import { existsSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+// squads of a project that also has squads on Orca. Imports no shared.ts; shared.ts imports only contract-here.ts.
+import { basename } from "node:path";
 import { checked, type Backend } from "../backend/contract.ts";
 import { projectTmux } from "../backend/tmux.ts";
-import { parseMember } from "../loop/core/whoami.ts";
+import { projectContracts } from "./contract-here.ts";
 
 export const LOCAL = "local::";   // as bin/loop/drivers/contract.ts, without its imports
 export const isLocalWt = (wt: string | null | undefined): boolean => !!wt && wt.startsWith(LOCAL);
@@ -24,42 +22,7 @@ export type MakeBackend = (name: string, project: string) => Backend | null;
 export const makeBackend = (root: string): MakeBackend => (name, project) =>
   (name === "tmux" ? checked(projectTmux(project, { stateRoot: root })) : null);
 
-function db<T>(root: string, f: (d: Database) => T): T | null {
-  const path = join(root, "loop.db");
-  try { if (!existsSync(path) || statSync(path).size === 0) return null; } catch { return null; }
-  try {
-    const d = new Database(path, { readonly: true });
-    try { return f(d); } finally { d.close(); }
-  } catch { return null; }   // an older loop.db with no backend column, or none at all: read as Orca
-}
-
-/** The backend a squad runs on when it is not Orca, else null (squads.backend, migration 0054). */
-export function squadContract(root: string, project: string, squad: string): string | null {
-  const b = db(root, (d) => (d.query("SELECT backend FROM squads WHERE project = ? AND topic = ?").get(project, squad) as { backend?: string } | null)?.backend ?? null);
-  return b && b !== "orca" ? b : null;
-}
-
-/** The contract backends a project's open squads run on, each once. */
-export function projectContracts(root: string, project: string): string[] {
-  return db(root, (d) => (d.query("SELECT DISTINCT backend FROM squads WHERE project = ? AND backend != 'orca' AND COALESCE(status, '') NOT IN ('closed', 'gone') ORDER BY backend")
-    .all(project) as { backend: string }[]).map((r) => r.backend)) ?? [];
-}
-
-/** The contract backend this process belongs to, else null: DS_BACKEND (on every terminal the loop starts
- *  on a contract, core/actuator.ts contractSeat), else the squad of DS_MEMBER as loop.db has it. */
-export function contractHere(root: string, env: Record<string, string | undefined> = process.env): string | null {
-  if (env.DS_BACKEND) return env.DS_BACKEND === "orca" ? null : env.DS_BACKEND;
-  const m = parseMember(env.DS_MEMBER);
-  return m ? squadContract(root, m.project, m.squad) : null;
-}
-
-/** The projects a contract verb answers for: DS_MEMBER's, else every project with a contract squad. */
-export function contractProjects(root: string, env: Record<string, string | undefined> = process.env): string[] {
-  const m = parseMember(env.DS_MEMBER);
-  if (m) return [m.project];
-  return db(root, (d) => (d.query("SELECT DISTINCT project FROM squads WHERE backend != 'orca' AND COALESCE(status, '') NOT IN ('closed', 'gone') ORDER BY project")
-    .all() as { project: string }[]).map((r) => r.project)) ?? [];
-}
+export { contractHere, contractProjects, projectContracts, squadContract } from "./contract-here.ts";
 
 export type LiveTerm = { wt: string; id: string; backend: string; label: string; created_at: number };
 export type Live = { terms: LiveTerm[]; blind: string[] };   // blind: why a backend could not be read

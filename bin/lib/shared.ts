@@ -4,7 +4,7 @@
 import { readFileSync, existsSync, readdirSync, writeSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { filerIdentity, whoAmI } from "../loop/core/whoami.ts";
-import { contractHere } from "./contract-roles.ts";
+import { contractHere } from "./contract-here.ts";
 
 /** The checkout root: DS_ROOT from the .sh wrapper (the path as the caller named it, symlinks kept, like the shell's `cd .. && pwd`), else two folders up. */
 export const ROOT = process.env.DS_ROOT || join(import.meta.dir, "..", "..");
@@ -19,7 +19,7 @@ export const settingsAt = () => ({ root: stateRoot(), conventions: join(ROOT, "c
 
 /** The adapter a role script reaches its backend through: BACKEND (tests, a swap), else the contract
  *  adapter when this process runs in a squad off Orca (DS_BACKEND, else DS_MEMBER's squad row in loop.db;
- *  bin/lib/contract-roles.ts contractHere, U11b), else Orca's. */
+ *  bin/lib/contract-here.ts contractHere, U11b), else Orca's. */
 export function backendPath(): string {
   if (process.env.BACKEND) return process.env.BACKEND;
   return join(ROOT, "bin", "backend", contractHere(stateRoot()) ? "contract.sh" : "orca.sh");
