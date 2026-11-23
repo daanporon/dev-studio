@@ -123,6 +123,9 @@ export function limitValueProblem(key: string, val: string): string {
   if (key === "briefing_time" || key === "briefing_days") { /* validated by the shape checks below */ }
   else if (key === "review_risk_paths") {
     if (val === "" || WS.test(val)) return "review_risk_paths must be comma-separated shell globs, or -";
+  } else if (key === "feedback_repo") {
+    // ds-feedback-github-issues U1: the GitHub repo feedback issues go to, owner/name, or - (off).
+    if (val !== "-" && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(val)) return `feedback_repo must be owner/name, or - (got '${val}')`;
   } else {
     const wide = key === "expected_checks" || key === "review_skip_lenses";
     if (val === "" || (wide ? /[^A-Za-z0-9._,-]/ : /[^A-Za-z0-9._-]/).test(val)) return `bad value '${val}'`;
@@ -148,6 +151,9 @@ export function limitValueProblem(key: string, val: string): string {
     case "review_delta_wide_lines": case "review_delta_full_lines": case "flow_stuck_floor_min": case "flow_quiet_min": case "needs_grace_min": case "refusal_needs_min":
     case "loop_stall_banner_n": case "loop_stall_banner_min": case "expose_down_min": case "expose_warn_min": case "chat_quiet_s": case "chat_queue_min": case "msg_chase_min": case "msg_reply_alert_min": case "archive_debrief_min": case "prompt_wait_min":
       if (/[^0-9]/.test(val)) return `${key} must be a non-negative integer (got '${val}')`;
+      break;
+    case "feedback_draft_batch":
+      if (!/^\d+$/.test(val) || Number(val) < 1 || Number(val) > 100) return `feedback_draft_batch must be a whole number from 1 to 100 (got '${val}')`;
       break;
     case "briefing_merges_lag_min":
       if (!/^\d+$/.test(val) || Number(val) > 120) return `briefing_merges_lag_min must be whole minutes from 0 to 120 (got '${val}')`;

@@ -110,6 +110,14 @@ export function payloadOf<K extends ActionKind>(a: { kind: string; payload?: unk
   return (a.payload ?? {}) as ActionPayload<K>;
 }
 
+// ---------------------------------------------------------------- feedback (migration 0054)
+// A ds-feedback note's states (feedback_notes.state) and a draft's (feedback_drafts.state); the
+// tables' CHECKs list the same words.
+export const FEEDBACK_NOTE_STATES = ["new", "drafted", "project-only", "already-fixed", "filed", "fixed", "closed", "dismissed"] as const;
+export type FeedbackNoteState = (typeof FEEDBACK_NOTE_STATES)[number];
+export const FEEDBACK_DRAFT_STATES = ["review", "posting", "filed", "dismissed", "fixed", "closed"] as const;
+export type FeedbackDraftState = (typeof FEEDBACK_DRAFT_STATES)[number];
+
 // ---------------------------------------------------------------- facts
 const ep = obj({ episode: opt(str), account: opt(str), notice: opt(str), reset: opt(num), kind: opt(str), until: opt(num) });
 const svc = { id: num, name: opt(str), project: opt(str), topic: opt(str), port: opt(num) };
@@ -124,6 +132,8 @@ export const FACTS = {
   delivery_sent: obj(delivery),
   delivery_verified: obj(delivery),
   exposed: obj({ name: str, role: opt(str), scope: opt(str), suffix: opt(str), url: opt(str), audience: opt(str), stop: opt(bool), ports: opt(arr(num)) }),
+  feedback_imported: obj({ file: str, lines: num, added: num, renamed: opt(str) }),
+  feedback_noted: obj({ key: str, project: str, member: opt(str), source: str }),
   limit_cleared: ep,
   limit_expired: ep,
   limit_wait: ep,
