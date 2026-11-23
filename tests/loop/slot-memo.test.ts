@@ -100,13 +100,13 @@ test("a start slot given in the walk is read live, the rest is kept", () => {
   const store = fixture();
   const u3 = Number(member(store, "u3").id), u4 = Number(member(store, "u4").id);
   withWalkMemo(store, T, () => {
-    expect(slot(store, "p", { member: u4, squad: "one", suffix: "u4" }, T).ok).toBe(false);   // u3 is ahead of it
+    // Two seats held (u1, u2); u3 is ahead of u4 in the line for the last.
+    expect(slot(store, "p", { member: u4, squad: "one", suffix: "u4" }, T)).toMatchObject({ ok: false, live: 2, ahead: 1 });
     expect(slot(store, "p", { member: u3, squad: "one", suffix: "u3" }, T).ok).toBe(true);
     store.db.run("CREATE TEMP TABLE picks AS SELECT * FROM main.picks WHERE 0");
     store.db.run("INSERT INTO temp.picks (member, project, squad, role, agent, model, account, slot, reason) VALUES (?, 'p', 'one', 'builder', 'claude', 'opus', 'acct-a', 1, 'test')", [u3]);
     // u3 now holds a start slot: the last seat is taken for u4 too, and u3's own seat counts.
-    const s4 = slot(store, "p", { member: u4, squad: "one", suffix: "u4" }, T);
-    expect(s4.ok).toBe(false);
+    expect(slot(store, "p", { member: u4, squad: "one", suffix: "u4" }, T)).toMatchObject({ ok: false, live: 3, ahead: 0 });
     expect(seats(store, "p", T).holders.map((h) => [h.suffix, h.why])).toEqual([["u1", "working"], ["u2", "restarting"], ["u3", "starting"]]);
     store.db.run("DROP TABLE temp.picks");
   });
