@@ -92,7 +92,10 @@ test("contract.sh: current is the member's local:: worktree, ping writes nothing
   const sh = join(ROOT, "bin", "backend", "contract.sh");
   expect(run([sh, "current"], me, cwd)).toMatchObject({ rc: 0, out: `${lead}\n` });
   expect(run([sh, "ping", lead, "NEEDS YOU: x"], me, cwd)).toMatchObject({ rc: 0, out: "" });
-  expect(run([sh, "worker-states"], me, cwd)).toMatchObject({ rc: 0, out: "" });   // no server yet: nobody is up
+  // No server yet: nobody is up. Without a tmux binary the list fails, and liveness is unknown, not "none".
+  const ws = run([sh, "worker-states"], me, cwd);
+  if (Bun.which("tmux")) expect(ws).toMatchObject({ rc: 0, out: "" });
+  else expect(ws).toMatchObject({ rc: 1, out: "" });
   const no = run([sh, "run-show", "run_x"], me, cwd);
   expect(no.rc).toBe(2);
   expect(no.err).toContain("no 'run-show' off Orca");
