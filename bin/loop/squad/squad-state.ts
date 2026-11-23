@@ -80,11 +80,11 @@ const USAGE = `usage: squad-state.sh <file> <command> [args]
   set-repo         <file> <repo-selector>
   set-host         <file> <saved-env-or-empty>
   set-framing      <file> <framing-text>
-  set-debrief      <file> <text> | --file <path>   (the squad's short debrief — six parts, the sixth a feature squad's "Try it" — written before set-status done; empty is refused; also records debrief_at and debrief_units)
+  set-debrief      <file> <text> | --file <path>   (the squad's debrief — six parts, the sixth "Try it" from the approved plan — the Lead writes it when the loop asks at archive; empty is refused; also records debrief_at and debrief_units)
   set-spawn        <file> <repo> <host> <framing>   (all three at once)
   set-type         <file> <feature|testing>
   set-autonomy     <file> <checkpoints|lfg>
-  set-status       <file> <running|blocked|waiting-on-you|suspended|done|failed>   (done refuses while a feature squad has a unit dispatched, planned or held — a unit is done when its PR merges — without a debrief, and, for a feature squad, a debrief without its "Try it" part)
+  set-status       <file> <running|blocked|waiting-on-you|suspended|done|failed>   (done refuses while a feature squad has a unit dispatched, planned or held — a unit is done when its PR merges)
   enqueue-question <file> <id> <asker> <blocking:true|false> <question> [card_wt] [suggestion] [why] [options A|B|C] [title] [choices JSON [{label,does}]] [picker JSON {source,tool_use_id,transcript_path,picker_answerable}] [pr number] [doc_path]
   resolve-question <file> <id> [--answer <text>] [--via terminal|picker|board|reality]   (clears card_wt's NEEDS YOU note once no open question uses it; the loop's store keeps the answer)
   answered-questions <file> [--limit N] [--before <seq>]   (answered questions, newest first: seq\\tid\\tanswered_at\\tvia\\ttitle\\tanswer; none before the loop's switch)
@@ -678,8 +678,7 @@ function main(argv: string[]): void {
     case "set-host": need(1); return set((d) => { d.host = a[0] === "" ? null : a[0]; });
     case "set-framing": need(1); return set((d) => { d.framing = a[0]; });
     case "set-debrief": {
-      // The squad's debrief (set out to do / shipped / learned / still open / cost): set-status done
-      // needs one. It rides in the doc, so the archive keeps it with the squad.
+      // The squad's debrief (set out to do / shipped / learned / still open / cost): the loop asks for it at archive; set-status done does not. It rides in the doc, so the archive keeps it with the squad.
       need(1);
       let text = a[0];
       if (a[0] === "--file") {
@@ -1051,9 +1050,6 @@ function main(argv: string[]): void {
             }
           }
           if (lines.length) die(1, `squad-state: refusing done: ${lines.join("\n  ")}\n  or leave the squad parked; it is not done`);
-          if (typeof d.debrief !== "string" || d.debrief.trim() === "") die(1, `squad-state: refusing done: no debrief — write one first: squad-state.sh ${file} set-debrief "<6 parts: set out to do / shipped (PR #s) / learned / still open / cost / Try it>"`);
-          // A feature squad's debrief carries a "Try it" part (brief-other-prs U3): a line that starts, after an optional list marker or **, with "Try it".
-          if (feature && !/^[ \t]*(?:\*\*|__)?(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:\*\*|__)?[ \t]*try it/im.test(d.debrief)) die(1, `squad-state: refusing done: the debrief has no "Try it" part — add as a sixth part, as the Thinker gave it: "6. **Try it:** 1. <where, what to do, what you should see> …" (1-5 steps that work on main), or one line "Try it: nothing to try by hand — <why>"`);
         }
         const was = raw(alt(d.status, ""));
         d.status = a[0];

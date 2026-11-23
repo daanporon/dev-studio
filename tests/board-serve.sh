@@ -1165,6 +1165,33 @@ ex(){ [ -e "$CF/ans/$1" ] && echo y || echo n; }
 eq "chat-file: 15 days old gone, 13 kept, other file kept, old tmp gone, new tmp kept" "$(ex "$AID")$(ex "$B")$(ex notes.txt)$(ex ".$AID.1.tmp")$(ex ".$B.2.tmp")" "nyyny"
 eq "chat-file: a pruned image is 404"   "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "404"
 rm -f "$CF/ans/notes.txt" "$CF/ans/.$B.2.tmp"
+# chat-image-upload U4: the Start squad dialog's images go to topic _start with no member (no squad yet),
+# and a start may name up to 8 of them.
+ups(){ # ups <file> [project] [extra query] -> status; the answer in $TMP/up.out
+  curl -s -o "$TMP/up.out" -w '%{http_code}' -X POST -H "$O" -H "Content-Type: image/png" --data-binary "@$TMP/$1" "$F?project=${2:-$LBL}&topic=_start${3:-}"; }
+eq "start-file: an upload to _start with no wt is 200" "$(ups a.png)" "200"
+SID=$(jq -r '.id' "$TMP/up.out")
+eq "start-file: stored under _start, 0600" "$(stat -c %a "$CF/_start/$SID" 2>&1)" "600"
+eq "start-file: with a wt is 400"       "$(ups b.png "$LBL" '&wt=wTh')" "400"
+eq "start-file: another project is 403" "$(ups b.png zzother)" "403"
+eq "start-file: over 5 MiB is 413"      "$(ups big.png)" "413"
+eq "start-file: a cross-origin upload is 403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://evil.example' -H 'Content-Type: image/png' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=_start")" "403"
+eq "start-file: an SVG is 415"          "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$O" -H 'Content-Type: image/png' --data-binary "@$TMP/s.svg" "$F?project=$LBL&topic=_start")" "415"
+eq "start-file: GET serves it"          "$(curl -s -o "$TMP/served.png" -w '%{http_code}' "$F?project=$LBL&topic=_start&name=$SID"; cmp -s "$TMP/a.png" "$TMP/served.png" && echo same)" "200same"
+eq "start-file: a second image"         "$(ups b.png)" "200"
+SID2=$(jq -r '.id' "$TMP/up.out")
+sbody(){ jq -nc --arg p "$LBL" --argjson f "$1" '{project: $p, action: "start", text: "look", files: $f}'; }
+eq "start-file: a start with 2 files is 202" "$(req "$(sbody "[\"$SID\",\"$SID2\"]")")" "202"
+eq "start-file: the studio row holds the names" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.action, .payload.files]')" "[\"studio\",\"start\",[\"$SID\",\"$SID2\"]]"
+srows(){ dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'" | jq '.[0].n'; }
+N4=$(srows)
+eq "start-file: 9 files are 400"        "$(req "$(sbody "$(jq -nc '[range(9) | tostring * 16 + ".png"]')")")" "400"
+eq "start-file: a bad name is 400"      "$(req "$(sbody '["../x.png"]')")" "400"
+eq "start-file: a missing one is 409"   "$(req "$(sbody '["0123456789abcdef.png"]')")$(jq -r '.error' "$TMP/post.out")" "409image 0123456789abcdef.png is gone — attach it again"
+CID="$(sha256sum "$TMP/c.png" | cut -c1-16).png"
+eq "start-file: c.png is stored for a chat only" "$([ -f "$CF/ans/$CID" ] && [ ! -e "$CF/_start/$CID" ] && echo y)" "y"
+eq "start-file: a chat image is not a start's" "$(req "$(sbody "[\"$CID\"]")")" "409"
+eq "start-file: no refused start wrote a row" "$(srows)" "$N4"
 
 # GET /lavish/<key>: Lavish stops itself when idle; when it is down the board files one `lavish`
 # request and answers a page that reloads until the loop has started it, then redirects.

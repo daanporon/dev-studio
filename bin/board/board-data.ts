@@ -17,6 +17,7 @@ import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pr
 import { basename, join, resolve } from "node:path";
 import { ROOT } from "../lib/shared.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
+import { debriefTopic } from "./card-place.ts";
 import { placeAlert, questionsCount, shownStatus, doneWaits, shortTitle, prNumber } from "./needs-rules.ts";
 import { githubView, githubLine, budgetCard, dropLeadMergeCopies } from "./github-view.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
@@ -2020,10 +2021,13 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const allAlerts = (db ? labels.flatMap((l) => db.all("SELECT doc FROM observed_alerts WHERE project = ? ORDER BY rowid", l).map((r) => {
     const x = parse(r.doc) ?? {};
     const text = String(x.question ?? x.text ?? "");
-    const aslug = slugOf(l, typeof x.squad === "string" ? x.squad : null);
+    // A debrief card's repo is its archived squad's (resolved like a live squad's), before the project's.
+    const dTopic = debriefTopic(x);
+    const dRepo = dTopic ? archivedDocs(db, l).filter((a) => a.st && typeof a.st === "object" && String(a.st.topic ?? "") === dTopic && a.st.repo).sort((p, q) => String(q.st.closed_at ?? "").localeCompare(String(p.st.closed_at ?? "")))[0]?.st.repo : null;
+    const aslug = (dRepo && repoSlug(db, l, String(dRepo))) || slugOf(l, typeof x.squad === "string" ? x.squad : null);
     const acts = alertActs(x);
     return {
-      repo_slug: aslug, pr: cardPr(db, l, x.ref, aslug), act: cardAct(x.act),
+      debrief: dTopic, repo_slug: aslug, pr: cardPr(db, l, x.ref, aslug), act: cardAct(x.act),
       project: l, id: x.id ?? null, from: typeof x.asker === "string" && x.asker !== "sweep" ? x.asker : null, text, title: x.title ?? shortTitle(text, x.id ?? null),
       card: typeof x.kind === "string" ? x.kind : typeof x.card === "string" ? x.card : null, reason: typeof x.reason === "string" ? x.reason : null,
       squad: typeof x.squad === "string" ? x.squad : null, unit: typeof x.unit === "string" ? x.unit : null,
@@ -2097,7 +2101,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     // The inbox: every question and proposed fix from squads that aren't on hold: blocking first,
     // then approvals, then questions, oldest first; each carries the command to copy.
     needs_you: [...studioAlerts.map((a) => ({
-      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: String(a.id ?? "").match(/^sweep-debrief-(.+)-[0-9]+$/)?.[1] ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true,
+      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true,
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
@@ -2280,7 +2284,7 @@ export function renderText(b: Board): string {
   }
   for (const a of b.studio_alerts) {
     const ag = a.age_min == null || a.age_min < 0 ? "?" : a.age_min >= 60 ? `${Math.floor(a.age_min / 60)}h` : `${a.age_min}m`;
-    o.push(`studio: ${a.text.replace(/[\t\n]/g, " ")} (${ag}) — then dismiss it on the web board${a.suggestion ? ` ("${a.suggestion}")` : ""}`);
+    o.push(`studio: ${(a.debrief ? a.text.split("\n")[0] : a.text).replace(/[\t\n]/g, " ")} (${ag}) — then dismiss it on the web board${a.suggestion ? ` ("${a.suggestion}")` : ""}`);
   }
   if (b.studio_alerts.length) o.push(RULE);
   for (const st of b.studio) {

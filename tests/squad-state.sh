@@ -97,14 +97,11 @@ check "done refusal names the settle command for a dispatched unit" "1" "$(grep 
 check "another status with dispatched units still works" "blocked" "$("$SS" "$d" get | jq -r '.status')"
 observe_pr "$d" a 81 MERGED; "$SS" "$d" set-unit-status "a" "done" >/dev/null
 "$SS" "$d" cancel-unit "b" >/dev/null 2>&1
-# U1: done also needs a debrief; set-debrief refuses an empty one; other statuses are not gated.
-before="$(cat "$d")"
+# debrief-in-needs-you U2: done needs no debrief (the loop asks for it at archive); set-debrief refuses an empty one.
 "$SS" "$d" set-status "done" >/dev/null 2>"$d.err"; rc=$?
-check "done without a debrief refuses" "1" "$rc"
-check "debrief refusal leaves state unchanged" "$before" "$(cat "$d")"
-check "debrief refusal says how to write one" \
-  "squad-state: refusing done: no debrief — write one first: squad-state.sh $d set-debrief \"<6 parts: set out to do / shipped (PR #s) / learned / still open / cost / Try it>\"" \
-  "$(cat "$d.err")"
+check "done without a debrief works" "0" "$rc"
+"$SS" "$d" set-status "running" >/dev/null 2>&1
+before="$(cat "$d")"
 "$SS" "$d" set-debrief "" >/dev/null 2>"$d.err"; rc=$?
 check "set-debrief refuses an empty text" "1" "$rc"
 check "set-debrief names the refusal" "1" "$(grep -c 'refusing an empty debrief' "$d.err")"
@@ -185,10 +182,6 @@ check "done refusal writes no journal" "absent" "$([ -e "$JF" ] && echo present 
 "$SS" "$JD/squads/topic.json" set-status "blocked" >/dev/null
 check "non-done status writes no journal" "absent" "$([ -e "$JF" ] && echo present || echo absent)"
 observe_pr "$JD/squads/topic.json" a 81 MERGED; "$SS" "$JD/squads/topic.json" set-unit-status "a" "done" >/dev/null
-"$SS" "$JD/squads/topic.json" set-status "done" >/dev/null 2>&1
-check "no-debrief refusal writes no journal" "absent" "$([ -e "$JF" ] && echo present || echo absent)"
-"$SS" "$JD/squads/topic.json" set-debrief "d
-Try it: nothing to try by hand — x" >/dev/null
 "$SS" "$JD/squads/topic.json" set-status "done" >/dev/null 2>&1
 check "set-status done lands one lead decision" "1" "$(grep -c '\[decision\] squad set to done' "$JF" 2>/dev/null)"
 "$SS" "$JD/squads/topic.json" set-status "done" >/dev/null 2>&1

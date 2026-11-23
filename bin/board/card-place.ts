@@ -21,10 +21,18 @@ const GRACE_ID = /^(loop|sweep)-studio\.(limit|adopt)-/;
 const s = (v: unknown) => (typeof v === "string" ? v : "");
 const epoch = (v: unknown): number | null => { const t = Date.parse(s(v)); return Number.isFinite(t) ? Math.floor(t / 1000) : null; };
 
+// The topic of a squad's archive debrief card: from `reason` `debrief-<topic>`, else from an id
+// `sweep-debrief-<topic>-<n>`. An id `loop-debrief-…` alone is not parsed (its subject was cut to 60 characters).
+export function debriefTopic(a: CardLike): string | null {
+  const reason = s(a.reason).match(/^debrief-(.+)$/);
+  if (reason) return reason[1];
+  return s(a.id).match(/^sweep-debrief-(.+)-[0-9]+$/)?.[1] ?? null;
+}
+
 export function cardPlace(a: CardLike, now: number, graceMin = 10, refusalMin = 240): Place {
   const kind = s(a.kind), id = s(a.id), title = s(a.title);
   // U7: the morning brief and a finished squad wait on the operator, so they are needs, with no grace.
-  if (/^(brief|sweep-debrief)-/.test(id) || (kind === "poke_unanswered" && s(a.reason) === "all-done")) return "needs";
+  if (/^(brief|sweep-debrief)-/.test(id) || debriefTopic(a) !== null || (kind === "poke_unanswered" && s(a.reason) === "all-done")) return "needs";
   // U287: a merge card from a rate-limited merge is a note (the budget card covers it); any other one ("merge it
   // by hand", "could not be armed") only a person clears, so it is Needs-you once it has lasted the grace.
   if (kind === "merge_card") {

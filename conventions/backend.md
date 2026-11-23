@@ -130,6 +130,32 @@ it on its own backend: `conformance({name, make, cwd, wait?, survive?})`.
 and as a server that outlives its caller. It also shows the checks catch an answer outside its type.
 `tests/loop/server-unit.test.ts` covers `server-unit.ts` on both paths.
 
+### The tmux backend
+
+`bin/backend/tmux.ts` (U14) is the first v2 backend on a real multiplexer. Capabilities: `parents`
+`groups`, `state` `none` (`agent.state` is always `unknown`; the loop's own readers give the state),
+`turn_confirm` `none`, `keys` `native`.
+
+- One tmux server per project: `projectTmux(<project>, {stateRoot})` uses the socket `-L ds-<project>`
+  and starts its server through `server-unit.ts` (unit `ds-tmux-<project>`, log
+  `<state root>/<project>/loop/tmux-server.log`) on the first create. The server runs
+  `tmux -f /dev/null -D`, so no user config is read, with `exit-empty` off. Its environment is the
+  caller's without `ORCA_*`, `TMUX*`, `DS_MEMBER`, `DS_WT`, `DS_GEN` and `DS_BACKEND`.
+- Every client call passes `-N`, so a call never starts a server inside the loop's cgroup.
+- One session per squad (the terminal's `group`; `.`, `:` and other characters become `_`; no group
+  means session `_ds`) and one window per member, made with `-c <cwd>` and `-e` for each env entry.
+- A terminal's id is its pane id (`%7`). The window option `@ds_meta` keeps cwd, label, group, gen and
+  the create time. It is set in the same tmux command list as the window, so a listed terminal always
+  has its gen.
+- Text is loaded into a paste buffer from stdin and pasted, so tmux never parses it. `submit` then
+  presses Enter. Keys go through `send-keys`.
+- `read` is `capture-pane`. `last_output` is the window's `window_activity`, because tmux 3.4 has no
+  `pane_activity` and each window holds one pane.
+- No server, or a server with no session left, lists no terminals and answers `not_found` for an id.
+
+`tests/loop/backend-tmux.test.ts` runs the conformance suite, including `survive`, on a private socket
+(`tmux.ts caller` is its caller). When no `tmux` binary is on `PATH` it skips with the reason printed.
+
 ### Adding a v2 backend
 
 1. Implement `Backend` (`call(op, req)`) under `bin/backend/<name>.ts`.
