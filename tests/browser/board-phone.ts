@@ -132,10 +132,26 @@ const shoot = async (size: any, view: string, base: boolean) => {
     await p.evaluate((h: number) => (window as any).__kb(h), size.h - 300); await p.waitForTimeout(400);
     const kb = await p.evaluate(`${KB_MEASURE}(${JSON.stringify(v.field)})`);
     await p.screenshot({ path: join(OUT, `${size.w}-${view}.png`) });
+    // The band between the sheet's bottom and the window's bottom (the stub shrinks only visualViewport): iOS 26's see-through chrome
+    // shows what is under it, so the sheet must paint and own it. Three points, and the pixel at each is read back from a screenshot.
+    const cover: any[] = [];
+    const sel = JSON.stringify(v.field);
+    const pts: { x: number; y: number }[] = await p.evaluate(`(() => { const m = document.querySelector(${sel}).closest(".mbox"); const b = m.getBoundingClientRect(), H = innerHeight, x = Math.round(innerWidth / 2);
+      return [Math.ceil(b.bottom) + 1, Math.round((b.bottom + H) / 2), H - 2].map((y) => ({ x, y })); })()`);
+    for (const pt of pts) {
+      const hit = await p.evaluate(`(() => { const m = document.querySelector(${sel}).closest(".mbox"); const e = document.elementFromPoint(${pt.x}, ${pt.y}); const top = [...document.querySelectorAll(".modal .mbox")].pop();
+        return { inside: !!e && m.contains(e), topmost: m === top }; })()`);
+      const png = (await p.screenshot({ clip: { x: pt.x, y: pt.y, width: 1, height: 1 } })).toString("base64");
+      const rgb: number[] = await p.evaluate(`new Promise((ok) => { const i = new Image(); i.onload = () => { const c = document.createElement("canvas"); c.width = c.height = 1; const g = c.getContext("2d"); g.drawImage(i, 0, 0); ok([...g.getImageData(0, 0, 1, 1).data].slice(0, 3)); }; i.src = "data:image/png;base64,${png}"; })`);
+      cover.push({ ...pt, ...hit, rgb });
+    }
+    const open0 = await p.locator(".modal").count();
+    await p.mouse.click(pts[1].x, pts[1].y); await p.waitForTimeout(200);
+    const stays = (await p.locator(".modal").count()) === open0;
     await p.evaluate(() => (window as any).__kb(null)); await p.waitForTimeout(400);
     const back = await p.evaluate(`${KB_MEASURE}(${JSON.stringify(v.field)})`);
     await ctx.close();
-    return { opened, m: null, kb, back };
+    return { opened, m: null, kb, back, cover, stays };
   }
   const m = opened ? await p.evaluate(MEASURE) : null;
   if (opened && !base) await p.screenshot({ path: join(OUT, `${size.w}-${view}.png`) });
@@ -145,8 +161,8 @@ const shoot = async (size: any, view: string, base: boolean) => {
 
 for (const size of SIZES) for (const v of VIEWS) {
   if (v.kind === "keyboard" && !size.phone) continue;
-  const key = `${size.w}/${v.name}`; const { opened, m, kb, back } = await shoot(size, v.name, false);
-  report[key] = { opened, m, kb, back };
+  const key = `${size.w}/${v.name}`; const { opened, m, kb, back, cover, stays } = await shoot(size, v.name, false);
+  report[key] = { opened, m, kb, back, cover, stays };
   if (!opened) { if (v.strict) breaks.push(`${key}: did not open`); continue; }
   if (v.kind === "keyboard") {
     const need = (ok: boolean, why: string) => { if (!ok) breaks.push(`${key}: ${why}`); };
@@ -154,6 +170,11 @@ for (const size of SIZES) for (const v of VIEWS) {
     need(!!kb.popup && kb.popup.y === 0 && Math.abs(kb.popup.h - H) <= 1, `keyboard open: sheet ${JSON.stringify(kb.popup)} is not the ${H} px above the keyboard`);
     need(inside(kb.primary) && kb.primary.h >= 44, `keyboard open: Send ${JSON.stringify(kb.primary)} not above the keyboard`);
     need(kb.focused && inside(kb.field), `keyboard open: the focused field ${JSON.stringify(kb.field)} (focused ${kb.focused}) not above the keyboard`);
+    for (const c of cover) {
+      need(c.inside && c.topmost, `keyboard open: the point (${c.x}, ${c.y}) under the sheet hits the board, not the sheet`);
+      need(c.rgb.every((v: number, i: number) => Math.abs(v - [0x15, 0x19, 0x20][i]) <= 2), `keyboard open: the point (${c.x}, ${c.y}) under the sheet paints rgb(${c.rgb}), not the sheet's #151920`);
+    }
+    need(stays, "keyboard open: a tap on the strip under the sheet closed it");
     need(kb.kb, "keyboard open: no kb-open on the root");
     need(kb.secondary === 0, `keyboard open: ${kb.secondary} secondary footer button(s) still shown`);
     need(!!back.popup && back.popup.y === 0 && Math.abs(back.popup.h - back.vh) <= 1 && !back.kb, `keyboard closed: sheet ${JSON.stringify(back.popup)} kb-open ${back.kb} is not the full ${back.vh} px sheet`);

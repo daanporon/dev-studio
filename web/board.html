@@ -310,9 +310,13 @@ input,textarea,select{font-size:16px!important}
 }
 /* Phone: the sheet is the visible area above the keyboard (U4). keyboardSheets() writes --vvh/--vvtop from visualViewport while a
    sheet is open; without them the sheet is the dynamic viewport. kb-open (keyboard up) folds the footer's secondary buttons, and
-   the chat's Send sits beside its text box. */
+   the chat's Send sits beside its text box. On iOS 26 Safari the floating address bar and the keyboard toolbar are see-through and
+   sit below the visual viewport, so the sheet (sized to it) lets the board show there: .mbox::after paints the sheet's colour
+   under it, and a tap on it hits the .mbox, so neither the board nor a close-on-backdrop handler gets it. */
 @media (max-width:600px){
 .modal{top:var(--vvtop,0px);bottom:auto;height:var(--vvh,100dvh)}
+.modal .mbox{position:relative}
+.modal .mbox::after{content:"";position:absolute;top:100%;left:0;right:0;height:100lvh;background:var(--panel)}
 .kb-open .mbox>.qfoot>.qsec,.kb-open .mbox>.qfoot>.chat-btn{display:none}
 .kb-open .mbox.chat>.qfoot>.chat-in{flex:1 1 0}
 .kb-open .mbox.chat>.qfoot>.btn.pri{flex:none;order:0}
@@ -4147,7 +4151,7 @@ function App() {
 // sheet is open at <= 600 px, one listener on visualViewport (resize, scroll) writes the visible area to the root
 // as --vvh / --vvtop, which the phone sheet rule sizes .modal by; on Android the layout already shrank and they
 // change nothing. `kb-open` on the root (the visible height over 120 px under the tallest seen at this width)
-// folds the footer's secondary buttons; a focused field is scrolled into view inside the sheet, never the page.
+// folds the footer's secondary buttons (the strip under the sheet down to the screen's bottom is .mbox::after's cover, see the phone rule); a focused field is scrolled into view inside the sheet, never the page.
 // A pinch zoom (scale != 1) drops the variables. Nothing is installed without visualViewport; the listeners
 // go when the last sheet closes or the width passes 600 px. Returns a teardown (the tests use it).
 function keyboardSheets(win) {
