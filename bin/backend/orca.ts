@@ -11,6 +11,7 @@ import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsS
 import { basename, dirname, join, resolve } from "node:path";
 import { cachedRead, canonRead, countDrop, countSpawn, dropCached, runsOfWrite, type SpawnKind } from "./orca-cache.ts";
 import { clientRead, orcaClientOn, streams } from "./orca-client.ts";
+import { bashQ, claudeLine, claudeSettings, markTrusted, orcaData, systemJsonDir, utf8Locale, type ClaudeConfig, type LaunchLine } from "../loop/drivers/claude-launch.ts";
 
 type Env = Record<string, string | undefined>;
 type Sink = (b: string | Uint8Array) => void;
@@ -163,8 +164,7 @@ const latin1 = (b: Uint8Array): string => Buffer.from(b).toString("latin1");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Where Orca keeps its data (profiles, the bundled CLI). */
-export const orcaData = (env: Env): string =>
-  env.DS_ORCA_DATA || env.ORCA_USER_DATA_PATH || join(env.XDG_CONFIG_HOME || `${env.HOME}/.config`, "orca");
+export { orcaData };
 const claudeSys = (env: Env): string => env.DS_CLAUDE_HOME || `${env.HOME}/.claude`;
 
 type Ran = { code: number; out: Uint8Array; err: Uint8Array };
@@ -2402,43 +2402,14 @@ const wtPath = (wt: string): string => wt.replace(/^.*::/s, "");
 
 // --- printf %q -------------------------------------------------------------------------------------
 /** The shell's locale (LC_ALL, LC_CTYPE, LANG): a UTF-8 one prints a printable non-ASCII character as is. */
-const utf8Locale = (env: Env): boolean => /utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "");
-const Q_META = new Set([..." !\"$&'()*,;<>?[\\]^`{|}"]);
-const Q_ESC: Record<number, string> = { 7: "a", 8: "b", 9: "t", 10: "n", 11: "v", 12: "f", 13: "r", 27: "E", 39: "'", 92: "\\" };
-/** bash 5.2's `printf %q`: `''` for nothing; `$'…'` when a character is not printable (a control, or any
- *  non-ASCII outside a UTF-8 locale), its bytes in octal; else a backslash before each shell character. */
-export function bashQ(s: string, utf8: boolean): string {
-  if (s === "") return "''";
-  const cs = [...s];
-  const shown = (c: string): boolean => {
-    const n = c.codePointAt(0)!;
-    return n < 0x80 ? n >= 0x20 && n !== 0x7f : utf8 && !/\p{Cc}/u.test(c);
-  };
-  if (!cs.every(shown)) {
-    let r = "$'";
-    for (const c of cs) {
-      const n = c.codePointAt(0)!;
-      if (Q_ESC[n]) r += `\\${Q_ESC[n]}`;
-      else if (shown(c)) r += c;
-      else for (const b of Buffer.from(c)) r += `\\${b.toString(8).padStart(3, "0")}`;
-    }
-    return `${r}'`;
-  }
-  let r = "";
-  cs.forEach((c, i) => {
-    const tilde = c === "~" && (i === 0 || cs[i - 1] === "=" || cs[i - 1] === ":");
-    if (Q_META.has(c) || tilde || (c === "#" && i === 0)) r += "\\";
-    r += c;
-  });
-  return r;
-}
+export { bashQ };
 /** shim_path: `PATH=<bin/hooks/path-gates>:$PATH` for the front of a role's claude command (U235). The hook
  *  shims gate the lavish-axi / gh-axi / chrome-devtools-axi SessionStart hooks by role on every account
  *  without touching any settings.json (Orca rewrites a profile's). `$PATH` stays literal: the terminal's
  *  shell expands it. */
-function shimPath(env: Env): string {
+function gates(env: Env): string {
   const d = resolve(root(env), "bin", "hooks", "path-gates");
-  return `PATH=${bashQ(isDir(d) ? d : "", utf8Locale(env))}:$PATH`;
+  return isDir(d) ? d : "";
 }
 
 // --- the pause verbs' reads
@@ -2553,7 +2524,7 @@ async function onOtherAccount(ctx: Ctx, agent: string, acct: string): Promise<bo
 }
 /** claude_home: that account's Claude config dir, or null (said on stderr) when it does not exist. */
 function claudeHome(ctx: Ctx, acct: string): string | null {
-  const h = `${orcaData(ctx.env)}/claude-profiles/${acct}/home`;
+  const h = accountHome(ctx.env, acct);
   if (isDir(h)) return h;
   say(ctx, `orca adapter: no Claude home for account ${acct} (${h})`);
   return null;
@@ -2696,25 +2667,7 @@ function moveSessionFile(ctx: Ctx, srcRoot: string, dstRoot: string, src: string
  *  <dir>/.claude.json (projects[path].hasTrustDialogAccepted), so the TUI comes up without it. Best effort: a
  *  missing or non-JSON file is left alone, an already-trusted path is not rewritten, no other key is touched. */
 function claudeTrust(ctx: Ctx, dir: string, wt: string): void {
-  const f = `${dir}/.claude.json`, p = wtPath(wt);
-  let text: string | null = null;
-  try { if (statSync(f).isFile()) text = readFileSync(f, "utf8"); } catch { text = null; }
-  if (text === null || jqE(jq(text, (d, emit) => emit(d))) !== 0) { say(ctx, `orca adapter: not pre-trusting ${p}: no usable ${f}`); return; }
-  if (jqE(jq(text, (d, emit) => emit(idx(idx(idx(d, "projects"), p), "hasTrustDialogAccepted") === true))) === 0) return;
-  const trusted = jq(text, (d, emit) => {
-    if (d !== null && !isObj(d)) throw new JqError(`Cannot index ${jqType(d)} with "projects"`);
-    const projects = alt(idx(d, "projects"), {});
-    if (!isObj(projects)) throw new JqError(`Cannot index ${jqType(projects)} with "${p}"`);
-    const e = idx(projects, p);
-    if (e !== null && !isObj(e)) throw new JqError(`Cannot index ${jqType(e)} with "hasTrustDialogAccepted"`);
-    emit({ ...(d ?? {}), projects: { ...projects, [p]: { ...(e ?? {}), hasTrustDialogAccepted: true } } });
-  });
-  const tmp = `${dir}/.claude.json.${Math.random().toString(36).slice(2, 8).padEnd(6, "0")}`;
-  try { writeFileSync(tmp, "", { flag: "wx", mode: 0o600 }); } catch { return; }
-  if (trusted.code !== 0) { rmSync(tmp, { force: true }); return; }
-  writeFileSync(tmp, trusted.vals.map((v) => `${pretty(v)}\n`).join(""));
-  try { chmodSync(tmp, statSync(f).mode & 0o7777); } catch { /* best effort */ }
-  try { renameSync(tmp, f); } catch { rmSync(tmp, { force: true }); }
+  if (markTrusted(dir, wtPath(wt)) === "unusable") say(ctx, `orca adapter: not pre-trusting ${wtPath(wt)}: no usable ${dir}/.claude.json`);
 }
 
 /** tab_record: the file holding the handle of the tab this run's retry id owns. */
@@ -2778,21 +2731,18 @@ function noTab(ctx: Ctx, failure: string, where: Where, created: Call): null {
  *  It is launched through `env -u`, because with a managed account selected Orca's `claude` function
  *  re-selects that profile whenever the variable is unset; `env` is a binary, so it skips the function. */
 async function claudeTab(ctx: Ctx, wt: string, acct: string, args: string[]): Promise<string | null> {
-  const utf8 = utf8Locale(ctx.env), sys = ctx.env.DS_CLAUDE_SYSTEM_JSON_DIR || ctx.env.HOME || "";
-  let cmd: string;
-  if (acct === "system") {
-    claudeTrust(ctx, sys, wt);
-    cmd = `env -u CLAUDE_CONFIG_DIR ${identity(ctx, wt)}${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
-  } else if (acct) {
+  const sys = systemJsonDir(ctx.env);
+  let config: ClaudeConfig = null;
+  if (acct && acct !== "system") {
     const home = claudeHome(ctx, acct);
     if (home === null) return null;
     claudeTrust(ctx, home, wt);
-    cmd = `CLAUDE_CONFIG_DIR=${bashQ(home, utf8)} ${identity(ctx, wt)}${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
+    config = { home };
   } else {
     claudeTrust(ctx, sys, wt);
-    cmd = `${identity(ctx, wt)}${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
+    if (acct) config = { system: true };
   }
-  for (const a of args) cmd += ` ${bashQ(a, utf8)}`;
+  const cmd = claudeLine({ config, gates: gates(ctx.env), identity: identity(ctx, wt), args, utf8: utf8Locale(ctx.env) });
   const { h, created } = await openTab(ctx, wt, `claude${acct ? `@${[...acct].slice(0, 8).join("")}` : ""}`, cmd);
   const where = { wt, account: acct };
   if (!h) return noTab(ctx, `could not open a terminal in ${wt} for account ${acct}`, where, created);
@@ -2801,16 +2751,13 @@ async function claudeTab(ctx: Ctx, wt: string, acct: string, args: string[]): Pr
 /** The worker identity a loop start gives its terminal (U4 of orca-backend-alternatives, bin/loop/core/whoami.ts):
  *  `DS_MEMBER=… DS_WT=… DS_GEN=… ` from the DS_START_MEMBER/DS_START_GEN the loop sent, empty for a start the loop
  *  did not identify (an operator's script, a test, a role's shell, which may hold its own DS_MEMBER). */
-function identity(ctx: Ctx, wt: string): string {
-  const member = ctx.env.DS_START_MEMBER, gen = ctx.env.DS_START_GEN;
-  if (!member) return "";
-  const q = (v: string) => bashQ(v, utf8Locale(ctx.env));
-  return `DS_MEMBER=${q(member)} DS_WT=${q(wtPath(wt))} ${gen ? `DS_GEN=${q(gen)} ` : ""}`;
+function identity(ctx: Ctx, wt: string): LaunchLine["identity"] {
+  const member = ctx.env.DS_START_MEMBER;
+  return member ? { member, wt: wtPath(wt), gen: ctx.env.DS_START_GEN || null } : null;
 }
 /** resume_tab: a tab running `claude --continue` on the default login. */
 async function resumeTab(ctx: Ctx, wt: string, model: string, args: string[]): Promise<string | null> {
-  let cmd = `${identity(ctx, wt)}${shimPath(ctx.env)} claude --continue --dangerously-skip-permissions --model ${model}`;
-  for (const a of args) cmd += ` ${bashQ(a, utf8Locale(ctx.env))}`;
+  const cmd = claudeLine({ config: null, gates: gates(ctx.env), identity: identity(ctx, wt), resume: model, args, utf8: utf8Locale(ctx.env) });
   const { h, created } = await openTab(ctx, wt, "resume", cmd);
   if (!h) return noTab(ctx, `worker-resume could not open a terminal in ${wt}`, { wt }, created);
   return launched(ctx, h, `worker-resume — claude --continue never came up in ${wt}`, { wt });
@@ -2925,8 +2872,7 @@ async function compactSettings(ctx: Ctx, window: string, wt: string): Promise<st
     ctx.err("jq: invalid JSON text passed to --argjson\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs  at https://jqlang.github.io/jq\n");
     return ["--settings", ""];
   }
-  const o = s.vals[0], den = d.bad || d.vals.length !== 1 ? [] : d.vals[0];
-  return ["--settings", pretty({ ...(win ? { env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: win } } : {}), ...(Object.keys(o).length > 0 ? { skillOverrides: o } : {}), ...(den.length > 0 ? { deniedMcpServers: den } : {}), ...(hasPlugins ? { enabledPlugins: plugins } : {}) }, 0)];
+  return claudeSettings({ window: win, skillOverrides: s.vals[0], denied: d.bad || d.vals.length !== 1 ? [] : d.vals[0], plugins });
 }
 /** forget_tab: a worker start failed: close its tab unless a replay needs it. Under a retry id that is what
  *  request-show says: absent means the actuator gives the next try a new id, which would never find this
