@@ -1,4 +1,5 @@
 import { CANCEL_KINDS, stopping } from "../squad/cancel.ts";
+import { debriefHold } from "../squad/archive-debrief.ts";
 // Shared activity overlay and guard. Public checkpoint/close/start controls live in the lifecycle fulfiller.
 import type { Action } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
@@ -274,13 +275,17 @@ export function resume(store: Store, t: PauseTarget, at: number): Row {
 // order: its squad archived (gone or closed) -> archived; its squad suspended -> suspended; an open
 // pause intent on the member, its squad or its project -> paused; else its own wish (running, stopped,
 // archived; null when it has none). `own` is that wish, `why` names the row that decided.
-export type Effective = { state: string | null; own: string | null; why: "squad" | "pause" | "own" };
+// why "archive-debrief": the squad is archiving and its Lead stays on its own wish while the final-debrief
+// step is open (debriefHold, squad/archive-debrief.ts); the decider never starts or restarts it then.
+export type Effective = { state: string | null; own: string | null; why: "squad" | "pause" | "own" | "archive-debrief" };
 export function effective(store: Store, m: Row): Effective {
   const own = m.want == null ? null : m.want === "gone" ? "archived" : String(m.want);
   if (own === "archived") return { state: own, own, why: "own" };
   const squad = m.role === "studio" ? null : store.get("squads", { project: m.project, topic: m.squad });
   const ended = (v: unknown) => ["gone", "closed", "archived"].includes(String(v ?? ""));
-  if (ended(squad?.want) || ended(squad?.status)) return { state: "archived", own, why: "squad" };
+  if (ended(squad?.want) || ended(squad?.status)) {
+    return debriefHold(store, m, squad) ? { state: own, own, why: "archive-debrief" } : { state: "archived", own, why: "squad" };
+  }
   // The squad's wish wins over its status: a resume in flight (want running, status suspended) is not suspended.
   if ((squad?.want ?? squad?.status) === "suspended") return { state: "suspended", own, why: "squad" };
   if (intents(store, { project: String(m.project), squad: String(m.squad), role: String(m.role), suffix: String(m.suffix ?? "") }).length) return { state: "paused", own, why: "pause" };

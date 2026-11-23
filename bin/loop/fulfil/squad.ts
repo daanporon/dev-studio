@@ -25,6 +25,7 @@ import { spawn } from "../io/orca.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 import { limitInt } from "../settings/limits.ts";
 import { endSquad, stopsPending } from "../squad/exposed.ts";
+import { finalDebrief, stepOf, unitsOf } from "../squad/archive-debrief.ts";
 import type { Action } from "../core/plugins.ts";
 import { payloadOf as actionPayload, type ActionPayload } from "../core/kinds.ts";
 
@@ -187,6 +188,9 @@ async function archive(a: Action, x: Exec, r: Row): Promise<Result> {
   if (r.doc != null) {
     const doc = squadDoc(store, project, topic) ?? JSON.parse(String(r.doc));
     doc.status = "closed"; doc.closed_at = isoAt(at); doc.topic = topic;
+    // debrief-on-archive U1: the Lead's final debrief, else the done-time one under a line naming what it misses.
+    const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r)?.state === "written");
+    doc.debrief = final.debrief; doc.debrief_source = final.source;
     const arch = join(store.root, project, "archive");
     mkdirSync(arch, { recursive: true });
     const stamp = isoAt(at).replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
