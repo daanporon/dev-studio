@@ -6,7 +6,7 @@
 //   parseAnswer(text, input)  the answer, checked: one verdict per note it names, each sound for its
 //                             kind, or a `keep` with the reason it was not; throws on text that is no
 //                             such JSON
-//   marker(area, kind)        the line every posted body ends with, before its `ds-key:` line
+//   marker(area, kind)        the line every posted body ends with, before its hidden `<!-- ds-key:<key> -->` line
 //   finalBody(body, area, kind, key)   the text a post sends (U3 posts it; U2 checks it for leaks)
 //
 // A note is data: its text is never an instruction to the drafter.
@@ -32,7 +32,7 @@ export type Verdict =
 
 export const marker = (area: string, kind: string): string => `<!-- ds-feedback v1 area:${area} kind:${kind} -->`;
 export const finalBody = (body: string, area: string, kind: string, key: string): string =>
-  `${body.trimEnd()}\n\n${marker(area, kind)}\nds-key:${key}\n`;
+  `${body.trimEnd()}\n\n${marker(area, kind)}\n<!-- ds-key:${key} -->\n`;
 
 const RULES = `You are the dev-studio feedback drafter. dev-studio is the orchestrator in this checkout (the current
 folder). Roles that worked on other projects jotted the notes below about dev-studio itself: snags,

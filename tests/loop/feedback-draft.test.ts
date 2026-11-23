@@ -11,7 +11,7 @@ import reconciler from "../../bin/loop/reconcilers/feedback.ts";
 import fulfiller from "../../bin/loop/fulfil/feedback-draft.ts";
 import { alertGone } from "../../bin/loop/reconcilers/alerts.ts";
 import { addNote, NOBODY } from "../../bin/loop/feedback/notes.ts";
-import { parseAnswer } from "../../bin/loop/feedback/prompt.ts";
+import { finalBody, parseAnswer } from "../../bin/loop/feedback/prompt.ts";
 import { draftKey, writeVerdicts } from "../../bin/loop/feedback/draft.ts";
 import type { Action, TickCtx } from "../../bin/loop/core/plugins.ts";
 import type { Exec, Result } from "../../bin/loop/core/actuator.ts";
@@ -60,7 +60,7 @@ cat "$STUB_ISSUES"
 `);
   for (const f of ["claude", "gh"]) chmodSync(join(bin, f), 0o755);
   writeFileSync(files.issues, JSON.stringify([
-    { number: 7, title: "Board hides a stuck unit", body: "It hides.\n\n<!-- ds-feedback v1 area:board kind:bug -->\nds-key:fd:aaaa" },
+    { number: 7, title: "Board hides a stuck unit", body: "It hides.\n\n<!-- ds-feedback v1 area:board kind:bug -->\n<!-- ds-key:fd:aaaa -->" },
     { number: 9, title: "Not ours", body: "no marker here" },
   ]));
   writeFileSync(files.calls, "");
@@ -208,6 +208,7 @@ test("feedback_repo '-' offers nothing; a pass in flight blocks the next; a fail
 });
 
 test("parseAnswer: an add-to to an unknown issue, an already-fixed with no evidence and a fence", () => {
+  expect(finalBody("Body.\n", "loop", "bug", "fd:0123")).toBe("Body.\n\n<!-- ds-feedback v1 area:loop kind:bug -->\n<!-- ds-key:fd:0123 -->\n");
   const input = { repo: "o/r", head: "abc", issues: [{ number: 7, title: "t", body: "b" }],
     notes: [{ key: "n1", role: null, text: "x" }, { key: "n2", role: null, text: "y" }, { key: "n3", role: null, text: "z" }] };
   const v = parseAnswer("```json\n" + JSON.stringify({ verdicts: [
