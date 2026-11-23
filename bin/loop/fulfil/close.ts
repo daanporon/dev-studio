@@ -128,6 +128,8 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   const again = await check(true);
   if (!("files" in again)) return again;
   const { dirty, unpushed, files } = again;
+  // U11c: no backend fences a provider's removal (Orca answers 75), so check here, as worktree.ts does.
+  if (contract && actionBlock(store, a)) return { wait: "activity changed before removal" };
   const rm = contract ? await contractRemoveTree(x, w) : await x.act.orca.run("worktree-rm", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
   if (rm.code === 75) return { wait: "activity changed before removal" };   // the backend's pause/generation fence: not a refusal
   if (rm.code !== 0) {
