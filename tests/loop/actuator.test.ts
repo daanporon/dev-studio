@@ -26,6 +26,7 @@ import phases from "../../bin/loop/reconcilers/phases.ts";
 import decider from "../../bin/loop/core/decide.ts";
 import { alertGone, dropAlerts } from "../../bin/loop/reconcilers/alerts.ts";
 import { wake } from "../../bin/loop/pause/wake.ts";
+import { markStopping, resetStopping } from "../../bin/loop/core/stopping.ts";
 
 // U150: a transient refusal is tried again every 15 minutes (DS_LOOP_RETRY_S); these tests step
 // a retry one tick at a time. The spacing itself is tested in actuator.test.ts ("refusals").
@@ -1379,6 +1380,31 @@ describe("refusals", () => {
     expect(again.calls()).toHaveLength(2);                  // the fix, then a refusal like any other
     expect(rows(again.s)).toEqual([expect.objectContaining({ class: "transient", count: 1, next_at: T + 1 + 900 })]);
     expect(cards(again.s)).toEqual([]);
+  });
+
+  test("a retry recorded while the loop is stopping is tried on the next tick, uncounted, with no refusal row", async () => {
+    const err = "orca: dispatch store busy, try later";
+    let n = 0;
+    // The child answers, then the signal handler sets the flag before the actuator records the result.
+    const stop = probe({ answers: () => { if (n++ === 0) markStopping(); return { code: n === 1 ? 143 : 0, err }; } });
+    try {
+      await stop.tick(T);
+      expect(rows(stop.s)).toEqual([]);
+      expect(evs(stop.s, "refusal")).toEqual([]);
+      resetStopping();
+      await stop.tick(T + 1);                                // the next loop process: its first tick
+      expect(stop.calls()).toHaveLength(2);
+      expect(claim(stop.s, { subject: "probe:1", kind: "probe" })!.state).toBe("done");
+      expect(rows(stop.s)).toEqual([]);
+    } finally { resetStopping(); }
+  });
+
+  test("the same retry while the loop is not stopping is a transient refusal that waits the retry gap", async () => {
+    resetStopping();
+    const run = probe({ answers: () => ({ code: 143, err: "orca: dispatch store busy, try later" }) });
+    await run.tick(T); await run.tick(T + 1);
+    expect(run.calls()).toHaveLength(1);
+    expect(rows(run.s)).toEqual([expect.objectContaining({ class: "transient", count: 1, next_at: T + 900 })]);
   });
 
   test("no room is no claim, no call and no card; agent_busy waits uncounted", async () => {
