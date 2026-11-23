@@ -14,7 +14,8 @@
 // PATH, and with the loop stopped it shows the last data behind a "loop down" banner.
 import { resolveBackUp, returnOf } from "../loop/settings/roster.ts";
 import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { ROOT } from "../lib/shared.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { cardPlace } from "./card-place.ts";
 import { githubView, githubLine, budgetCard, dropLeadMergeCopies } from "./github-view.ts";
@@ -1872,15 +1873,18 @@ function noDb(label: string, why: string) {
   return board(null, label, [], [], [], { ws: {}, backendOk: false, loopDown: true });
 }
 
-export function buildBoard(project = "", topic = "", root = stateRoot()) {
+// The checkout's own state/ is the live root; a test's temp DS_STATE_ROOT is not (U253), and `liveRoot`
+// lets a test say which it is. On the live root a project the loop treats as a test project is not listed.
+export function isLiveRoot(root: string): boolean { return resolve(root) === resolve(join(ROOT, "state")); }
+export function buildBoard(project = "", topic = "", root = stateRoot(), liveRoot = isLiveRoot(root)) {
   const label = project ? dsLabel(project) : "";
   let s: Store;
   try { s = openReadOnly(root); } catch (e) { return noDb(label, String(e)); }
   focusMemo.clear();
-  try { return fromDb(new Db(s), label, topic); } finally { s.close(); focusMemo.clear(); }
+  try { return fromDb(new Db(s), label, topic, liveRoot); } finally { s.close(); focusMemo.clear(); }
 }
 
-function fromDb(db: Db, label: string, topic: string) {
+function fromDb(db: Db, label: string, topic: string, liveRoot = false) {
   // The Orca observer's rows are current when its newest is younger than the loop's stale window.
   const loop = loopStatus(db, label);
   const live: Live = { ws: {}, backendOk: false, loopDown: loop.down };
@@ -1893,7 +1897,7 @@ function fromDb(db: Db, label: string, topic: string) {
   // Every squad that isn't closed, by project then topic; one that can't be read renders as broken.
   const rows = db.all(`SELECT project, topic FROM squads WHERE COALESCE(status, '') != 'closed' AND doc IS NOT NULL
     ${label ? "AND project = ?" : ""} ${topic ? "AND topic = ?" : ""} ORDER BY project, topic`, ...[label, topic].filter(Boolean));
-  const read = rows.map((r) => {
+  const read = rows.filter((r) => !(liveRoot && !label && isTestProject(String(r.project)))).map((r) => {
     const l = String(r.project), t = String(r.topic);
     let st: any = null;
     try { st = squadDoc(db.s, l, t); } catch { /* a doc that won't parse */ }
@@ -1906,7 +1910,7 @@ function fromDb(db: Db, label: string, topic: string) {
     try { return squad(db, l, t, st, live, toks, accts); } catch { return broken(l, t); }
   }).sort(compareSquads);
   accountUsers(db, accts, label, squads);
-  const labels = label ? [label] : db.all("SELECT label FROM projects UNION SELECT project AS label FROM squads ORDER BY label").map((r) => String(r.label));
+  const labels = label ? [label] : db.all("SELECT label FROM projects UNION SELECT project AS label FROM squads ORDER BY label").map((r) => String(r.label)).filter((l) => !(liveRoot && !label && isTestProject(l)));
   return { ...board(db, label, labels, squads, accts, live), project_controls: !topic };
 }
 
