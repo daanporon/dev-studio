@@ -189,6 +189,18 @@ The loop is the one exception to the spawn: when `$BACKEND` is unset or is this 
 would have had and the same `{code, stdout, stderr}` (U227). Any other `$BACKEND` (a sibling
 adapter, a test's fake script) is still a program the loop spawns.
 
+## Worker identity
+
+A start or resume of a Claude worker the loop makes passes `DS_START_MEMBER`
+(`<project>/<squad>/<role[-suffix]>`) and `DS_START_GEN` (the generation: the start call's retry id,
+also on the member's row as `members.gen`) to the adapter, and the adapter puts `DS_MEMBER`, `DS_WT`
+and `DS_GEN` on the terminal's launch line (`identity()` in `bin/backend/orca.ts`). Only that pair
+sets them: the adapter never passes its caller's own `DS_MEMBER` on, and the loop's children never
+inherit one (`childEnv`). A start the backend makes itself (Orca's `--agent` launch for Codex and
+Muse, a `--on` host) carries only the Orca handle. Code that asks who it runs as calls `whoAmI()`
+(`bin/loop/core/whoami.ts`): `DS_MEMBER` first, then `ORCA_TERMINAL_HANDLE`. A sibling adapter sets
+the same three variables on every Claude terminal it starts.
+
 The Orca adapter chooses its CLI once per process: `DS_ORCA_CLI_BIN_DIR`, then
 `ORCA_CLI_BIN_DIR`, then an executable `orca` in `<Orca data path>/cli/bin`, then
 PATH. An explicit directory must contain an executable `orca`; a missing one

@@ -18,10 +18,14 @@ const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
 const T = 1_800_000_000;
 const temps: string[] = [], stores: Store[] = [];
+// "members reads in parallel" points DS_STATE_ROOT at its temp state; put it back, or a later test file in
+// the same `bun test` process opens the default store there and recreates the removed dir (CI temp-dirs).
+const stateRoot = process.env.DS_STATE_ROOT;
 afterEach(() => {
   for (const s of stores.splice(0)) { try { s.close(); } catch { /* closed */ } }
   for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
   delete process.env.DS_LOOP_READ_SLOTS;
+  if (stateRoot === undefined) delete process.env.DS_STATE_ROOT; else process.env.DS_STATE_ROOT = stateRoot;
 });
 function imported(): Store {
   const d = mkdtempSync(join(tmpdir(), "zztickfires-"));

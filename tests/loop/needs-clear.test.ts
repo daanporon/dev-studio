@@ -76,3 +76,40 @@ describe("old Loop-stalled cards", () => {
     expect(gone(fx(), { asker: "sweep", id: "loop-stall-1234", title: "Loop stalled", question: "the loop stalled", since })).toBe("loop stalls are shown on the board's loop line now");
   });
 });
+
+describe("loopnotes U3: Lifecycle failed and archived squads", () => {
+  const setSquad = (s: Store, set: Row) => s.upsert("squads", { project: "fx", topic: "lc" }, set);
+  const life = (extra: Row = {}): Row => ({ asker: "sweep", id: "sweep-life-1", title: "Lifecycle failed", squad: "lc",
+    question: "The loop could not make the running squad lc: boom", since, ...extra });
+
+  test("a squad Lifecycle-failed card stays while the squad wants running, and goes once its want moved on", () => {
+    const s = fx();
+    setSquad(s, { want: "running", status: null });
+    expect(gone(s, life())).toBe(false);
+    setSquad(s, { want: "gone" });
+    expect(gone(s, life())).toBe("the squad's wish moved on");
+    setSquad(s, { want: "running", status: "running" });
+    expect(gone(s, life())).toBe("the squad's wish moved on");
+  });
+
+  const red = (extra: Row = {}): Row => ({ asker: "sweep", id: "loop-x-1", title: "Red PR still blocked", kind: "pr_stale", ref: `${NWO}#7`, pr: 7, squad: "lc", blocked_since: T - 100, question: "PR #7 is still not merge-ready", since, ...extra });
+  const reply = (extra: Row = {}): Row => ({ asker: "sweep", id: "sweep-msg-reply-3", title: "No reply", squad: "lc", question: "asked, no reply", since, ...extra });
+  test("an archived squad's cards are gone; a running squad's are not", () => {
+    const s = fx();
+    pr(s, {});
+    setSquad(s, { want: "running", status: "running" });
+    expect(gone(s, red())).toBe(false);
+    expect(gone(s, reply())).not.toBe("its squad was archived");
+    setSquad(s, { status: "closed" });
+    expect(gone(s, red())).toBe("its squad was archived");
+    expect(gone(s, reply())).toBe("its squad was archived");
+    setSquad(s, { status: "running", want: "gone", want_result: "done: archived" });
+    expect(gone(s, reply())).toBe("its squad was archived");
+  });
+  test("the debrief, dropped-questions and stop-failed cards of a closed squad stay", () => {
+    const s = fx();
+    setSquad(s, { status: "closed" });
+    for (const c of [reply({ id: "sweep-debrief-lc-1", title: "Debrief: lc" }), reply({ kind: "questions_dropped", title: "Archived with a blocking question open: lc" }), reply({ title: "Stop command failed" })])
+      expect(gone(s, c)).not.toBe("its squad was archived");
+  });
+});

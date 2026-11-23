@@ -14,6 +14,7 @@ import { inherit } from "../lib/install";
 import { open, type Store } from "../loop/core/store.ts";
 import { toplevel } from "../loop/squad/exposed.ts";
 import { ack, memberAt, reply, replyTo, senderAt, sendMessage, squadOfRun, type Addr, type Sender } from "../loop/messages/messages.ts";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = `<op> [args...] — the agent-facing entry point to the backend (orch.sh): send, reply, ask, … and the refusal of lifecycle ops`;
 
@@ -133,7 +134,7 @@ export async function run(argv: string[]): Promise<number> {
   const label = file.split("/").slice(-3)[0];
   const top = await runCmd(["git", "rev-parse", "--show-toplevel"]);
   const wt = (top.rc === 0 && top.out.trim() ? top.out.replace(/\n+$/, "") : process.cwd()).split("/").pop()!;
-  const body = `Question from ${wt} (${process.env.ORCA_TERMINAL_HANDLE || "no terminal handle"}); its ask was refused because its dispatch is closed, so it reads your answer as mail at its worktree:\n\n${question}`;
+  const body = `Question from ${wt} (${whoAmI().handle || "no terminal handle"}); its ask was refused because its dispatch is closed, so it reads your answer as mail at its worktree:\n\n${question}`;
   const sent = await runCmd([join(ROOT, "bin", "role", "send-role.sh"), squad, "lead", `Question from ${wt} (ask fell back)`, body, "--project", label]);
   writeErr(sent.out); writeErr(sent.err);
   if (sent.rc === 0) {

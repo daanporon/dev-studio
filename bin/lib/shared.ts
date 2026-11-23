@@ -3,6 +3,7 @@
 // Only bun/node built-ins; no package.
 import { readFileSync, existsSync, readdirSync, writeSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
+import { filerIdentity, whoAmI } from "../loop/core/whoami.ts";
 
 /** The checkout root: DS_ROOT from the .sh wrapper (the path as the caller named it, symlinks kept, like the shell's `cd .. && pwd`), else two folders up. */
 export const ROOT = process.env.DS_ROOT || join(import.meta.dir, "..", "..");
@@ -134,8 +135,8 @@ export async function dsLoopCheck(usage: () => number, directory: string, checkA
 /** ds_loop_front: write this script's request through `ds nudge` and return its exit code. `script` is the .sh path as called. */
 export async function dsLoopFront(o: { label: string; kind: string; subject: string; id: string; key: string; script: string; argv: string[]; wait: string }): Promise<number> {
   const self = join(ROOT, "bin", basename(dirname(o.script)), basename(o.script));
-  const from = process.env.ORCA_TERMINAL_HANDLE ?? "";
-  const replay = JSON.stringify({ kind: o.kind, key: o.key, argv: [self, ...o.argv], cwd: process.env.PWD || process.cwd(), ...(from === "" ? {} : { from }) });
+  const from = whoAmI().handle ?? "";
+  const replay = JSON.stringify({ kind: o.kind, key: o.key, argv: [self, ...o.argv], cwd: process.env.PWD || process.cwd(), ...(from === "" ? {} : { from }), ...filerIdentity() });
   const about: string[] = [];
   if (o.label) about.push("--project", o.label);
   if (o.subject) about.push("--squad", o.subject);

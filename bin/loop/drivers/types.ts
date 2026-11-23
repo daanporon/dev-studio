@@ -17,8 +17,9 @@ export type Squad = { project: string; topic: string; run_id: string | null; rep
 export type Seat = {
   squad: Squad;
   call(op: string, args: string[]): Promise<Out>;   // an Orca mutation: retry id stored first, from the sender terminal
-  send(op: string, args: string[]): Promise<Out>;   // a plain backend op
+  send(op: string, args: string[], env?: Record<string, string>): Promise<Out>;   // a plain backend op (env: extra for the adapter)
   window?(role: string): string;                     // the role's auto-compact window in tokens (auto_compact_<role>), `-` when unset
+  gen?(): string | null;                             // the generation (DS_GEN) the last Claude start through this seat ran under (U4)
 };
 export type Started = { ok: true; wt: string } | { ok: false; error: string; busy?: boolean };
 // started: Orca saw the turn start; accepted: the text landed but no turn yet; failed: not sent.
