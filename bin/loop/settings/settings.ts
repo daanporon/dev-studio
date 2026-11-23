@@ -369,7 +369,7 @@ export function writeExport(store: Store, project: string): string {
 // target as `set` would store it, and only the picked rows are written.
 
 // Keys that fit one project only: planned as `skip: project-specific`, unpicked, but can be picked.
-export const PROJECT_SPECIFIC_LIMITS = ["auto_merge", "expected_checks", "focus_squad", "review_risk_paths", "cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths"] as const;
+export const PROJECT_SPECIFIC_LIMITS = ["auto_merge", "expected_checks", "focus_squad", "review_risk_paths", "cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths", "feedback_repo"] as const;
 // limits.conf keys the board never writes (a command the loop runs, absolute paths it clears; board-data's
 // FILE_ONLY_LIMITS): a board plan skips them as `shell only`, and only the shell imports them.
 export const SHELL_ONLY_LIMITS = ["cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths"] as const;

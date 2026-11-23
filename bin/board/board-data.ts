@@ -2414,6 +2414,7 @@ export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] 
   { name: "Board & machine", keys: ["board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
   { name: "Morning brief", prefixes: ["briefing_"] },
   { name: "Host tidy", keys: ["host_tidy"], prefixes: ["cleanup_", "disk_"] },
+  { name: "Feedback", prefixes: ["feedback_"] },
 ];
 export function limitGroup(key: string): string {
   return (LIMIT_GROUPS.find((g) => g.keys?.includes(key)) ?? LIMIT_GROUPS.find((g) => g.prefixes?.some((p) => key.startsWith(p))))?.name ?? "Other";
