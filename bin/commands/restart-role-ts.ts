@@ -2,6 +2,7 @@
 // A restart is a wish the loop acts on (`ds want member … --restart now`); no backend call on any path.
 import { dsLabel, backend, chomp, writeErr } from "../lib/shared";
 import { inherit, dsBin } from "../lib/upkeep";
+import { memberLabel, whoAmI } from "../loop/core/whoami.ts";
 
 export const help = `<project> <topic> <role> [suffix] [--wt <worktree_id>] — restart one worker in place (restart-role.sh)`;
 
@@ -45,13 +46,14 @@ export async function run(rawArgv: string[], quiet = false): Promise<number> {
     return 2;
   }
   const label = dsLabel(project);
-  // A worker can't restart its own worktree: the loop's stop would kill this terminal.
-  if (wt !== "" && (process.env.ORCA_TERMINAL_HANDLE ?? "") !== "") {
-    const cur = chomp((await backend(["current"])).out);
-    if (cur !== "" && cur === wt) {
-      writeErr(`restart-role: that worktree is THIS terminal (${wt}) — a worker can't restart itself. Run it from the Studio.\n`);
-      return 1;
-    }
+  // A worker can't restart itself: the loop's stop would kill this terminal. Found by its DS_MEMBER or
+  // DS_WT (whoami.ts), else, for a worktree, by asking Orca which worktree this terminal is in.
+  const me = whoAmI();
+  if (me.member === memberLabel({ project: label, squad: topic, role, suffix })
+    || (wt !== "" && me.wt !== null && wt.replace(/^.*::/s, "") === me.wt)
+    || (wt !== "" && me.handle !== null && chomp((await backend(["current"])).out) === wt)) {
+    writeErr(`restart-role: that worktree is THIS terminal (${wt || me.member}) — a worker can't restart itself. Run it from the Studio.\n`);
+    return 1;
   }
   const mid = wt !== "" ? wt : `${label}/${topic}/${role}${suffix ? "/" + suffix : ""}`;
   const cmd = [dsBin(), "want", "member", mid, "--restart", "now", "--by", "restart-role", "--why", `restart-role ${topic}/${role}${suffix ? "/" + suffix : ""}`];

@@ -2764,15 +2764,15 @@ async function claudeTab(ctx: Ctx, wt: string, acct: string, args: string[]): Pr
   let cmd: string;
   if (acct === "system") {
     claudeTrust(ctx, sys, wt);
-    cmd = `env -u CLAUDE_CONFIG_DIR ${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
+    cmd = `env -u CLAUDE_CONFIG_DIR ${identity(ctx, wt)}${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
   } else if (acct) {
     const home = claudeHome(ctx, acct);
     if (home === null) return null;
     claudeTrust(ctx, home, wt);
-    cmd = `CLAUDE_CONFIG_DIR=${bashQ(home, utf8)} ${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
+    cmd = `CLAUDE_CONFIG_DIR=${bashQ(home, utf8)} ${identity(ctx, wt)}${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
   } else {
     claudeTrust(ctx, sys, wt);
-    cmd = `${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
+    cmd = `${identity(ctx, wt)}${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
   }
   for (const a of args) cmd += ` ${bashQ(a, utf8)}`;
   const { h, created } = await openTab(ctx, wt, `claude${acct ? `@${[...acct].slice(0, 8).join("")}` : ""}`, cmd);
@@ -2780,9 +2780,18 @@ async function claudeTab(ctx: Ctx, wt: string, acct: string, args: string[]): Pr
   if (!h) return noTab(ctx, `could not open a terminal in ${wt} for account ${acct}`, where, created);
   return launched(ctx, h, `claude on account ${acct} never came up in ${wt}`, where);
 }
+/** The worker identity a loop start gives its terminal (U4 of orca-backend-alternatives, bin/loop/core/whoami.ts):
+ *  `DS_MEMBER=… DS_WT=… DS_GEN=… ` from the DS_START_MEMBER/DS_START_GEN the loop sent, empty for a start the loop
+ *  did not identify (an operator's script, a test, a role's shell, which may hold its own DS_MEMBER). */
+function identity(ctx: Ctx, wt: string): string {
+  const member = ctx.env.DS_START_MEMBER, gen = ctx.env.DS_START_GEN;
+  if (!member) return "";
+  const q = (v: string) => bashQ(v, utf8Locale(ctx.env));
+  return `DS_MEMBER=${q(member)} DS_WT=${q(wtPath(wt))} ${gen ? `DS_GEN=${q(gen)} ` : ""}`;
+}
 /** resume_tab: a tab running `claude --continue` on the default login. */
 async function resumeTab(ctx: Ctx, wt: string, model: string, args: string[]): Promise<string | null> {
-  let cmd = `${shimPath(ctx.env)} claude --continue --dangerously-skip-permissions --model ${model}`;
+  let cmd = `${identity(ctx, wt)}${shimPath(ctx.env)} claude --continue --dangerously-skip-permissions --model ${model}`;
   for (const a of args) cmd += ` ${bashQ(a, utf8Locale(ctx.env))}`;
   const { h, created } = await openTab(ctx, wt, "resume", cmd);
   if (!h) return noTab(ctx, `worker-resume could not open a terminal in ${wt}`, { wt }, created);

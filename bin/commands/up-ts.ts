@@ -8,6 +8,7 @@ import { inherit, isUrl } from "../lib/upkeep";
 import { compactWindowOf, roleRow, writeRoleFile } from "../lib/lib";
 import { studioCandidates, studioPrompt } from "../loop/squad/studio.ts";
 import type { LiveTerminal } from "../loop/observers/orca.ts";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = `[<git-url> | --home <selector>] [--force-new] [--account <id>] — bring up or reconcile a project's Studio (up.sh)`;
 
@@ -35,7 +36,7 @@ export async function run(argv: string[]): Promise<number> {
     else if (argv[i] === "--account") { if (i + 1 >= argv.length || argv[i + 1] === "") { writeErr("up: --account needs an account id (ds account list)\n"); return 2; } account = argv[i + 1]; i += 2; }
     else { homeArg = argv[i]; i++; }
   }
-  if ((process.env.ORCA_TERMINAL_HANDLE ?? "") !== "") {
+  if (whoAmI().via !== null) {
     writeErr("up: NOTE — you're running this inside an Orca agent (a Studio is bound to its own project). /ds-up is a host bootstrap; prefer a plain host shell. Reconciling by label so it won't duplicate.\n");
   }
   const arg = homeArg || process.env.HOME_REPO || `path:${ROOT}`;

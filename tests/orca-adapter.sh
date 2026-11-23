@@ -1374,6 +1374,17 @@ hasnt "role-start with no account: no --agent launch" "$(cat "$ORCA_LOG")" "--ag
 : > "$ORCA_LOG"; "$ADAPTER" role-start run_1 repo1 - spec muse muse-spark-1.3 nm >/dev/null 2>&1 || true
 has "role-start of another agent: Orca's own launch (no path gates)" "$(cat "$ORCA_LOG")" "--agent muse --model muse-spark-1.3"
 hasnt "role-start of another agent: no tab of ours" "$(cat "$ORCA_LOG")" "terminal create"
+# U4 (orca-backend-alternatives): a loop start hands DS_START_MEMBER/DS_START_GEN; the claude tab's launch line
+# carries them as DS_MEMBER, DS_WT and DS_GEN. Orca's own launch (muse) carries none. The tab never inherits
+# the caller's DS_MEMBER: only the DS_START_* pair sets one.
+: > "$ORCA_LOG"; DS_START_MEMBER=fx/sq/builder-u1 DS_START_GEN=gen-7 "$ADAPTER" worker-start run_1 "id:repo1::/w/b1" spec claude opus - - system >/dev/null 2>&1 || true
+has "a loop start: the claude tab carries its identity" "$(cat "$ORCA_LOG")" "--command DS_MEMBER=fx/sq/builder-u1 DS_WT=/w/b1 DS_GEN=gen-7 $SHIMP claude --dangerously-skip-permissions --model opus"
+: > "$ORCA_LOG"; DS_START_MEMBER=fx/sq/builder-u1 DS_START_GEN=gen-8 "$ADAPTER" worker-resume run_1 "id:repo1::/w/b1" spec opus system claude >/dev/null 2>&1 || true
+has "a loop resume: the claude tab carries its identity" "$(cat "$ORCA_LOG")" "DS_MEMBER=fx/sq/builder-u1 DS_WT=/w/b1 DS_GEN=gen-8 $SHIMP claude --continue"
+: > "$ORCA_LOG"; DS_MEMBER=fx/sq/lead DS_GEN=g0 "$ADAPTER" worker-start run_1 "id:repo1::/w/b1" spec claude opus - - system >/dev/null 2>&1 || true
+hasnt "a caller's own DS_MEMBER is not passed on" "$(cat "$ORCA_LOG")" "DS_MEMBER="
+: > "$ORCA_LOG"; DS_START_MEMBER=fx/sq/builder-u1 DS_START_GEN=gen-7 "$ADAPTER" worker-start run_1 wtX spec muse muse-spark-1.3 - - default >/dev/null 2>&1 || true
+hasnt "Orca's own launch (muse) carries no identity" "$(cat "$ORCA_LOG")" "DS_MEMBER="
 
 # Another account: a claude tab under that account's config dir, then worker-start --terminal.
 : > "$ORCA_LOG"; rc=0; "$ADAPTER" role-start run_1 repo1 - spec claude opus nm - high acctB >/dev/null 2>&1 || rc=$?

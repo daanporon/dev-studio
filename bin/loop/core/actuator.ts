@@ -39,7 +39,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { actionBlock, actionTargets, actionVersion, deferredMail, paused, version, resumeAction, startBlock, actionStartSent } from "../pause/pause.ts";
 import { outside, sender } from "../messages/coordinator.ts";
 import { driverModule } from "../drivers/index.ts";
-import type { Driver, Member, Seat, Squad } from "../drivers/types.ts";
+import { startIdentity } from "./whoami.ts";
+import { startedOn, type Driver, type Member, type Seat, type Squad } from "../drivers/types.ts";
 import { errOf, inDoubt, shell, spawn, type Orca, type Out } from "../io/orca.ts";
 import { DIRS, load, type Action, type Actuator, type Reconciler, type TickCtx } from "./plugins.ts";
 import { pick } from "../capacity/pick.ts";
@@ -459,7 +460,11 @@ export class LoopActuator implements Actuator {
   // An Orca mutation under `key` (one effect, e.g. one start of one wish): write-ahead, then call.
   // A call request-show settled as completed has no output (result NULL): it is replayed under the
   // same id from the same sender to get it; from another sender only the fact it started is known.
-  async call(store: Store, op: string, args: string[], o: { key: string; project: string; squad: string | null; member: string | null; sender: string; at: number }): Promise<Out> {
+  // U4 (orca-backend-alternatives): with `ident` (a DS_MEMBER) a Claude start or resume carries it and its
+  // generation, the call's retry id, to the adapter (startIdentity), which puts them on the terminal's launch line; `gen` hears the
+  // generation the call ran (or, settled before, ran) under. The same id on a replay keeps the same generation.
+  async call(store: Store, op: string, args: string[], o: { key: string; project: string; squad: string | null; member: string | null; sender: string; at: number;
+    ident?: string | null; gen?: (gen: string) => void }): Promise<Out> {
     const target = { project: o.project, squad: o.squad, member: o.member }, block = this.block(store, target);
     if (block) return { code: 75, out: "", err: `activity: ${block}` };
     // U200: a row under this key is this call's only when it is for the same project and member: an
@@ -467,7 +472,10 @@ export class LoopActuator implements Actuator {
     let last = store.db.query("SELECT * FROM orca_calls WHERE key = ? AND (project IS NULL OR project = ?) AND (? IS NULL OR member IS NULL OR member = ?) ORDER BY id DESC LIMIT 1").get(o.key, o.project, o.member, o.member) as Row | null;
     if (last?.state === "pending") last = await this.ask(store, last, o.at);
     if (last?.state === "pending") return { code: 75, out: "", err: `orca: request ${last.retry_id} still pending` };
-    if (last?.state === "completed" && (last.result != null || last.sender !== o.sender)) return { code: 0, out: String(last.result ?? ""), err: "" };
+    if (last?.state === "completed" && (last.result != null || last.sender !== o.sender)) {
+      if (identified(o.ident, String(last.op), last.payload ? JSON.parse(String(last.payload)) as string[] : args)) o.gen?.(String(last.retry_id));
+      return { code: 0, out: String(last.result ?? ""), err: "" };
+    }
     const afterLookup = this.block(store, target);
     if (afterLookup) return { code: 75, out: "", err: `activity: ${afterLookup}` };
     const replay = last != null && (last.settled_at == null || last.state === "completed") && last.sender === o.sender;
@@ -478,8 +486,13 @@ export class LoopActuator implements Actuator {
     // Orca holds an id to its first input, and a replay's pick or prompt may read differently now.
     const sent = replay && last!.op === op && last!.payload ? JSON.parse(String(last!.payload)) as string[] : args;
     // U270: a failed Claude launch's screen becomes a start_failed event; the answer keeps a pointer to it.
-    const out = keepStartFailed(store, await this.orca.run(op, sent, { from: o.sender, retry, env: this.callEnv(store, target) }), target);
-    if (out.code === 0) store.db.run("UPDATE orca_calls SET state = 'completed', result = ?, settled_at = ? WHERE retry_id = ?", [out.out, o.at, retry]);
+    const ident = identified(o.ident, op, sent);
+    const env = { ...this.callEnv(store, target), ...(ident ? startIdentity(ident, retry) : {}) };
+    const out = keepStartFailed(store, await this.orca.run(op, sent, { from: o.sender, retry, env }), target);
+    if (out.code === 0) {
+      store.db.run("UPDATE orca_calls SET state = 'completed', result = ?, settled_at = ? WHERE retry_id = ?", [out.out, o.at, retry]);
+      if (ident) o.gen?.(retry);
+    }
     else {
       // A non-zero exit may still have landed (a timeout, a killed backend): ask before a retry gets a new id.
       store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [errOf(out, op), retry]);
@@ -495,8 +508,10 @@ export class LoopActuator implements Actuator {
   }
 
   // What a driver acts through for one action: its squad, its sender terminal (made on the first
-  // mutating call), and `key` for the write-ahead row.
-  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number): Seat {
+  // mutating call), and `key` for the write-ahead row. `ident` is the member's DS_MEMBER for a start
+  // (fulfil/member.ts): a Claude start then carries its identity, and `gen()` is its generation.
+  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null): Seat {
+    let gen: string | null = null;
     const row = squad ? store.db.query("SELECT project, topic, run_id, repo, lead_wt FROM squads WHERE project = ? AND topic = ?").get(project, squad) as Squad | null : null;
     const studio_wt = (store.get("projects", { label: project })?.studio_wt as string | null | undefined) ?? null;
     return {
@@ -504,14 +519,14 @@ export class LoopActuator implements Actuator {
       call: async (op, args) => {
         const block = this.block(store, { project, squad, member });
         if (block) return { code: 75, out: "", err: `activity: ${block}` };
-        const via = (from: string) => this.call(store, op, args, { key, project, squad, member, sender: from, at });
+        const via = (from: string) => this.call(store, op, args, { key, project, squad, member, sender: from, at, ident, gen: (g) => { gen = g; } });
         const out = await via(await this.sender(store, project, squad ?? "", at));
         if (out.code === 0 || !/consumer_fenced|not bound to Run|run_not_bound|terminal_not_found|stable_pane_required/.test(out.err + out.out)) return out;
         if (squad) this.seatFailed.add(`${project}/${squad}`); // U244: seats() asks Orca who holds the Run next tick
         // The sender lost its Run (a restarted Orca, a closed tab): find or make it again, once.
         return via(await this.sender(store, project, squad ?? "", at, true));
       },
-      send: (op, args) => {
+      send: (op, args, extra) => {
         const target = op === "poke-terminal" ? store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ?").get(args[0]) as Row | null : null;
         const physical = target ? { project: String(target.project), member: String(target.wt) }
           : ["poke", "keys", "ping"].includes(op) ? { project, member: args[0] } : { project, squad, member };
@@ -519,9 +534,10 @@ export class LoopActuator implements Actuator {
         if (block) return Promise.resolve({ code: 75, out: "", err: `activity: ${block}` });
         // U270: a Studio move's studio-start is a Claude launch too: keep a failed one's screen as call() does.
         const who = { project: physical.project, squad: "squad" in physical ? physical.squad ?? null : null, member: physical.member ?? null };
-        return this.orca.run(op, args, { env: this.callEnv(store, physical) }).then((o) => keepStartFailed(store, o, who));
+        return this.orca.run(op, args, { env: { ...this.callEnv(store, physical), ...extra } }).then((o) => keepStartFailed(store, o, who));
       },
       window: (role) => compactWindow(store, project, role),
+      gen: () => gen,
     };
   }
 
@@ -732,3 +748,9 @@ export function finishRequest(store: Store, a: Action, result: unknown, at: numb
 export const failRequest = (a: Action, x: Exec, why: string): true => { finishRequest(x.store, a, { ok: false, error: why }, x.now); return true; };
 
 export const actuator = new LoopActuator();
+
+// The DS_MEMBER a call carries: only a Claude start or resume, whose terminal the adapter opens and so
+// can give an environment (claudeTab, resumeTab). A start Orca types itself (Codex, Muse) has none.
+function identified(ident: string | null | undefined, op: string, args: string[]): string | null {
+  return ident && startedOn(op, args)?.agent === "claude" ? ident : null;
+}
