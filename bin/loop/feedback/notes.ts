@@ -1,4 +1,4 @@
-// notes.ts — ds-feedback notes as loop.db rows (ds-feedback-github-issues U1, migration 0055). A role's
+// notes.ts — ds-feedback notes as loop.db rows (ds-feedback-github-issues U1, migration 0056). A role's
 // bin/role/ds-feedback.sh writes one `feedback_notes` row with the writer's member (project, squad, role)
 // as the loop knows it, not as the note's free-text prefix says; `ds feedback import` reads the old
 // host-local file `state/dev-studio-feedback` once into rows and renames it. Host scope: every project's

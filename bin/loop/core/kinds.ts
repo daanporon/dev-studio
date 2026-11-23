@@ -110,7 +110,7 @@ export function payloadOf<K extends ActionKind>(a: { kind: string; payload?: unk
   return (a.payload ?? {}) as ActionPayload<K>;
 }
 
-// ---------------------------------------------------------------- feedback (migration 0055)
+// ---------------------------------------------------------------- feedback (migration 0056)
 // A ds-feedback note's states (feedback_notes.state) and a draft's (feedback_drafts.state); the
 // tables' CHECKs list the same words.
 export const FEEDBACK_NOTE_STATES = ["new", "drafted", "project-only", "already-fixed", "filed", "fixed", "closed", "dismissed"] as const;
@@ -143,6 +143,9 @@ export const FACTS = {
   message_replied: obj({ id: num, reply: opt(num), request: opt(num) }),
   message_sent: obj({ key: str, to: str, from: str, kind: str, subject: str }),
   finish_recorded: obj({ key: str, member: str, unit: opt(str), outcome: str, gen: opt(str) }),
+  worktree_created: obj({ path: str, provider: str, branch: str, adopted: bool, parent: opt(str) }),
+  worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
+  worktree_gone: obj({ path: str, provider: str, why: str }),
   builder_wish_settled: obj({ id: num, unit: str, was: opt(str) }),
   builder_wish_withdrawn: obj({ id: num, unit: str, why: str, by: str, reason: opt(str) }),
   member_drift_cleared: obj({ id: opt(num), path: opt(str), status: opt(str) }),

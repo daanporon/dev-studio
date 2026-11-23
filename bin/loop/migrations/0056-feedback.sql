@@ -1,4 +1,4 @@
--- 0055-feedback.sql — ds-feedback notes as loop.db rows (ds-feedback-github-issues U1). Host scope: every
+-- 0056-feedback.sql — ds-feedback notes as loop.db rows (ds-feedback-github-issues U1). Host scope: every
 -- project's roles write here and every project's board reads the same rows; `project` is a label for
 -- display only.
 --
