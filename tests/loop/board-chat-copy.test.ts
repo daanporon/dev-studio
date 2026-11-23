@@ -29,6 +29,7 @@ const chat = {
   sends: [{ id: 9, text: "pending line", state: "queued", at: now - 5 }],
 };
 
+const label = (el: any) => el.getAttribute("aria-label");
 async function open(secure: boolean, exec?: (c: string) => boolean) {
   const r = await mount(board, false, { "api/chat": chat });
   const w = r.window, doc = w.document, wait = (ms: number) => new Promise((x) => setTimeout(x, ms));
@@ -51,6 +52,11 @@ test("one Copy per member reply and operator turn; none on tool or pending rows"
   try {
     expect(t.doc.querySelectorAll(".chat-turn").length).toBe(5);
     expect(t.doc.querySelectorAll(".chat-copy").length).toBe(3);
+    for (const b of t.doc.querySelectorAll(".chat-copy")) {
+      expect(b.querySelector("svg")).not.toBeNull();
+      expect(b.textContent.trim()).toBe("");
+      expect(b.getAttribute("aria-label")).toBe("Copy this message");
+    }
     expect(t.doc.querySelectorAll(".chat-turn.tool .chat-copy, .chat-turn.op.wait .chat-copy").length).toBe(0);
     expect(t.doc.querySelectorAll(".chat-turn.agent")[1].querySelector(".chat-copy")).not.toBeNull();   // the reply with no time
     expect(t.r.errors).toEqual([]);
@@ -61,13 +67,14 @@ test("secure context: the raw text is written, Copied, then Copy again after the
   const t = await open(true);
   try {
     const btn = t.doc.querySelector(".chat-turn.agent .chat-copy");
-    expect(btn.textContent).toBe("Copy");
+    expect(label(btn)).toBe("Copy this message");
     await t.click(btn);
     expect(t.written).toEqual([TABLE]);
-    expect(btn.textContent).toBe("Copied");
-    expect(t.doc.querySelectorAll(".chat-copy")[1].textContent).toBe("Copy");   // only that button
+    expect(label(btn)).toBe("Copied");
+    expect(btn.querySelector("svg path:not([d*='a1.5'])")?.getAttribute("d")).toBe("M3 8.5l3.2 3.2L13 4.5");   // the check mark
+    expect(label(t.doc.querySelectorAll(".chat-copy")[1])).toBe("Copy this message");   // only that button
     await t.wait(1600);
-    expect(t.doc.querySelector(".chat-turn.agent .chat-copy").textContent).toBe("Copy");
+    expect(label(t.doc.querySelector(".chat-turn.agent .chat-copy"))).toBe("Copy this message");
   } finally { await t.r.window.happyDOM.close(); }
 });
 
@@ -77,13 +84,13 @@ test("plain http: the textarea fallback copies; a refused copy reads Copy failed
     await ok.click(ok.doc.querySelector(".chat-turn.agent .chat-copy"));
     expect(ok.fell()).toBe(1);
     expect(ok.written).toEqual([]);
-    expect(ok.doc.querySelector(".chat-turn.agent .chat-copy").textContent).toBe("Copied");
+    expect(ok.doc.querySelector(".chat-turn.agent .chat-copy").getAttribute("aria-label")).toBe("Copied");
   } finally { await ok.r.window.happyDOM.close(); }
   const bad = await open(false, () => false);
   try {
     await bad.click(bad.doc.querySelector(".chat-turn.agent .chat-copy"));
-    expect(bad.doc.querySelector(".chat-turn.agent .chat-copy").textContent).toBe("Copy failed");
+    expect(label(bad.doc.querySelector(".chat-turn.agent .chat-copy"))).toBe("Copy failed");
     await bad.wait(1600);
-    expect(bad.doc.querySelector(".chat-turn.agent .chat-copy").textContent).toBe("Copy");
+    expect(label(bad.doc.querySelector(".chat-turn.agent .chat-copy"))).toBe("Copy this message");
   } finally { await bad.r.window.happyDOM.close(); }
 });
