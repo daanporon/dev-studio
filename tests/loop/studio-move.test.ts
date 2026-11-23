@@ -569,6 +569,33 @@ describe("studio-hung-agent-broken U2: the operator's Restart Studio", () => {
     expect(r.orca.of("studio-start")).toHaveLength(1);
   });
 
+  test("a restart whose close fails: nothing started, the approval ended, one Needs-you Studio move failed card", async () => {
+    const s = rig({ draft: "half a thought" }), r = restarter(s);
+    r.orca.closeFails.add("term_s");
+    card(s);
+    await answer(s, "Restart Studio");
+    await r.tick(T + 10);
+    expect(r.orca.of("studio-start")).toEqual([]);
+    expect(approval(s)).toMatchObject({ state: "ended" });
+    const cards = cardsIn(s, "loop-studio.move-");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ title: "Studio move failed", kind: "restart_failed" });
+    expect(String(cards[0]!.question)).toContain("could not close the Studio's tab term_s to restart it");
+    await r.tick(T + 400);
+    expect(r.orca.of("terminal-close")).toHaveLength(1);
+  });
+
+  test("a restart whose own claim ended without move() ending it: the approval is ended, nothing filed again", async () => {
+    const s = rig({ draft: "half a thought" });
+    card(s);
+    await answer(s, "Restart Studio");
+    const ep = `restart|term_s@${approval(s)!.started_at}`;
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "action:studio-move" }, { episode_key: ep, state: "failed", started_at: T, ended_at: T + 5, source: "loop", observed_at: T + 5 });
+    const ctx = { store: s, project: "fx", tick: 1, now: T + 10, fired: [], poked: new Set() } as never;
+    expect(studioRec.run(ctx).filter((y) => y.kind === "studio-move")).toEqual([]);
+    expect(approval(s)).toMatchObject({ state: "ended", ended_at: T + 10 });
+  });
+
   test("a replay of the restart closes nothing: after the close it only starts, after the start it does nothing", async () => {
     const s = rig({ draft: "half a thought" });
     card(s);

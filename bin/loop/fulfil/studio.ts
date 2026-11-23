@@ -82,7 +82,7 @@ async function move(a: Action, x: Exec) {
         endRestart();
         const cmd = studioRestartCmd(v.wt, p.model, p.account);
         await alert(store, P, MOVE, `failed|${a.episode}`, `The loop could not close the Studio's tab ${p.handle} to restart it (${errOf(c, "terminal-close")}) — close it and start the Studio yourself: ${cmd}`,
-          { title: "Studio move failed", option: "done — restarted it", why: cmd });
+          { title: "Studio move failed", option: "done — restarted it", why: cmd, fields: { kind: "restart_failed" } });
       }
       return { done: true, result: `not moved: ${errOf(c, "terminal-close")}` };
     }

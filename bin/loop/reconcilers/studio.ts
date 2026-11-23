@@ -89,13 +89,15 @@ export function restartStudio(ctx: TickCtx): Action[] {
   const claim = store.get("episodes", { project, subject: MOVE, kind: "action:studio-move" });
   if (claim && claim.ended_at == null && ["pending", "acted", "running"].includes(String(claim.state))) return [];
   const v = studioView(store, project), m = v?.member as Row | null | undefined, handle = (m?.handle as string | null) || null;
-  const named = (ok.result as string | null) || null;
-  if (!v || !m || m.status === "gone" || !handle || (named && named !== handle)) {
+  const named = (ok.result as string | null) || null, episode = `restart|${handle}@${ok.started_at}`;
+  // This restart's own claim already ended (a move the actuator gave up on ends without move()'s own end): try once.
+  const tried = claim?.episode_key === episode && claim.ended_at != null;
+  if (tried || !v || !m || m.status === "gone" || !handle || (named && named !== handle)) {
     store.upsert("episodes", key, { ended_at: now, state: "ended", observed_at: now });
     return [];
   }
   const agent = String(m.agent || v.agent), account = String(m.account || "-");
-  return [{ project, squad: null, member: v.wt, subject: MOVE, kind: "studio-move", episode: `restart|${handle}@${ok.started_at}`,
+  return [{ project, squad: null, member: v.wt, subject: MOVE, kind: "studio-move", episode,
     payload: { handle, agent, account, model: String(m.model || "-"), effort: String(m.effort || "-"), from: `${agent}:${account}`, why: "restart" } }];
 }
 
