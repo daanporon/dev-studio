@@ -263,7 +263,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-log{flex:1;min-height:0;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:10px}
 .chat-turn{display:flex;flex-direction:column;font-size:13px;line-height:1.5;min-width:0} .chat-time{font:11px var(--mono);color:var(--dim);margin-top:3px}
 .chat-turn.op{align-items:flex-end} .chat-turn.op .bubble{max-width:80%;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:8px 12px;white-space:pre-wrap;overflow-wrap:anywhere}
-.chat-via{opacity:.75} .chat-copy{font:11px var(--mono);color:var(--dim);background:none;border:0;padding:0 4px;margin-left:6px;cursor:pointer} .chat-copy:hover{color:var(--text,inherit)}
+.chat-via{opacity:.75} .chat-copy{font:11px var(--mono);color:var(--dim);background:none;border:0;padding:0 4px;margin-left:6px;cursor:pointer;vertical-align:middle;line-height:1} .chat-copy svg{display:block} .chat-copy:hover{color:var(--text,inherit)}
 .chat-ctl{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:2px} .chat-cbtn{font:11px var(--mono);color:var(--dim);background:none;border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer} .chat-cbtn:hover{color:var(--text,inherit)} .chat-cbtn:disabled{opacity:.5;cursor:default} .chat-giveup{margin-top:0} .chat-turn.op .chat-time{text-align:right;overflow-wrap:anywhere} .chat-turn.op.mut .chat-time{color:var(--dim)}
 .chat-turn.op.wait .chat-time{color:var(--amber)} .chat-turn.op.bad .chat-time{color:var(--red)} .chat-turn.op.ok .chat-time{color:var(--green)}
 .chat-turn.agent{align-items:flex-start} .chat-turn.agent .md{padding:0;overflow:visible;overflow-wrap:anywhere;max-width:100%} .chat-turn.agent .md>:first-child{margin-top:0} .chat-turn.agent .md>:last-child{margin-bottom:0}
@@ -2028,7 +2028,12 @@ function CopyBtn({ text }) {
     const show = (v) => { setState(v); clearTimeout(timer.current); timer.current = setTimeout(() => setState(""), 1500); };
     copyText(text).then(() => show("Copied"), () => show("Copy failed"));
   };
-  return html`<button type="button" class="chat-copy" title="Copy this message" onClick=${click}>${state || "Copy"}</button>`;
+  const label = state || "Copy this message";
+  const path = state === "Copied" ? "M3 8.5l3.2 3.2L13 4.5" : state ? "M4 4l8 8M12 4l-8 8" : null;
+  return html`<button type="button" class="chat-copy" title=${label} aria-label=${label} onClick=${click}>
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path
+      ? html`<path d=${path} />`
+      : html`<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2" />`}</svg></button>`;
 }
 function chatTone(state, failing) { return state === "turn started" || state === "sent" ? "ok" : state === "queued" ? (failing ? "bad" : "wait") : state === "cancelled" ? "mut" : "bad"; }
 // A waiting send's status line (U4): how long it has waited and why; a failing one is red, a Send now one says it was asked.
