@@ -1,6 +1,6 @@
 // cardPlace (bin/board/card-place.ts): which Studio cards are Needs-you asks, loop notes, or held back.
 import { describe, expect, test } from "bun:test";
-import { cardPlace } from "../../bin/board/card-place.ts";
+import { cardPlace, debriefTopic } from "../../bin/board/card-place.ts";
 
 const NOW = Date.parse("2026-11-13T12:00:00Z") / 1000;
 const ago = (min: number) => new Date((NOW - min * 60) * 1000).toISOString().replace(/\.\d+Z$/, "Z");
@@ -33,6 +33,18 @@ describe("cardPlace", () => {
     ["Host tidy", { kind: "host_tidy", id: "loop-cleanup_p-1", title: "Host tidy: p" }],
     ["Loop stalled", { id: "loop-stall-1", title: "Loop stalled" }],
   ])("note: %s", (_n, a) => expect(cardPlace(a, NOW)).toBe("note"));
+
+  test("a debrief card is needs whatever its id, however old (never a loop note)", () => {
+    for (const a of [{ reason: "debrief-x", id: "loop-debrief-x-abc", title: "Debrief: x" }, { id: "sweep-debrief-x-1", title: "Debrief: x" },
+      { id: "sweep-debrief-x-1", title: "Debrief: x", since: ago(7 * 24 * 60) }, { reason: "debrief-x", id: "loop-debrief-x-abc", since: ago(7 * 24 * 60) }])
+      expect(cardPlace(a, NOW)).toBe("needs");
+  });
+  test("debriefTopic: the reason, else a sweep id; a loop-debrief id alone is not parsed", () => {
+    expect(debriefTopic({ reason: "debrief-a-b", id: "loop-debrief-a-b-1x" })).toBe("a-b");
+    expect(debriefTopic({ id: "sweep-debrief-a-b-12" })).toBe("a-b");
+    expect(debriefTopic({ id: "loop-debrief-a-b-1x" })).toBeNull();
+    expect(debriefTopic({ id: "brief-2026-11-16" })).toBeNull();
+  });
 
   test("U9: a squad's request refusal is a note for refusal_needs_min, then needs; any other refusal is needs", () => {
     const c = { kind: "loop_refusal", subject: "req:11246", squad: "sq", id: "x", title: "Loop action refused" };

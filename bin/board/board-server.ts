@@ -30,14 +30,15 @@
 //   GET /api/chat?project=<label>&topic=<slug|_studio>&wt=<worktree>   one live member's turns from
 //                              observed_chat and its last 10 chats with their state (404: no such member)
 //   GET /api/messages?project=<label>&topic=<slug>[&wt=<worktree>]   that member's (or the squad's) message rows, newest first; a read, never an ack
-//   GET /api/chat-file?project=<label>&topic=<slug|_studio>&name=<sha16>.<ext>   one stored chat image (and HEAD),
+//   GET /api/chat-file?project=<label>&topic=<slug|_studio|_start>&name=<sha16>.<ext>   one stored chat image (and HEAD),
 //                              nosniff, a no-script CSP, cached a day (the name is a content hash); no member check
 //   GET /healthz               {ok, pid, port}: the loop's ping (the loop runs this server, U16)
 //   GET /lavish/<key>          302 to that Lavish review page; when Lavish is down, a `lavish`
 //                              request and a page that reloads until it is up
 // Writes (POST, JSON, same-origin), each a `requests` row unless said otherwise:
 //   /api/request  {project, action, topic?, role?, text?}  `studio`: the loop files the one-line
-//                 request for the Studio ("board: the operator asks you to run: /ds-…")
+//                 request for the Studio ("board: the operator asks you to run: /ds-…"); a start may add
+//                 `files`, up to 8 images uploaded to topic `_start` (a gone one is 409)
 //   /api/answer   {project, topic, id, answer, since?}  the questions row answered via `board` and an
 //                 `answer` row: the loop types it into the asker's terminal (the card's worktree,
 //                 else the Lead; a picker by keystroke). A Studio alert (topic _studio): `dismiss`,
@@ -50,7 +51,8 @@
 //                 2000 characters) the loop types into that live, unpaused member's terminal once it is ready;
 //                 `files` names up to 4 stored chat images (text may then be empty; a gone one is 409)
 //   /api/chat-file?project=&topic=&wt=  the raw bytes of one PNG/JPEG/WebP/GIF (Content-Type the image's, at
-//                 most 5 MiB, magic bytes checked) for a live member, stored once as
+//                 most 5 MiB, magic bytes checked) for a live member (topic `_start` and no wt: for a squad
+//                 start, in a project the loop knows), stored once as
 //                 `<state root>/<label>/chat-files/<topic>/<sha256[:16]>.<ext>` (0600), answered 200 {id, url, bytes};
 //                 each upload first prunes the project's images older than chat_files_keep_d days (500 MiB cap: 507).
 //                 The only route a body over 128 KiB may reach.
@@ -73,7 +75,7 @@ import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSyn
 import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
-import { CHAT_FILE_NAME, CHAT_FILES_MAX, chatFileDir } from "../loop/chat/files.ts";
+import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
 import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
@@ -180,7 +182,8 @@ const ACTIONS: Record<string, { topic: boolean; cmd: (p: string, t: string, role
 
 // The start dialog's fields (contract of board-start-squad-box U1). An error string, or the clean fields.
 const START_ENUMS = { type: ["feature", "testing"], autonomy: ["checkpoints", "lfg"], start: ["plan", "brainstorm", "ask", "investigate", "fix", "auto"] } as const;
-function startFields(b: any): { error: string } | { framing: string; slug?: string; type?: string; autonomy?: string; start?: string } {
+type StartFields = { framing: string; slug?: string; type?: string; autonomy?: string; start?: string; files?: string[] };
+function startFields(b: any): { error: string } | StartFields {
   if (typeof b.text !== "string") return { error: "say what the squad should do: the text is empty" };
   // CRLF and a lone CR become LF; nothing else changes.
   const framing = b.text.replace(/\r\n?/g, "\n");
@@ -189,7 +192,7 @@ function startFields(b: any): { error: string } | { framing: string; slug?: stri
   if (bytes > BRIEF_MAX) return { error: `the text is ${(bytes / 1024).toFixed(1)} KiB; the limit is 32 KiB` };
   const bad = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.exec(framing);
   if (bad) return { error: `the text has a control character on line ${framing.slice(0, bad.index).split("\n").length}` };
-  const out: { framing: string; slug?: string; type?: string; autonomy?: string; start?: string } = { framing };
+  const out: StartFields = { framing };
   if (b.slug != null && b.slug !== "") {
     if (typeof b.slug !== "string" || b.slug.length > 64 || b.slug.startsWith(".") || /[^A-Za-z0-9._-]/.test(b.slug))
       return { error: "topic slug may only use letters, digits, . _ - and must not start with ." };
@@ -203,6 +206,12 @@ function startFields(b: any): { error: string } | { framing: string; slug?: stri
   }
   if (out.start === "auto") delete out.start;
   if (out.start && out.type === "testing") return { error: "a testing squad has no start" };
+  // chat-image-upload U4: names of images uploaded to `chat-files/_start/` (names only, never a path).
+  const files = b.files ?? [];
+  if (!Array.isArray(files) || files.length > START_FILES_MAX || new Set(files).size !== files.length
+    || files.some((f) => typeof f !== "string" || !CHAT_FILE_NAME.test(f)))
+    return { error: `files: at most ${START_FILES_MAX} distinct image names from /api/chat-file` };
+  if (files.length) out.files = files;
   return out;
 }
 
@@ -217,10 +226,11 @@ async function request(req: Request) {
   if (!a) return json(400, { error: `unknown action ${action}` });
   if (a.topic ? !NAME.test(topic) : topic !== "") return json(400, { error: a.topic ? "need a topic" : "no topic for this action" });
   if (role !== "" && (action !== "restart" || !NAME.test(role))) return json(400, { error: "bad role" });
-  let sf: Exclude<ReturnType<typeof startFields>, { error: string }> | null = null;
+  let sf: StartFields | null = null;
   if (isStart) {
     const f = startFields(pr.b);
     if ("error" in f) return json(400, { error: f.error });
+    for (const n of f.files ?? []) if (!chatFileAt(project, START_TOPIC, n)) return json(409, { error: `image ${n} is gone — attach it again` });
     sf = f;
   }
   const line = sf
@@ -240,7 +250,7 @@ async function request(req: Request) {
     const filed = s.db.query("SELECT key FROM requests WHERE done_at IS NULL AND substr(key, 1, ?) = ?").all(stem.length, stem) as Row[];
     if (action !== "start" && (pendingReq(s, "studio", project, topic || null, "action", action)
       || filed.some((r) => /^\d+\.txt$/.test(String(r.key).slice(stem.length))))) no(409, "already requested — waiting for the Studio");
-    return board(s, "studio", { action, topic: topic || null, line, ...(sf ? { framing: sf.framing } : {}) }, { project, squad: topic || null });
+    return board(s, "studio", { action, topic: topic || null, line, ...(sf ? { framing: sf.framing } : {}), ...(sf?.files ? { files: sf.files } : {}) }, { project, squad: topic || null });
   });
 }
 
@@ -418,14 +428,26 @@ function chatPrune(project: string): number {
   return left;
 }
 
+// chat-image-upload U4: an image for the Start squad dialog names topic `_start` and no member (no squad
+// exists yet): the project must be a name in this board's scope; a `wt` with it is refused.
+function startTarget(project: unknown, wt: boolean): { project: string; topic: string } | { status: number; error: string } {
+  if (typeof project !== "string" || !NAME.test(project) || wt) return { status: 400, error: `need a project and no member's worktree for topic ${START_TOPIC}` };
+  if (scope.project && scope.project !== project) return { status: 403, error: "target is outside this board's scope" };
+  return { project, topic: START_TOPIC };
+}
+
 // POST /api/chat-file?project=&topic=&wt=, body = the image's bytes. The checks run in this order and the
 // body is read only after the header ones pass; a refused upload writes no file.
 async function chatFilePost(req: Request, url: URL) {
   if (!sameOrigin(req)) return text(403, "forbidden origin\n");
   const ext = CHAT_TYPES[(req.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase()];
   if (!ext) return json(415, { error: "want image/png, image/jpeg, image/webp or image/gif" });
-  const q = url.searchParams, t = chatTarget(q.get("project"), q.get("topic"), q.get("wt"));
-  if ("error" in t) return json(t.status, { error: t.error });
+  const q = url.searchParams, start = q.get("topic") === START_TOPIC;
+  const st = start ? startTarget(q.get("project"), q.has("wt")) : null;
+  const ct = start ? null : chatTarget(q.get("project"), q.get("topic"), q.get("wt"));
+  if (st && "error" in st) return json(st.status, { error: st.error });
+  if (ct && "error" in ct) return json(ct.status, { error: ct.error });
+  const chat = ct && !("error" in ct) ? ct : null, t = (chat ?? st) as { project: string; topic: string };
   const tooBig = { error: `an image is at most ${CHAT_FILE_MAX / 1024 / 1024} MiB` };
   if (Number(req.headers.get("Content-Length") || 0) > CHAT_FILE_MAX) return json(413, tooBig);
   let bytes: Uint8Array;
@@ -434,10 +456,14 @@ async function chatFilePost(req: Request, url: URL) {
   if (!bytes.length) return json(400, { error: "empty body: send the image's bytes" });
   if (sniffImage(bytes) !== ext) return json(415, { error: "not a png/jpeg/webp/gif" });
   if (!existsSync(dbPath())) return json(503, NO_DB);
+  // A chat's image needs its live member; a start's (no squad yet) a project the loop knows, as the start itself.
   let live = false;
-  try { const s = openReadOnly(); try { live = !!chatMember(s, t.project, t.topic, t.wt); } finally { s.close(); } }
-  catch (e) { return json(503, { error: `loop.db: ${e}` }); }
-  if (!live) return json(404, { error: noMember(t) });
+  try {
+    const s = openReadOnly();
+    try { live = chat ? !!chatMember(s, chat.project, chat.topic, chat.wt) : !!one(s, "SELECT 1 AS x FROM projects WHERE label = ?", t.project); }
+    finally { s.close(); }
+  } catch (e) { return json(503, { error: `loop.db: ${e}` }); }
+  if (!live) return chat ? json(404, { error: noMember(chat) }) : json(409, { error: `no project ${t.project} on this board` });
   const name = `${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.${ext}`;
   try {
     const left = chatPrune(t.project);
@@ -463,7 +489,8 @@ function chatFileGet(url: URL) {
   const q = url.searchParams, project = q.get("project"), topic = q.get("topic"), name = q.get("name") ?? "";
   if (typeof project !== "string" || !NAME.test(project) || typeof topic !== "string" || !SQUAD.test(topic))
     return json(400, { error: "need project and topic" });
-  if ((scope.project && scope.project !== project) || (scope.topic && scope.topic !== topic)) return json(403, { error: "target is outside this board's scope" });
+  // A start's images (`_start`) belong to the project, as the start does.
+  if ((scope.project && scope.project !== project) || (scope.topic && topic !== START_TOPIC && scope.topic !== topic)) return json(403, { error: "target is outside this board's scope" });
   if (!CHAT_FILE_NAME.test(name)) return json(400, { error: "bad image name" });
   const p = chatFileAt(project, topic, name);
   if (!p) return text(404, "image removed\n");

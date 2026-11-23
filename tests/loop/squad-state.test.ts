@@ -45,12 +45,16 @@ describe("the store backend", () => {
     expect(s.get("units", {project:"p",squad:"s",slug:"unit"})?.wait_until).toBeNull();
   });
 
-  test("done needs a debrief; the debrief lives in the stored squad doc and its export (U1)", () => {
+  test("done with no debrief works (debrief-in-needs-you U2)", () => {
     const { root: r, file } = root(true);
     expect(ss(r, file, "set-task", "t").code).toBe(0);
-    const refused = ss(r, file, "set-status", "done");
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("refusing done: no debrief — write one first:");
+    expect(ss(r, file, "set-status", "done").code).toBe(0);
+    expect(doc(file).debrief ?? null).toBeNull();
+  });
+
+  test("done needs no debrief; the debrief lives in the stored squad doc and its export (U1)", () => {
+    const { root: r, file } = root(true);
+    expect(ss(r, file, "set-task", "t").code).toBe(0);
     expect(ss(r, file, "set-debrief", "").code).toBe(1);
     expect(ss(r, file, "set-debrief", "shipped #1\nTry it: nothing to try by hand — docs only\n").code).toBe(0);
     const s = store(r);
@@ -73,23 +77,6 @@ describe("the store backend", () => {
     expect(d.debrief_at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
     expect(Math.floor(Date.parse(d.debrief_at) / 1000)).toBeGreaterThanOrEqual(before);
     expect(doc(file)).toMatchObject({ debrief: "shipped #1", debrief_units: ["u-one", "u-two"] });
-  });
-
-  test("a feature squad's debrief needs a Try it part; a testing squad's does not (brief-other-prs U3)", () => {
-    const { root: r, file } = root(true);
-    expect(ss(r, file, "set-debrief", "1. Set out to do: x\n2. Shipped: #1").code).toBe(0);
-    const refused = ss(r, file, "set-status", "done");
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("Try it");
-    expect(ss(r, file, "set-debrief", "2. Shipped: #1\n6. **Try it:** 1. open the board and see x").code).toBe(0);
-    expect(ss(r, file, "set-status", "done").code).toBe(0);
-    const n = root(true);
-    expect(ss(n.root, n.file, "set-debrief", "- try it: nothing to try by hand — docs only").code).toBe(0);
-    expect(ss(n.root, n.file, "set-status", "done").code).toBe(0);
-    const t = root(true);
-    expect(ss(t.root, t.file, "set-type", "testing").code).toBe(0);
-    expect(ss(t.root, t.file, "set-debrief", "shipped #1").code).toBe(0);
-    expect(ss(t.root, t.file, "set-status", "done").code).toBe(0);
   });
 
   test("done refuses a planned or held unit, once per hold kind, and names its command (squad-done-definition U2)", () => {
