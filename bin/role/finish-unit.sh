@@ -2,7 +2,7 @@
 # finish-unit.sh — a Builder ends its unit with one call, so the finish can't be
 # half-done (pushed but no PR recorded, PR opened but worker_done never sent).
 #
-#   finish-unit.sh <state> <unit> [--check | --no-pr]
+#   finish-unit.sh <state> <unit> [--check | --no-pr | --failed <why>]
 #
 # Run in the Builder's worktree. In order: look up the PR for the current branch
 # (the same open-else-newest-merged lookup the loop uses), refuse with
@@ -15,7 +15,10 @@
 # is merge-ready — the loop marks the unit done when the PR merges. --check prints
 # the verdict and exits 0/1 without writing or sending anything (the babysit exit
 # test). --no-pr (local-only mode or a no-code unit) skips the lookup, the gate and
-# the recording, and says so in the note and body.
+# the recording, and says so in the note and body. --failed <why> ends a unit that cannot be built:
+# no lookup or gate, and worker_done goes out with --outcome failed. Every finish (PR, --no-pr,
+# --failed) first writes one `finishes` row in loop.db (`ds finish list`; U3 of orca-backend-alternatives),
+# keyed by unit + HEAD, so a re-run or a replayed request writes no second row.
 #
 # Any refusal exits non-zero having written no state, added no journal entry and
 # sent nothing. A journal write that fails warns on stderr but doesn't block the

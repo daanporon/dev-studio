@@ -23,8 +23,10 @@ Builders don't collide.
    **A unit that looks too big for one PR is not refused.** Do not end it with `worker_done`
    ("not done, scope too large"): that closes your dispatch and leaves the unit idle. Propose a
    split with `orch.sh ask` (what goes in each part, in what order) and start on the first part
-   while you wait. `worker_done --outcome failed` is only for a unit that cannot be built at all;
-   its body says why and what the Lead should decide.
+   while you wait. A unit that cannot be built at all ends with
+   `~/.dev-studio/bin/role/finish-unit.sh <state> <unit> --failed "<why>"` (never a bare
+   `worker_done --outcome failed`): it records the finish and sends `worker_done --outcome failed`;
+   the why says what blocks it and what the Lead should decide.
    **When `orch.sh ask` says it fell back** (exit 5: your dispatch is closed, or no answer came
    within its wait), the question still reached the Lead: watch your own inbox
    (`~/.dev-studio/bin/lib/watch.sh --worktree --poll`) for the answer instead of stopping.
