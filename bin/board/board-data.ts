@@ -46,6 +46,7 @@ import { retestDue, openPrUnits, type Retest } from "../loop/squad/retest.ts";
 import { settle, type Finish } from "../loop/squad/squad-finish.ts";
 import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
+import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
 
@@ -2856,9 +2857,11 @@ export function chatMember(store: Store | Db, project: string, topic: string, wt
 // Where one `chat` request is, for the panel: queued (with why), sent, turn started, not taken or failed.
 // A send the agent only accepted is "sent" until poke.ts's verify settles its deliveries row.
 // A send's text is redacted as its transcript turn is, so the two match and no secret is shown back.
-function chatSend(db: Db, r: Row) {
+function chatSend(db: Db, r: Row, topic: string) {
   const p = parse(String(r.payload ?? "")) ?? {}, res = parse(String(r.result ?? "")) ?? {};
-  const base = { id: Number(r.id), text: redact(String(p.text ?? "")), at: Number(r.created_at), done_at: r.done_at == null ? null : Number(r.done_at) };
+  const files = (Array.isArray(p.files) ? p.files : []).filter((n: unknown): n is string => typeof n === "string" && CHAT_FILE_NAME.test(n))
+    .map((name: string) => ({ name, url: chatFileUrl(String(r.project ?? ""), topic, name) }));
+  const base = { id: Number(r.id), text: redact(String(p.text ?? "")), files, at: Number(r.created_at), done_at: r.done_at == null ? null : Number(r.done_at) };
   if (r.done_at == null) return { ...base, state: "queued", why: res.state === "queued" ? String(res.why ?? "") : "waiting for the loop" };
   if (res.ok === false) return { ...base, state: "failed", why: String(res.error ?? "the loop refused it") };
   if (res.state === "turn started") return { ...base, state: "turn started", why: null };
@@ -2877,8 +2880,8 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     let c: Row | null = null;
     try { c = db.one("SELECT agent, source, turns, updated_at, gone_at FROM observed_chat WHERE project = ? AND wt = ?", o.project, o.wt) ?? null; }
     catch { /* loop.db before migration 0044: no turns yet */ }
-    const sends = db.all("SELECT id, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? ORDER BY id DESC LIMIT 10",
-      o.project, o.wt).reverse().map((r) => chatSend(db, r));
+    const sends = db.all("SELECT id, project, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? ORDER BY id DESC LIMIT 10",
+      o.project, o.wt).reverse().map((r) => chatSend(db, r, o.topic));
     // Mid-turn, as the board's crew row reads it (observed_workers.state), for the panel's "Working…" line.
     const w = db.one("SELECT state, gone_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
     return {
