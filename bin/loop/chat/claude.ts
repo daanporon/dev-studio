@@ -21,9 +21,21 @@ export function parse(text: string): Turn[] {
     const m = j.message as { content?: unknown } | undefined, at = epoch(j.timestamp);
     const role = j.type as "user" | "assistant";
     const blocks = typeof m?.content === "string" ? [{ type: "text", text: m.content }] : Array.isArray(m?.content) ? m.content : [];
+    // A user message whose text blocks have image blocks between them (the TUI's native attachment) is one
+    // line: join its text blocks so textTurn sees the typed suffix whole.
+    const texts = role === "user" ? (blocks as Record<string, unknown>[]).filter((b) => b?.type === "text" && typeof b.text === "string") : [];
+    const joined = texts.length > 1 && texts.length < blocks.length && !texts.some((b) => harnessText(String(b.text)));
+    let done = false;
     for (const b of blocks as Record<string, unknown>[]) {
       if (!b || typeof b !== "object") continue;
       if (b.type === "text" && typeof b.text === "string") {
+        if (joined) {
+          if (done) continue;
+          done = true;
+          const t = textTurn(role, texts.map((x) => String(x.text)).join(""), at);
+          if (t) out.push(t);
+          continue;
+        }
         if (role === "user" && harnessText(b.text)) continue;
         const t = textTurn(role, b.text, at);
         if (t) out.push(t);
