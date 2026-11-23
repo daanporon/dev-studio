@@ -11,9 +11,10 @@
 // Lead's is its project's Studio, every other member's its squad's Lead, the Studio has none; a
 // worktree that is no member keeps Orca's observed parent. When several rows name one path, the
 // Studio wins, then the newest member, then the newest live observed row, so every run picks the same.
-// It writes only rows it changes, and only rows the `orca` provider owns: a later provider's row
-// (git, treehouse; U7, U8) is never touched, and a `local::<path>` member (a non-Orca squad, U11)
-// is not one of its sources. Nothing reads the table yet.
+// It writes only rows it changes, and only the Orca rows it keeps itself: a later provider's row
+// (git, treehouse; U7, U8) is never touched, nor one the `orca` worktree provider made (U8b: its rows
+// carry `repo`, and that provider keeps them, a worktree Orca stops listing included), and a
+// `local::<path>` member (a non-Orca squad, U11) is not one of its sources. Nothing reads the table yet.
 import type { Store } from "../core/store.ts";
 
 // The folder path in a worktree id (`<repo id>::<path>`, or a plain absolute path), as SQL over `col`;
@@ -34,8 +35,10 @@ export const PATH_COLUMNS: readonly (readonly [table: string, id: string, path: 
   ["units", "builder_wt", "builder_path"],
 ];
 
-// The one statement that records the known worktrees; `now` is the SQL for the record time.
-export function syncSql(now: string): string {
+// The one statement that records the known worktrees; `now` is the SQL for the record time. `skipProviderRows`
+// (the observer's run) also leaves alone the rows the `orca` worktree provider made, which carry `repo`
+// (migration 0055); the 0054 backfill ran before that column existed.
+export function syncSql(now: string, skipProviderRows = false): string {
   return `WITH cand AS (
   SELECT p.label AS project, p.studio_wt AS wt, p.studio_path AS path, '_studio' AS squad, 'studio' AS role,
          NULL AS parent_path, 0 AS pri, 0 AS gone, 0 AS ord
@@ -64,7 +67,7 @@ SELECT 'local', b.path, b.project,
 ON CONFLICT (host, path) DO UPDATE SET project = excluded.project, name = excluded.name,
   parent_path = excluded.parent_path, branch = COALESCE(excluded.branch, worktrees.branch), squad = excluded.squad,
   role = excluded.role, orca_id = excluded.orca_id, gone_at = excluded.gone_at
- WHERE worktrees.provider = 'orca' AND (worktrees.project IS NOT excluded.project OR worktrees.name IS NOT excluded.name
+ WHERE worktrees.provider = 'orca'${skipProviderRows ? " AND worktrees.repo IS NULL" : ""} AND (worktrees.project IS NOT excluded.project OR worktrees.name IS NOT excluded.name
    OR worktrees.parent_path IS NOT excluded.parent_path OR worktrees.branch IS NOT COALESCE(excluded.branch, worktrees.branch)
    OR worktrees.squad IS NOT excluded.squad OR worktrees.role IS NOT excluded.role OR worktrees.orca_id IS NOT excluded.orca_id
    OR worktrees.gone_at IS NOT excluded.gone_at)`;
@@ -72,5 +75,5 @@ ON CONFLICT (host, path) DO UPDATE SET project = excluded.project, name = exclud
 
 // Record the known worktrees now; returns the rows added or changed.
 export function syncWorktrees(store: Store, now: number): number {
-  return store.db.run(syncSql("?"), [now]).changes;
+  return store.db.run(syncSql("?", true), [now]).changes;
 }
