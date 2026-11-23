@@ -463,13 +463,14 @@ jt "no dispatch on record keeps done"           "$TMP/u96.json" "$U96 | (.member
 rm -f "$SD/u96.json"
 
 # U100: the board degrades on a loop.db from before migration 0017 (no dispatch_seen_at):
-# a done Thinker keeps `done` instead of rendering the squad broken.
+# a done Thinker keeps `done` instead of rendering the squad broken. Such a loop.db has none of 0055's
+# triggers either, so they go first.
 printf '{"run_id":"r17","status":"running","members":[{"role":"thinker","wt":"wT"}],"units":[]}' > "$SD/u17.json"
 cat > "$TMP/seed17.json" <<'JSON'
 {"workers":[["wT","done","ds-thinker"]],"terminals":[],"worktrees":[["wT",null]]}
 JSON
 SEED="$TMP/seed17.json" mkdb "$LBL"
-bun -e 'const {Database} = await import("bun:sqlite"); const db = new Database("'"$DBR"'/loop.db"); db.run("ALTER TABLE observed_workers DROP COLUMN dispatch_seen_at"); db.close();'
+bun -e 'const {Database} = await import("bun:sqlite"); const db = new Database("'"$DBR"'/loop.db"); for (const t of ["observed_workers_orca_ins", "observed_workers_orca_upd"]) db.run(`DROP TRIGGER IF EXISTS ${t}`); db.run("ALTER TABLE observed_workers DROP COLUMN dispatch_seen_at"); db.close();'
 render "$LBL" --json > "$TMP/u17.json"
 jt "pre-0017 loop.db keeps the agent state" "$TMP/u17.json" '.squads[] | select(.topic=="u17") | (.members[] | select(.label=="thinker") | .state=="done")'
 rm -f "$SD/u17.json"
