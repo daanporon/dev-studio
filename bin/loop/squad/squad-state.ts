@@ -1124,7 +1124,8 @@ function main(argv: string[]): void {
       }, { id, text, via });
       // Answered: clear the asker's "NEEDS YOU" card note (set by ask-operator.sh) unless another open
       // question still sits on that card. Best-effort — the board is already right.
-      if (wt !== "" && left === 0) {
+      // A worktree off Orca (`local::`, U11b) has no card note: the question was the card, and it is gone.
+      if (wt !== "" && left === 0 && !wt.startsWith("local::")) {
         const r = spawnSync(process.env.BACKEND || join(dirname(dirname(import.meta.dir)), "backend", "orca.sh"), ["ping", wt, ""], { stdio: "ignore" });
         if (r.status !== 0) warn(`squad-state: answered, but could not clear the NEEDS YOU note on ${wt}`);
       }
