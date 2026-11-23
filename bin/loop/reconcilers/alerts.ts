@@ -339,10 +339,10 @@ function requestMoot(store: Store, project: string, subject: string): string | n
 }
 // A card of an archived squad: its newest squads row reads `closed`, or wants `gone` with a `done…` result.
 // Exempt: the archive's own cards (the debrief and the dropped-questions card are meant to be read) and a
-// failed late stop, which stays because something may still be listening.
+// failed late stop, which stays because something may still be listening. A refusal card keeps its own rule, which also ends its refusals row.
 function archivedCard(store: Store, project: string, a: Row): boolean {
   const squad = typeof a.squad === "string" ? a.squad : "";
-  if (!squad || a.kind === "questions_dropped" || /^sweep-debrief-/.test(String(a.id ?? "")) || /(^|[ :·])Stop command failed$/.test(String(a.title ?? ""))) return false;
+  if (!squad || a.kind === REFUSAL_KIND || a.kind === "questions_dropped" || /^sweep-debrief-/.test(String(a.id ?? "")) || /(^|[ :·])Stop command failed$/.test(String(a.title ?? ""))) return false;
   const sq = store.db.query("SELECT status, want, want_result FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, squad) as Row | null;
   return !!sq && (sq.status === "closed" || (sq.want === "gone" && String(sq.want_result ?? "").startsWith("done")));
 }
