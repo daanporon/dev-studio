@@ -1,0 +1,37 @@
+# A ds-feedback issue gets its labels (ds-feedback-github-issues U3): the loop opens each issue with one
+# marker line, `<!-- ds-feedback v1 area:<a> kind:<k> -->`, and this adds `ds-feedback`, `area:<a>` and
+# `kind:<k>` (GitHub makes a label that does not exist yet). Any other issue is left alone.
+# .github/scripts/feedback-labels.mjs reads only the marker from the event file and never prints the body,
+# and no issue text goes into the script text, so a body cannot run as shell. tests/feedback-labels.sh.
+name: feedback-labels
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  labels:
+    name: feedback-labels
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Label a ds-feedback issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          labels="$(node .github/scripts/feedback-labels.mjs "$GITHUB_EVENT_PATH")"
+          if [ -z "$labels" ]; then echo "no ds-feedback marker: nothing to label"; exit 0; fi
+          args=()
+          while IFS= read -r l; do args+=(-f "labels[]=$l"); done <<< "$labels"
+          gh api -X POST "repos/$REPO/issues/$ISSUE/labels" "${args[@]}" --silent
+          echo "labelled #$ISSUE: $(tr '\n' ' ' <<< "$labels")"
