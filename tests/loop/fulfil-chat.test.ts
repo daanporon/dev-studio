@@ -129,6 +129,24 @@ describe("chat fulfiller", () => {
     expect(typed(orca)).toEqual([`${SAYS}codex waits`]);
   });
 
+  test("a member Orca still reads working after an Esc is typed into once its screen and transcript agree (studio-hung-agent-broken U4)", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    const transcript = (turn: string) => s.upsert("observed_transcripts", { path: join(ROOT, "tests", "fixtures", "liveness", `${turn}.jsonl`) },
+      { project: "fx", wt: B, mtime: T - 300, observed_at: T });
+    // Orca `working` (Esc runs no Stop hook), quiet for a minute, an empty prompt read since, the turn still open
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "working", last_output_at: T - 60, tail: "│ ❯ │\n", tail_at: T - 30, unread: 0, gone_at: null, observed_at: T });
+    transcript("open");
+    const id = chat(s, "are you there?");
+    await tick(T);
+    expect(result(s, id)).toEqual({ state: "queued", why: "busy: working", since: T });
+    // the newest transcript record is the Esc: the line goes in
+    s.db.run("DELETE FROM observed_transcripts WHERE wt = ?", [B]);
+    transcript("interrupted");
+    await tick(T + 10);
+    expect(typed(orca)).toEqual([`${SAYS}are you there?`]);
+    expect(req(s, id).done_at).toBe(T + 10);
+  });
+
   test("an accepted send is a chat delivery: verified once working, never resent", async () => {
     const s = imported(), orca = new FakeOrca(), { tick } = rig(s, orca);
     orca.pokes.set(B, [3]);
