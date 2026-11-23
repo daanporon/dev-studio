@@ -50,6 +50,7 @@ import { settle, type Finish } from "../loop/squad/squad-finish.ts";
 import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
 import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
+import { feedbackRepo } from "../loop/feedback/post.ts";
 import { BACKEND_NAMES, DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
@@ -2193,7 +2194,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const update = updateSummary(db, label);
   const disk = diskSummary(db, label);
   const header = headerSummary(db, label, squads, out.needs_you, loop);
-  return { ...out, ...(update ? { update } : {}), ...(disk.length ? { disk } : {}), accounts_summary: accountsSummary(db, label, accts), header, flow: { ...flowFor(db, labels, squads), brake: header.brake ?? null }, ...(machine ? { machine, as_of: { ...out.as_of, machine: machine.observed_at } } : {}) };
+  return { ...out, ...(update ? { update } : {}), ...(disk.length ? { disk } : {}), feedback: feedbackSummary(db), accounts_summary: accountsSummary(db, label, accts), header, flow: { ...flowFor(db, labels, squads), brake: header.brake ?? null }, ...(machine ? { machine, as_of: { ...out.as_of, machine: machine.observed_at } } : {}) };
 }
 
 // The open disk-pressure spells of this project (disk-pressure U3): the episodes, the machine row's disk and the
@@ -2316,6 +2317,52 @@ export function brakeText(br: any): string | null {
   return `BRAKE  armed: ${line} · ${br.free > 0 ? "no unit waits for a seat" : "no free seat now"}`;
 }
 
+// The Feedback panel's header facts (ds-feedback-github-issues U4): the repo drafts go to (null: posting off),
+// the drafts waiting for review (`blocked` of them with a leak hit) and the notes by state. Host-wide, so a
+// project board shows the same numbers; an older loop.db without the tables reads as none.
+export function feedbackSummary(db: Db | null) {
+  const none = { on: false, repo: null as string | null, review: 0, blocked: 0, notes: 0, new: 0, drafted: 0, filed: 0, fixed: 0, dismissed: 0 };
+  if (!db) return none;
+  try {
+    const repo = feedbackRepo(db.s);
+    const d = db.one("SELECT COUNT(*) AS n, COALESCE(SUM(leak = 'blocked'), 0) AS b FROM feedback_drafts WHERE state IN ('review', 'posting')");
+    const by: Record<string, number> = {};
+    for (const r of db.all("SELECT state, COUNT(*) AS n FROM feedback_notes GROUP BY state")) by[String(r.state)] = Number(r.n);
+    const sum = Object.values(by).reduce((a, b) => a + b, 0);
+    return { on: repo != null, repo, review: Number(d?.n ?? 0), blocked: Number(d?.b ?? 0), notes: sum, new: by.new ?? 0, drafted: by.drafted ?? 0,
+      filed: by.filed ?? 0, fixed: (by.fixed ?? 0) + (by.closed ?? 0), dismissed: by.dismissed ?? 0 };
+  } catch { return none; }
+}
+export function feedbackLine(f: ReturnType<typeof feedbackSummary> | undefined): string | null {
+  if (!f || (!f.on && f.notes === 0)) return null;
+  const head = f.on ? `${f.review} draft${f.review === 1 ? "" : "s"} to review${f.blocked ? ` (${f.blocked} blocked by the leak check)` : ""}` : "off (feedback_repo is -)";
+  return `FEEDBACK  ${head} · notes: ${f.notes} (${f.new} new, ${f.drafted} drafted, ${f.filed} filed, ${f.fixed} fixed, ${f.dismissed} dismissed)`;
+}
+
+// GET /api/feedback: what the Feedback panel shows. `review` = drafts in review (or posting) with the notes they
+// came from, `filed` = drafts already sent (newest 100), `notes` = every note, newest first (at most 500), each
+// with its draft's issue when it has one. null: no loop.db.
+export function feedbackJson(root = stateRoot()) {
+  return withDb((db) => {
+    const notes = db.all(`SELECT n.id, n.project, n.squad, n.role, n.text, n.source, n.state, n.draft_id, n.evidence, n.reason, n.at,
+        d.issue, d.url, d.fix_pr, d.fix_here FROM feedback_notes n LEFT JOIN feedback_drafts d ON d.id = n.draft_id ORDER BY n.id DESC LIMIT 500`)
+      .map((r) => ({ id: Number(r.id), project: String(r.project), squad: r.squad as string | null, role: r.role as string | null, text: String(r.text), source: String(r.source),
+        state: String(r.state), draft: r.draft_id == null ? null : Number(r.draft_id), evidence: r.evidence as string | null, reason: r.reason as string | null, at: Number(r.at),
+        issue: r.issue == null ? null : Number(r.issue), url: r.url as string | null, fix_pr: r.fix_pr == null ? null : Number(r.fix_pr), fix_here: r.fix_here === 1 }));
+    const draft = (r: Row) => ({ id: Number(r.id), kind: String(r.kind), title: r.title as string | null, body: String(r.body), area: r.area as string | null, label: r.label as string | null,
+      target: r.target == null ? null : Number(r.target), evidence: r.evidence as string | null, checked_at: r.checked_at as string | null, leak: String(r.leak), leak_why: r.leak_why as string | null,
+      state: String(r.state), reason: r.reason as string | null, repo: r.repo as string | null, issue: r.issue == null ? null : Number(r.issue), url: r.url as string | null,
+      fix_pr: r.fix_pr == null ? null : Number(r.fix_pr), fix_here: r.fix_here === 1, created_at: Number(r.created_at),
+      notes: notes.filter((n) => n.draft === Number(r.id)).sort((a, b) => a.id - b.id) });
+    return {
+      ...feedbackSummary(db),
+      review: db.all("SELECT * FROM feedback_drafts WHERE state IN ('review', 'posting') ORDER BY id").map(draft),
+      filed: db.all("SELECT * FROM feedback_drafts WHERE state IN ('filed', 'fixed', 'closed') ORDER BY updated_at DESC, id DESC LIMIT 100").map(draft),
+      notes,
+    };
+  }, root);
+}
+
 export function renderText(b: Board): string {
   const o: string[] = [];
   const cap = b.capacity ? ` · ${b.capacity.label} ${b.capacity.count}` : "";
@@ -2330,6 +2377,7 @@ export function renderText(b: Board): string {
   if (b.loop.stalling) o.push(`LOOP  ⚠ the loop keeps stalling — ${b.loop.restarts_recent} restarts in the last ${b.loop.stall_window_min} min; see loop.log / journalctl --user -u ds-loop.service`, RULE);
   if (b.loop.down) o.push(`LOOP  ⚠ loop down — ${b.loop.tick_at == null ? "it has never ticked" : `data as of ${clock(b.loop.tick_at)} (${Math.floor((b.loop.age_s ?? 0) / 60)} min ago)`}; pokes, restarts and PR status are paused. Start it: bin/loop/loop.sh --ensure`, RULE);
   { const gl = githubLine(b.github, b.github?.waiting.length ?? 0); if (gl) o.push(gl, RULE); }
+  { const fl = feedbackLine(b.feedback); if (fl) o.push(fl, RULE); }
   if (b.update) o.push(updateLine(b.update), RULE);
   if (b.live_waiting.length) {
     o.push("LIVE — waiting for input (not yet enqueued; poke the Lead to route it):", ...b.live_waiting.map((l) => `  ⚠ ${l}`), RULE);

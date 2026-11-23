@@ -860,7 +860,7 @@ jt "U2: a note carries its allowed action" "$TMP/u2.json" '[.loop_notes[] | sele
 jt "U2: an unknown action is dropped" "$TMP/u2.json" '[.loop_notes[] | select(.id=="loop-u2-bad")][0].act == null'
 jt "U2: a Studio ask carries its squad for Show squad" "$TMP/u2.json" '[.needs_you[] | select(.id=="loop-u2-ask")][0] | .card_squad == "ans" and has("repo_slug") and has("pr") and has("act")'
 eq "web board: a loop note shows its text and why under a title without the squad prefix" "$(grep -cF 'class="lndet">${linkedQ(n.text, n.repo_slug)}' "$ROOT/web/board.html")$(grep -cF 'const noteTitle' "$ROOT/web/board.html")$(grep -cF 'squads.length > 1' "$ROOT/web/board.html")" "211"
-eq "web board: Show squad on a Studio card, the PR chip and the action button" "$(grep -cF 'n.card_squad' "$ROOT/web/board.html")$(grep -cF 'function ActBtn' "$ROOT/web/board.html")$(grep -cF 'onShow(n.project, n.squad)' "$ROOT/web/board.html")" "411"
+eq "web board: Show squad on a Studio card, the PR chip and the action button" "$(grep -cF 'n.card_squad' "$ROOT/web/board.html")$(grep -cF 'function ActBtn' "$ROOT/web/board.html")$(grep -cF 'onShow(n.project, n.squad)' "$ROOT/web/board.html")" "311"
 
 # POST /api/request files a `studio` request; the loop writes it out for the Studio as
 # <state root>/<label>/requests/_studio/board-<action>[-<topic>]-<id>.txt, which the Studio's watch
@@ -1088,6 +1088,26 @@ eq "chat-cancel: a typed chat is 409"   "$(post -H "$O" -H "$CT" -d "$(cid "$CH"
 eq "chat-now: a typed chat is 409"      "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CN")" "409"
 eq "chat-now: no such request is 404"   "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CN")" "404"
 eq "chat-now: a bad id is 400"          "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"id\":\"x\"}" "$CN")" "400"
+# ds-feedback-github-issues U4: GET /api/feedback lists drafts and notes; POST /api/feedback files one request per action.
+FBU="http://127.0.0.1:$PORT/api/feedback"
+dbw "INSERT INTO feedback_drafts (id, key, kind, title, body, leak, state, created_at, updated_at) VALUES (901, 'fd:s1', 'issue', 'Serve one', 'Body', 'ok', 'review', 1, 1), (902, 'fd:s2', 'issue', 'Serve two', 'Body', 'ok', 'filed', 1, 1)"
+dbw "INSERT INTO feedback_notes (id, key, project, text, source, state, draft_id, at, updated_at) VALUES (801, 'sn1', 'p', 'a new note', 'cli', 'new', NULL, 1, 1), (802, 'sn2', 'p', 'drafted note', 'cli', 'drafted', 901, 1, 1), (803, 'sn3', 'p', 'gone note', 'cli', 'dismissed', NULL, 1, 1), (804, 'sn4', 'p', 'filed note', 'cli', 'filed', 902, 1, 1)"
+eq "feedback: GET is 200" "$(curl -s -o "$TMP/fb.out" -w '%{http_code}' "$FBU")" "200"
+jt "feedback: GET lists the review draft with its notes, and the notes" "$TMP/fb.out" '([.review[] | select(.id == 901)] | length) == 1 and (.review[0].notes[0].id == 802) and ([.notes[].id] | contains([801, 802, 803, 804])) and ([.filed[].id] | contains([902]))'
+fbp(){ post -H "$O" -H "$CT" -d "$1" "$FBU"; }
+fbj(){ jq -nc --arg p "$LBL" "$1"; }
+eq "feedback: Post a draft in review is 202" "$(fbp "$(fbj '{project: $p, action: "post", draft: 901}')")" "202"
+eq "feedback: its row is a feedback-post of the draft" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.draft]')" '["feedback-post",901]'
+eq "feedback: a second action on that draft while one is open is 409" "$(fbp "$(fbj '{project: $p, action: "dismiss", draft: 901}')")" "409"
+eq "feedback: Post a draft already posted is 409" "$(fbp "$(fbj '{project: $p, action: "post", draft: 902}')")" "409"
+eq "feedback: Post an unknown draft is 404" "$(fbp "$(fbj '{project: $p, action: "post", draft: 99999}')")" "404"
+eq "feedback: Dismiss a note is 202" "$(fbp "$(fbj '{project: $p, action: "dismiss", note: 801, why: "stale"}')")" "202"
+eq "feedback: its row carries the note and reason" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.note, .payload.why]')" '["feedback-dismiss",801,"stale"]'
+eq "feedback: Dismiss a filed note is 409" "$(fbp "$(fbj '{project: $p, action: "dismiss", note: 804}')")" "409"
+eq "feedback: Restore a dismissed note is 202" "$(fbp "$(fbj '{project: $p, action: "restore", note: 803}')")" "202"
+eq "feedback: Restore a note that is not dismissed is 409" "$(fbp "$(fbj '{project: $p, action: "restore", note: 804}')")" "409"
+eq "feedback: an unknown action is 400" "$(fbp "$(fbj '{project: $p, action: "nuke", draft: 901}')")" "400"
+eq "feedback: a cross-origin POST is refused" "$(post -H "Origin: http://evil.example" -H "$CT" -d "$(fbj '{project: $p, action: "restore", note: 803}')" "$FBU")" "403"
 eq "chat-now: foreign Origin is 403"    "$(post -H 'Origin: http://evil.example' -H "$CT" -d "$(cid "$TK")" "$CN")" "403"
 eq "chat-cancel: only the two accepted rows" "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind IN ('chat-cancel','chat-now')" | jq '.[0].n')" "$((NQ + 2))"
 eq "chat: resume the researcher"       "$(post -H "$O" -H "$CT" -d "{\"scope\":\"member\",\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wResearcher\"}" "http://127.0.0.1:$PORT/api/resume")" "200"
