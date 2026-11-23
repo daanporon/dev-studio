@@ -133,7 +133,9 @@ export function tmuxBackend(o: TmuxOptions): TmuxBackend {
     const meta: Meta = { cwd: req.cwd, label: req.label, group: req.group ?? null, gen: req.env?.DS_GEN ?? null, created_at: Math.floor(Date.now() / 1000) };
     const s = sessionName(req.group ?? DEFAULT_GROUP);
     const env = Object.entries(req.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-    const where = ["-n", req.label || "terminal", "-c", req.cwd, ...env, "-P", "-F", "#{pane_id}"];
+    // tmux expands formats in -n and -c ("#S", "##"); "##" keeps a "#" as it is.
+    const lit = (v: string) => v.replaceAll("#", "##");
+    const where = ["-n", lit(req.label || "terminal"), "-c", lit(req.cwd), ...env, "-P", "-F", "#{pane_id}"];
     // The chained set-option lands on the new window: without -d it is the command list's current one.
     const tag = ["set-option", "-w", "@ds_meta", encodeURIComponent(JSON.stringify(meta))];
     const inWindow = () => run([["new-window", "-t", `=${s}:`, ...where], tag]);

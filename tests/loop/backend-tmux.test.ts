@@ -2,7 +2,7 @@
 // the conformance suite on a real tmux server on a private socket, including a server that outlives the
 // process that started it. With no tmux binary on PATH every case is skipped with the reason printed.
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stopServer, unitName } from "../../bin/backend/server-unit.ts";
@@ -75,6 +75,36 @@ if (!TMUX) {
       expect(await none.call("terminal.close", { id: "%1" })).toEqual({ ok: true, closed: false });
       const c = await none.call("terminal.create", { cwd: dir, label: "x" });
       expect(c.ok ? "ok" : c.error.code).toBe("failed");
+    });
+
+    test("a fresh server: parallel creates in one new group start one server and one session; the starter's identity is not inherited; '#' stays literal", async () => {
+      const keep = { DS_MEMBER: process.env.DS_MEMBER, DS_GEN: process.env.DS_GEN };
+      process.env.DS_MEMBER = "p/sq/builder-x";
+      process.env.DS_GEN = "starter";
+      const fresh = tmuxBackend({ socket: join(dir, "f.sock"), server: { name: `test-tmux-fresh-${stamp}`, log: join(dir, "fresh.log") }, shell: "/bin/sh" });
+      try {
+        const odd = join(dir, "w##x#S");
+        mkdirSync(odd);
+        const made = await Promise.all([1, 2, 3].map((i) => fresh.call("terminal.create", { cwd: odd, label: `m#S${i}`, group: "par" })));
+        for (const a of made) expect(a.ok ? "ok" : a.error.message).toBe("ok");
+        const ids = made.map((a) => (a.ok ? a.terminal.id : ""));
+        expect(new Set(ids).size).toBe(3);
+        const p = Bun.spawnSync([TMUX, "-N", "-S", join(dir, "f.sock"), "list-panes", "-a", "-F", "#{session_name} #{window_name}"]);
+        expect(p.stdout.toString().trim().split("\n").sort()).toEqual(["par m#S1", "par m#S2", "par m#S3"]);
+        await fresh.call("terminal.send", { id: ids[0]!, text: 'echo "id=[$DS_MEMBER][$DS_GEN]"; pwd', submit: true });
+        let text = "";
+        for (let i = 0; i < 100 && !text.includes(odd); i++) {
+          const r = await fresh.call("terminal.read", { id: ids[0]! });
+          text = r.ok ? r.text : "";
+          await Bun.sleep(50);
+        }
+        expect(text).toContain("id=[][]");
+        expect(text).toContain(odd);
+      } finally {
+        Object.assign(process.env, keep);
+        for (const [k, v] of Object.entries(keep)) if (v === undefined) delete process.env[k];
+        await fresh.killServer();
+      }
     });
 
     test("a missing cwd fails the create", async () => {
