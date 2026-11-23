@@ -1,18 +1,20 @@
-# Every PR into main runs the loop tests through tests/ci.sh.
+# Every PR into main, and every push to main, runs the loop tests through tests/ci.sh.
 name: tests
 
 # No `edited` trigger, on purpose. An edit (a title, a body, a retarget) on the same head would add a newer
 # `tests` run whose job is skipped, and GitHub then holds the PR BLOCKED with green checks (#12, #17).
 # A retarget without a push gets no run: push, or close and reopen the PR.
 on:
+  push:
+    branches: [main]
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
 
-# A new push cancels the older run on the same PR.
+# A new push cancels the older run on the same PR. A push to main cancels nothing, so each merge's run finishes.
 concurrency:
-  group: tests-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
