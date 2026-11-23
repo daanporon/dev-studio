@@ -3541,7 +3541,7 @@ function App() {
     ${data.needs_you.length > 0 && html`<div class="qlist">${data.needs_you.map((n) => {
       // U10: every Needs-you item is one block shape: who · age and the buttons, the title, the text.
       const brief = /^brief-/.test(n.id || "");
-      const debrief = /^sweep-debrief-/.test(n.id || ""); // debrief-on-archive U2: the archived squad's final debrief
+      const debrief = !!n.debrief; // debrief-on-archive U2: the archived squad's final debrief
       const studioCard = n.squad === "_studio" && !brief && !debrief;
       const doneRow = n.kind === "done";
       const sent = n.id && sentQ.has(nkey(n));
@@ -3559,7 +3559,7 @@ function App() {
         catch (e) { say("not dismissed: " + (e.message || e)); return; }
         qbump((x) => x + 1);
       };
-      const dTopic = debrief ? String(n.title || "").replace(/^Debrief:\s*/, "") : "";
+      const dTopic = debrief ? n.debrief : "";
       const openDebrief = () => { // the topic comes from the card's title; the text is the archived doc's debrief
         const a = (data.archived || []).find((x) => x.topic === dTopic && (!n.label || x.label === n.label || x.label == null));
         setPlan({ name: dTopic + " — debrief", markdown: a && a.debrief ? a.debrief : "No debrief was written." });
