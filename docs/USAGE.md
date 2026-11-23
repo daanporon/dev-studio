@@ -476,6 +476,15 @@ one click shows that member's chat without closing the panel. On a phone the tit
 (`<member> ▾`, with the other members' mail and a dot) that opens the same list. What you typed for
 each member stays with it (per browser tab, kept across a switch, a close and a reload) until you send it.
 
+**Attach images in the Chat panel.** The 📎 button (or a paste into the box, or a drop anywhere on the
+panel) attaches up to 4 images; each shows as a 56 px thumbnail with ✕ and is uploaded at once. An image over
+3.5 MiB, with a long side over 2000 px, or of a type the server refuses (an iPhone HEIC) is redrawn in the
+page as a JPEG with its long side at most 2000 px first; a small one goes as it is. Send works with images
+and no text; the typed line then ends with the stored paths, which the member opens with its file-reading
+tool, and the bubble shows the thumbnails. Images are kept 14 days (an older bubble says `image removed`),
+are not checked for secrets, and a Muse member or a screen-only chat shows `this member may not see images`.
+Attached images stay in each member's draft across a switch.
+
 **Chat with the Studio from the board.** The board's top bar has a **💬 Studio** button (one per
 project on a host-wide board) that opens the same Chat panel on the project's Studio, titled
 `Chat · Studio · <project>`. The loop types your line in once the Studio has been quiet for two

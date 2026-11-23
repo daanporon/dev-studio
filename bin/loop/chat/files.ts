@@ -2,8 +2,7 @@
 // The board server stores each upload once under `<state root>/<label>/chat-files/<topic>/<name>`
 // (topic: a squad name, or `_studio`); a `chat` request row holds file NAMES only, never a path, and
 // whoever reads the row resolves each name inside that folder for the row's own project and squad, so
-// a forged row can never name another file. board-server.ts keeps its own copy of the rule, pinned to
-// this one by a test, until the popup unit switches it to import this module.
+// a forged row can never name another file. board-server.ts imports the rule from here.
 import { join } from "node:path";
 
 // The first 16 hex characters of the file's sha256, then the extension of its sniffed type (JPEG: .jpg).

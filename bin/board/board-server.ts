@@ -73,6 +73,7 @@ import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSyn
 import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
+import { CHAT_FILE_NAME, CHAT_FILES_MAX, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
 import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
@@ -332,12 +333,11 @@ async function chatPost(req: Request) {
 // The shared contract with the loop (bin/loop/chat/files.ts, chat-image-upload U2): a project's images
 // live in `<state root>/<label>/chat-files/<topic>/`, each named by the first 16 hex characters of its
 // sha256 plus the extension of its sniffed type; a `chat` row names files only, never a path. These are
-// this server's own copies of the folder and name rule until the popup unit imports that module.
-const CHAT_FILE_NAME = /^[0-9a-f]{16}\.(png|jpg|webp|gif)$/;
-const chatFilesRoot = (project: string) => join(stateRoot(), project, "chat-files");
+// the folder and name rule are that module's (bin/loop/chat/files.ts), imported here.
+const chatFilesRoot = (project: string) => dirname(chatFileDir(stateRoot(), project, "x")); // `<state root>/<label>/chat-files`
 const CHAT_FILE_MAX = 5 * 1024 * 1024; // per stored file
 const CHAT_FILES_CAP = 500 * 1024 * 1024; // per project's chat-files/
-const CHAT_FILES_PER_SEND = 4;
+const CHAT_FILES_PER_SEND = CHAT_FILES_MAX;
 const CHAT_FILES_KEEP_D = 14; // chat_files_keep_d's default
 const CHAT_TMP = /^\..*\.tmp$/;
 const CHAT_TYPES: Record<string, "png" | "jpg" | "webp" | "gif"> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
