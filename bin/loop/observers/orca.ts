@@ -7,7 +7,7 @@
 // below wraps bin/backend/orca.sh, bin/loop/fakes/orca.ts replays recorded outputs.
 //
 // A project's worktrees: its directory rows, its members rows, its Studio worktree, and any worktree
-// named <prefix><label>-… that no longer label claims (`ds-dev-studio-public-…` is not dev-studio's).
+// named <prefix><label>-… and no longer label's prefix (`ds-dev-studio-public-…` is not dev-studio's).
 // A row whose worktree or terminal left, or whose worktree is no longer the project's, gets gone_at
 // (kept, not deleted); seen again, gone_at clears. An empty `ps` while rows are live is an Orca hiccup, not a mass exit:
 // the tick throws (plugin_error) and nothing is marked gone.
@@ -302,7 +302,7 @@ const STUDIO_SETTLE_S = 5; // the Studio's screen is re-read once its output has
 // The project's worktree ids besides its directory rows: members, the Studio, and the name prefix.
 // A worktree belongs to one project: a name that also starts with a longer label's prefix
 // (`ds-dev-studio-public-` beside `ds-dev-studio-`) is that project's, not this one's.
-export function knownWts(store: Store, project: string, ps: PsWorktree[]): Set<string> {
+function knownWts(store: Store, project: string, ps: PsWorktree[]): Set<string> {
   const ids = new Set((store.db.query("SELECT wt FROM members WHERE project = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone' UNION SELECT builder_wt AS wt FROM units WHERE project = ? AND status = 'cancelled' AND COALESCE(builder_wt, '') != ''")
     .all(project, project) as { wt: string }[]).map((r) => r.wt));
   const studio = (store.get("projects", { label: project })?.studio_wt as string | null) ?? null;
