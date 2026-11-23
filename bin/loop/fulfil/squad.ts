@@ -11,8 +11,10 @@
 //   resume   running on a suspended squad: back to running, manual pause intents cleared;
 //            the members' standing wishes start them fresh from their journals.
 //   archive  gone, once every member is closed and worktree-free (the decider/close.ts):
-//            reclaim the Run's workers, move the squad JSON and its plans to the archive,
-//            and take the row off the live board (status closed). Branches and PRs are kept.
+//            reclaim the Run's workers, drop the squad's open questions (status dropped, kept in
+//            the archived JSON's dropped_questions; one card if any was blocking), move the squad
+//            JSON and its plans to the archive, and take the row off the live board (status
+//            closed). Branches and PRs are kept.
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { alert, type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
@@ -26,6 +28,7 @@ import { effectiveRoster } from "../settings/roster.ts";
 import { limitInt } from "../settings/limits.ts";
 import { endSquad, stopsPending } from "../squad/exposed.ts";
 import { finalDebrief, stepOf, unitsOf } from "../squad/archive-debrief.ts";
+import * as questions from "../messages/questions.ts";
 import type { Action } from "../core/plugins.ts";
 import { payloadOf as actionPayload, type ActionPayload } from "../core/kinds.ts";
 
@@ -35,6 +38,7 @@ const rowOf = (x: Exec, a: Action): Row | null => {
   return id == null ? null : x.store.get("squads", { id });
 };
 const payloadOf = (r: Row): Row => { try { return JSON.parse(String(r.want_payload ?? "{}")) ?? {}; } catch { return {}; } };
+const DROP_WHY = "squad archived";
 const isoAt = (at: number) => new Date(at * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
 // The Lead's task spec: the loop holds the Run seat, so the Lead never adopts (U159).
@@ -184,10 +188,24 @@ async function archive(a: Action, x: Exec, r: Row): Promise<Result> {
   const stopped = new Set((store.db.query("SELECT DISTINCT stop_cmd FROM exposed WHERE project = ? AND squad = ? AND stop_state = 'done'").all(project, topic) as { stop_cmd: string }[]).map((x) => x.stop_cmd));
   for (const cmd of cleanup) if (typeof cmd === "string" && cmd && !stopped.has(cmd))
     await spawn(["sh", "-c", cmd], { ...x.act.childActivity(x.store, a) }, 120_000);
+  // morning-brief-stale-items U2: the squad's open questions are dropped, never left open on a closed squad
+  // (no board shows them, and the brief would carry them for ever). A blocking one gets one Needs-you card,
+  // raised before the drop so a failed card retries the archive; the same id on a replay replaces it.
+  const open = questions.pending(store, project, topic), blocking = open.filter((q) => q.blocking === 1);
+  if (blocking.length) {
+    const lines = blocking.map((q) => `- ${String(q.title ?? q.question ?? q.id)} (asked by ${String(q.asker ?? "?")})`);
+    const o = await alert(store, project, `archive-questions-${topic}`, String(r.want_at),
+      `The squad was archived with ${blocking.length === 1 ? "a blocking question" : `${blocking.length} blocking questions`} still open; ${blocking.length === 1 ? "it was" : "they were"} dropped:\n${lines.join("\n")}`,
+      { title: `Archived with a blocking question open: ${topic}`, option: "Seen", why: "archiving drops a squad's open questions", fields: { kind: "questions_dropped" } });
+    if (o.code !== 0) return { retry: `blocking-question card: ${(o.err || o.out).trim().slice(0, 200)}` };
+  }
+  const dropped = open.map((q) => ({ ...(questions.entryOf(q) as Row), dropped: DROP_WHY, dropped_at: isoAt(at) }));
   const dir = join(store.root, project, "squads"), live = join(dir, `${topic}.json`);
   if (r.doc != null) {
     const doc = squadDoc(store, project, topic) ?? JSON.parse(String(r.doc));
     doc.status = "closed"; doc.closed_at = isoAt(at); doc.topic = topic;
+    doc.waiting_on_you = [];
+    if (dropped.length) doc.dropped_questions = [...(Array.isArray(doc.dropped_questions) ? doc.dropped_questions : []), ...dropped];
     // debrief-on-archive U1: the Lead's final debrief, else the done-time one under a line naming what it misses.
     const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r)?.state === "written");
     doc.debrief = final.debrief; doc.debrief_source = final.source;
@@ -198,8 +216,16 @@ async function archive(a: Action, x: Exec, r: Row): Promise<Result> {
     try { for (const f of readdirSync(dir)) if (f.startsWith(`${topic}-`) && (f.endsWith("-plan.md") || f.endsWith("-plan.approved.md"))) renameSync(join(dir, f), join(arch, f)); } catch { /* no plans */ }
   }
   try { rmSync(live, { force: true }); } catch { /* already gone */ }
-  store.fact("wish_done", [{ table: "squads", key: { id }, set: { status: "closed", want_result: "done: archived", updated_at: at } }],
-    { project, squad: topic, payload: { subject: "squad", id, want: "gone", result: "archived" } });
+  // The row's doc loses its queue in the same write, so a later questions.sync (an import, squad-state)
+  // never brings the dropped questions back as new open rows.
+  const rowDoc = r.doc == null ? null : (() => { try { return JSON.parse(String(r.doc)) as Row; } catch { return null; } })();
+  const set: Row = { status: "closed", want_result: "done: archived", updated_at: at };
+  if (rowDoc && Array.isArray(rowDoc.waiting_on_you) && rowDoc.waiting_on_you.length) set.doc = JSON.stringify({ ...rowDoc, waiting_on_you: [] });
+  store.tx(() => {
+    questions.drop(store, project, topic, DROP_WHY);
+    store.fact("wish_done", [{ table: "squads", key: { id }, set }],
+      { project, squad: topic, payload: { subject: "squad", id, want: "gone", result: "archived", ...(dropped.length ? { dropped_questions: dropped.length } : {}) } });
+  });
   return { done: true, result: "archived" };
 }
 

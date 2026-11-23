@@ -63,7 +63,7 @@ One brief per date: the loop never sends a second, so take your time and do it o
 
 1. Run the command from the line: `bin/ds briefing-input <label> --date <date>`. It prints the
    facts for the window since the last brief, and the same-length window before it ("the day
-   before"), in brief order: needs you (each item `new` or `waiting <age>`), progress per squad
+   before"), in brief order: needs you (the board's own Needs-you list, headed `Needs you: N` with the board's count; each item `new` or `waiting <age>`), progress per squad
    (% done at the window's start and now), squad PRs merged with their titles (squad PRs only, not the repo total),
    one "Elsewhere in <repo>" block per repo (the merged PRs that are not a squad's, grouped by
    scope), PRs opened and stuck, squads started, your decisions, quiet squads, finished squads
@@ -96,6 +96,8 @@ A fact you cannot find stays out.
 
 ## Needs you
 - <new items first, one plain sentence each; then one "Still waiting: …" bullet>; else "Nothing."
+
+Needs you is the board's Needs-you list and nothing else: state its count as given and never add an item the facts do not list. The `Loop notes (no answer needed; …)` line is not a request: say it at most once, as a plain remark ("13 Stop command failed notes on the board"), never as something to answer or act on. A line marked `(not counted above)` is a side note, not an ask.
 
 ## What happened
 - **<squad>** 91% → 93%
