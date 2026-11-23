@@ -421,5 +421,19 @@ S10="$TMP/sq10.json"; printf '%s' "$EMPTY" > "$S10"
 eq "a mirrored picker question naming a PR enqueues" "$?" "0"
 eq "... with no pr stored"                 "$(jq -r '.waiting_on_you[0] | has("pr")' "$S10")" "false"
 
+# Off Orca (U11b): a member of a squad on a contract backend, with no BACKEND set, asks through
+# bin/backend/contract.sh: on the board with its local:: worktree, exit 0, and nothing reaches Orca (an `orca`
+# stub on PATH and as the Orca CLI dir logs every call). tests/loop/role-scripts-contract.test.ts covers the rest.
+mkdir -p "$TMP/obin" "$TMP/owt"; : > "$TMP/olog"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/olog"; exit 1\n' "$TMP" > "$TMP/obin/orca"; chmod +x "$TMP/obin/orca"
+S11="$TMP/sq11.json"; printf '%s' "$EMPTY" > "$S11"
+out="$(cd "$TMP/owt" && env -u BACKEND PATH="$TMP/obin:$PATH" DS_ORCA_CLI_BIN_DIR="$TMP/obin" DS_BACKEND=tmux DS_WT="$TMP/owt" \
+  "$A" "$S11" off-1 thinker true --title "Ship it" --question "Ship u1?" --option A a --option B b --recommend 1 --why w 2>&1)"
+eq "off Orca: asks through the contract adapter"  "$?" "0"
+eq "... is on the board"                   "$(printf '%s' "$out" | grep -c '^ON BOARD: off-1 (blocking)')" "1"
+eq "... and pinged (nothing to ping)"      "$(printf '%s' "$out" | grep -c 'NOT pinged')" "0"
+eq "... with its local:: worktree"         "$(jq -r '.waiting_on_you[0].card_wt' "$S11")" "local::$TMP/owt"
+eq "... and no Orca call"                  "$(wc -c < "$TMP/olog" | tr -d ' ')" "0"
+
 echo "ask-operator: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

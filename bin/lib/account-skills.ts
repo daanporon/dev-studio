@@ -4,7 +4,7 @@
 // Kept apart from lib.ts so the hook ports that import lib.ts don't load it.
 import { readFileSync, readlinkSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { backendPath, readIfs, run, shq, writeErr, writeOut } from "./shared";
+import { hostBackendPath, readIfs, run, shq, writeErr, writeOut } from "./shared";
 import { accountOwner, canon, exists, isDir, isFile, isLink } from "./install";
 
 /** The skills the roles invoke (roles/*.md). ONE list: the check reads it, and tests/install-ce-accounts.sh
@@ -191,7 +191,7 @@ async function adapterOut(adapter: string, args: string[]): Promise<{ ok: boolea
  *  skills ok (<path>)` or a ⚠ block; with tsv `<account>\t<ok|broken|warn>\t<reason>` per account). Accounts
  *  come from the backend's account-list with their claude-config-dir (empty = ~/.claude); backend unreachable or
  *  no Claude account -> the current env only (`claude`, account `current` in tsv). Returns 1 when any is broken. */
-export async function accountSkillsCheck(adapter: string = backendPath(), tsv = false, io: Sink = stdio): Promise<number> {
+export async function accountSkillsCheck(adapter: string = hostBackendPath(), tsv = false, io: Sink = stdio): Promise<number> {
   let accts: string[] = [];
   if ((await run([adapter, "status"])).rc === 0) {
     const list = (await run([adapter, "account-list"])).out;

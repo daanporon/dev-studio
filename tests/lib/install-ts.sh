@@ -11,5 +11,5 @@ install_ts_copy() {
   cp "$src/bin/ds" "$src/bin/ds.ts" "$dest/bin/"
   cp "$src/bin/commands/install-ts.ts" "$src/bin/commands/install-skills-ts.ts" "$src/bin/commands/wrap-hooks-ts.ts" "$dest/bin/commands/"
   cp "$src/bin/lib/shared.ts" "$src/bin/lib/install.ts" "$src/bin/lib/account-skills.ts" "$dest/bin/lib/"
-  cp "$src/bin/loop/core/whoami.ts" "$dest/bin/loop/core/"   # shared.ts imports it
+  cp "$src/bin/lib/contract-here.ts" "$dest/bin/lib/"; cp "$src/bin/loop/core/whoami.ts" "$dest/bin/loop/core/"   # shared.ts imports them
 }
