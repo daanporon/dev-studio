@@ -41,7 +41,8 @@
 //   - worktrees (U8b): wt-make makes a real git worktree under `wtRoot`/<repo folder>/<name> as Orca does
 //     (an existing branch or taken folder gets `-2`, the parent is recorded), wt-show finds one by
 //     `path:` or `id:` (exit 3 when none), wt-list lists the repo's worktrees but those in `unlisted`
-//     (Orca lost them), and worktree-rm of a known one removes its folder and keeps its branch
+//     (Orca lost them), and worktree-rm of a known one removes its folder and keeps its branch (an unknown
+//     one is selector_not_found once `wtRoot` is set; before, any worktree-rm is ok)
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { git } from "../io/worktrees.ts";
@@ -307,7 +308,7 @@ export class FakeBackend implements Orca {
         return ok([...this.wts.values()].filter((w) => w.repo === args[0] && !this.unlisted.has(w.path)).map((w) => `${this.wtLine(w)}\n`).join(""));
       case "worktree-rm": {   // <selector> [force]
         const w = this.wtAt(args[0]);
-        if (!w) return ok();
+        if (!w) return this.wtRoot ? no(`{"ok":false,"error":{"code":"selector_not_found"}}`) : ok();   // as Orca, once worktrees are modelled
         const rm = await git(["-C", w.repo, "worktree", "remove", "--force", w.path]);
         if (rm.code !== 0 && existsSync(w.path)) return no(rm.err);
         await git(["-C", w.repo, "worktree", "prune"]);

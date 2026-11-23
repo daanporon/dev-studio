@@ -99,14 +99,26 @@ describe("create", () => {
     expect(fake.of("wt-make")).toHaveLength(0);
   });
 
-  test("a worktree Orca made under another path or branch is removed again and refused", async () => {
+  test("a worktree Orca made under another path is removed again with its new branch, so a retry is not refused", async () => {
+    const r = await rig();
+    const realRoot = fake.wtRoot;
+    fake.wtRoot = join(realRoot, "elsewhere");   // Orca's folder for the repo is not the one the provider expects
+    await expect(createWorktree(r.s, "orca", spec(r, "a1"), 1000)).rejects.toThrow(/Orca made .*elsewhere.* on 'feat\/a1'.*; removed it again$/);
+    expect(fake.of("worktree-rm")).toHaveLength(1);
+    expect(fake.wts.size).toBe(0);
+    expect(await branches(r)).toEqual(["main"]);
+    fake.wtRoot = realRoot;
+    expect(row(r, pathOf("a1"))?.gone_at).toBe(1000);
+    expect((await createWorktree(r.s, "orca", spec(r, "a1"), 2000)).row).toMatchObject({ gone_at: null, branch: "feat/a1" });
+  });
+
+  test("a mismatched worktree Orca would not remove is named in the refusal", async () => {
     const r = await rig();
     fake.answer = (c) => c.op === "wt-make"
       ? { code: 0, out: `${JSON.stringify({ id: "R::/elsewhere/a1-2", path: "/elsewhere/a1-2", branch: "refs/heads/feat/a1-2", head: null, parentWorktreeId: null })}\n`, err: "" }
       : undefined;
-    await expect(createWorktree(r.s, "orca", spec(r, "a1"), 1000)).rejects.toThrow(/Orca made \/elsewhere\/a1-2 on 'feat\/a1-2'.*removed it again/);
+    await expect(createWorktree(r.s, "orca", spec(r, "a1"), 1000)).rejects.toThrow(/Orca made \/elsewhere\/a1-2 on 'feat\/a1-2'.*removing it failed: .*selector_not_found/);
     expect(fake.of("worktree-rm").map((c) => c.args)).toEqual([["id:R::/elsewhere/a1-2", "force"]]);
-    expect(row(r, pathOf("a1"))?.gone_at).toBe(1000);
   });
 
   test("refuses a folder at the path that Orca does not know", async () => {
@@ -130,6 +142,17 @@ describe("remove", () => {
     expect(fake.wts.size).toBe(0);
     expect(await branches(r)).toEqual(["feat/a1", "main"]);
     expect(out.row.gone_at).toBe(2000);
+  });
+
+  test("an id Orca no longer knows falls back to the path", async () => {
+    const r = await rig();
+    await createWorktree(r.s, "orca", spec(r, "a1"), 1000);
+    const path = pathOf("a1");
+    fake.wts.get(path)!.id = `R2::${path}`;   // the row's orca_id is stale
+    const out = await removeWorktree(r.s, path, {}, 2000);
+    expect(fake.of("worktree-rm").map((c) => c.args)).toEqual([[`id:R::${path}`, "force"], [`path:${path}`, "force"]]);
+    expect(out.gone.removed).toBe(true);
+    expect(existsSync(path)).toBe(false);
   });
 
   test("a merged branch is deleted with deleteBranch", async () => {

@@ -6,7 +6,8 @@
 //   create   a worktree Orca shows at the path on the branch is adopted (its id recorded); one on another
 //            branch, a folder Orca does not know, a branch checked out elsewhere or a branch that already
 //            exists is refused (Orca would make `<branch>-2`). Else `wt-make` nested under the parent (or
-//            top-level), and a worktree Orca made under another path or branch is removed again and refused.
+//            top-level), and a worktree Orca made under another path or branch is removed again (its new branch
+//            too) and refused.
 //   remove   refuses a tree with changes other than dev-studio's own files unless forced, then
 //            `worktree-rm --force` by its Orca id (by path when Orca no longer knows the id). Orca keeps the
 //            branch; it is deleted only with deleteBranch when merged into the base, as the git provider does.
@@ -87,8 +88,11 @@ const provider: Provider = {
     const made = parse(o)[0];
     if (!made) throw new WorktreeError(`orca: worktree create ${spec.name} answered no worktree`);
     if (made.path !== path || made.branch !== spec.branch) {
-      await run("worktree-rm", [`id:${made.id}`, "force"]);
-      throw new WorktreeError(`orca: Orca made ${made.path} on '${made.branch}', not ${path} on '${spec.branch}'; removed it again`);
+      // Undo it, its new branch too (Orca keeps a branch on removal), so a retry is not refused for that branch.
+      const rm = await run("worktree-rm", [`id:${made.id}`, "force"]);
+      const undone = rm.code === 0 && made.branch ? await keepOrDrop(spec.repo, made.branch, { deleteBranch: true, base: spec.base }) : null;
+      const what = rm.code !== 0 ? `removing it failed: ${lastLine(rm)}` : undone === "kept" ? `removed it again, branch '${made.branch}' kept` : "removed it again";
+      throw new WorktreeError(`orca: Orca made ${made.path} on '${made.branch}', not ${path} on '${spec.branch}'; ${what}`);
     }
     return { path, branch: spec.branch, adopted: false, orca_id: made.id };
   },
