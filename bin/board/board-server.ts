@@ -69,7 +69,7 @@
 //                 model/account "until done", or back to auto
 // Everything else is 404, so no state file is ever reachable.
 import { createHash } from "node:crypto";
-import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
@@ -122,13 +122,17 @@ const intParam = (q: URLSearchParams, k: string) => (/^\d+$/.test(q.get(k) ?? ""
 // One line of operator text, safe to type into a terminal: no newlines, no control characters.
 const oneLine = (v: unknown) => typeof v === "string" ? v.replace(/\s*[\r\n]+\s*/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim() : "";
 
+// sameOrigin: the request's Origin names this board's own Host (a missing or bad Origin is not).
+function sameOrigin(req: Request): boolean {
+  const origin = req.headers.get("Origin");
+  let oh = "";
+  try { oh = origin ? new URL(origin).host.toLowerCase() : ""; } catch { /* bad Origin: refused */ }
+  return !!oh && oh === (req.headers.get("Host") || "").toLowerCase();
+}
 // readPost: the CSRF checks every POST shares — only this board's own page may post: same-origin,
 // and JSON (a plain form can't send that). Returns the parsed body, or the refusal to send back.
 async function readPost(req: Request): Promise<{ b: any } | { r: Response }> {
-  const origin = req.headers.get("Origin");
-  let oh = "";
-  try { oh = origin ? new URL(origin).host.toLowerCase() : ""; } catch { /* bad Origin: refused below */ }
-  if (!oh || oh !== (req.headers.get("Host") || "").toLowerCase()) return { r: text(403, "forbidden origin\n") };
+  if (!sameOrigin(req)) return { r: text(403, "forbidden origin\n") };
   if (!(req.headers.get("Content-Type") || "").toLowerCase().startsWith("application/json")) return { r: text(415, "want application/json\n") };
   if (Number(req.headers.get("Content-Length") || 0) > MAX_BODY) return { r: text(413, "too large\n") };
   try {
@@ -417,10 +421,7 @@ function chatPrune(project: string): number {
 // POST /api/chat-file?project=&topic=&wt=, body = the image's bytes. The checks run in this order and the
 // body is read only after the header ones pass; a refused upload writes no file.
 async function chatFilePost(req: Request, url: URL) {
-  const origin = req.headers.get("Origin");
-  let oh = "";
-  try { oh = origin ? new URL(origin).host.toLowerCase() : ""; } catch { /* refused below */ }
-  if (!oh || oh !== (req.headers.get("Host") || "").toLowerCase()) return text(403, "forbidden origin\n");
+  if (!sameOrigin(req)) return text(403, "forbidden origin\n");
   const ext = CHAT_TYPES[(req.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase()];
   if (!ext) return json(415, { error: "want image/png, image/jpeg, image/webp or image/gif" });
   const q = url.searchParams, t = chatTarget(q.get("project"), q.get("topic"), q.get("wt"));
@@ -471,9 +472,7 @@ function chatFileGet(url: URL) {
     fd = openSync(p, fsc.O_RDONLY | fsc.O_NOFOLLOW);
     const st = fstatSync(fd);
     if (!st.isFile() || st.size > CHAT_FILE_MAX) return text(404, "image removed\n");
-    const buf = Buffer.alloc(st.size);
-    for (let off = 0; off < st.size;) { const n = readSync(fd, buf, off, st.size - off, off); if (!n) break; off += n; }
-    return new Response(buf, { status: 200, headers: {
+    return new Response(readFileSync(fd), { status: 200, headers: {
       "Content-Type": CHAT_EXT_TYPE[name.split(".")[1]], "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline",
       "Content-Security-Policy": "default-src 'none'; img-src 'self'", "Cache-Control": "private, max-age=86400" } });
   } catch { return text(404, "image removed\n"); }
