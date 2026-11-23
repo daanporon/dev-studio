@@ -900,6 +900,13 @@ eq "request: the brief is in its file, newlines kept" "$(for f in "$DBR/$LBL"/fr
 eq "request: two starts, two files"  "$(find "$RD" -name 'board-start-*.txt' | wc -l | tr -d ' ')" "2"
 has "request: other squad's file"    "$(cat "$RD"/board-close-ans-2-*.txt 2>/dev/null)" "/ds-close-squad ans-2"
 rm -f "$RD"/board-close-ans-2-*.txt "$RD/board-close-ans-$C1.txt"
+# U9: the Start dialog's backend reaches /ds-start-squad as --backend; an unknown one is 400.
+rm -f "$RD"/board-start-*.txt
+eq "request: start on a backend"     "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"on tmux\",\"backend\":\"tmux\"}")" "202"
+eq "request: unknown backend is 400" "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"x\",\"backend\":\"screen\"}")" "400"
+ff
+has "request: start passes backend"  "$(cat "$RD"/board-start-*.txt 2>/dev/null)" "/ds-start-squad --repo $LBL --backend tmux --framing-file $DBR/$LBL/framings/board-start-"
+rm -f "$RD"/board-start-*.txt
 DS_STATE_ROOT="$DBR" bun -e 'import { open } from "'"$ROOT"'/bin/loop/core/store.ts"; import { doneRequests } from "'"$ROOT"'/bin/loop/db/import-json.ts"; const s = open(); doneRequests(s, s.root, process.argv[1]); s.close();' "$LBL"
 eq "request: done once the Studio removed the file" "$(req "{\"project\":\"$LBL\",\"action\":\"close\",\"topic\":\"ans\"}")" "202"
 eq "request: start without brief"    "$(req "{\"project\":\"$LBL\",\"action\":\"start\"}")" "400"

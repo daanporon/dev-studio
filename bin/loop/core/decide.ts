@@ -33,7 +33,7 @@ import { graceS } from "../capacity/slot.ts";
 import { crashCapped, lastStart, lastStopSent, lock, startEpisode, view, walkedGone, type View } from "../squad/member-state.ts";
 import { effective, memberKey, intents, quote, type Target } from "../pause/pause.ts";
 import { resumeGate } from "../reconcilers/pause-resume.ts";
-import { knob, limit, stepOpen } from "../reconcilers/liveness.ts";
+import { knob, limit, stepOpen, turnEnded } from "../reconcilers/liveness.ts";
 import { closeBusy } from "../squad/close-busy.ts";
 import { limitStuck, switchFacts, toldAlready, type Switch } from "../capacity/switches.ts";
 import { TELL, worksAgain } from "../squad/handoff.ts";
@@ -288,7 +288,8 @@ function stopFacts(store: Store, m: Row, now: number): Pick<Facts, "stopDue" | "
   const out = Number(w.last_output_at ?? 0), hungMin = knob(store, String(m.project), "HUNG_MIN", 30);
   const lastRestart = Number(store.get("episodes", { project: m.project, subject: `member:${m.id}`, kind: "restarted" })?.started_at ?? 0);
   if (w.state === "working" && out > 0 && now - out >= hungMin * 60 && !(now - lastRestart < knob(store, String(m.project), "REBREAK_MIN", 30) * 60 && lastRestart > 0)
-    && !/What do you want to do\?/.test(String(w.tail ?? "")) && !(stepOpen(store, String(m.wt)) && now - out < (Number(limit(store, String(m.project), "long_step_min") ?? 60) || 60) * 60 + hungMin * 60))
+    && !/What do you want to do\?/.test(String(w.tail ?? "")) && !(stepOpen(store, String(m.wt)) && now - out < (Number(limit(store, String(m.project), "long_step_min") ?? 60) || 60) * 60 + hungMin * 60)
+    && !turnEnded(store, String(m.wt)))
     return { stopDue: "now", stopWhy: "hung", idleOK };
   const rssGb = limit(store, String(m.project), "restart_rss_gb");
   const gb = rssGb && rssGb !== "-" ? Number(rssGb) : NaN;
