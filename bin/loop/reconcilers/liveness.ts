@@ -90,6 +90,7 @@ import { INTERRUPTED } from "../chat/turns.ts";
 import { wake } from "../pause/wake.ts";
 import { settledDispatch } from "./members.ts";
 import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioView } from "../squad/studio.ts";
+import { memo } from "../capacity/walk-memo.ts";
 
 export const POKE_TEXT = "dev-studio loop: you went quiet with unread messages. Check your inbox now and carry on with your work.";
 export const QUIET_POKE_TEXT = "dev-studio loop: you have been working with no output for a while — are you stuck? If you are, ask your Lead; if not, carry on with your work.";
@@ -278,9 +279,13 @@ export function linesEnded(lines: string[]): boolean {
 
 // One parse of the newest transcript's last MB: is a foreground tool call open, which background tasks it
 // started have not reported done (oldest first, with the command each ran), and did its last turn end
-// (`linesEnded`). null with no transcript row.
+// (`linesEnded`). null with no transcript row. One decide parses each worktree's transcript once (walk-memo.ts
+// withDecideMemo: its look() asks up to three times per member, through the switch and stop checks).
 export type OpenCalls = { foreground: boolean; background: { id: string; command: string }[]; ended: boolean };
 export function openCalls(store: Store, wt: string): OpenCalls | null {
+  return memo(store, null, "open-calls", wt, () => openCallsRead(store, wt));
+}
+function openCallsRead(store: Store, wt: string): OpenCalls | null {
   const t = store.db.query("SELECT path FROM observed_transcripts WHERE wt = ? ORDER BY mtime DESC").get(wt) as { path: string } | null;
   if (!t) return null;
   const lines = tailOf(t.path, 1024 * 1024).split("\n");
