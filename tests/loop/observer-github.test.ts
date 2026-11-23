@@ -1036,4 +1036,14 @@ describe("feedback issues", () => {
     expect(g.queries[0]).toContain("fi41: issue(number: 41)");
     expect(g.queries[0]).toContain("fi42: issue(number: 42)");
   });
+
+  test("feedback issues, project row only: the fi<N> field is in the query", async () => {
+    const s = imported();
+    seed(s, [41], null);
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "feedback_repo" }, { value: "acme/app", observed_at: T });
+    const g = withIssues(new Map([[41, issue(41, "CLOSED", "COMPLETED")]]));
+    await obs(g.run).run(ctx(s, T));
+    expect(g.queries[0]).toContain("fi41: issue(number: 41)");
+    expect(draft(s, 41).state).toBe("fixed");
+  });
 });

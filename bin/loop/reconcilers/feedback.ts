@@ -16,7 +16,8 @@ import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import { envInt } from "../core/tick.ts";
 import { limitInt } from "../settings/limits.ts";
 import { budgetOf, budgetShare, pace } from "../io/github-budget.ts";
-import { dueNotes, feedbackRepo, hostProject } from "../feedback/draft.ts";
+import { dueNotes, hostProject } from "../feedback/draft.ts";
+import { feedbackRepo } from "../feedback/post.ts";
 import { hasWords, wordsPath } from "../feedback/leak.ts";
 import { alertAction } from "./alerts.ts";
 

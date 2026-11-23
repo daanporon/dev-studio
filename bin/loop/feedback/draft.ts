@@ -1,6 +1,6 @@
 // feedback/draft.ts — what the feedback reconciler and the drafter share (ds-feedback-github-issues U2).
 //
-//   feedbackRepo(store)       the host-level `feedback_repo` (owner/name), or null while it is `-`
+//   (the repo itself comes from post.ts `feedbackRepo`, the one reader the board, drafter, observer and posts share)
 //   hostProject(store)        the project the drafter's pick and the Studio card belong to: the first
 //                             project the loop ticks (feedback is host-level; any project's board shows it)
 //   dueNotes(store, now, n)   the oldest `n` notes the drafter should see: `new`, and either never kept
@@ -17,15 +17,9 @@ import { createHash } from "node:crypto";
 import { FACTS, problem } from "../core/kinds.ts";
 import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
-import { limit } from "../settings/limits.ts";
 import { discoverProjects, loopProjects } from "../settings/projects.ts";
 import type { Leak } from "./leak.ts";
 import type { Verdict } from "./prompt.ts";
-
-export function feedbackRepo(store: Store): string | null {
-  const v = (limit(store, "", "feedback_repo") ?? "-").trim();
-  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(v) ? v : null;
-}
 
 export function hostProject(store: Store): string | null {
   return loopProjects(store.root)[0] ?? discoverProjects(store.root)[0] ?? null;
