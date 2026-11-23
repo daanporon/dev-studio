@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, openReadOnly, type Store } from "../../bin/loop/core/store.ts";
-import { collect, MAX_LINES, render, windowOf } from "../../bin/commands/briefing-input.ts";
+import { collect, MAX_LINES, planTryIt, render, tryItOf, windowOf } from "../../bin/commands/briefing-input.ts";
 
 process.env.TZ = "Europe/Berlin";
 const ROOT = join(import.meta.dir, "..", "..");
@@ -449,6 +449,21 @@ describe("Elsewhere and try it", () => {
       expect(md).toMatch(/- none \(done [^)]+\): debrief:\n(?: {2}> .*\n)* {2}try it: nothing to try — docs only/);
       expect(md).toMatch(/- bare \(done [^)]+\): debrief:\n(?: {2}> .*\n)* {2}try it: missing/);
     } finally { rmSync(w.d, { recursive: true, force: true }); }
+  });
+});
+
+// debrief-in-needs-you U2: a done squad has no debrief; its Try it is the approved plan's `## Try it`.
+describe("a done squad's Try it comes from its approved plan", () => {
+  test("planTryIt reads the newest approved plan's section", () => {
+    const d = mkdtempSync(join(tmpdir(), "ds-briefing-plan-"));
+    try {
+      const plan = join(d, "x-plan.md");
+      writeFileSync(plan, "## Try it\n1. stale\n");
+      writeFileSync(join(d, "x-plan.approved.md"), "# Plan\n## Try it (after merge)\n1. one\n2. two\n## Other\n3. no\n");
+      expect(tryItOf(planTryIt({ approved_plans: [plan] }))).toEqual({ kind: "steps", steps: 2 });
+      expect(tryItOf(planTryIt({ approved_plans: [] }))).toEqual({ kind: "missing" });
+      expect(planTryIt(null)).toBeNull();
+    } finally { rmSync(d, { recursive: true, force: true }); }
   });
 });
 

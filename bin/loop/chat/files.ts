@@ -12,7 +12,13 @@ export const CHAT_FILES_MAX = 4;
 // What the loop types after the text; the transcript reader looks for it to split the images off again.
 export const IMAGES_MARK = "[images attached; open each with your file-reading tool: ";
 
-export const chatFileDir = (root: string, label: string, topic: string) => join(root, label, "chat-files", topic);
+// Images sent with a squad start (chat-image-upload U4) wait in `chat-files/_start/` while the board's Start
+// squad dialog is open: there is no squad yet, and `_start` can never be a squad name (a squad name starts
+// with a letter or digit). The Studio's start copies them next to the brief (fulfil/studio.ts).
+export const START_TOPIC = "_start";
+export const START_FILES_MAX = 8;
+
+export const chatFileDir =(root: string, label: string, topic: string) => join(root, label, "chat-files", topic);
 
 // null for a name that fails the rule, so `..`, a slash or an uppercase name never reaches the disk.
 export function chatFilePath(root: string, label: string, topic: string, name: string): string | null {
