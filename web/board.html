@@ -2037,9 +2037,11 @@ function chatTools(t) {
   const s = [...by.values()].map(({ v, name, n }) => v ? v[0] + " " + n + " " + v[1] + (n === 1 ? "" : "s") : "used " + name + (n > 1 ? " " + n + "×" : "")).join(", ");
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
-// The rows, oldest first: the turns, a date line where the day changes, then each send that is not yet an
+// The rows, oldest first: the turns, a date line where the day changes, and each send that is not yet an
 // operator turn (matched by text, each turn once, never one older than the send), unless it is older
-// than the whole window (it scrolled out with its turn).
+// than the whole window (it scrolled out with its turn). A delivered send (sent, turn started, not taken)
+// sits among the turns at its typed time (done_at), before the first later turn; a queued or failed one,
+// or one typed after the newest turn, sits at the bottom.
 function chatRows(turns, sends) {
   const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim(), used = new Set(), rows = [];
   // Newest send first, each taking the newest unclaimed operator turn with its text at or after it, so a
@@ -2054,14 +2056,24 @@ function chatRows(turns, sends) {
     }
     if (i >= 0) used.add(i); else left.add(x);
   }
-  const pending = sends.filter((x) => left.has(x));
   const oldest = turns.find((t) => t.at != null)?.at;
+  const pending = sends.filter((x) => left.has(x)).filter((x) => x.state === "queued" || oldest == null || x.at == null || x.at >= oldest);
+  // A delivered send (sent, turn started, not taken) with no operator turn goes in at the time the loop typed it
+  // (done_at), before the first turn whose time is later; queued and failed ones, and any with no such time, stay at the bottom.
+  const placed = pending.filter((x) => (x.state === "sent" || x.state === "turn started" || x.state === "not taken") && x.done_at != null)
+    .sort((p, q) => p.done_at - q.done_at);
+  const rest = pending.filter((x) => !placed.includes(x));
   let day = "";
+  const dayLine = (at) => { if (chatDay(at) !== day) { if (day) rows.push({ day: chatDay(at) }); day = chatDay(at); } };
   for (const t of turns) {
-    if (t.at != null && chatDay(t.at) !== day) { if (day) rows.push({ day: chatDay(t.at) }); day = chatDay(t.at); }
+    if (t.at != null) {
+      while (placed.length && placed[0].done_at < t.at) { const x = placed.shift(); dayLine(x.done_at); rows.push({ send: x }); }
+      dayLine(t.at);
+    }
     rows.push({ turn: t });
   }
-  for (const x of pending) if (x.state === "queued" || oldest == null || x.at == null || x.at >= oldest) rows.push({ send: x });
+  for (const x of placed) rows.push({ send: x });
+  for (const x of rest) rows.push({ send: x });
   return rows;
 }
 function chatTurn(r, source, i) {

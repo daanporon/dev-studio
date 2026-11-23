@@ -181,6 +181,21 @@ test("each send not yet in the transcript shows at the bottom where it is: queue
   expect(textOf(rows[4])).toContain("never ready: working");
 });
 
+test("chat-missing-replies U2: a delivered send with no operator turn sits among the turns at its typed time (done_at), queued and failed at the bottom", () => {
+  const p = panel();
+  p.render();
+  const turns = [{ role: "assistant", text: "before", at: T - 60 }, { role: "assistant", text: "after", at: T + 300 }];
+  const sends = [{ id: 1, text: "lost question", at: T - 30, done_at: T, state: "turn started", why: null },
+    { id: 2, text: "waiting", at: T + 10, done_at: null, state: "queued", why: "busy" },
+    { id: 3, text: "broken", at: T + 20, done_at: null, state: "failed", why: "never ready" },
+    { id: 4, text: "typed late", at: T + 400, done_at: T + 500, state: "sent", why: null }];
+  p.setData({ agent: "claude", source: "transcript", turns, sends });
+  const rows = rowsOf(p.render());
+  expect(rows.map((r) => (textOf(r).match(/before|lost question|after|waiting|broken|typed late/) || [])[0])).toEqual(["before", "lost question", "after", "typed late", "waiting", "broken"]);
+  expect(textOf(rows[1])).toContain("turn started");
+  expect(p.mod.chatRows(turns, sends.slice(0, 1)).map((r: any) => r.day ? "day" : r.send ? "send" : "turn")).toEqual(["turn", "send", "turn"]);
+});
+
 test("crew-terminal-access U5: a send is shown once: pending at the bottom, then as its timed operator turn", () => {
   const p = panel();
   p.render();
