@@ -1326,6 +1326,8 @@ OLDC="$(date -u -d "@$((NOWC-1200))" +%Y-%m-%dT%H:%M:%SZ)"
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-when "Review stopped" "Reviews stopped" "restart it" "" '{"kind":"out_of_credits"}' >/dev/null
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-acts "Studio limited" "Studio is limited" "move it" "" '{"kind":"out_of_credits","acts_on_answer":true}' >/dev/null
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-two "Two answers" "Pick one" "" "" '{"kind":"out_of_credits","options":["Fixed","Switch it off"]}' >/dev/null
+# studio-hung-agent-broken U2: the broken Studio's card as liveness.ts files it (no option, two answers in fields).
+"$ROOT/bin/lib/alerts.sh" "$CRA" add na-studio "Studio not responding" "studio (hung since 09:00) — the $LBL Studio (your cockpit terminal claude, term_s) has shown no output for 35 min while Orca reads it as working" "" "The loop never restarts the Studio on its own." '{"kind":"agent_broken","restart":true,"handle":"term_s","options":["Restart Studio","It'"'"'s fine"]}' >/dev/null
 jq --arg t "$OLDC" '.alerts |= map(.since = $t)' "$CRA" > "$CRA.t" && mv "$CRA.t" "$CRA"
 HOSTST="$TMP/stcr" mkdb "$LBL"; render "$LBL" --json > "$TMP/na.json"
 NA='.needs_you[] | select(.id=="%s")'
@@ -1333,6 +1335,7 @@ jt "dismiss-only: no option, no choices, no when"  "$TMP/na.json" "[${NA/\%s/na-
 jt "dismiss-only: a lone non-acting option is when" "$TMP/na.json" "[${NA/\%s/na-when}] | .[0] | .choices == [] and .when == \"restart it\" and .suggestion == null and .options == [\"restart it\"]"
 jt "dismiss-only: a lone acting option is a choice" "$TMP/na.json" "[${NA/\%s/na-acts}] | .[0] | [.choices[].label] == [\"move it\"] and .when == null and .acts_on_answer == true"
 jt "dismiss-only: two options stay choices"        "$TMP/na.json" "[${NA/\%s/na-two}] | .[0] | [.choices[].label] == [\"Fixed\",\"Switch it off\"] and .when == null"
+jt "studio-hung-agent-broken U2: the Studio card in Needs-you offers Restart Studio and It's fine" "$TMP/na.json" "[${NA/\%s/na-studio}] | .[0] | .title == \"Studio not responding\" and ([.choices[].label] == [\"Restart Studio\",\"It's fine\"]) and .when == null"
 rm -f "$CRA"
 
 S2='.squads[] | select(.topic=="ov-sq")'

@@ -104,8 +104,26 @@ describe("step 2: dead", () => {
     t.world.delete(STUDIO);
     await t.tick(T);
     await t.tick(T + MIN);
-    expect(t.alerts().map((a) => [t.text(a), (a.payload as Row).to])).toEqual([[expect.stringMatching(/^studio \(dead since .*\) — nobody above it can restart it$/), "@project"]]);
+    // studio-hung-agent-broken U2: the Studio's own card; with no adopted handle there is nothing to restart through.
+    expect(t.alerts().map((a) => [t.text(a), (a.payload as Row).to])).toEqual([[expect.stringMatching(/^studio \(dead since .*\) — the fx Studio \(your cockpit terminal; the loop has adopted none\) is no longer listed by Orca$/), "@project"]]);
+    expect(t.alerts()[0]!.payload).toMatchObject({ title: "Studio not responding", card: "agent_broken", option: "look at it, then restart it by hand", why: "The loop never restarts the Studio on its own." });
+    expect((t.alerts()[0]!.payload as Row).fields).toBeUndefined();
     expect(t.acted.filter((a) => a.kind === "request.file")).toEqual([]);
+  });
+
+  test("studio-hung-agent-broken U2: a hung Studio with an adopted handle: Studio not responding, Restart Studio / It's fine, the terminal named", async () => {
+    const t = setup();
+    t.s.db.run("INSERT INTO members (project, squad, role, suffix, wt, handle, agent, observed_at, updated_at) VALUES ('fx', '_studio', 'studio', '', ?, 'term_s', 'claude', ?, ?)", [STUDIO, T, T]);
+    t.world.set(STUDIO, { state: "working", out: T - 35 * MIN, terminals: ["term_s"] });
+    t.s.upsert("observed_terminals", { project: "fx", handle: "term_s" }, { wt: STUDIO, title: "fx studio", observed_at: T, gone_at: null });
+    await t.tick(T);
+    await t.tick(T + MIN);
+    const cards = t.alerts().filter((a) => a.subject === "_studio");
+    expect(cards).toHaveLength(1);
+    expect(t.text(cards[0]!)).toMatch(/^studio \(hung since \d\d:\d\d\) — the fx Studio \(your cockpit terminal fx studio, term_s\) has shown no output for 3[56] min while Orca reads it as working$/);
+    expect(cards[0]!.payload).toMatchObject({ title: "Studio not responding", card: "agent_broken", option: "", to: "@project", why: "The loop never restarts the Studio on its own.",
+      fields: { restart: true, handle: "term_s", options: ["Restart Studio", "It's fine"] } });
+    expect(t.acted.filter((a) => a.kind === "studio-move" || a.kind === "request.file")).toEqual([]);
   });
 
   test("Lead + Studio GONE: only the Studio's alert", async () => {
@@ -520,6 +538,23 @@ describe("not responding: the unread clock", () => {
     }
     expect(t.pokes().length).toBe(2);
     expect(t.reqs("_studio").map(t.text)).toEqual([expect.stringContaining("not responding since")]);
+  });
+
+  test("studio-hung-agent-broken U2: the same Lead with the Studio gone: its card to the operator keeps today's text, no Restart Studio", async () => {
+    const t = setup();
+    t.world.delete(STUDIO);
+    t.world.set(LEAD, { state: "idle", unread: 1 });
+    await t.tick(T);
+    for (const m of [10, 15, 20]) {
+      t.world.set(LEAD, { state: "idle", unread: 1 });
+      await t.tick(T + m * MIN);
+      t.world.set(LEAD, { state: "working", out: T + (m + 1) * MIN, unread: 1 });
+      await t.tick(T + (m + 1) * MIN);
+    }
+    const lead = t.alerts().filter((a) => a.subject === "demo.lead");
+    expect(lead.map(t.text)).toEqual([expect.stringMatching(/^lead of demo \(not responding since \d\d:\d\d\) — nobody above it can restart it$/)]);
+    expect(lead[0]!.payload).toMatchObject({ title: "Agent broken", option: "look at it, then restart it by hand (restart-role.sh)" });
+    expect((lead[0]!.payload as Row).fields).toBeUndefined();
   });
 
   test("a turn that reads some of the mail starts a new episode", async () => {

@@ -17,6 +17,12 @@ import type { Row, Store } from "../core/store.ts";
 export const STUDIO_SQUAD = "_studio";
 // U264: the subject of a Studio move's episodes and cards (reconcilers/limits.ts, fulfil/studio.ts).
 export const MOVE = "studio.move";
+// studio-hung-agent-broken U2: the broken Studio's card (reconcilers/liveness.ts) and its answers. "Restart Studio"
+// records RESTART_APPROVED (fulfil/studio.ts dismiss), which reconcilers/studio.ts turns into one studio-move, why "restart".
+export const STUDIO_CARD_TITLE = "Studio not responding";
+export const RESTART_STUDIO = "Restart Studio";
+export const STUDIO_FINE = "It's fine";
+export const RESTART_APPROVED = "studio:restart-approved";
 
 export type StudioTerm = { handle: string; title: string | null; identity: string | null };
 export type StudioView = { wt: string; agent: string; member: Row | null; terms: StudioTerm[]; candidates: StudioTerm[]; recorded: string | null };
