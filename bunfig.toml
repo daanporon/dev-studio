@@ -3,4 +3,5 @@
 [test]
 timeout = 30000
 # Tests never scan the host's real session logs: DS_TOKEN_DIR defaults to an empty temp dir (KTD4).
-preload = ["./tests/loop/preload-token-dir.ts"]
+# A fresh test store copies a migrated template loop.db instead of replaying every migration (squad-cpu-usage U3).
+preload = ["./tests/loop/preload-token-dir.ts", "./tests/loop/preload-db-template.ts"]
