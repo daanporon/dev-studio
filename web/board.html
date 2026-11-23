@@ -1923,7 +1923,7 @@ function LoopNotes({ notes, open, setOpen, sq, setSq, toast, onShow }) {
   };
   return html`<div class="lnbox">
     <div class="lnrow" onClick=${() => setOpen(!open)}><span>${open ? "▾" : "▸"} ${notes.length} loop note${notes.length === 1 ? "" : "s"}</span>
-      <span class="hint">things the loop is watching; they clear themselves</span><span class="sp"></span>
+      <span class="hint">things the loop is watching; most clear themselves, the rest after a day</span><span class="sp"></span>
       ${open && squads.length > 1 && html`<select class="sm" value=${sq} onClick=${(e) => e.stopPropagation()} onChange=${(e) => setSq(e.target.value)}>
         <option value="all">all squads</option>${squads.map((s) => html`<option key=${s} value=${s}>${s}</option>`)}</select>`}
       ${open && html`<button class="btn sm" disabled=${busy || shown.length === 0} onClick=${(e) => { e.stopPropagation(); dismiss(shown); }}>Dismiss all</button>`}</div>
@@ -3541,7 +3541,7 @@ function App() {
     ${data.needs_you.length > 0 && html`<div class="qlist">${data.needs_you.map((n) => {
       // U10: every Needs-you item is one block shape: who · age and the buttons, the title, the text.
       const brief = /^brief-/.test(n.id || "");
-      const debrief = /^sweep-debrief-/.test(n.id || ""); // debrief-on-archive U2: the archived squad's final debrief
+      const debrief = !!n.debrief; // debrief-on-archive U2: the archived squad's final debrief
       const studioCard = n.squad === "_studio" && !brief && !debrief;
       const doneRow = n.kind === "done";
       const sent = n.id && sentQ.has(nkey(n));
@@ -3559,7 +3559,7 @@ function App() {
         catch (e) { say("not dismissed: " + (e.message || e)); return; }
         qbump((x) => x + 1);
       };
-      const dTopic = debrief ? String(n.title || "").replace(/^Debrief:\s*/, "") : "";
+      const dTopic = debrief ? n.debrief : "";
       const openDebrief = () => { // the topic comes from the card's title; the text is the archived doc's debrief
         const a = (data.archived || []).find((x) => x.topic === dTopic && (!n.label || x.label === n.label || x.label == null));
         setPlan({ name: dTopic + " — debrief", markdown: a && a.debrief ? a.debrief : "No debrief was written." });
