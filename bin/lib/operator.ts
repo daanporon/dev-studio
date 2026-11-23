@@ -158,6 +158,12 @@ export function limitValueProblem(key: string, val: string): string {
     case "feedback_draft_batch":
       if (!/^\d+$/.test(val) || Number(val) < 1 || Number(val) > 100) return `feedback_draft_batch must be a whole number from 1 to 100 (got '${val}')`;
       break;
+    case "tick_alarm_ms":
+      if (!/^\d+$/.test(val)) return `tick_alarm_ms must be a non-negative integer of ms, 0 = off (got '${val}')`;
+      break;
+    case "tick_alarm_windows":
+      if (!/^\d+$/.test(val) || Number(val) < 1 || Number(val) > 20) return `tick_alarm_windows must be a whole number from 1 to 20 (got '${val}')`;
+      break;
     case "briefing_merges_lag_min":
       if (!/^\d+$/.test(val) || Number(val) > 120) return `briefing_merges_lag_min must be whole minutes from 0 to 120 (got '${val}')`;
       break;
