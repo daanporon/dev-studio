@@ -16,7 +16,7 @@
 -- columns ever leave the host. `leak` is the word-list check's last verdict on title + body.
 CREATE TABLE feedback_drafts (
   id          INTEGER PRIMARY KEY,
-  key         TEXT NOT NULL UNIQUE,     -- the drafter's idempotency key; also the `ds-key:` line of the body
+  key         TEXT NOT NULL UNIQUE,     -- the drafter's idempotency key; also the hidden `<!-- ds-key:<key> -->` line of the body
   kind        TEXT NOT NULL CHECK (kind IN ('issue', 'add-to')),
   title       TEXT,                     -- NULL for an add-to comment
   body        TEXT NOT NULL,
