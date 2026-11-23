@@ -21,7 +21,7 @@
 // watch tick shows under CREW CHAT: (bin/commands/watch-ts.ts) — a log line, never mail, so nothing wakes it.
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
-import { failRequest, finishRequest, memberAt, type Fulfiller } from "../core/actuator.ts";
+import { failRequest, finishRequest, memberAt, requestActions, type Fulfiller } from "../core/actuator.ts";
 import { limitInt } from "../settings/limits.ts";
 import { memberReady } from "../squad/member-ready.ts";
 import { paused } from "../pause/pause.ts";
@@ -62,13 +62,28 @@ function crewLog(store: Store, project: string, topic: string, role: string, suf
   appendFileSync(join(store.root, project, "crew-chat.md"), `- ${iso} operator → ${who}: ${Array.from(text).slice(0, 200).join("")}${images ? ` (+${images} image${images === 1 ? "" : "s"})` : ""}\n`);
 }
 
+// chat-cancel / chat-now (U4): act on the named chat request of the same project. A chat already done (typed,
+// failed or cancelled) is left alone; the control request says so in its result, and the board answers 409 first.
+function control(a: Action, store: Store, now: number): { done: true; result: string } | { failed: string } {
+  const p = payloadOf<"chat-cancel">(a), t = store.get("requests", { id: p.chat });
+  if (!t || t.kind !== "chat" || t.project !== a.project) return { failed: `no chat request ${p.chat} in ${a.project}` };
+  if (t.done_at != null) { finishRequest(store, a, { ok: true, state: "already done" }, now); return { done: true, result: "already done" }; }
+  if (a.kind === "chat-cancel") {
+    finishRequest(store, { ...a, kind: "chat", payload: { request: p.chat } } as Action, { ok: false, state: "cancelled" }, now);
+  } else {
+    store.upsert("requests", { id: p.chat }, { payload: JSON.stringify({ ...parse(t.payload), now: true }) });
+  }
+  finishRequest(store, a, { ok: true, state: a.kind === "chat-cancel" ? "cancelled" : "now" }, now);
+  return { done: true, result: a.kind };
+}
+
 const chat: Fulfiller = {
   name: "chat",
   scope: "host",
-  kinds: ["chat"],
+  kinds: ["chat", "chat-cancel", "chat-now"],
 
   run(ctx) {
-    const { store } = ctx, out: Action[] = [], first = new Set<string>();
+    const { store } = ctx, out: Action[] = requestActions(ctx, ["chat-cancel", "chat-now"]), first = new Set<string>();
     const rows = store.db.query("SELECT * FROM requests WHERE done_at IS NULL AND kind = 'chat' ORDER BY id").all() as Row[];
     for (const r of rows) {
       const id = Number(r.id), project = String(r.project ?? ""), squad = (r.squad as string | null) ?? null, member = (r.member as string | null) ?? null;
@@ -82,7 +97,9 @@ const chat: Fulfiller = {
   },
 
   async exec(a, x) {
+    if (a.kind !== "chat") return control(a, x.store, x.now);
     const p = payloadOf<"chat">(a), wt = a.member, { store, now } = x, id = p.request ?? null;
+    if (id != null && store.get("requests", { id })?.done_at != null) return { done: true, result: "already done" };   // cancelled (or finished) while this action waited
     const row = parse(id == null ? null : store.get("requests", { id })?.payload);
     const text = String(row.text ?? p.text ?? "").trim();
     const names: unknown[] = Array.isArray(row.files) ? row.files : Array.isArray(p.files) ? p.files : [];
@@ -99,7 +116,8 @@ const chat: Fulfiller = {
     const studio = a.squad === STUDIO_SQUAD;
     const m = studio ? null : memberAt(store, a, wt);
     // Screen noise alone never holds a chat to a Claude member (memberReady's screenNoise); other agents keep the quiet window.
-    const quietS = limitInt(store, a.project, "chat_quiet_s", 10);
+    // Send now (U4): the operator asked to skip the quiet windows only; the screen read, the prompt, picker and earlier-request checks stay.
+    const quietS = row.now === true ? 0 : limitInt(store, a.project, "chat_quiet_s", 10);
     const ready = studio ? studioReady(store, a.project, now, quietS, id, "ignore")
       : memberReady(store, a.project, wt, now, { quietS, agent: m!.agent, before: id, screenNoise: "ignore" });
     if (!ready.ready) {

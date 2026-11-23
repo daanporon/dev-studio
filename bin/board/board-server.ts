@@ -47,6 +47,7 @@
 //   /api/pause, /api/resume {scope, project, topic?, wt?, role?, suffix?, prerequisites?}
 //                 shared activity state, answered 200; the loop owns checkpoint/close/start
 //   /api/poke     {project, topic}  `poke`: a wake-up line typed into a quiet Lead's terminal
+//   /api/chat-cancel, /api/chat-now  {project, id}  `chat-cancel`/`chat-now` of an open chat request (409: already typed)
 //   /api/chat     {project, topic, wt, text, files?}  `chat`: one line (no newline or control character, at most
 //                 2000 characters) the loop types into that live, unpaused member's terminal once it is ready;
 //                 `files` names up to 4 stored chat images (text may then be empty; a gone one is 409)
@@ -337,6 +338,21 @@ async function chatPost(req: Request) {
     const m = chatMember(s, t.project, t.topic, t.wt) ?? no(404, noMember(t));
     if (t.topic !== "_studio" && paused(s, m as { project: string })) no(409, "this member is paused or resuming; use Resume before chatting");
     return board(s, "chat", { text, via: "board", ...(files.length ? { files } : {}) }, { project: t.project, squad: t.topic, member: t.wt });
+  });
+}
+
+// POST /api/chat-cancel and /api/chat-now {project, id} (studio-chat-queued-busy U4): one `chat-cancel` or
+// `chat-now` request naming a chat request that is still open; 409 once it is done or typed (or never was a chat).
+async function chatControl(req: Request, kind: "chat-cancel" | "chat-now") {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const project = pr.b.project, id = pr.b.id;
+  if (typeof project !== "string" || !project || typeof id !== "number" || !Number.isInteger(id) || id < 1) return json(400, { error: "project and a chat request id" });
+  return write((s) => {
+    const r = s.db.query("SELECT kind, project, squad, member, done_at FROM requests WHERE id = ?").get(id) as { kind: string; project: string; squad: string | null; member: string | null; done_at: number | null } | null;
+    if (!r || r.kind !== "chat" || r.project !== project) no(404, "no such chat");
+    if (r!.done_at != null) no(409, "already typed");
+    return board(s, kind, { chat: id }, { project, squad: r!.squad, member: r!.member });
   });
 }
 
@@ -1124,6 +1140,8 @@ async function handle(req: Request) {
   if (path === "/api/skills" && req.method === "POST") return skillsPost(req);
   if (path === "/api/settings-import" && req.method === "POST") return settingsImportPost(req);
   if (path === "/api/chat" && req.method === "POST") return chatPost(req);
+  if (path === "/api/chat-cancel" && req.method === "POST") return chatControl(req, "chat-cancel");
+  if (path === "/api/chat-now" && req.method === "POST") return chatControl(req, "chat-now");
   if (req.method !== "GET" && req.method !== "HEAD") return text(405, "GET only\n");
   return get(req, url);
 }

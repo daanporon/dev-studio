@@ -351,7 +351,7 @@ export function actionTargets(store: Store, a: Action): Target[] {
   }
   return [targetOf(store, { project, squad: a.squad, member: a.member ?? (p.wt as string) ?? null })];
 }
-const controls = new Set(["board_start", "board_restart", "board_stop", "board_giveup", "config", "limits", "roles", "skills", "override", "account", "unit-action", "plan-revoke", "alert", "alert-clear", "lavish", "dismiss"]);
+const controls = new Set(["board_start", "board_restart", "board_stop", "board_giveup", "config", "limits", "roles", "skills", "override", "account", "unit-action", "plan-revoke", "chat-cancel", "chat-now", "alert", "alert-clear", "lavish", "dismiss"]);
 const mail = new Set(["poke", "answer", "reply", "send-role", "send-peer", "notify-squads"]);
 export function deferredMail(a: Action): boolean { return mail.has(a.kind); }
 export function actionVersion(store: Store, a: Action): string { return JSON.stringify(actionTargets(store, a).map((t) => version(store, t))); }
