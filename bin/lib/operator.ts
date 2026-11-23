@@ -152,6 +152,12 @@ export function limitValueProblem(key: string, val: string): string {
     case "loop_stall_banner_n": case "loop_stall_banner_min": case "expose_down_min": case "expose_warn_min": case "chat_quiet_s": case "chat_queue_min": case "msg_chase_min": case "msg_reply_alert_min": case "archive_debrief_min": case "prompt_wait_min":
       if (/[^0-9]/.test(val)) return `${key} must be a non-negative integer (got '${val}')`;
       break;
+    case "tick_alarm_ms":
+      if (!/^\d+$/.test(val)) return `tick_alarm_ms must be a non-negative integer of ms, 0 = off (got '${val}')`;
+      break;
+    case "tick_alarm_windows":
+      if (!/^\d+$/.test(val) || Number(val) < 1 || Number(val) > 20) return `tick_alarm_windows must be a whole number from 1 to 20 (got '${val}')`;
+      break;
     case "briefing_merges_lag_min":
       if (!/^\d+$/.test(val) || Number(val) > 120) return `briefing_merges_lag_min must be whole minutes from 0 to 120 (got '${val}')`;
       break;
