@@ -21,7 +21,7 @@ import { basename, join, resolve } from "node:path";
 import type { Row } from "../../core/store.ts";
 import { shell, type Orca, type Out } from "../orca.ts";
 import { git, lastLine, WorktreeError, type Gone, type Listed, type Made, type Provider, type RemoveOpts, type Spec } from "../worktrees.ts";
-import { dirtyWhy, hasBranch, keepOrDrop, listed as gitListed } from "./git.ts";
+import { branchAfter, changes, hasBranch, listed as gitListed } from "./git.ts";
 
 /** A worktree as the adapter prints it (one JSON line per worktree). */
 export type OrcaWt = { id: string; path: string; branch: string | null; head: string | null; parentWorktreeId: string | null };
@@ -90,7 +90,7 @@ const provider: Provider = {
     if (made.path !== path || made.branch !== spec.branch) {
       // Undo it, its new branch too (Orca keeps a branch on removal), so a retry is not refused for that branch.
       const rm = await run("worktree-rm", [`id:${made.id}`, "force"]);
-      const undone = rm.code === 0 && made.branch ? await keepOrDrop(spec.repo, made.branch, { deleteBranch: true, base: spec.base }) : null;
+      const undone = rm.code === 0 && made.branch ? await branchAfter(spec.repo, made.branch, { deleteBranch: true, base: spec.base }) : null;
       const what = rm.code !== 0 ? `removing it failed: ${lastLine(rm)}` : undone === "kept" ? `removed it again, branch '${made.branch}' kept` : "removed it again";
       throw new WorktreeError(`orca: Orca made ${made.path} on '${made.branch}', not ${path} on '${spec.branch}'; ${what}`);
     }
@@ -107,13 +107,13 @@ const provider: Provider = {
     if (!existsSync(path)) {
       await rm();   // Orca's entry for a folder already gone; nothing to refuse
       await git(["-C", repo, "worktree", "prune"]);
-      return { removed: true, already: true, branch: await keepOrDrop(repo, branch, opts) };
+      return { removed: true, already: true, branch: await branchAfter(repo, branch, opts) };
     }
-    const why = opts.force ? null : await dirtyWhy(path);
+    const why = opts.force ? null : await changes(path);
     if (why) return { removed: false, already: false, branch: "none", why };
     const o = await rm();
     if (o.code !== 0) return { removed: false, already: false, branch: "none", why: `orca worktree rm failed: ${lastLine(o)}` };
-    return { removed: true, already: false, branch: await keepOrDrop(repo, branch, opts) };
+    return { removed: true, already: false, branch: await branchAfter(repo, branch, opts) };
   },
 
   list,

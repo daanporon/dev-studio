@@ -41,16 +41,19 @@ export async function listed(repo: string): Promise<Listed[]> {
 export const hasBranch = async (repo: string, branch: string) =>
   (await git(["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
 
-/** What becomes of a removed worktree's branch: kept, unless opts.deleteBranch and it is merged into the base. */
-export async function keepOrDrop(repo: string, branch: string, opts: RemoveOpts): Promise<Gone["branch"]> {
+/** What becomes of a removed worktree's branch: kept, unless opts.deleteBranch and it is merged into the
+ *  base (an unmerged branch is always kept); `none` when there is no such branch. */
+export async function branchAfter(repo: string, branch: string, opts: RemoveOpts): Promise<Gone["branch"]> {
   if (!branch || !(await hasBranch(repo, branch))) return "none";
   if (!opts.deleteBranch) return "kept";
-  if ((await git(["-C", repo, "merge-base", "--is-ancestor", `refs/heads/${branch}`, opts.base || "HEAD"])).code !== 0) return "kept";
+  const base = opts.base || "HEAD";
+  if ((await git(["-C", repo, "merge-base", "--is-ancestor", `refs/heads/${branch}`, base])).code !== 0) return "kept";
   return (await git(["-C", repo, "branch", "-D", branch])).code === 0 ? "deleted" : "kept";
 }
 
-/** Why a tree may not be removed unforced (changes other than dev-studio's own files), else null. */
-export async function dirtyWhy(path: string): Promise<string | null> {
+/** Why the tree at `path` must not be removed unforced: its changes other than dev-studio's own files
+ *  (wt-probe.ts OURS), or a failed `git status`; null when there are none. */
+export async function changes(path: string): Promise<string | null> {
   const st = await git(["-C", path, "status", "--porcelain", "--untracked-files=all"]);
   if (st.code !== 0) return `git status failed: ${lastLine(st)}`;
   const dirty = st.out.split("\n").filter((l) => l && !OURS.test(l));
@@ -90,17 +93,20 @@ const provider: Provider = {
   async remove(row: Row, opts: RemoveOpts): Promise<Gone> {
     const path = String(row.path), repo = row.repo ? String(row.repo) : "", branch = row.branch ? String(row.branch) : "";
     if (!repo || !existsSync(repo)) return { removed: false, already: false, branch: "none", why: `its repo ${repo || "(unknown)"} is not there` };
+    const keepOrDrop = () => branchAfter(repo, branch, opts);
     const here = (await listed(repo)).find((l) => l.path === path);
     if (!here || here.prunable || !existsSync(path)) {
       if (existsSync(path)) return { removed: false, already: false, branch: "none", why: `${path} exists and is not a worktree of ${repo}` };
       await git(["-C", repo, "worktree", "prune"]);
-      return { removed: true, already: true, branch: await keepOrDrop(repo, branch, opts) };
+      return { removed: true, already: true, branch: await keepOrDrop() };
     }
-    const why = opts.force ? null : await dirtyWhy(path);
-    if (why) return { removed: false, already: false, branch: "none", why };
+    if (!opts.force) {
+      const why = await changes(path);
+      if (why) return { removed: false, already: false, branch: "none", why };
+    }
     const rm = await git(["-C", repo, "worktree", "remove", "--force", path]);
     if (rm.code !== 0) return { removed: false, already: false, branch: "none", why: `git worktree remove failed: ${lastLine(rm)}` };
-    return { removed: true, already: false, branch: await keepOrDrop(repo, branch, opts) };
+    return { removed: true, already: false, branch: await keepOrDrop() };
   },
 
   list: listed,
