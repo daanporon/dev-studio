@@ -138,6 +138,11 @@ export const FACTS = {
   worktree_created: obj({ path: str, provider: str, branch: str, adopted: bool, parent: opt(str) }),
   worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
   worktree_gone: obj({ path: str, provider: str, why: str }),
+  // U10 (squad/shadow.ts): the shadow signals.
+  shadow_started: obj({}),
+  shadow_disagree: obj({ point: str, old: str, new: str, member: str, id: opt(num), gen: opt(str), wt: opt(str), transient: bool, ticks: num, first_at: num }),
+  shadow_explained: obj({ event: num, why: str, by: opt(str) }),
+  shadow_crash: obj({ member: str, id: num, gen: str, next: str }),
   builder_wish_settled: obj({ id: num, unit: str, was: opt(str) }),
   builder_wish_withdrawn: obj({ id: num, unit: str, why: str, by: str, reason: opt(str) }),
   member_drift_cleared: obj({ id: opt(num), path: opt(str), status: opt(str) }),
