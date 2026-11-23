@@ -72,5 +72,6 @@ function squadBackend(label: string, topic: string): string | null {
   try {
     const r = s.db.query("SELECT backend FROM squads WHERE project = ? AND topic = ? AND doc IS NOT NULL AND COALESCE(status, '') NOT IN ('closed', 'gone')").get(label, topic) as { backend: string } | null;
     return r ? r.backend : null;
-  } finally { s.close(); }
+  } catch { return null; /* a db before migration 0054 (between a pull and its migrate): every squad there is on orca */ }
+  finally { s.close(); }
 }

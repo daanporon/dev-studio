@@ -10,6 +10,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mount as mountPage, type Run } from "./board-mount";
+import { BACKEND_NAMES } from "../../bin/backend/registry.ts";
 
 const root = join(import.meta.dir, "../..");
 const page = readFileSync(join(root, "web/board.html"), "utf8");
@@ -560,7 +561,8 @@ test("Start squad: Backend starts on the project's default_backend, follows the 
   const d = await startDialog(() => ({ status: 202, body: { ok: true, id: 3 } }), b);
   try {
     expect(d.doc.querySelector(".start-backend").value).toBe("tmux");
-    expect([...d.doc.querySelectorAll(".start-backend option")].map((o: any) => o.value)).toEqual(["orca", "orca-lite", "tmux", "herdr"]);
+    // The page's list is a copy of the registry's; this keeps the two the same.
+    expect([...d.doc.querySelectorAll(".start-backend option")].map((o: any) => o.value)).toEqual([...BACKEND_NAMES]);
     await d.set(".start-project", "other", "change");
     expect(d.doc.querySelector(".start-backend").value).toBe("orca");
     await d.set(".start-project", "fixture", "change");
