@@ -89,7 +89,9 @@ export function feedback(opts: { gh?: Gh; leak?: LeakCheck } = {}): Fulfiller {
     const { title, body } = finalText(out);
     const l = await leak(title, body);
     if (l.leak === "blocked") {
-      s.fact("feedback_edited", [draftRow(id, { leak: "blocked", leak_why: l.why, updated_at: x.now })], { project: a.project || null, payload: { draft: id, leak: "blocked" } });
+      // A draft a replay finds posting goes back to review too, so it can be edited and posted again
+      // (that post still looks for its key before it creates anything).
+      s.fact("feedback_edited", [draftRow(id, { state: "review", leak: "blocked", leak_why: l.why, updated_at: x.now })], { project: a.project || null, payload: { draft: id, leak: "blocked" } });
       return refuse(x, a, `leak check: ${l.why}`);
     }
     if (d.state === "review") {

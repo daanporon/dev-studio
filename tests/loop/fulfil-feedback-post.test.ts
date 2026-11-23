@@ -41,6 +41,7 @@ if [ "$1" = -X ]; then
   exit 0
 fi
 key=$(grep -o 'ds-key:[^"\\\\]*' <<< "$*" | head -1)
+[ -n "$key" ] || { echo "stub gh: find names no ds-key" >&2; exit 8; }
 for f in $(ls -r "$STUB_DIR"/posted-*.json 2>/dev/null); do
   grep -qF "$key" "$f" || continue
   n="\${f##*posted-}"; n="\${n%.json}"
@@ -148,6 +149,22 @@ describe("feedback-post", () => {
     expect(calls().filter((c) => c.includes("issues?state=all"))).toHaveLength(2);
     expect(d(s, id)).toMatchObject({ state: "filed", issue: 41 });
     expect(noteState(s, a)).toBe("filed");
+    // Another draft's find does not take the first draft's issue: it creates its own.
+    const other = draft(s);
+    const second = file(s, "feedback-post", { draft: other });
+    await tick(T + 120);
+    expect(request(s, second)).toMatchObject({ ok: true, issue: 42, found: false });
+    expect(posts()).toHaveLength(2);
+  });
+
+  test("a replay that now fails the leak check puts the posting draft back in review", async () => {
+    const { s, tick } = rig();
+    const id = draft(s, { state: "posting", title: "About zebrafoxtrot" });
+    const req = file(s, "feedback-post", { draft: id });
+    await tick();
+    expect(request(s, req)).toMatchObject({ ok: false, error: expect.stringMatching(/^leak check: line 1: /) });
+    expect(calls()).toEqual([]);
+    expect(d(s, id)).toMatchObject({ state: "review", leak: "blocked" });
   });
 
   test("a leak hit marks the draft blocked and refuses with no gh call", async () => {
