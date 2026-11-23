@@ -12,6 +12,7 @@ import { now, type Row, type Store } from "../core/store.ts";
 import { caller, type Caller } from "../squad/exposed.ts";
 import { roleOf } from "../settings/skills.ts";
 import { redact } from "../core/redact.ts";
+import { parseMember, whoAmI } from "../core/whoami.ts";
 
 export const ROLES = ["lead", "thinker", "builder", "reviewer", "tester", "researcher", "studio"] as const;
 export type Addr = { project: string; squad: string; role: string; suffix: string };
@@ -26,6 +27,7 @@ export function splitRole(want: string): { role: string; suffix: string } | null
 export const roleName = (role: string, suffix: string) => (suffix ? `${role}-${suffix}` : role);
 
 /** Who is sending (U285). The session decides, not the folder the command runs in; the first that finds a member wins:
+ *  0. `DS_MEMBER` (whoami.ts, U4) → that member's worktree, else `DS_WT`, the identity the loop gave the terminal it started;
  *  1. `ORCA_TERMINAL_HANDLE` → the worktree of the terminal the loop observed under that handle (or the member holding it);
  *  2. `CLAUDE_PROJECT_DIR`, the worktree the session started in;
  *  3. the current folder's git top level `top`.
@@ -33,12 +35,19 @@ export const roleName = (role: string, suffix: string) => (suffix ? `${role}-${s
  *  (never `operator`: that is only ever named, `ds msg send --as operator`). */
 export function senderAt(s: Store, top: string | null, env: Record<string, string | undefined> = process.env): Sender {
   const tries: string[] = [];
-  const handle = env.ORCA_TERMINAL_HANDLE;
+  const me = whoAmI(env), id = parseMember(me.member);
+  if (id) {
+    const m = s.db.query("SELECT wt FROM members WHERE project = ? AND squad = ? AND role = ? AND COALESCE(suffix, '') = ? AND wt IS NOT NULL AND COALESCE(status, '') != 'gone' ORDER BY id DESC")
+      .get(id.project, id.squad, id.role, id.suffix) as Row | null;
+    if (m?.wt) tries.push(wtDir(String(m.wt)));
+  }
+  if (me.wt) tries.push(me.wt.replace(/\/+$/, ""));
+  const handle = me.handle;
   if (handle) {
     const t = s.db.query("SELECT wt FROM observed_terminals WHERE handle = ? AND wt IS NOT NULL ORDER BY (gone_at IS NULL) DESC, observed_at DESC").get(handle) as Row | null;
     const m = t ? null : s.db.query("SELECT wt FROM members WHERE handle = ? AND wt IS NOT NULL AND COALESCE(status, '') != 'gone' ORDER BY id DESC").get(handle) as Row | null;
     const wt = String((t ?? m)?.wt ?? "");
-    if (wt) tries.push(wt.includes("::") ? wt.slice(wt.indexOf("::") + 2) : wt);
+    if (wt) tries.push(wtDir(wt));
   }
   if (env.CLAUDE_PROJECT_DIR) tries.push(env.CLAUDE_PROJECT_DIR.replace(/\/+$/, ""));
   if (top) tries.push(top);
@@ -54,6 +63,7 @@ export function senderAt(s: Store, top: string | null, env: Record<string, strin
   const folder = top ?? tries[0] ?? process.cwd();
   return { project: roleOf(folder, projects)?.project ?? null, squad: null, role: "unknown", suffix: "", member: folder };
 }
+const wtDir = (wt: string) => (wt.includes("::") ? wt.slice(wt.indexOf("::") + 2) : wt);
 export const fromCaller = (c: Caller): Sender =>
   ({ project: c.project, squad: c.squad, role: c.role, suffix: c.suffix, member: c.owner_wt || null });
 

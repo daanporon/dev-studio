@@ -1,5 +1,6 @@
 // ds pause-checkpoint-ts — a pausing agent journals, then acknowledges (U192): what bin/role/pause-checkpoint.sh runs.
 import { ROOT, run as runCmd, writeErr, writeOut } from "../lib/shared";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = `<project> <squad> <role> <suffix|-> <generation> "<checkpoint>" --commands-finished — journal a checkpoint, then acknowledge the pause; a stop-… generation is a stop checkpoint before a restart, journaled only (pause-checkpoint.sh)`;
 
@@ -7,7 +8,7 @@ export async function run(argv: string[]): Promise<number> {
   if (!(argv.length === 7 && argv[6] === "--commands-finished")) {
     writeErr('usage: pause-checkpoint.sh <project> <squad> <role> <suffix|-> <generation> "<checkpoint>" --commands-finished\n'); return 2;
   }
-  const handle = process.env.ORCA_TERMINAL_HANDLE ?? "";
+  const handle = whoAmI().handle ?? "";
   if (!handle) { writeErr("pause: checkpoint must run in the instructed agent terminal\n"); return 2; }
   const [project, squad, role, sfx, gen, text] = argv;
   if (!text) { writeErr("pause: checkpoint text is required\n"); return 2; }

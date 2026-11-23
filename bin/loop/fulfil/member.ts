@@ -29,6 +29,7 @@ import { queuedWhy, withdraw } from "../squad/queued-builder.ts";
 import { limitStuck, switchFacts, SWITCH_WHYS } from "../capacity/switches.ts";
 import { limitNum, RESERVE, reservationOf, sameModel } from "../capacity/pick.ts";
 import { phasePrompt, resumePrompt, revalidateNote } from "../reconcilers/pause-resume.ts";
+import { memberLabel } from "../core/whoami.ts";
 
 type Wish = { why?: Why; prompt?: string; agent?: string; model?: string; effort?: string; account?: string; ctx?: number; request?: boolean; unit?: string; spec?: string; pauseResume?: string };
 const placements = new WeakMap<Action, Pick>();
@@ -270,7 +271,7 @@ const member: Fulfiller = {
     const fromHandoff = handoff(m, { why: placementWhy, model: p.model, account: p.account ?? null, ctx: why === "limit" ? ctxOf(store, m, w) : null, run: (store.get("squads", { project: m.project, topic: m.squad })?.run_id as string) ?? null, prompt });
     const h = { ...fromHandoff, model: p.model, account: p.account, ...(sent ? { launch: sent.launch, context: sent.prompt } : {}) };
     const agent = p.agent ?? m.agent ?? "claude", effort = p.effort ?? m.effort;
-    const seat = x.act.seat(store, m.project, m.squad, key, m.wt, at), driver = x.act.driver(seat, agent);
+    const seat = x.act.seat(store, m.project, m.squad, key, m.wt, at, memberLabel(m)), driver = x.act.driver(seat, agent);
 
     if (h.launch === "tell") {
       const r = await driver.poke(m, h.context);
@@ -321,7 +322,8 @@ const member: Fulfiller = {
             // agent yet) reads as before this start, so the decider waits out the spawn grace.
             const seen = Number(store.get("observed_workers", { project: m.project, wt: r.wt })?.account_at ?? 0);
             settleReservation(store, m, { agent, model: h.model, account: h.account }, at);   // before placed_at moves
-            setMember(store, m, { status: "running", wt: r.wt, agent, model: h.model, effort, account: h.account,
+            // U4: the generation this start's terminal carries as DS_GEN (none for a start Orca types itself).
+            setMember(store, m, { status: "running", wt: r.wt, agent, model: h.model, effort, account: h.account, gen: seat.gen?.() ?? null,
               ...(sameWish ? { want_result: h.launch } : {}), placed_at: Math.max(at, seen), ...(w.request ? { since: isoAt(at), doc: requestDoc(row, w) } : {}) }, "member_started", at);
             // A start that is not the member's first: the decider's REBREAK_MIN reads it.
             if (Number(row.placed_at ?? 0) || row.started) store.upsert("episodes", { project: m.project, subject: `member:${m.id}`, kind: "restarted" },

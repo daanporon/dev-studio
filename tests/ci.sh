@@ -36,6 +36,9 @@ serial_reason() {
 
 # A runner has no git identity, and many tests commit in their temp repos.
 export GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@localhost GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@localhost
+# U4 (orca-backend-alternatives): a role terminal the loop started carries DS_MEMBER, DS_WT and DS_GEN, which
+# whoAmI() reads before the Orca handle. A test sets the identity it means; it never inherits the caller's.
+unset DS_MEMBER DS_WT DS_GEN DS_START_MEMBER DS_START_GEN
 
 OUT="$(mktemp -d)"
 # No test scans the host's real session logs: an unset DS_TOKEN_DIR becomes an empty temp dir (bun tests
