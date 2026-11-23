@@ -289,6 +289,55 @@ describe("incremental reads", () => {
     expect(READ_WINDOW).toBe(256 * 1024);
   });
 
+  const asst = (text: string) => `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, timestamp: "2026-11-17T11:05:00Z" })}\n`;
+  const blob = (type: string, kb: number, extra: Record<string, unknown> = {}) => `${JSON.stringify({ type, ...extra, attachment: { text: "z".repeat(kb * 1024) } })}\n`;
+
+  test("a compaction burst over the read window keeps the board line and the reply in order", () => {
+    const f = setup(); tick(f);
+    appendFileSync(f.claudePath, asst("first answer"));
+    tick(f, T + 1);
+    appendFileSync(f.claudePath, userLine("dev-studio board, the operator says: please summarise"));
+    const burst = JSON.stringify({ type: "system", subtype: "compact_boundary" }) + "\n"
+      + JSON.stringify({ type: "user", isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: "user", content: "COMPACT SUMMARY TEXT" } }) + "\n"
+      + blob("attachment", 160) + blob("api-request-blob", 60) + blob("api-request-blob", 60);
+    appendFileSync(f.claudePath, burst);
+    expect(Buffer.byteLength(burst)).toBeGreaterThan(READ_WINDOW);
+    appendFileSync(f.claudePath, asst("the reply after compaction"));
+    tick(f, T + 2);
+    const ts = turns(f, f.claudeWt), texts = ts.map((t) => t.text);
+    const i = texts.indexOf("please summarise"), j = texts.indexOf("the reply after compaction");
+    expect(i).toBeGreaterThan(-1);
+    expect(j).toBeGreaterThan(i);
+    expect(ts[i].from).toBe("operator");
+    expect(texts.some((x) => String(x).includes("COMPACT SUMMARY"))).toBe(false);
+    expect(row(f, f.claudeWt).read_to).toBe(statSync(f.claudePath).size);
+  });
+
+  test("a line longer than the read window is parsed whole across chunks", () => {
+    const f = setup(); tick(f);
+    appendFileSync(f.claudePath, userLine("x".repeat(READ_WINDOW + 5000)) + asst("after the long line"));
+    tick(f, T + 1);
+    const texts = turns(f, f.claudeWt).map((t) => String(t.text));
+    expect(texts.some((x) => x.startsWith("xxx"))).toBe(true);
+    expect(texts.at(-1)).toBe("after the long line");
+  });
+
+  test("an append over FOLLOW_MAX jumps to the end window and logs once", () => {
+    const f = setup();
+    f.o = chatObserver({ log: (l) => f.logs.push(l), followMax: 1024 * 1024 });
+    tick(f);
+    const n = turns(f, f.claudeWt).length;
+    appendFileSync(f.claudePath, userLine("LOST MARK") + blob("attachment", 1100) + asst("tail reply"));
+    tick(f, T + 1);
+    const texts = turns(f, f.claudeWt).map((t) => String(t.text));
+    expect(texts).toHaveLength(n + 1);
+    expect(texts.at(-1)).toBe("tail reply");
+    expect(texts).not.toContain("LOST MARK");
+    appendFileSync(f.claudePath, blob("attachment", 1100) + asst("again"));
+    tick(f, T + 2);
+    expect(f.logs.filter((l) => l.includes("in one tick"))).toHaveLength(1);
+  });
+
   test("a half-written line is not parsed until it completes", () => {
     const f = setup(); tick(f);
     const before = Number(row(f, f.claudeWt).read_to), n = turns(f, f.claudeWt).length;

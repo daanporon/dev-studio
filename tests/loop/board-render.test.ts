@@ -500,6 +500,40 @@ test("a Debrief card shows 'Debrief · <topic>', opens the archived debrief and 
   } finally { await w.happyDOM.close(); }
 });
 
+// debrief-in-needs-you U3: an old-id card (`loop-debrief-…` with reason `debrief-<topic>`) is a Debrief card like the new one.
+test("an old-id and a new-id Debrief card both show in Needs you, with linked PRs; Open falls back to the card text; Mark read answers only its card", async () => {
+  const mk = (id: string, topic: string, extra: any = {}) => ({ squad: "_studio", label: "fixture", kind: "studio", card_squad: null, id, debrief: topic, reason: `debrief-${topic}`, from: null,
+    title: "Debrief: " + topic, titled: true, text: `1. Set out to do ${topic}.\n2. Shipped #123 and #45.`, choices: [], options: ["Mark read"], act: null, age_min: 3000, about: null, repo_slug: "o/r", ...extra });
+  const oldC = mk("loop-debrief-oldy-1uy1p7zj2un2e", "oldy"), newC = mk("sweep-debrief-newy-1", "newy");
+  const archived = { topic: "newy", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [], debrief: "NEWY-ARCHIVED-BODY" };
+  const r = await mount({ ...board, needs_you: [oldC, newC], loop_notes: [], archived: [archived] }, false);
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) === "api/answer") posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && doc.querySelectorAll(".qnote").length < 2; k++) await wait(25);
+    const notes = [...doc.querySelectorAll(".qnote")] as any[];
+    expect(notes.map((n) => n.querySelector(".sq").textContent)).toEqual([expect.stringContaining("Debrief · oldy"), expect.stringContaining("Debrief · newy")]);
+    expect(notes[0].querySelectorAll('a[href="https://github.com/o/r/pull/123"]').length).toBe(1);
+    expect(notes[0].querySelector(".lndet.dbr")).not.toBeNull();
+    expect(doc.querySelectorAll(".lnnote").length).toBe(0);
+    notes[1].querySelector('[data-ev="open-debrief"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("NEWY-ARCHIVED-BODY");
+    notes[0].querySelector('[data-ev="open-debrief"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("The full debrief of this squad is not on the board.");
+    expect(doc.body.textContent).toContain("Set out to do oldy.");
+    notes[0].querySelector('[data-ev="mark-read"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(posts).toEqual([expect.objectContaining({ topic: "_studio", id: "loop-debrief-oldy-1uy1p7zj2un2e", answer: "Mark read" })]);
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
 // chat-with-studio U1: the header's Studio button(s), the badge, the new-reply dot and the opener, on the real page.
 const studio = (over: any = {}) => ({ label: "fixture", wt: "/w/st", handle: "term_s", adopted: true, unread: 0, reply_due: 0, working: false, reply_at: null,
   agent: "claude", walk: null, model_label: null, account: null, account_label: null, ctx: null, ctx_level: null, ...over });

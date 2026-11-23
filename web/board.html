@@ -225,7 +225,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .qplain{margin:8px 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:5px} .qplain li{font-size:13px} .qplain b{color:var(--mut);font-weight:600;margin-right:6px}
 .qfacts{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0} .qfact{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);background:#1b2029;color:var(--fg)}
 .qdetails{margin:8px 0;font-size:12.5px} .qdetails summary{cursor:pointer;color:var(--mut)}
-.qnote .lndet{font-size:12px;color:var(--mut);white-space:normal;overflow-wrap:anywhere;margin-top:2px}
+.qnote .lndet{font-size:12px;color:var(--mut);white-space:normal;overflow-wrap:anywhere;margin-top:2px} .qnote .lndet.dbr{white-space:pre-line}
 .qnote.sent .l2{color:var(--mut)} .qnote .ok{color:var(--green);font:12px var(--mono)}
 .lnrow{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--line);cursor:pointer;font-size:12.5px;color:var(--mut)}
 .lnrow:hover{background:var(--panel2)} .lnrow .sp{flex:1}
@@ -274,6 +274,13 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-down{position:absolute;right:18px;bottom:10px;border-radius:50%;width:32px;height:32px;padding:0}
 .chat-in{flex:1 1 100%;min-width:0;resize:none;font:13px/1.45 var(--sans);padding:7px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;max-height:calc(6 * 1.45em + 16px);overflow-y:auto}
 .chat-left{font:11px var(--mono);color:var(--dim)} .chat-left.low{color:var(--amber)}
+.chat-note{flex:1 1 100%;font:11px var(--mono);color:var(--dim)} .chat-strip{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.chat-th{position:relative;flex:none;width:56px;height:56px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel2);display:flex;align-items:center;justify-content:center}
+.chat-th img{width:100%;height:100%;object-fit:cover;display:block} .chat-th.bad{border-color:var(--red);color:var(--red);font:9px/1.2 var(--mono);padding:2px;text-align:center;overflow-wrap:anywhere}
+.chat-rm{position:absolute;top:1px;right:1px;width:20px;height:20px;padding:0;border:0;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:11px;line-height:20px;cursor:pointer}
+.chat-th .dot.spin{margin:0} .chat-attach{padding:0 8px} .mbox.chat.drop{outline:2px dashed var(--blue);outline-offset:-6px}
+.chat-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px} .chat-img{display:block;max-width:160px;max-height:160px;border-radius:8px;border:1px solid var(--line)}
+.chat-imgchip{font:11px var(--mono);color:var(--dim);border:1px dashed var(--line);border-radius:8px;padding:2px 8px}
 .chat-tabs{flex:none;display:flex;gap:4px;padding:6px 12px 0;overflow-x:auto;white-space:nowrap;border-bottom:1px solid var(--line)} .chat-tab{flex:none;display:inline-flex;align-items:center;gap:2px;max-width:200px;padding:5px 10px;border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;background:transparent;color:var(--mut);font:600 12px var(--mono);cursor:pointer} .chat-tab.on{background:var(--panel2);color:var(--fg);border-color:var(--line)} .chat-tab:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 .chat-swlabel{min-width:0;overflow:hidden;text-overflow:ellipsis} .chat-new{display:inline-block;flex:none;width:8px;height:8px;margin-left:6px;border-radius:50%;background:var(--blue)} .chat-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .mhd .chat-sw{position:relative;display:inline-block;vertical-align:middle;max-width:60%}
 .chat-swbtn{display:inline-flex;align-items:center;max-width:100%;min-height:44px;padding:0 8px;font:600 13px var(--mono)} .chat-menu{position:absolute;z-index:60;top:100%;left:0;display:flex;flex-direction:column;gap:2px;min-width:220px;max-width:calc(100vw - 24px);padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4)} .chat-mi{display:flex;align-items:center;min-height:44px;text-align:left;border-color:transparent;background:transparent} .chat-mi[aria-checked="true"]{border-color:var(--line);background:var(--panel)}
@@ -1598,13 +1605,13 @@ function LeftoversBox({ s }) {
 const docAge = (t) => { if (!t) return ""; const m = Math.max(0, Math.floor((Date.now() / 1000 - t) / 60)); return m < 60 ? m + "m" : m < 48 * 60 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
 const docWhen = (t) => t ? new Date(t * 1000).toLocaleString() : "";
 
-function Docs({ s, onPlan, closed, toast }) {
+function Docs({ s, onPlan, closed, toast, atArchive }) {
   const [all, setAll] = useState({});
   const [menu, setMenu] = useState(null), [revoking, setRevoking] = useState(null);
   const byNew = (a, b) => (b.mtime || 0) - (a.mtime || 0);
   const groups = [
     // The debrief has no timestamp, so its group goes first; a closed squad without one says so.
-    { id: "debrief", label: "Debrief", items: s.debrief ? [{ kind: "debrief", name: "debrief" }] : closed ? [{ kind: "none", name: "no debrief" }] : [] },
+    { id: "debrief", label: "Debrief", items: s.debrief ? [{ kind: "debrief", name: "debrief" }] : closed ? [{ kind: "none", name: atArchive ? "written at archive" : "no debrief" }] : [] },
     { id: "plans", label: "Plans", items: [...(s.plans || [])].sort(byNew).map((p) => ({ kind: "plan", name: p.name, mtime: p.mtime, p })) },
     { id: "pages", label: "Review pages", items: [...(s.lavish || [])].sort(byNew).map((l) => ({ kind: "page", name: l.name, dir: l.dir, mtime: l.mtime, l })) },
   ].filter((g) => g.items.length);
@@ -1615,7 +1622,7 @@ function Docs({ s, onPlan, closed, toast }) {
       const shown = all[g.id] ? g.items : g.items.slice(0, 10);
       return html`<div key=${g.id} class="docs" data-docs=${g.id}><span class="dl">${g.label}</span>
         ${shown.map((i, n) => { const label = (count[i.name] > 1 && i.dir ? i.dir + "/" : "") + i.name;
-          if (i.kind === "none") return html`<span key="d0" class="mut nodebrief">no debrief</span>`;
+          if (i.kind === "none") return html`<span key="d0" class="mut nodebrief">${i.name}</span>`;
           if (i.kind === "debrief") return html`<div key="d1" class="plan" title="the squad's debrief" onClick=${() => onPlan({ name: s.topic + " — debrief", markdown: s.debrief })}>📝 debrief</div>`;
           const age = html`<span class="mut dage">${docAge(i.mtime)}</span>`;
           const tip = (i.kind === "plan" ? i.name : i.l.url || i.name) + (i.mtime ? " · " + docWhen(i.mtime) : "");
@@ -2024,6 +2031,50 @@ const chatDay = (at) => new Date(at * 1000).toLocaleDateString("en-GB", { weekda
 // A typed line as the POST sends it: one line, every line break or control character (C0, DEL, C1, as
 // the server refuses them) a space.
 const chatOneLine = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim();
+// ---- images in the chat (chat-image-upload U3) ----
+// An image is shrunk in the page when it is big (over 3.5 MiB, a long side over 2000 px) or of a type the server refuses
+// (an iPhone HEIC), uploaded the moment it is attached (api/chat-file, answered with its name), and only the names ride
+// along with the line. These helpers take the upload url and the limit as arguments so the Start squad dialog can share them.
+const CHAT_IMAGES = 4, IMG_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"], IMG_BIG = 3.5 * 1024 * 1024, IMG_SIDE = 2000;
+const imageFiles = (list) => Array.from(list || []).filter((f) => f && (/^image\//.test(f.type || "") || /\.(heic|heif)$/i.test(f.name || "")));
+async function shrinkImage(file) {
+  let bmp = null, img = null, url = null;
+  try { if (typeof createImageBitmap === "function") bmp = await createImageBitmap(file); } catch (e) { bmp = null; }
+  if (!bmp) {
+    url = URL.createObjectURL(file);
+    try { img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error("can't read this image")); i.src = url; }); }
+    catch (e) { URL.revokeObjectURL(url); throw e; }
+  }
+  try {
+    const src = bmp || img, w = src.width || src.naturalWidth || 0, h = src.height || src.naturalHeight || 0, long = Math.max(w, h);
+    if (!long) throw new Error("can't read this image");
+    if (IMG_TYPES.includes(file.type) && file.size <= IMG_BIG && long <= IMG_SIDE) return file;
+    const k = Math.min(1, IMG_SIDE / long), cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
+    const c = document.createElement("canvas"); c.width = cw; c.height = ch;
+    const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, cw, ch); g.drawImage(src, 0, 0, cw, ch);
+    const blob = await new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.85));
+    if (!blob) throw new Error("can't read this image");
+    return blob;
+  } finally { if (bmp && bmp.close) bmp.close(); if (url) URL.revokeObjectURL(url); }
+}
+// POST the bytes to `url`; resolves {id, url, bytes}, rejects with the server's own refusal text.
+async function uploadImage(blob, url) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+  const b = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(b.error || "HTTP " + r.status); e.status = r.status; throw e; }
+  return b;
+}
+const chatImgUrl = (project, topic, name) => "api/chat-file?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&name=" + encodeURIComponent(name);
+// One image in a bubble: a click opens the full size in a new tab; a file the prune removed says so.
+function ChatImg({ src }) {
+  const [gone, setGone] = useState(false);
+  return gone ? html`<span class="chat-imgchip">image removed</span>`
+    : html`<a href=${src} target="_blank" rel="noopener"><img class="chat-img" src=${src} alt="attached image" loading="lazy" onError=${() => setGone(true)} /></a>`;
+}
+// `items`: {url} for a stored image, null for one the terminal took natively (no file to show).
+function ChatImages({ items }) {
+  return html`<div class="chat-imgs">${items.map((x, i) => x && x.url ? html`<${ChatImg} key=${x.url} src=${x.url} />` : html`<span key=${"n" + i} class="chat-imgchip">image</span>`)}</div>`;
+}
 // "Ran 3 commands, read 1 file, edited 1 file": one phrase per tool name, in the order first used.
 const CHAT_VERBS = { Bash: ["ran", "command"], shell: ["ran", "command"], exec_command: ["ran", "command"], Read: ["read", "file"],
   Edit: ["edited", "file"], MultiEdit: ["edited", "file"], Write: ["edited", "file"], NotebookEdit: ["edited", "file"], apply_patch: ["edited", "file"],
@@ -2047,6 +2098,7 @@ function chatRows(turns, sends) {
   // Newest send first, each taking the newest unclaimed operator turn with its text at or after it, so a
   // turn is claimed once and, when only the later of two identical sends is still in the window, it is
   // the later send that takes it (the earlier one scrolled out with its turn).
+  const pair = new Map();
   const order = sends.map((x, k) => [x, k]).sort((p, q) => ((q[0].at ?? 0) - (p[0].at ?? 0)) || (q[1] - p[1])), left = new Set();
   for (const [x] of order) {
     let i = -1;
@@ -2054,7 +2106,7 @@ function chatRows(turns, sends) {
       const t = turns[k];
       if (!used.has(k) && t.from === "operator" && t.via !== "terminal" && norm(t.text) === norm(x.text) && (t.at == null || x.at == null || t.at >= x.at - 60)) { i = k; break; }
     }
-    if (i >= 0) used.add(i); else left.add(x);
+    if (i >= 0) { used.add(i); if (x.files && x.files.length) pair.set(i, x.files); } else left.add(x);
   }
   const oldest = turns.find((t) => t.at != null)?.at;
   const pending = sends.filter((x) => left.has(x)).filter((x) => x.state === "queued" || oldest == null || x.at == null || x.at >= oldest);
@@ -2065,22 +2117,22 @@ function chatRows(turns, sends) {
   const rest = pending.filter((x) => !placed.includes(x));
   let day = "";
   const dayLine = (at) => { if (chatDay(at) !== day) { if (day) rows.push({ day: chatDay(at) }); day = chatDay(at); } };
-  for (const t of turns) {
+  for (const [k, t] of turns.entries()) {
     if (t.at != null) {
       while (placed.length && placed[0].done_at < t.at) { const x = placed.shift(); dayLine(x.done_at); rows.push({ send: x }); }
       dayLine(t.at);
     }
-    rows.push({ turn: t });
+    rows.push(pair.has(k) ? { turn: t, files: pair.get(k) } : { turn: t });
   }
   for (const x of placed) rows.push({ send: x });
   for (const x of rest) rows.push({ send: x });
   return rows;
 }
-function chatTurn(r, source, i) {
+function chatTurn(r, source, i, imgUrl) {
   if (r.day) return html`<div key=${"d" + i} class="chat-day">${r.day}</div>`;
   if (r.send) {
     const x = r.send;
-    return html`<div key=${"s" + x.id} class=${"chat-turn op " + chatTone(x.state)}><div class="bubble">${x.text}</div>
+    return html`<div key=${"s" + x.id} class=${"chat-turn op " + chatTone(x.state)}><div class="bubble">${x.text}${x.files && x.files.length ? html`<${ChatImages} items=${x.files} />` : null}</div>
       <span class="chat-time">${x.state}${x.why ? " · " + x.why : ""}</span></div>`;
   }
   const t = r.turn, text = String(t.text ?? ""), time = chatTime(t.at);
@@ -2089,7 +2141,10 @@ function chatTurn(r, source, i) {
     const more = (t.counts ? Object.values(t.counts).reduce((a, b) => a + b, 0) : 1) - (t.tools || [text]).length;
     return html`<div key=${i} class="chat-turn tool" title=${(t.tools || [text]).join("\n") + (more > 0 ? "\n…and " + more + " before" : "")}><span>⚙</span><span>${chatTools(t)}</span>${time && html`<span>· ${time}</span>`}</div>`;
   }
-  if (t.role === "user" && t.from === "operator") return html`<div key=${i} class="chat-turn op"><div class="bubble">${text}</div><span class="chat-time">${time}${t.via === "terminal" && html`<span class="chat-via">${time ? " · " : ""}in Orca</span>`}<${CopyBtn} key=${text} text=${text} /></span></div>`;
+  if (t.role === "user" && t.from === "operator") {
+    const own = r.files || [], imgs = (t.images || []).map((n) => n == null ? null : { url: (own.find((f) => f.name === n) || {}).url || imgUrl(n) });
+    return html`<div key=${i} class="chat-turn op"><div class="bubble">${text}${imgs.length ? html`<${ChatImages} items=${imgs} />` : null}</div><span class="chat-time">${time}${t.via === "terminal" && html`<span class="chat-via">${time ? " · " : ""}in Orca</span>`}${text && html`<${CopyBtn} key=${text} text=${text} />`}</span></div>`;
+  }
   if (t.role === "user" && t.from === "interrupted") return html`<div key=${i} class="chat-turn in"><span>⏹ Interrupted${time ? " · " + time : ""}</span></div>`;
   if (t.role === "user") return html`<div key=${i} class="chat-turn in" title=${text}><span>in${time ? " · " + time : ""}</span><span class="txt">${text}</span></div>`;
   return html`<div key=${i} class="chat-turn agent"><div class="md" dangerouslySetInnerHTML=${{ __html: mdToHtml(text) }}></div><span class="chat-time">${time}<${CopyBtn} key=${text} text=${text} /></span></div>`;
@@ -2103,11 +2158,16 @@ const chatReplyAt = (turns) => { for (let i = (turns || []).length - 1; i >= 0; 
 // stay as they are); the new-reply dot compares a member's `reply_at` with its seen mark (lstore, chatSeenKey).
 const chatDraftKey = (project, topic, wt) => "b:chat-draft:" + project + "/" + topic + "/" + wt;
 const chatDraft = (project, topic, wt) => { const d = store.get(chatDraftKey(project, topic, wt), null); return d && typeof d === "object" ? d : {}; };
-const chatDraftSet = (project, topic, wt, text) => {
-  const d = { ...chatDraft(project, topic, wt) };
-  if (text) d.text = text; else delete d.text;
+// A member's draft holds `text` and `files` (the attached images as {id, url, name}, never bytes); a patch key that is
+// empty is dropped, and a draft with no keys is deleted.
+const chatDraftPatch = (project, topic, wt, patch) => {
+  const d = { ...chatDraft(project, topic, wt), ...patch };
+  for (const k of Object.keys(d)) if (d[k] == null || d[k] === "" || (Array.isArray(d[k]) && !d[k].length)) delete d[k];
   if (Object.keys(d).length) store.set(chatDraftKey(project, topic, wt), d); else store.del(chatDraftKey(project, topic, wt));
 };
+const chatDraftSet = (project, topic, wt, text) => chatDraftPatch(project, topic, wt, { text });
+const chatDraftFiles = (project, topic, wt) => (Array.isArray(chatDraft(project, topic, wt).files) ? chatDraft(project, topic, wt).files : [])
+  .filter((f) => f && typeof f.id === "string" && typeof f.url === "string").slice(0, CHAT_IMAGES);
 const chatNewReply = (project, m) => m.reply_at != null && lstore.get(chatSeenKey(project, m.wt), m.reply_at) < m.reply_at;
 const chatMailTip = (m) => m.unread + " unread · " + m.reply_due + " waiting for a reply";
 const chatMemberAria = (m, mail, fresh) => m.label + (mail > 0 ? ", " + mail + " mail" : "") + (fresh ? ", new reply" : "");
@@ -2121,7 +2181,12 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
   const [crew, setCrew] = useState([]);
   const [phone, setPhone] = useState(typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches);
   const [menu, setMenu] = useState(false);
+  const [files, setFiles] = useState(chatDraftFiles(project, topic, wt));   // the shown member's attached images {id, url, name}
+  const [ups, setUps] = useState([]);              // uploads under way or refused: {k, wt, state: "up"|"bad", msg}
+  const [note, setNote] = useState("");
+  const [drag, setDrag] = useState(false);
   const log = useRef(null), input = useRef(null), cur = useRef(wt), tabs = useRef(null), menuOn = useRef(false), swBtn = useRef(null);
+  const pick = useRef(null), held = useRef({}), slots = useRef({}), seq = useRef(0);   // held: wt -> its attached images; slots: wt -> uploads in flight
   cur.current = shown.wt; menuOn.current = menu;
   const url = "api/chat?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(shown.wt);
   const load = async () => {
@@ -2187,19 +2252,55 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
     if (m.wt === shown.wt) return;
     if (m.reply_at != null) lstore.set(chatSeenKey(project, m.wt), m.reply_at);
     cur.current = m.wt; setShown({ wt: m.wt, label: m.label }); setData(null); setErr(""); setPinned(true);
-    setText(String(chatDraft(project, topic, m.wt).text || ""));
+    setText(String(chatDraft(project, topic, m.wt).text || "")); setFiles(heldOf(m.wt)); setNote("");
     if (input.current && input.current.style) setTimeout(() => grow(input.current), 0);
   };
+  // The images attached to a member, kept in `held` (and in its draft); a put shows them when that member is the one shown.
+  const heldOf = (at) => held.current[at] || (held.current[at] = chatDraftFiles(project, topic, at));
+  const putHeld = (at, arr) => { held.current[at] = arr; chatDraftPatch(project, topic, at, { files: arr }); if (cur.current === at) setFiles(arr); };
+  const uploading = ups.some((u) => u.wt === shown.wt && u.state === "up");
+  // Attach images for the member shown now: each is shrunk if needed and uploaded at once; a fifth is refused.
+  const attach = (list) => {
+    const at = shown.wt, imgs = imageFiles(list), upUrl = "api/chat-file?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(at);
+    if (!imgs.length) return;
+    setNote("");
+    for (const f of imgs) {
+      if (heldOf(at).length + (slots.current[at] || 0) >= CHAT_IMAGES) { setNote("Up to " + CHAT_IMAGES + " images per message — remove one first."); break; }
+      const k = ++seq.current;
+      slots.current[at] = (slots.current[at] || 0) + 1;
+      setUps((u) => [...u, { k, wt: at, state: "up" }]);
+      (async () => {
+        try {
+          const r = await uploadImage(await shrinkImage(f), upUrl);
+          if (!heldOf(at).some((x) => x.id === r.id)) putHeld(at, [...heldOf(at), { id: r.id, url: r.url, name: f.name || "image" }]);
+          setUps((u) => u.filter((x) => x.k !== k));
+        } catch (e) { setUps((u) => u.map((x) => (x.k === k ? { ...x, state: "bad", msg: String(e.message || e) } : x))); }
+        finally { slots.current[at]--; }
+      })();
+    }
+  };
+  const dropFile = (id) => { putHeld(shown.wt, heldOf(shown.wt).filter((x) => x.id !== id)); setNote(""); };
+  const onPaste = (e) => {
+    const d = e.clipboardData, got = imageFiles(d && d.files && d.files.length ? d.files : Array.from((d && d.items) || []).filter((x) => x.kind === "file").map((x) => x.getAsFile()));
+    if (got.length) { e.preventDefault(); attach(got); }   // a text paste is left alone
+  };
+  const dragHas = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files");
   const send = async () => {
     const t = chatOneLine(text);
     const wt = shown.wt, to = wt;   // the member this line is for (shadows the opening member)
-    if (!t || busy === to) return;
+    const ids = heldOf(to).map((f) => f.id);
+    if ((!t && !ids.length) || busy === to || uploading) return;
     setBusy(to); setErr("");
     try {
-      await post("api/chat", { project, topic, wt, text: t });
+      await post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t });
       store.del(chatDraftKey(project, topic, to));   // a send clears that member's whole draft
-      if (cur.current === to) { setText(""); grow(input.current); setPinned(true); load(); }
-    } catch (e) { if (cur.current === to) setErr("not sent: " + String(e.message || e)); }
+      held.current[to] = [];
+      if (cur.current === to) { setText(""); setFiles([]); grow(input.current); setPinned(true); load(); }
+    } catch (e) {
+      const gone = /^image (\S+) is gone/.exec(String(e.message || ""));
+      if (e.status === 409 && gone) putHeld(to, heldOf(to).filter((x) => x.id !== gone[1]));   // that thumbnail goes; the rest stay
+      if (cur.current === to) setErr("not sent: " + String(e.message || e));
+    }
     finally { setBusy((v) => (v === to ? "" : v)); }
   };
   const turns = (data && data.turns) || [], sends = (data && data.sends) || [], rows = chatRows(turns, sends);
@@ -2222,7 +2323,9 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
   const dot = (m) => chatNewReply(project, m) && html`<span class="chat-new" title="New reply" aria-hidden="true"></span>`;
   const badge = (n, tip) => n > 0 && html`<span class="msg-badge" title=${tip}>${n}</span>`;
   return html`<div class="modal chat-modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div class="mbox chat">
+    <div class=${"mbox chat" + (drag ? " drop" : "")} onDragOver=${(e) => { if (dragHas(e)) { e.preventDefault(); if (!drag) setDrag(true); } }}
+      onDragLeave=${(e) => { if (!(e.relatedTarget && e.currentTarget.contains(e.relatedTarget))) setDrag(false); }}
+      onDrop=${(e) => { if (dragHas(e)) { e.preventDefault(); setDrag(false); attach(e.dataTransfer.files); } }}>
       <div class="mhd">${topic === "_studio" ? "Chat · Studio · " + project : html`Chat · ${phone && multi
         ? html`<span class="chat-sw"><button class="btn chat-swbtn" ref=${swBtn} aria-haspopup="menu" aria-expanded=${menu ? "true" : "false"}
             aria-label=${"Switch member, shown " + shown.label + (othersMail > 0 ? ", " + othersMail + " mail elsewhere" : "") + (othersNew ? ", new reply elsewhere" : "")}
@@ -2233,17 +2336,25 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
       ${multi && !phone && html`<div class="chat-tabs" role="tablist" aria-label="Members of this squad" ref=${tabs} onKeyDown=${tabKey}>${members.map((m, i) => html`<button key=${m.wt} id=${tabId(i)} class=${"chat-tab" + (m.wt === shown.wt ? " on" : "")} role="tab"
         aria-selected=${m.wt === shown.wt ? "true" : "false"} tabindex=${m.wt === shown.wt ? 0 : -1} title=${m.label} aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))}
         onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label.length > 14 ? m.label.slice(0, 13) + "…" : m.label}</span>${badge(mail(m), chatMailTip(m))}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}
-      <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${rows.length ? rows.map((r, i) => chatTurn(r, data.source, i))
+      <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${rows.length ? rows.map((r, i) => chatTurn(r, data.source, i, (n) => chatImgUrl(project, topic, n)))
         : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
         ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
         ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
       <div class="qfoot">
+        ${data && (data.agent === "muse" || data.source === "screen") && html`<span class="chat-note">this member may not see images</span>`}
+        ${(files.length > 0 || ups.some((u) => u.wt === shown.wt)) && html`<div class="chat-strip">${files.map((f) => html`<div key=${f.id} class="chat-th" title=${f.name}><img src=${f.url} alt=${f.name} />
+            <button type="button" class="chat-rm" aria-label=${"Remove " + f.name} onClick=${() => dropFile(f.id)}>✕</button></div>`)}
+          ${ups.filter((u) => u.wt === shown.wt).map((u) => html`<div key=${"u" + u.k} class=${"chat-th" + (u.state === "bad" ? " bad" : "")} title=${u.msg || "uploading"}>${u.state === "bad"
+            ? html`<span>${u.msg.length > 40 ? u.msg.slice(0, 39) + "…" : u.msg}</span><button type="button" class="chat-rm" aria-label="Dismiss" onClick=${() => setUps((l) => l.filter((x) => x.k !== u.k))}>✕</button>`
+            : html`<span class="dot spin" role="status" aria-label="Uploading"></span>`}</div>`)}</div>`}
         <textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX} enterkeyhint="send" value=${text} placeholder=${"Message " + shown.label + " (typed into its terminal when it is idle; Enter sends)"}
           onInput=${(e) => { setText(e.target.value); grow(e.target); chatDraftSet(project, topic, shown.wt, e.target.value); }}
-          onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (!e.shiftKey) send(); } }}></textarea>
+          onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (!e.shiftKey) send(); } }} onPaste=${onPaste}></textarea>
+        <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
+        <button type="button" class="btn sm chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}>📎</button>
         <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left} left</span><span class="sp"></span>
-        <button class="btn pri" disabled=${busy === shown.wt || !chatOneLine(text)} onClick=${send}>${busy === shown.wt ? "Sending…" : "Send"}</button>
-        ${err && html`<span class="err">${err}</span>`}
+        <button class="btn pri" disabled=${busy === shown.wt || uploading || (!chatOneLine(text) && !files.length)} onClick=${send}>${busy === shown.wt ? "Sending…" : uploading ? "Uploading…" : "Send"}</button>
+        ${err && html`<span class="err">${err}</span>`}${note && html`<span class="err">${note}</span>`}
       </div>
     </div></div>`;
 }
@@ -2841,7 +2952,7 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
         </div>`; })}
         ${s.role_tokens && Object.values(s.role_tokens).some((v) => v) && html`<div class="tier" title="price-weighted tokens per role, 7 days">spent 7d · ${["lead", "thinker", "builders (all units)", "review", "other"].map((r) => r + " ≈" + fmtTok(s.role_tokens[r.split(" ")[0]])).join(" · ")}</div>`}</div>`}
       <${PastAnswers} s=${s} />
-      <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} />
+      <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} atArchive=${true} />
       ${s.mermaid && html`<${GraphBox} s=${s} />`}
       ${(s.units || []).length > 0 && html`<${UnitsBox} s=${s} flow=${flow} toast=${toast} onPlan=${onPlan} />`}
       ${(s.leftovers || []).length > 0 && html`<${LeftoversBox} s=${s} />`}
@@ -3683,7 +3794,8 @@ function App() {
       const dTopic = debrief ? n.debrief : "";
       const openDebrief = () => { // the topic comes from the card's title; the text is the archived doc's debrief
         const a = (data.archived || []).find((x) => x.topic === dTopic && (!n.label || x.label === n.label || x.label == null));
-        setPlan({ name: dTopic + " — debrief", markdown: a && a.debrief ? a.debrief : "No debrief was written." });
+        // No archived squad, or an empty debrief: show the card's own text, saying the full one is not on the board.
+        setPlan({ name: dTopic + " — debrief", markdown: a && a.debrief ? a.debrief : (n.text || n.title || "") + "\n\nThe full debrief of this squad is not on the board." });
       };
       const markRead = async () => {
         if (sentQ.has(akey(n))) return;
@@ -3706,7 +3818,8 @@ function App() {
           ${debrief && html`<button class="btn sm" data-ev="open-debrief" onClick=${(e) => { e.stopPropagation(); openDebrief(); }}>Open</button>`}
           ${debrief && html`<button class="btn sm" data-ev="mark-read" onClick=${(e) => { e.stopPropagation(); markRead(); }}>Mark read</button>`}</div>
         <div class="l2">${linkedQ(n.title, n.repo_slug)}</div>
-        ${n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
+        ${debrief ? (n.text && n.text !== n.title && html`<div class="lndet dbr">${linkedQ(n.text, n.repo_slug)}</div>`)
+          : n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
           : n.text && n.text !== n.title && html`<div class="lndet">${linkedQ(n.text, n.repo_slug)}</div>`}
         ${n.why && html`<div class="lndet">Why: ${linkedQ(n.why, n.repo_slug)}</div>`}
         ${sent && html`<div class="lndet ok">${brief || debrief ? "✓ marked read" : n.squad === "_studio" ? "✓ dismissed" : "✓ sent"}</div>`}</div>`;

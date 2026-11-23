@@ -19,6 +19,7 @@ import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { paused } from "../pause/pause.ts";
 import { studioReady, studioView } from "../squad/studio.ts";
+import { STUDIO_MEMBER, sendFailed, sendOk } from "../squad/send-fail.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
 import { clearSending, markDelivered, markSending } from "../messages/messages.ts";
 
@@ -100,7 +101,10 @@ const poke: Fulfiller = {
       }
       const seat = x.act.seat(store, a.project, a.squad ?? null, `${a.subject}:${a.episode}`, wt, at);
       const r = await seat.send("poke-terminal", [p.handle, p.text]);
-      return r.code === 0 ? { done: true, result: "sent" } : { retry: `poke-terminal ${p.handle}: not sent` };
+      if (r.code === 0) { sendOk(x.store, a.project, STUDIO_MEMBER, at); return { done: true, result: "sent" }; }
+      const err = (r.err || r.out || "").trim();
+      sendFailed(x.store, a.project, STUDIO_MEMBER, err || `poke-terminal exit ${r.code}`, at);
+      return { retry: `poke-terminal ${p.handle}: not sent${err ? `: ${err}` : ""}` };
     }
     const m = memberAt(store, a, wt);
     const seat = x.act.seat(store, a.project, a.squad ?? m.squad, `${a.subject}:${a.episode}`, wt, at);
