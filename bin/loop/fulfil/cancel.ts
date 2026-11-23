@@ -28,7 +28,7 @@ async function cleanup(a: Action, x: Exec): Promise<Result> {
   // through its provider (forced, as worktree-rm here), both by path; its PR is closed as on Orca.
   const w = { project: a.project, squad: a.squad, wt, path };
   if (a.kind !== "cancel.pr" && byContract(x.store, w)) {
-    const o = a.kind === "cancel.stop" ? await contractCloseTerminals(a, x, w) : await contractRemoveTree(x, w, true);
+    const o = a.kind === "cancel.stop" ? await contractCloseTerminals(a, x, w) : await contractRemoveTree(a, x, w, true);
     if (o.code !== 0) return { retry: errOf(o, a.kind === "cancel.stop" ? "terminal.close" : "worktree remove") };
     if (tidy) await closeTidy.after(a, x, path, tidy);
     return { done: true };

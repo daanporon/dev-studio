@@ -263,7 +263,9 @@ backend (U11, "Started" below).
     leftover pass (`fulfil/worktree.ts`) and a host tidy of a class `d` tree (`fulfil/cleanup-act.ts`,
     found by its live `worktrees` row; no `worktree ps` read, and the tree is probed again before the
     removal). The provider keeps the branch (an unmerged one always); a dirty or unpushed tree is kept as
-    a leftover as on Orca. A cancel reads the tree from the `worktrees` row when Orca has none. Squads on
+    a leftover as on Orca. Before the provider runs, the removal checks the fence Orca's `worktree-rm`
+    checks (`pause.ts` `gateBlock` on the action's `childActivity` gate; blocked answers 75, a wait), and
+    a `terminal.close` that fails keeps the tree, since no backend drops a terminal with its folder. A cancel reads the tree from the `worktrees` row when Orca has none. Squads on
     `orca` keep `terminal-close-worktree` and `worktree-rm` by id. `tests/loop/contract-removal.test.ts`.
   - **Not yet.** The observer that reads these members' state is U12's; the role scripts' own backend
     calls are U11b's. `nesting.ts` skips such a

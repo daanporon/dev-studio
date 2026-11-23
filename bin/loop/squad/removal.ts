@@ -11,6 +11,7 @@ import type { Out } from "../io/orca.ts";
 import { removeWorktree, worktreeAt } from "../io/worktrees.ts";
 import { LOCAL } from "../drivers/contract.ts";
 import { onContract } from "./backend.ts";
+import { gateBlock, type ActivityGate } from "../pause/pause.ts";
 
 export type Where = { project: string; squad: string | null | undefined; wt: string; path: string };
 const OK: Out = { code: 0, out: "", err: "" };
@@ -34,8 +35,12 @@ export async function contractCloseTerminals(a: Action, x: Exec, w: Where): Prom
   return r.ok ? OK : { code: 1, out: "", err: r.error ?? "terminal.close failed" };
 }
 
-/** Remove the worktree at `path` through its recorded provider; a refusal (dirty, no row) is code 1. */
-export async function contractRemoveTree(x: Exec, w: Where, force = false): Promise<Out> {
+/** Remove the worktree at `path` through its recorded provider; a refusal (dirty, no row) is code 1. First
+ *  the fence Orca's worktree-rm checks on the action's gate (`childActivity`): blocked is code 75, as there. */
+export async function contractRemoveTree(a: Action, x: Exec, w: Where, force = false): Promise<Out> {
+  const gate = JSON.parse(x.act.childActivity(x.store, a).DS_LOOP_ACTIVITY) as ActivityGate;
+  const block = gateBlock(x.store, gate);
+  if (block) return { code: 75, out: "", err: `activity: ${block}` };
   try {
     await removeWorktree(x.store, w.path, { force }, x.now);
     return OK;

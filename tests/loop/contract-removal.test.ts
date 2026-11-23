@@ -19,6 +19,8 @@ import { Loop } from "../../bin/loop/core/tick.ts";
 import { git } from "../../bin/loop/io/worktrees.ts";
 import { cleanupAct, CLEANUP_ACT } from "../../bin/loop/fulfil/cleanup-act.ts";
 import { fakeProc, UID } from "./cleanup-fixture.ts";
+import { pause } from "../../bin/loop/pause/pause.ts";
+import { contractRemoveTree } from "../../bin/loop/squad/removal.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
@@ -174,6 +176,37 @@ describe("a squad on a contract backend removes through its provider (U11c)", ()
       payload: { topic: SQ, wt: String(b.wt), path, unit: "u1" } } as Action);
     for (let i = 0; i < 5 && tree(r.s, path)?.gone_at == null; i++) await r.tick();
     await removedByProvider(r, path, branch);
+  });
+
+  test("a paused squad's removal waits: the provider is not called, the tree stays", async () => {
+    const r = await rig();
+    const { b, path } = await startBuilder(r);
+    r.s.upsert("members", { id: b.id }, { status: "gone", want: null });
+    ended(r, b);
+    const a = { project: "fx", squad: SQ, member: String(b.wt), subject: String(b.wt), kind: "worktree.remove", episode: "leftover:1",
+      payload: { topic: SQ, wt: String(b.wt), path } } as Action;
+    pause(r.s, { scope: "squad", project: "fx", squad: SQ }, { by: "test" }, r.now());
+    const rm = await contractRemoveTree(a, r.x(), { project: "fx", squad: SQ, wt: String(b.wt), path });
+    expect(rm).toMatchObject({ code: 75, err: "activity: paused" });
+    expect(existsSync(path)).toBe(true);
+    expect(tree(r.s, path)?.gone_at ?? null).toBeNull();
+  });
+
+  test("a leftover pass whose terminal.close fails keeps the worktree", async () => {
+    const r = await rig();
+    const { b, path } = await startBuilder(r);
+    r.s.upsert("members", { id: b.id }, { status: "gone", want: null });
+    ended(r, b);
+    const call = r.contract.call.bind(r.contract);
+    r.contract.call = (async (op: string, req: unknown) => op === "terminal.close" ? { ok: false, error: { code: "internal", message: "stuck" } } : call(op as never, req as never)) as typeof r.contract.call;
+    r.queue.push({ project: "fx", squad: SQ, subject: String(b.wt), kind: "worktree.remove", episode: "leftover:1",
+      payload: { topic: SQ, wt: String(b.wt), path, unit: "u1" } } as Action);
+    await r.tick(3);
+    const done = r.s.db.query("SELECT result FROM episodes WHERE kind = 'action:worktree.remove' AND subject = ?").get(String(b.wt)) as Row | null;
+    expect(String(done?.result ?? "")).toContain("terminals not closed");
+    expect(existsSync(path)).toBe(true);
+    expect(tree(r.s, path)?.gone_at ?? null).toBeNull();
+    expect(live(r.contract, path)).toHaveLength(1);
   });
 
   test("a host tidy reads no Orca list, closes a stray terminal and removes the worktree by path", async () => {

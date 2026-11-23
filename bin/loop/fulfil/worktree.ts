@@ -72,8 +72,10 @@ async function remove(a: Action, x: Exec, p: P): Promise<Result> {
   if (stops) return { wait: stops };
   // U11c: a squad on a contract backend closes and removes through its contract and its provider, by path.
   const w = { project: a.project, squad: p.topic, wt, path }, contract = byContract(x.store, w);
-  if (contract) await contractCloseTerminals(a, x, w);
-  else await x.act.orca.run("terminal-close-worktree", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
+  if (contract) {
+    // No backend drops a contract terminal with its tree (Orca's worktree-rm does): one left open keeps it.
+    if ((await contractCloseTerminals(a, x, w)).code !== 0) return { done: true, result: "left: terminals not closed" };
+  } else await x.act.orca.run("terminal-close-worktree", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
   if (actionBlock(x.store, a)) return { wait: "activity changed before removal" };
   // U1 (KTD10): the project's cleanup_on_close, then stop what is still running in the tree, then probe again.
   const tidy = await closeTidy.before(a, x, path);
@@ -81,7 +83,7 @@ async function remove(a: Action, x: Exec, p: P): Promise<Result> {
   if (!("unpushed" in again)) return again;
   const { unpushed } = again;
   if (actionBlock(x.store, a)) return { wait: "activity changed before removal" };
-  const rm = contract ? await contractRemoveTree(x, w) : await x.act.orca.run("worktree-rm", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
+  const rm = contract ? await contractRemoveTree(a, x, w) : await x.act.orca.run("worktree-rm", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
   if (rm.code !== 0) return note(a, x, p, "rm-refused", `leftover ${path} still refused by worktree-rm — left as is`);
   await closeTidy.after(a, x, path, tidy);
   x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, "leftover-note"]);

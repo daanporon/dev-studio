@@ -242,7 +242,7 @@ async function removeEntity(a: Action, x: Exec, r: CleanupRow, f: Facts, reason:
 
 // U11c: a contract squad's worktree, as removeEntity: its terminals through the contract, then its provider.
 async function removeContract(a: Action, x: Exec, r: CleanupRow, own: Row, path: string, reason: string): Promise<Result> {
-  const w = { project: String(own.project), squad: String(own.squad), wt: contractWt(own), path };
+  const w = { project: String(own.project), squad: String(own.squad), wt: contractWt(own), path: String(own.path) };   // the row's own path: terminals match their cwd exactly
   if (actionBlock(x.store, a)) return { wait: "paused" };
   const c = await contractCloseTerminals(a, x, w);
   if (c.code !== 0) return failed(x, a, r, errOf(c, "terminal.close"));
@@ -251,7 +251,7 @@ async function removeContract(a: Action, x: Exec, r: CleanupRow, own: Row, path:
     const p = await probeTree(path, await targetRef(path));
     if (!p || p.dirty > 0 || p.unique > 0) return failed(x, a, r, p ? `changed after its terminals closed (dirty ${p.dirty}, unpushed ${p.unique})` : "probe failed after its terminals closed");
   }
-  const rm = await contractRemoveTree(x, w);
+  const rm = await contractRemoveTree(a, x, w);
   if (rm.code !== 0) return failed(x, a, r, errOf(rm, "worktree remove"));
   return removed(x, a, r, "cleanup_removed", { kb: r.size_kb, provider: own.provider, branch: own.branch ?? null, reason });
 }
