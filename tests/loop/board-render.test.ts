@@ -425,6 +425,37 @@ test("the Plans list: an approved plan shows its chip and a menu item that opens
   } finally { await r.window.happyDOM.close(); }
 });
 
+// ---- debrief-in-needs-you pages U1: the Try it group sits in Documents, after the debrief, and opens like a plan.
+test("Documents: a squad's Try it page shows as its own group and opens", async () => {
+  const sq = { ...udBoard.squads[0], debrief: "set out: x", try_it: { name: "sq-try-it.md", mtime: now - 600, markdown: "# Try it — sq\n\n1. Open the board; see the squad." } };
+  const r = await mount({ ...udBoard, squads: [sq] }, false);
+  const w = r.window, doc = w.document;
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await new Promise((x) => setTimeout(x, 30)); };
+  try {
+    doc.getElementById("squads").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    await click(doc.querySelector(".row.squad"));
+    const groups = [...doc.querySelectorAll(".docbox .docs")].map((g: any) => g.getAttribute("data-docs"));
+    expect(groups.slice(0, 2)).toEqual(["debrief", "tryit"]);
+    await click(doc.querySelector('.docs[data-docs="tryit"] .plan'));
+    expect(doc.querySelector(".mbox .mhd span")?.textContent).toBe("sq — try it");
+    expect(doc.querySelector(".mbox")?.textContent).toContain("Open the board; see the squad.");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+test("Documents: a squad without a Try it page has no Try it group", async () => {
+  const r = await mount({ ...udBoard, squads: [{ ...udBoard.squads[0], try_it: null }] }, false);
+  const w = r.window, doc = w.document;
+  try {
+    doc.getElementById("squads").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    doc.querySelector(".row.squad").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await new Promise((x) => setTimeout(x, 30));
+    expect(doc.querySelector('.docs[data-docs="tryit"]')).toBeNull();
+  } finally { await r.window.happyDOM.close(); }
+});
+
 test("the dim ★ on a Merged card reads at opacity .7, dimmer than the bright ★ (U6)", async () => {
   const bright = { ...flowBoard.flow.cards[0], focus: "on", key: "fixture/gone/bright", slug: "bright" };
   const r = await mount({ ...flowBoard, flow: { ...flowBoard.flow, cards: [bright, ...flowBoard.flow.cards] } }, false);
