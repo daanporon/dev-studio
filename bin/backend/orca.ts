@@ -488,6 +488,17 @@ export function nameUnlock(env: Env, key: string): void {
   try { rmdirSync(dir); } catch { /* another holder's file */ }
 }
 
+/** The fields of an Orca worktree the `orca` worktree provider reads (wt-make, wt-show, wt-list). */
+const wtSlim = (w: Record<string, unknown>) => ({ id: w.id ?? null, path: w.path ?? null, branch: w.branch ?? null,
+  head: w.head ?? null, parentWorktreeId: w.parentWorktreeId ?? null });
+/** `result.worktree` of an Orca JSON answer, slimmed; null when the answer holds none. */
+function wtJson(out: string): ReturnType<typeof wtSlim> | null {
+  try {
+    const w = JSON.parse(out)?.result?.worktree;
+    return w && typeof w === "object" && w.id && w.path ? wtSlim(w) : null;
+  } catch { return null; }
+}
+
 /** wt_create <repo> <name> [parent] [extra args] -> the worktree id. Idempotent: reuses a LIVE worktree
  *  with this displayName (it carries the ds-<label>-<role>-<topic> namespace), never an archived one (a
  *  torn-down ds-<label>-… must not be started back to life). Never matches the repo by the ps row's .path:
@@ -3739,6 +3750,45 @@ export const VERBS: Record<string, Verb> = {
     // orca prints its error JSON on STDOUT, so keep it and surface it.
     ctx.err(`${chomp(r.out + r.err)}\norca adapter: worktree rm failed for ${a[0]} (see error above)\n`);
     return 1;
+  },
+  /** <repo> <name> <branch> <base> [parent_path] -> the new worktree as one JSON line ({id, path, branch, head,
+   *  parentWorktreeId}): `orca worktree create` with no agent and no Run, setup hooks skipped, nested under
+   *  <parent_path> or explicitly top-level (the `orca` worktree provider, U8b). Orca picks the folder, and an
+   *  existing branch or taken name gets a `-2` suffix: the caller checks the answer. */
+  async "wt-make"(ctx, a) {
+    if (!need(ctx, a, 4)) return 1;
+    const parent = blank(a[4]);
+    const r = await orca(ctx, ["worktree", "create", "--repo", `path:${a[0]}`, "--name", a[1], "--branch", a[2], "--base-branch", a[3],
+      ...(parent ? ["--parent-worktree", `path:${parent}`] : ["--no-parent"]), "--setup", "skip", "--json"], "keep");
+    const w = r.code === 0 ? wtJson(r.out) : null;
+    if (w) { ctx.out(`${JSON.stringify(w)}\n`); return 0; }
+    ctx.err(`${chomp(r.out + r.err)}\norca adapter: wt-make failed (repo=${a[0]} name=${a[1]})\n`);
+    return 1;
+  },
+  /** <selector> -> the worktree as one JSON line (as wt-make prints it); exit 3 when Orca has no such worktree.
+   *  `path:<path>` finds a worktree Orca no longer lists too (docs/backends/orca-probe.md Q1). */
+  async "wt-show"(ctx, a) {
+    if (!need(ctx, a, 1)) return 1;
+    const r = await orca(ctx, ["worktree", "show", "--worktree", a[0], "--json"], "keep");
+    const w = r.code === 0 ? wtJson(r.out) : null;
+    if (w) { ctx.out(`${JSON.stringify(w)}\n`); return 0; }
+    if (/selector_not_found/.test(r.out + r.err)) return 3;
+    ctx.err(`${chomp(r.out + r.err)}\norca adapter: wt-show failed for ${a[0]}\n`);
+    return 1;
+  },
+  /** <repo> -> one JSON line per worktree Orca lists for the repo (as wt-make prints them), the main checkout
+   *  left out; exit 1 when the list cannot be read whole (a truncated list would read as worktrees gone). */
+  async "wt-list"(ctx, a) {
+    if (!need(ctx, a, 1)) return 1;
+    const r = await orca(ctx, ["worktree", "list", "--repo", `path:${a[0]}`, "--limit", "10000", "--json"], "keep");
+    let res: { worktrees?: unknown[]; truncated?: boolean } | null = null;
+    try { res = r.code === 0 ? JSON.parse(r.out).result : null; } catch { res = null; }
+    if (!res || !Array.isArray(res.worktrees) || res.truncated) {
+      ctx.err(`${chomp(r.out + r.err)}\norca adapter: wt-list failed for ${a[0]}${res?.truncated ? " (truncated)" : ""}\n`);
+      return 1;
+    }
+    for (const w of res.worktrees as Record<string, unknown>[]) if (!w.isMainWorktree) ctx.out(`${JSON.stringify(wtSlim(w))}\n`);
+    return 0;
   },
   /** <repo> <name> <agent> <prompt> [parent_wt] -> worktree id; create + launch the agent if absent. An empty
    *  <agent> creates the worktree only (/ds-up then opens the Studio with studio-start, U262). */
