@@ -10,7 +10,8 @@ You investigate a question and return a report. You write no production code.
    the Thinker can plan against. Surface a question you cannot resolve up the
    tree (`conventions/escalation.md`). Before your `worker_done`, record the
    verdict with `~/.dev-studio/bin/ds finish <unit|-> --outcome verdict --body "<recommendation
-   and where the report is>"` (one finishes row; `-` when the question is no unit's).
+   and where the report is>"` (one finishes row; `-` when the question is no unit's). On a squad
+   not on Orca (`ds finish` says so: "no worker_done") that row is the whole report: skip `worker_done`.
 
 Model: see `conventions/roles.conf` (default fable). Started on demand, not at
 every spawn.

@@ -145,3 +145,15 @@ test("the board: each squad's backend and tool, the text line only off orca, and
   expect(lim.find((l: any) => l.key === "default_backend")).toMatchObject({ value: "tmux", allowed: ["orca", "orca-lite", "tmux", "herdr"] });
   expect(lim.find((l: any) => l.key === "worktree_provider")).toMatchObject({ value: "auto", allowed: ["auto", "git", "treehouse"] });
 });
+
+test("U11: off Orca only claude has a launch line: a roster role or fallback on codex or muse is named; elevate roles are not", async () => {
+  const { noLaunchLine } = await import("../../bin/commands/spawn-squad-ts.ts");
+  const roster = new Map([
+    ["lead", "claude  sonnet always"],
+    ["thinker-deep", "codex gpt elevate"],
+    ["builder", "claude  opus   ondemand -  claude:sonnet,muse:muse-spark-1.3"],
+    ["tester", "codex gpt-5 ondemand"],
+  ]);
+  expect(noLaunchLine(roster)).toEqual(["builder: muse", "tester: codex"]);
+  expect(noLaunchLine(new Map([["lead", "claude sonnet always"], ["builder", "claude opus ondemand - claude:sonnet"]]))).toEqual([]);
+});

@@ -442,6 +442,20 @@ eq "already-sent keeps the recorded PR" "$(pr_of)" "7"
 has "already-sent says nothing more to send" "$out" "worker_done was already sent for this dispatch"
 export BACKEND_FAIL=0 BACKEND_ERR=""
 
+# --- U11 (orca-backend-alternatives): a squad not on Orca sends no worker_done ----------
+# DS_BACKEND is on every terminal the loop makes for such a squad: the finish row is the finish.
+export GH_JSON='[{"number":7,"state":"OPEN"}]'; health ready.json; reset_calls; mkstate
+ok_before="$(fin_count "outcome = 'ok'")"
+DS_BACKEND=tmux DS_GEN=gen-t run_fu "$STATE" U1-widget
+eq "non-Orca squad exits 0" "$rc" "0"
+eq "non-Orca squad records the PR" "$(pr_of)" "7"
+eq "non-Orca squad sends no worker_done" "$(wd_count)" "0"
+has "non-Orca squad says why" "$out" "squad on backend tmux: no worker_done"
+has "non-Orca receipt names the PR" "$out" "finished (PR #7)"
+has "non-Orca squad records its finish" "$out" "finish"
+eq "non-Orca squad's finish is the ok row of this unit and head (no second one)" "$(fin_count "outcome = 'ok'")" "$ok_before"
+has "non-Orca journal does not claim worker_done" "$(tail -3 "$JFILE")" "no worker_done (no Run)"
+
 # --- a journal that can't be written warns but doesn't block --------------------------
 mkdir -p "$SD"; rm -rf "$SD/journals"; touch "$SD/journals"; reset_calls; mkstate
 run_fu "$STATE" U1-widget
