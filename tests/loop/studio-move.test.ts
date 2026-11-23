@@ -16,7 +16,8 @@ import { since } from "../../bin/loop/core/events.ts";
 import { makeLimits, type Pick, type PickArgs } from "../../bin/loop/reconcilers/limits.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import studio from "../../bin/loop/fulfil/studio.ts";
-import { MOVE } from "../../bin/loop/squad/studio.ts";
+import { MOVE, RESTART_APPROVED, studioReady } from "../../bin/loop/squad/studio.ts";
+import studioRec from "../../bin/loop/reconcilers/studio.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -525,5 +526,88 @@ describe("configurable-role-elevation U3: the Studio moves back up", () => {
     expect(await studio.exec(a, { store: s, project: "fx", tick: 1, now: T + 5, fired: [], poked: new Set<string>(), act })).toMatchObject({ done: true });
     expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" })!.ended_at).toBe(T + 5);
     expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:approved" })!.ended_at).toBeNull();
+  });
+});
+
+describe("studio-hung-agent-broken U2: the operator's Restart Studio", () => {
+  // The broken Studio's card as liveness.ts files it, stood in observed_alerts the way the observer keeps it.
+  const card = (s: Store, handle = "term_s") => s.upsert("observed_alerts", { project: "fx", id: "loop-_studio-x" },
+    { doc: JSON.stringify({ id: "loop-_studio-x", title: "Studio not responding", kind: "agent_broken", restart: true, handle, options: ["Restart Studio", "It's fine"] }), observed_at: T });
+  const x = (s: Store, act = new LoopActuator({ orca: new FakeBackend() })) => ({ store: s, project: "fx", tick: 1, now: T, fired: [], poked: new Set<string>(), act });
+  const answer = (s: Store, said?: string) => studio.exec({ project: "fx", squad: null, member: null, subject: "req:1", kind: "dismiss", episode: "req:1",
+    payload: { id: "loop-_studio-x", ...(said === undefined ? {} : { answer: said }) } }, x(s));
+  // The Studio reconciler with the real actuator and fulfillers over a fake Orca.
+  function restarter(s: Store) {
+    const orca = new FakeBackend();
+    orca.agents = [{ wt: STUDIO, handle: "term_s", title: "claude" }, { wt: STUDIO, handle: "term_l", title: "ds-loop briefing" }];
+    const act = new LoopActuator({ orca });
+    const loop = new Loop(s, { observers: [], reconcilers: [studioRec] }, act, { projects: () => ["fx"] });
+    return { orca, tick: async (at: number) => { await loop.tick(at); await act.drain(); } };
+  }
+  const approval = (s: Store) => s.get("episodes", { project: "fx", subject: MOVE, kind: RESTART_APPROVED });
+
+  test("answered Restart Studio while it is not ready: one restart on its own account and model, its tab closed once, the approval ended", async () => {
+    const s = rig({ draft: "half a thought" }), r = restarter(s);
+    expect(studioReady(s, "fx", T).ready).toBe(false);
+    card(s);
+    expect(await answer(s, " restart studio ")).toMatchObject({ done: true });
+    expect(approval(s)).toMatchObject({ state: "approved", ended_at: null, source: "board", result: "term_s" });
+    expect(payloads(s, "studio_move_approved")).toEqual([{ alert: "loop-_studio-x", why: "restart", handle: "term_s" }]);
+    await r.tick(T + 10);
+    expect(r.orca.of("terminal-close").map((c) => c.args)).toEqual([["term_s"]]);
+    const start = r.orca.of("studio-start");
+    expect(start).toHaveLength(1);
+    expect(start[0]!.args.slice(0, 4)).toEqual([STUDIO, "acct-a", "opus", "-"]);
+    expect(start[0]!.args[5]).toContain("the operator restarted it from the board");
+    const handle = String(studioMember(s).handle);
+    expect(handle).toMatch(/^term_\d+$/);
+    expect(studioMember(s)).toMatchObject({ account: "acct-a", agent: "claude", model: "opus" });
+    expect(payloads(s, "studio_moved")).toEqual([{ handle, previous: "term_s", from: "claude:acct-a", to: "claude:acct-a", model: "opus", why: "restart" }]);
+    expect(approval(s)).toMatchObject({ state: "ended", ended_at: T + 10 });
+    await r.tick(T + 400);
+    expect(r.orca.of("terminal-close")).toHaveLength(1);
+    expect(r.orca.of("studio-start")).toHaveLength(1);
+  });
+
+  test("a replay of the restart closes nothing: after the close it only starts, after the start it does nothing", async () => {
+    const s = rig({ draft: "half a thought" });
+    card(s);
+    await answer(s, "Restart Studio");
+    const a = studioRec.run({ store: s, project: "fx", tick: 1, now: T + 5, fired: [], poked: new Set() } as never).find((y) => y.kind === "studio-move")!;
+    expect(a.payload).toMatchObject({ handle: "term_s", agent: "claude", account: "acct-a", model: "opus", why: "restart" });
+    const orca = new FakeBackend(), ex = x(s, new LoopActuator({ orca }));
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:move" }, { episode_key: a.episode, state: "closed", started_at: T, source: "loop", observed_at: T });
+    expect(await studio.exec(a, ex)).toMatchObject({ done: true });
+    expect(orca.of("terminal-close")).toEqual([]);
+    expect(orca.of("studio-start")).toHaveLength(1);
+    expect(await studio.exec(a, ex)).toMatchObject({ done: true, result: "already started" });
+    expect(orca.of("terminal-close")).toEqual([]);
+    expect(orca.of("studio-start")).toHaveLength(1);
+  });
+
+  test("It's fine, Dismiss or any other answer only clears the card: no approval, no move", async () => {
+    for (const said of ["It's fine", undefined, "restarted it myself"]) {
+      const s = rig(), r = restarter(s);
+      card(s);
+      expect(await answer(s, said)).toMatchObject({ done: true });
+      expect(s.db.query("SELECT 1 FROM observed_alerts WHERE project = 'fx' AND id = 'loop-_studio-x'").get()).toBeNull();
+      expect(approval(s)).toBeNull();
+      await r.tick(T + 10);
+      expect(r.orca.of("terminal-close")).toEqual([]);
+      expect(r.orca.of("studio-start")).toEqual([]);
+    }
+  });
+
+  test("an approval for a terminal that is no longer the Studio's ends with no move; a limit card's \"move it\" files no restart", async () => {
+    const s = rig(), r = restarter(s);
+    card(s, "term_old");
+    await answer(s, "Restart Studio");
+    await r.tick(T + 10);
+    expect(r.orca.of("terminal-close")).toEqual([]);
+    expect(approval(s)).toMatchObject({ state: "ended", ended_at: T + 10 });
+    const u = rig(), ru = restarter(u);
+    u.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:approved" }, { episode_key: "x", state: "approved", started_at: T - 5, ended_at: null, source: "board", observed_at: T - 5 });
+    await ru.tick(T + 10);
+    expect(ru.orca.of("terminal-close")).toEqual([]);
   });
 });

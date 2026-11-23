@@ -87,6 +87,7 @@ import { tailOf } from "../observers/state.ts";
 import { redact } from "../core/redact.ts";
 import { wake } from "../pause/wake.ts";
 import { settledDispatch } from "./members.ts";
+import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioView } from "../squad/studio.ts";
 
 export const POKE_TEXT = "dev-studio loop: you went quiet with unread messages. Check your inbox now and carry on with your work.";
 export const QUIET_POKE_TEXT = "dev-studio loop: you have been working with no output for a while — are you stuck? If you are, ask your Lead; if not, carry on with your work.";
@@ -442,7 +443,8 @@ class Pass {
   longStep(wt: string, out: number, extra = 0): boolean { return longStepOpen(this.store, this.project, wt, this.now, out, extra); }
 
   alert(squad: string | null, key: string, ep: string, text: string, to: "squad" | "@project",
-    option = "look at it, then restart it by hand (restart-role.sh)", why = "the loop does not restart an agent twice in a row or one that did not come back"): void {
+    option = "look at it, then restart it by hand (restart-role.sh)", why = "the loop does not restart an agent twice in a row or one that did not come back",
+    card: { title?: string; fields?: Record<string, unknown> } = {}): void {
     const k = { project: this.project, subject: key, kind: "alerted" };
     const row = this.store.get("episodes", k);
     let seen: string[] = [];
@@ -450,13 +452,32 @@ class Pass {
     if (seen.some((e) => this.same(row, ep, e))) return;
     seen.push(ep);
     this.store.upsert("episodes", k, { squad, started_at: this.now, episode_key: ep, count: seen.length, state: JSON.stringify(seen), source: "loop", observed_at: this.now });
-    this.actions.push({ project: this.project, squad, subject: key, kind: "alert", episode: ep, payload: { title: "Agent broken", card: "agent_broken", text, option, why, to } });
+    this.actions.push({ project: this.project, squad, subject: key, kind: "alert", episode: ep,
+      payload: { title: card.title ?? "Agent broken", card: "agent_broken", text, option, why, to, ...(card.fields ? { fields: card.fields } : {}) } });
+  }
+
+  // studio-hung-agent-broken U2: the Studio's own card. It names the project's Studio terminal and, with an
+  // adopted handle, offers Restart Studio (fulfil/studio.ts records the approval, reconcilers/studio.ts
+  // files the restart). The text keeps starting `studio (<cause> since `, which alertGone (alerts.ts) clears on.
+  studioAlert(key: string, b: Broken, what: string): void {
+    const v = studioView(this.store, this.project), handle = (v?.member?.handle as string | null) || null;
+    const term = handle ? v!.terms.find((t) => t.handle === handle) : undefined;
+    const where = handle ? `your cockpit terminal ${term?.title || "untitled"}, ${handle}` : "your cockpit terminal; the loop has adopted none";
+    const state = b.cause === "hung" ? `has shown no output for ${Math.max(0, Math.round((this.now - b.since) / 60))} min while Orca reads it as working`
+      : b.cause === "exited" ? "has no agent running in its worktree" : b.cause === "dead" ? "is no longer listed by Orca" : `is ${b.cause}`;
+    const text = `${what} — the ${this.project} Studio (${where}) ${state}`;
+    const why = "The loop never restarts the Studio on its own.";
+    // No handle, nothing to restart through: the one acknowledgement, as before.
+    if (!handle) { this.alert(null, key, b.ep, text, "@project", "look at it, then restart it by hand", why, { title: STUDIO_CARD_TITLE }); return; }
+    this.alert(null, key, b.ep, text, "@project", "", why,
+      { title: STUDIO_CARD_TITLE, fields: { restart: true, handle, options: [RESTART_STUDIO, STUDIO_FINE] } });
   }
 
   // handle: one request per episode; a RECHECK_MIN recheck; a second break within REBREAK_MIN goes up.
   handle(squad: string | null, key: string, target: string, member: string, topic: string, b: Broken): void {
     const what = `${member}${topic ? ` of ${topic}` : ""} (${b.cause} since ${hhmm(b.since)})`;
     const to = squad ? "squad" : "@project";
+    if (target === "_operator" && key === "_studio") { this.studioAlert(key, b, what); return; }
     if (target === "_operator") { this.alert(squad, key, b.ep, `${what} — nobody above it can restart it`, to); return; }
     const k = { project: this.project, subject: key, kind: "req" };
     const req = this.store.get("episodes", k), t = Number(req?.started_at ?? 0);

@@ -10,11 +10,18 @@
 // restart) is typed here, the way compaction.ts types the Studio's /compact: through wake() into the
 // adopted handle only, and only while studioReady() holds. A session adopted after reload_at satisfies
 // the wish without an ack, as decide.ts's fresh process start does for a member.
+//
+// studio-hung-agent-broken U2: the operator's Restart Studio (restartStudio below). The broken Studio's card
+// (liveness.ts) answered "Restart Studio" leaves an open studio:restart-approved (fulfil/studio.ts dismiss); it
+// becomes exactly one studio-move, why "restart", on the Studio's own agent, account, model and effort, which
+// skips studioReady() (fulfil/studio.ts move). The move ends the approval whatever comes of it; one that no
+// longer fits (no adopted handle, or not the terminal the card named) is ended with no move. The loop files
+// this move only on that answer, never on its own.
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import { quote } from "../pause/pause.ts";
 import { wake } from "../pause/wake.ts";
-import { STUDIO_SQUAD, studioReady, studioView } from "../squad/studio.ts";
+import { MOVE, RESTART_APPROVED, STUDIO_SQUAD, studioReady, studioView } from "../squad/studio.ts";
 import { alertAction } from "./alerts.ts";
 
 const KEY = "studio.adopt";
@@ -73,4 +80,23 @@ export function reloadStudio(ctx: TickCtx): Action[] {
   return wake(ctx, v.wt, studioReloadText(store, project), "reload", `reload:${at}`, { handle }).actions;
 }
 
-export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx)] } satisfies Reconciler;
+export function restartStudio(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx;
+  const key = { project, subject: MOVE, kind: RESTART_APPROVED };
+  const ok = store.get("episodes", key);
+  if (!ok || ok.ended_at != null) return [];
+  // A move already claimed (a limit move, or this restart) settles first.
+  const claim = store.get("episodes", { project, subject: MOVE, kind: "action:studio-move" });
+  if (claim && claim.ended_at == null && ["pending", "acted", "running"].includes(String(claim.state))) return [];
+  const v = studioView(store, project), m = v?.member as Row | null | undefined, handle = (m?.handle as string | null) || null;
+  const named = (ok.result as string | null) || null;
+  if (!v || !m || m.status === "gone" || !handle || (named && named !== handle)) {
+    store.upsert("episodes", key, { ended_at: now, state: "ended", observed_at: now });
+    return [];
+  }
+  const agent = String(m.agent || v.agent), account = String(m.account || "-");
+  return [{ project, squad: null, member: v.wt, subject: MOVE, kind: "studio-move", episode: `restart|${handle}@${ok.started_at}`,
+    payload: { handle, agent, account, model: String(m.model || "-"), effort: String(m.effort || "-"), from: `${agent}:${account}`, why: "restart" } }];
+}
+
+export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx), ...restartStudio(ctx)] } satisfies Reconciler;
