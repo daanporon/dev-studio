@@ -14,7 +14,7 @@ import { createWorktree, git, listWorktrees, provider, removeWorktree, WorktreeE
 import { fetchTreehouse, holderOf, slots, treehouse } from "../../bin/loop/io/providers/treehouse.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "wt-treehouse-"));
-const ENV = ["HOME", "XDG_CONFIG_HOME", "TREEHOUSE_ROOT", "DS_TREEHOUSE_BIN"] as const;
+const ENV = ["HOME", "XDG_CONFIG_HOME", "TREEHOUSE_ROOT", "DS_TREEHOUSE_BIN", "TREEHOUSE_NO_UPDATE_CHECK"] as const;
 const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 const restore = () => { for (const k of ENV) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } };
 const stores: Store[] = [];
@@ -71,6 +71,9 @@ if ("skip" in got) {
     process.env.HOME = join(dir, "home");
     process.env.XDG_CONFIG_HOME = join(dir, "home", ".config");
     process.env.TREEHOUSE_ROOT = join(dir, "pools");
+    // No update check: treehouse runs it in the background and its update-check.json can land in the temp
+    // HOME after afterAll removed it (tests/ci.sh's temp-dirs check then fails).
+    process.env.TREEHOUSE_NO_UPDATE_CHECK = "1";
     mkdirSync(process.env.XDG_CONFIG_HOME, { recursive: true });
   };
   const T = 120_000;

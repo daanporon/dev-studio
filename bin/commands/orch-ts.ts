@@ -63,7 +63,7 @@ const LOOP_HELP = [
   "  exits 5 and the answer comes as mail (the loop pokes you; ds msg inbox, watch.sh --worktree).",
 ].join("\n") + "\n";
 
-const LIFECYCLE = new Set(["adopt", "run-create", "task-create", "lead-start", "lead-worker-start", "role-start", "wt-create", "worker-resume",
+const LIFECYCLE = new Set(["adopt", "run-create", "task-create", "lead-start", "lead-worker-start", "role-start", "wt-create", "wt-make", "worker-resume",
   "worker-start", "worker-stop", "worker-release", "worker-reclaim", "worker-abandon", "dispatch", "dispatch-abandon",
   "worktree-rm", "terminal-close-worktree", "studio-start"]);
 /** Backend verbs only one loop fulfiller may run, for an operator's press on the board (account-free-resets
