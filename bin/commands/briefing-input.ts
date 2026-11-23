@@ -341,7 +341,9 @@ export function collect(s: Store, w: Window): Facts {
 
   const finished: Facts["finished"] = [];
   // No debrief at done (debrief-in-needs-you U2): a done squad's Try it comes from its newest approved plan's "## Try it" section.
-  const entry = (squad: string, how: "done" | "closed", at: number, debrief: string | null, doc: Row | null = null) => ({ squad, how, at, debrief, try_it: debrief ? tryItOf(debrief) : tryItOf(planTryIt(doc)) });
+  const entry = (squad: string, how: "done" | "closed", at: number, debrief: string | null, doc: Row | null = null) => ({ squad, how, at, debrief, try_it: tryItPage(pageOf(squad)) ?? (debrief ? tryItOf(debrief) : tryItOf(planTryIt(doc))) });
+  // debrief-in-needs-you pages U1: the squad's Try it page (live in squads/, after archive in archive/) comes first.
+  const pageOf = (t: string) => ((s.db.query("SELECT body FROM documents WHERE project = ? AND path IN (?, ?) ORDER BY path LIMIT 1").get(label, `${label}/archive/${t}-try-it.md`, `${label}/squads/${t}-try-it.md`) as Row | null)?.body as string | undefined) ?? null;
   const debriefOf = (d: Row | null) => (typeof d?.debrief === "string" && d.debrief.trim() ? d.debrief.trim() : null);
   for (const q of squadRows) {
     const t = String(q.topic);
@@ -498,6 +500,16 @@ export function planTryIt(doc: Row | null): string | null {
     }
   }
   return null;
+}
+
+// The Try it page of a squad (`<topic>-try-it.md`): the one line `Try it: nothing to try by hand — <why>` is `nothing`, else
+// every numbered step across its dated sections counts; null when there is no page or no step in it (the caller falls back).
+export function tryItPage(text: string | null): TryIt | null {
+  if (!text) return null;
+  const none = text.split("\n").find((l) => /^\s*try it\s*:\s*nothing to try/i.test(l));
+  if (none) return tryItOf(none);
+  const steps = text.split("\n").filter((l) => /^\s*\d{1,2}[.)]\s+\S/.test(l)).length;
+  return steps ? { kind: "steps", steps } : null;
 }
 
 // The debrief's "Try it" part: a line starting (after a list marker or **) with "Try it".

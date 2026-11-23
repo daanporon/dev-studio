@@ -217,7 +217,7 @@ async function archive(a: Action, x: Exec, r: Row): Promise<Result> {
     mkdirSync(arch, { recursive: true });
     const stamp = isoAt(at).replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
     writeFileSync(join(arch, `${topic}-${stamp}.json`), render(doc));
-    try { for (const f of readdirSync(dir)) if (f.startsWith(`${topic}-`) && (f.endsWith("-plan.md") || f.endsWith("-plan.approved.md"))) renameSync(join(dir, f), join(arch, f)); } catch { /* no plans */ }
+    try { for (const f of readdirSync(dir)) if (f.startsWith(`${topic}-`) && (f.endsWith("-plan.md") || f.endsWith("-plan.approved.md") || f === `${topic}-try-it.md`)) renameSync(join(dir, f), join(arch, f)); } catch { /* no plans */ }
   }
   try { rmSync(live, { force: true }); } catch { /* already gone */ }
   // The row's doc loses its queue in the same write, so a later questions.sync (an import, squad-state)

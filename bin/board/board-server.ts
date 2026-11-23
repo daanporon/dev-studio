@@ -33,6 +33,7 @@
 //   GET /api/chat-file?project=<label>&topic=<slug|_studio|_start>&name=<sha16>.<ext>   one stored chat image (and HEAD),
 //                              nosniff, a no-script CSP, cached a day (the name is a content hash); no member check
 //   GET /healthz               {ok, pid, port}: the loop's ping (the loop runs this server, U16)
+//   GET /page/<label>/pages/<topic>/<path>   one saved copy of a review page (sandboxed, read-only; saved-pages.ts)
 //   GET /lavish/<key>          302 to that Lavish review page; when Lavish is down, a `lavish`
 //                              request and a page that reloads until it is up
 // Writes (POST, JSON, same-origin), each a `requests` row unless said otherwise:
@@ -83,6 +84,7 @@ import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
 import { skillsJson } from "./skills-data.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
+import { servePage } from "./saved-pages.ts";
 import { answer as answerQuestion } from "../loop/messages/questions.ts";
 import { dbPath, open, openReadOnly, stateRoot, type Row, type Store } from "../loop/core/store.ts";
 import { checkExportText, exportTransfer, IMPORT_FILES, planImport, readGet, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
@@ -1075,6 +1077,22 @@ const waitPage = (why: string) => new Response(`<!doctype html><meta charset="ut
 <title>Starting Lavish</title><body style="font:15px system-ui;margin:2em">Lavish is starting (${why}); this page reloads until it is up.</body>`,
   { status: 202, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 
+// GET /page/<label>/pages/<topic>/<path> -> one saved copy of a review page (or a css, js, image or font file it
+// links, by extension) from `<state root>/<label>/pages/<topic>/`, read-only (bin/board/saved-pages.ts). Served
+// under that path so a page's relative links resolve; its scripts run in an opaque origin (CSP sandbox), so they
+// cannot call this board's API.
+function pageGet(url: URL) {
+  let seg: string[];
+  try { seg = url.pathname.slice("/page/".length).split("/").map(decodeURIComponent); } catch { return text(404, "not found\n"); }
+  const [project, pages, topic, ...rest] = seg;
+  if (pages !== "pages" || !NAME.test(project ?? "") || !SQUAD.test(topic ?? "")) return text(404, "not found\n");
+  if ((scope.project && scope.project !== project) || (scope.topic && scope.topic !== topic)) return json(403, { error: "target is outside this board's scope" });
+  const f = servePage(stateRoot(), project, topic, rest);
+  if (!f) return text(404, "not found\n");
+  return new Response(f.bytes, { status: 200, headers: { "Content-Type": f.type, "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox allow-scripts", "Cache-Control": "no-store" } });
+}
+
 // GET /lavish/<key> -> 302 to that Lavish review page; when Lavish is down, one `lavish` request.
 async function lavish(key: string) {
   if (!/^[0-9a-f]{16}$/.test(key)) return text(404, "not found\n");
@@ -1116,6 +1134,7 @@ async function get(req: Request, url: URL) {
   // The loop's liveness ping (U16): cheap, no db read, so a slow render is never a dead board.
   if (path === "/healthz") return json(200, { ok: true, pid: process.pid, port });
   if (path.startsWith("/lavish/")) return lavish(path.slice(8));
+  if (path.startsWith("/page/")) return pageGet(url);
   return text(404, "not found\n");
 }
 // --- end of read routes ---------------------------------------------------------------------------
