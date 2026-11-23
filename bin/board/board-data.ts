@@ -2887,12 +2887,21 @@ export function chatMember(store: Store | Db, project: string, topic: string, wt
 // Where one `chat` request is, for the panel: queued (with why), sent, turn started, not taken or failed.
 // A send the agent only accepted is "sent" until poke.ts's verify settles its deliveries row.
 // A send's text is redacted as its transcript turn is, so the two match and no secret is shown back.
-function chatSend(db: Db, r: Row, topic: string) {
+// U4: a queued send also carries `age_s` (from created_at), `failing`, `now` (Send now asked), `gives_up_at`
+// (the result's `since` + chat_queue_min, null while no clock runs: paused or behind an earlier chat) and `first`
+// (the member's oldest queued send, the only one Send now applies to; set by chatJson). A cancelled result is state `cancelled`.
+function chatSend(db: Db, r: Row, topic: string, now = Math.floor(Date.now() / 1000)) {
   const p = parse(String(r.payload ?? "")) ?? {}, res = parse(String(r.result ?? "")) ?? {};
   const files = (Array.isArray(p.files) ? p.files : []).filter((n: unknown): n is string => typeof n === "string" && CHAT_FILE_NAME.test(n))
     .map((name: string) => ({ name, url: chatFileUrl(String(r.project ?? ""), topic, name) }));
   const base = { id: Number(r.id), text: redact(String(p.text ?? "")), files, at: Number(r.created_at), done_at: r.done_at == null ? null : Number(r.done_at) };
-  if (r.done_at == null) return { ...base, state: "queued", why: res.state === "queued" ? String(res.why ?? "") : "waiting for the loop" };
+  if (r.done_at == null) {
+    const since = res.state === "queued" && res.since != null ? Number(res.since) : null;
+    return { ...base, state: "queued", why: res.state === "queued" ? String(res.why ?? "") : "waiting for the loop", age_s: Math.max(0, now - Number(r.created_at)),
+      failing: res.failing === true, now: p.now === true, first: false,
+      gives_up_at: since == null ? null : since + ((v) => (v !== null && /^\d+$/.test(v) ? Number(v) : 30))(limit(db.s, String(r.project ?? ""), "chat_queue_min")) * 60 };
+  }
+  if (res.state === "cancelled") return { ...base, state: "cancelled", why: null };
   if (res.ok === false) return { ...base, state: "failed", why: String(res.error ?? "the loop refused it") };
   if (res.state === "turn started") return { ...base, state: "turn started", why: null };
   const d = res.delivery == null ? null : db.one("SELECT state FROM deliveries WHERE id = ?", Number(res.delivery));
@@ -2938,7 +2947,9 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     try { c = db.one("SELECT agent, source, turns, updated_at, gone_at FROM observed_chat WHERE project = ? AND wt = ?", o.project, o.wt) ?? null; }
     catch { /* loop.db before migration 0044: no turns yet */ }
     const sends = db.all("SELECT id, project, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? ORDER BY id DESC LIMIT 10",
-      o.project, o.wt).reverse().map((r) => chatSend(db, r, o.topic));
+      o.project, o.wt).reverse().map((r) => chatSend(db, r, o.topic) as ReturnType<typeof chatSend> & { first?: boolean });
+    const firstQueued = sends.find((x) => x.state === "queued");
+    if (firstQueued) firstQueued.first = true;
     // Mid-turn, as the board's crew row reads it (observed_workers.state), for the panel's "Working…" line.
     const w = db.one("SELECT state, gone_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
     return {
