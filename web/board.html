@@ -264,6 +264,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-turn{display:flex;flex-direction:column;font-size:13px;line-height:1.5;min-width:0} .chat-time{font:11px var(--mono);color:var(--dim);margin-top:3px}
 .chat-turn.op{align-items:flex-end} .chat-turn.op .bubble{max-width:80%;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:8px 12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .chat-via{opacity:.75} .chat-copy{font:11px var(--mono);color:var(--dim);background:none;border:0;padding:0 4px;margin-left:6px;cursor:pointer} .chat-copy:hover{color:var(--text,inherit)}
+.chat-ctl{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:2px} .chat-cbtn{font:11px var(--mono);color:var(--dim);background:none;border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer} .chat-cbtn:hover{color:var(--text,inherit)} .chat-cbtn:disabled{opacity:.5;cursor:default} .chat-giveup{margin-top:0} .chat-turn.op .chat-time{text-align:right;overflow-wrap:anywhere} .chat-turn.op.mut .chat-time{color:var(--dim)}
 .chat-turn.op.wait .chat-time{color:var(--amber)} .chat-turn.op.bad .chat-time{color:var(--red)} .chat-turn.op.ok .chat-time{color:var(--green)}
 .chat-turn.agent{align-items:flex-start} .chat-turn.agent .md{padding:0;overflow:visible;overflow-wrap:anywhere;max-width:100%} .chat-turn.agent .md>:first-child{margin-top:0} .chat-turn.agent .md>:last-child{margin-bottom:0}
 .chat-turn.agent .md ul,.chat-turn.agent .md ol{margin:4px 0;padding-left:20px}
@@ -285,7 +286,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-tabs{flex:none;display:flex;gap:4px;padding:6px 12px 0;overflow-x:auto;white-space:nowrap;border-bottom:1px solid var(--line)} .chat-tab{flex:none;display:inline-flex;align-items:center;gap:2px;max-width:200px;padding:5px 10px;border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;background:transparent;color:var(--mut);font:600 12px var(--mono);cursor:pointer} .chat-tab.on{background:var(--panel2);color:var(--fg);border-color:var(--line)} .chat-tab:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 .chat-swlabel{min-width:0;overflow:hidden;text-overflow:ellipsis} .chat-new{display:inline-block;flex:none;width:8px;height:8px;margin-left:6px;border-radius:50%;background:var(--blue)} .chat-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .mhd .chat-sw{position:relative;display:inline-block;vertical-align:middle;max-width:60%}
 .chat-swbtn{display:inline-flex;align-items:center;max-width:100%;min-height:44px;padding:0 8px;font:600 13px var(--mono)} .chat-menu{position:absolute;z-index:60;top:100%;left:0;display:flex;flex-direction:column;gap:2px;min-width:220px;max-width:calc(100vw - 24px);padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4)} .chat-mi{display:flex;align-items:center;min-height:44px;text-align:left;border-color:transparent;background:transparent} .chat-mi[aria-checked="true"]{border-color:var(--line);background:var(--panel)}
-@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px}}
+@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px} .chat-cbtn{padding:8px 12px;min-height:32px}}
 .qfoot .err{font-size:12px;color:var(--red)} .qfoot .ok{font-size:12px;color:var(--green)}
 /* Phone: every popup is a full-screen sheet (the box fills the viewport; only its body scrolls; header, tabs and footer stay put) and no input is under 16px, so a tap never zooms the page. */
 @media (max-width:600px){
@@ -2026,7 +2027,26 @@ function CopyBtn({ text }) {
   };
   return html`<button type="button" class="chat-copy" title="Copy this message" onClick=${click}>${state || "Copy"}</button>`;
 }
-function chatTone(state) { return state === "turn started" || state === "sent" ? "ok" : state === "queued" ? "wait" : "bad"; }
+function chatTone(state, failing) { return state === "turn started" || state === "sent" ? "ok" : state === "queued" ? (failing ? "bad" : "wait") : state === "cancelled" ? "mut" : "bad"; }
+// A waiting send's status line (U4): how long it has waited and why; a failing one is red, a Send now one says it was asked.
+function chatSendLine(x) {
+  if (x.state === "cancelled") return "cancelled";
+  if (x.state !== "queued") return x.state + (x.why ? " · " + x.why : "");
+  const m = Math.floor((x.age_s || 0) / 60), age = m < 1 ? "<1 min" : m + " min";
+  return (x.failing ? "send failing " + age : x.now ? "send now asked" : "queued " + age) + (x.why ? " · " + x.why : "");
+}
+// Cancel (every queued send) and Send now (the member's oldest queued send, once, never jumping the queue): one press
+// disables both until the next load, which it asks for at once; a 409 means the loop already typed it.
+function ChatCtl({ x, project, reload }) {
+  const [off, setOff] = useState(false), [msg, setMsg] = useState("");
+  const go = async (kind) => {
+    setOff(true); setMsg("");
+    try { await post("api/chat-" + kind, { project, id: x.id }); }
+    catch (e) { if (e.status === 409) setMsg("already typed"); else { setMsg(String(e.message || e)); setOff(false); } }
+    reload();
+  };
+  return html`<div class="chat-ctl"><button type="button" class="chat-cbtn chat-cancel" disabled=${off} onClick=${() => go("cancel")}>Cancel</button>${x.first && !x.now ? html`<button type="button" class="chat-cbtn chat-now" disabled=${off} onClick=${() => go("now")}>Send now</button>` : null}${msg && html`<span class="chat-time">${msg}</span>`}</div>`;
+}
 const chatTime = (at) => at == null ? "" : new Date(at * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 const chatDay = (at) => new Date(at * 1000).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 // A typed line as the POST sends it: one line, every line break or control character (C0, DEL, C1, as
@@ -2129,12 +2149,12 @@ function chatRows(turns, sends) {
   for (const x of rest) rows.push({ send: x });
   return rows;
 }
-function chatTurn(r, source, i, imgUrl) {
+function chatTurn(r, source, i, imgUrl, ctl) {
   if (r.day) return html`<div key=${"d" + i} class="chat-day">${r.day}</div>`;
   if (r.send) {
     const x = r.send;
-    return html`<div key=${"s" + x.id} class=${"chat-turn op " + chatTone(x.state)}><div class="bubble">${x.text}${x.files && x.files.length ? html`<${ChatImages} items=${x.files} />` : null}</div>
-      <span class="chat-time">${x.state}${x.why ? " · " + x.why : ""}</span></div>`;
+    return html`<div key=${"s" + x.id} class=${"chat-turn op " + chatTone(x.state, x.failing)}><div class="bubble">${x.text}${x.files && x.files.length ? html`<${ChatImages} items=${x.files} />` : null}</div>
+      <span class="chat-time">${chatSendLine(x)}</span>${x.state === "queued" && x.gives_up_at != null ? html`<span class="chat-time chat-giveup">gives up at ${chatTime(x.gives_up_at)}</span>` : null}${x.state === "queued" && ctl ? html`<${ChatCtl} key=${x.id + ":" + (x.now ? 1 : 0) + ":" + (x.first ? 1 : 0)} x=${x} project=${ctl.project} reload=${ctl.reload} />` : null}</div>`;
   }
   const t = r.turn, text = String(t.text ?? ""), time = chatTime(t.at);
   if (source === "screen" || t.role === "screen") return html`<div key=${i} class="chat-turn screen"><div class="txt">${text}</div>${time && html`<span class="chat-time">${time}</span>`}</div>`;
@@ -2337,7 +2357,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
       ${multi && !phone && html`<div class="chat-tabs" role="tablist" aria-label="Members of this squad" ref=${tabs} onKeyDown=${tabKey}>${members.map((m, i) => html`<button key=${m.wt} id=${tabId(i)} class=${"chat-tab" + (m.wt === shown.wt ? " on" : "")} role="tab"
         aria-selected=${m.wt === shown.wt ? "true" : "false"} tabindex=${m.wt === shown.wt ? 0 : -1} title=${m.label} aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))}
         onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label.length > 14 ? m.label.slice(0, 13) + "…" : m.label}</span>${badge(mail(m), chatMailTip(m))}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}
-      <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${rows.length ? rows.map((r, i) => chatTurn(r, data.source, i, (n) => chatImgUrl(project, topic, n)))
+      <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${rows.length ? rows.map((r, i) => chatTurn(r, data.source, i, (n) => chatImgUrl(project, topic, n), { project, reload: load }))
         : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
         ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
         ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
