@@ -52,8 +52,17 @@ test("running: share done, then done count, no-unit after, broken last, then nam
     sq("half-a", {}, 1, 2),
     sq("cancelled", {}, 1, 2),
   ];
-  (rows[7] as any).progress = { done: 1, dispatched: 0, planned: 0, cancelled: 1, total: 3 }; // 1/2 once cancelled left out
+  (rows[7] as any).progress = { done: 1, dispatched: 0, planned: 0, cancelled: 1, total: 2 }; // as progress() builds it: total leaves cancelled out
   expect(order(rows)).toBe("big threeq cancelled half-a half-b quarter none broken");
+});
+
+test("cancelled units are left out once: 3 done of 5 with 3 cancelled sorts below 4 of 5", () => {
+  const cancelled = sq("cancelled", {}, 3, 5);
+  (cancelled as any).progress = { done: 3, dispatched: 0, planned: 0, cancelled: 3, total: 5 };
+  const further = sq("further", {}, 4, 5);
+  expect(order([cancelled, further])).toBe("further cancelled");
+  expect(order([further, cancelled])).toBe("further cancelled");
+  for (const r of [cancelled, further]) expect(squadRank(r).keys[1]).toBeGreaterThanOrEqual(-1);
 });
 
 test("the project then the name break a tie; a malformed row does not throw", () => {
