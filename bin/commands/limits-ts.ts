@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { ROOT, dsLabel, writeErr, writeOut } from "../lib/shared";
 import { confLines, limitEnvName, limitSrc, readFields } from "../lib/operator";
 import { rm, set } from "../loop/settings/settings.ts";
+import { BACKEND_NAMES, PROVIDER_SETTINGS } from "../backend/registry.ts";
 import { changeSettings } from "../loop/settings/settings-migrate.ts";
 
 export const help = `show [--json] [<project>] | set <project> <key> <value> | rm <project> <key> — view or set the limits (limits.sh)`;
@@ -22,6 +23,8 @@ function allowedFor(key: string): string[] | null {
   if (key === "auto_merge") return ["off", "squash", "merge", "rebase"];
   if (key === "builder_host_brake") return ["off", "on"];
   if (key === "unblock_first") return ["on", "off"];
+  if (key === "default_backend") return [...BACKEND_NAMES];
+  if (key === "worktree_provider") return [...PROVIDER_SETTINGS];
   if (key === "base_update") return ["merge", "rebase"];
   return null;
 }
