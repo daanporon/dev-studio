@@ -1397,7 +1397,9 @@ function crewFacts(db: Db, project: string, m: any, accts: any[]) {
 
 // The project's Studio (U261): the loop's `_studio` member, the terminal it adopted, and what that
 // Studio really runs (its walk is the Studio's agent only, so a ds-loop pane beside it never reads
-// as it). null when the project has no Studio worktree.
+// as it). null when the project has no Studio worktree. The header's Studio button (chat-with-studio U1)
+// reads `unread` / `reply_due` (the Crew box's counts for role studio), `working` (mid-turn) and `reply_at`
+// (the newest assistant text turn's time, null when none, gone or a screen tail).
 function studioOf(db: Db, label: string, accts: any[]) {
   const wt = studioWts(db).get(label);
   if (!wt) return null;
@@ -1408,7 +1410,20 @@ function studioOf(db: Db, label: string, accts: any[]) {
   const c = db.one("SELECT ctx FROM observed_tokens WHERE worker = ? AND ctx IS NOT NULL AND model != '<synthetic>' ORDER BY rowid LIMIT 1", wtKey(wt));
   const ctx = c?.ctx == null ? null : Number(c.ctx);
   const handle = (m?.handle as string | null) ?? null;
-  return { label, wt, handle, adopted: !!handle, agent, walk: (w?.walk as string | null) ?? null, model_label: f.model_label,
+  const mc = msgCounts(db, label, "_studio").get("studio\0");
+  let replyAt: number | null = null;
+  try {
+    const oc = db.one("SELECT source, turns, gone_at FROM observed_chat WHERE project = ? AND wt = ?", label, wt);
+    if (oc && oc.gone_at == null && oc.source !== "screen") {
+      const turns = JSON.parse(String(oc.turns ?? "[]"));
+      for (let i = turns.length - 1; i >= 0; i--) {
+        const t = turns[i];
+        if (t && t.role === "assistant" && !t.tool && t.at != null) { replyAt = Number(t.at); break; }
+      }
+    }
+  } catch { /* loop.db before migration 0044, or unreadable turns: no reply time */ }
+  return { label, wt, handle, adopted: !!handle, unread: mc?.unread ?? 0, reply_due: mc?.reply_due ?? 0,
+    working: w?.state === "working", reply_at: Number.isFinite(replyAt as number) ? replyAt : null, agent, walk: (w?.walk as string | null) ?? null, model_label: f.model_label,
     account: f.account_real ?? f.account_cfg, account_label: f.account_real_label ?? f.account_cfg_label, ctx, ctx_level: ctxLevel(db, ctx, label) };
 }
 
@@ -2259,7 +2274,7 @@ export function renderText(b: Board): string {
   for (const st of b.studio) {
     o.push(`studio ${st.label}: ` + (st.adopted
       ? [`${st.agent}${st.model_label ? " " + st.model_label : ""}`, st.account_label ? `@${st.account_label}` : null, st.ctx == null ? null : `ctx ${compact(st.ctx)}`, st.handle].filter(Boolean).join(" · ")
-      : "no Studio terminal adopted — see the studio.adopt card"));
+      : "no Studio terminal adopted — see the studio.adopt card") + (st.adopted && st.unread + st.reply_due > 0 ? ` · mail:${st.unread + st.reply_due}` : ""));
   }
   if (b.studio.length) o.push(RULE);
   if (b.squads.some((s) => ["held-only", "paused", "suspended", "on-hold"].includes(s.display_key))) o.push(`not working: ${STATE_LEGEND.join(" · ")}`);
