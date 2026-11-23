@@ -530,7 +530,10 @@ export class LoopActuator implements Actuator {
         return via(await this.sender(store, project, squad ?? "", at, true));
       },
       send: (op, args, extra) => {
-        const target = op === "poke-terminal" ? store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ?").get(args[0]) as Row | null : null;
+        // A handle can have rows under two projects (a worktree another project once claimed): the
+        // action's own project's row first, else a live row.
+        const target = op === "poke-terminal" ? store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ? ORDER BY (project = ?) DESC, (gone_at IS NULL) DESC, observed_at DESC")
+          .get(args[0], project) as Row | null : null;
         const physical = target ? { project: String(target.project), member: String(target.wt) }
           : ["poke", "keys", "ping"].includes(op) ? { project, member: args[0] } : { project, squad, member };
         const block = this.block(store, physical);

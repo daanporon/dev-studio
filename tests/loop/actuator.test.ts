@@ -27,6 +27,7 @@ import decider from "../../bin/loop/core/decide.ts";
 import { alertGone, dropAlerts } from "../../bin/loop/reconcilers/alerts.ts";
 import { wake } from "../../bin/loop/pause/wake.ts";
 import { markStopping, resetStopping } from "../../bin/loop/core/stopping.ts";
+import { pause as pauseScope } from "../../bin/loop/pause/pause.ts";
 
 // U150: a transient refusal is tried again every 15 minutes (DS_LOOP_RETRY_S); these tests step
 // a retry one tick at a time. The spacing itself is tested in actuator.test.ts ("refusals").
@@ -1456,5 +1457,42 @@ describe("one event per wait (account-move-slow U3)", () => {
     await loop.tick(T + 30); await act.drain();
     expect(na()).toBe(2);
     expect(n("action_pending")).toBe(2);
+  });
+});
+
+// studio-chat-queued-busy U1: a handle with rows under two projects (one a worktree the other once
+// claimed by name) is checked against the sending action's own project, not whichever row came first.
+describe("poke-terminal under the action's project", () => {
+  const PUB = `${WS}/ds-fx-public-studio`;
+  function two(): { s: Store; orca: FakeOrca; act: LoopActuator } {
+    const s = imported(), orca = new FakeOrca();
+    s.upsert("projects", { label: "fx-public" }, { observed_at: T });
+    s.upsert("observed_terminals", { project: "fx", handle: "term_pub" }, { wt: PUB, observed_at: T - 60, gone_at: T });   // the stray row, first
+    s.upsert("observed_terminals", { project: "fx-public", handle: "term_pub" }, { wt: PUB, observed_at: T, gone_at: null });
+    return { s, orca, act: new LoopActuator({ orca, pick: picked(), fulfillers: [] }) };
+  }
+
+  test("a pause on the other project does not block it", async () => {
+    const { s, orca, act } = two();
+    pauseScope(s, { scope: "project", project: "fx" }, {}, T);
+    const out = await act.seat(s, "fx-public", null, "k1", null, T).send("poke-terminal", ["term_pub", "hello"]);
+    expect([out.code, out.err]).toEqual([0, ""]);
+    expect(orca.of("poke-terminal")).toHaveLength(1);
+  });
+
+  test("a pause on its own project still blocks it", async () => {
+    const { s, orca, act } = two();
+    pauseScope(s, { scope: "project", project: "fx-public" }, {}, T);
+    const out = await act.seat(s, "fx-public", null, "k2", null, T).send("poke-terminal", ["term_pub", "hello"]);
+    expect([out.code, out.err]).toEqual([75, "activity: paused"]);
+    expect(orca.of("poke-terminal")).toHaveLength(0);
+  });
+
+  test("no row under its own project: a live row of another project is used", async () => {
+    const { s, orca, act } = two();
+    pauseScope(s, { scope: "project", project: "fx-public" }, {}, T);
+    const out = await act.seat(s, "other", null, "k3", null, T).send("poke-terminal", ["term_pub", "hello"]);
+    expect(out.code).toBe(75);                                          // fx-public's live row, not fx's gone one
+    expect(orca.of("poke-terminal")).toHaveLength(0);
   });
 });
