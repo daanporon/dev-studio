@@ -35,6 +35,7 @@ import { envInt } from "../core/tick.ts";
 import { setAccountEnabled } from "../capacity/accounts.ts";
 import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
 import { MOVE, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
+import { memberLabel, startIdentity } from "../core/whoami.ts";
 
 type P = { action?: string; topic?: string; line?: string; framing?: string; id?: string; answer?: string; request?: number };
 type Move = { handle?: string; agent?: string; account?: string; model?: string; effort?: string; from?: string; why?: string };
@@ -88,12 +89,15 @@ async function move(a: Action, x: Exec) {
     const since = Number(row?.observed_at ?? 0);
     if (!handle && at - since < moveStartS()) return { wait: "the Studio's studio-start may still be running", at: since + moveStartS() };
   }
+  // U4: the new Studio terminal's generation (DS_GEN), kept on the step so a start again after a replay reuses it.
+  const kept = was === "starting" && row?.result ? String(row.result) : "", gen = kept || crypto.randomUUID();
   if (!handle) {
-    store.upsert("episodes", key, { episode_key: a.episode, state: "starting", source: "loop", observed_at: at });
+    store.upsert("episodes", key, { episode_key: a.episode, state: "starting", source: "loop", observed_at: at, result: gen });
     const proj = store.get("projects", { label: P });
     const reason = up ? `moved back up from ${p.from ?? "a fallback"} to ${to}` : `${p.from ?? "its account"} hit its limit, now on ${to}`;
     const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), reason);
-    s = await seat.send("studio-start", [v.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt]);
+    s = await seat.send("studio-start", [v.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt],
+      startIdentity(memberLabel({ project: P, squad: "_studio", role: "studio" }), gen));
     handle = s.code === 0 ? s.out.trim().split("\n").pop()!.trim() : "";
   }
   if (!handle) {
@@ -105,7 +109,7 @@ async function move(a: Action, x: Exec) {
       { title: "Studio move failed", option: "done — restarted it", why: cmd, fields: { kind: "out_of_credits" } });
     return { done: true, result: `closed, not started: ${err}` };
   }
-  const set: Row = { handle, agent: p.agent, account: p.account === "-" ? null : p.account, limited_until: null, observed_at: at, updated_at: at };
+  const set: Row = { handle, agent: p.agent, account: p.account === "-" ? null : p.account, limited_until: null, gen: s || kept ? gen : null, observed_at: at, updated_at: at };
   if (p.model && p.model !== "-") set.model = p.model;
   const moved = { project: P, squad: "_studio", member: v.wt, payload: { handle, previous: p.handle, from: p.from ?? null, to, model: p.model ?? null, why: up ? "back-up" : "limit" } };
   store.db.transaction(() => {

@@ -69,8 +69,8 @@ function seed(s: Store) {
   ins("squads", { project: L, topic: "old-done", status: "done", doc: { topic: "old-done", debrief: "Long ago." }, ...at });
   ins("events", { at: MON - 2 * DAY, project: L, squad: "old-done", kind: "squad_state", payload: { cmd: "set-status", args: ["done"] } });
   // Questions: one open, one answered.
-  ins("questions", { id: "q-open", project: L, squad: "stuck", title: `Which API shape? Ask ${EMAIL}`, asked_at: MON + 4 * H, status: "open", blocking: 1 });
-  ins("questions", { id: "q-old", project: L, squad: "alpha", title: "Old open one", asked_at: MON - 2 * DAY, status: "open" });
+  ins("questions", { id: "q-open", project: L, squad: "stuck", title: `Which API shape? Ask ${EMAIL}`, asked_at: MON + 4 * H, status: "open", blocking: 1, doc: { id: "q-open", title: `Which API shape? Ask ${EMAIL}`, question: "?", blocking: true, since: new Date((MON + 4 * H) * 1000).toISOString() } });
+  ins("questions", { id: "q-old", project: L, squad: "alpha", title: "Old open one", asked_at: MON - 2 * DAY, status: "open", doc: { id: "q-old", title: "Old open one", question: "?", since: new Date((MON - 2 * DAY) * 1000).toISOString() } });
   ins("questions", { id: "q-done", project: L, squad: "alpha", title: "Answered already?", asked_at: MON + H, status: "answered" });
   // Accounts: one expired (label holds an email), one fine.
   ins("observed_accounts", { agent: "claude", account: "acct-a", label: EMAIL, note: "expired", observed_at: T });
@@ -82,7 +82,7 @@ function seed(s: Store) {
   ins("accounts", { agent: "codex", account: "off", state: "disabled", observed_at: T });
   ins("observed_accounts", { agent: "claude", account: "acct-b", label: `other-${EMAIL}`, session_pct: "12", weekly_pct: "40", skills: "ok", observed_at: T });
   // Studio alert, plus the brief's own alert (left out).
-  ins("observed_alerts", { project: L, id: "loop-x", doc: { title: "Poke unanswered", question: "The Lead went quiet.", since: new Date((MON + 5 * H) * 1000).toISOString() }, observed_at: T });
+  ins("observed_alerts", { project: L, id: "loop-x", doc: { id: "loop-x", kind: "review_stopped", title: "Poke unanswered", question: "The Lead went quiet.", since: new Date((MON + 5 * H) * 1000).toISOString() }, observed_at: T });
   ins("observed_alerts", { project: L, id: "brief-2026-11-09", doc: { title: "New morning brief", question: "Read it." }, observed_at: T });
   // Archived squads: one closed in the window with a debrief, one without, one closed before the window.
   const arch = (topic: string, closed: number, extra: Record<string, unknown>) =>
@@ -169,7 +169,9 @@ describe("ds briefing-input", () => {
     const n = facts().needs;
     expect(n.questions.map((q) => [q.id, q.squad, q.blocking])).toEqual([["q-old", "alpha", false], ["q-open", "stuck", true]]);
     expect(n.alerts.map((a) => a.title)).toEqual(["Poke unanswered"]);
-    expect(n.squads).toEqual([{ squad: "stuck", status: "waiting-on-you" }]);
+    expect(n.squads).toEqual([]);   // waiting-on-you with a queued question is listed through the question
+    expect(n.done).toEqual(["shipped", "old-done"]);   // done squads wait for Close, as on the board
+    expect(n.count).toBe(5);
     expect(n.accounts.map((a) => a.account)).toEqual(["claude:acct-a", "claude:acct-c"]);
     expect(n.accounts[0].problem).toBe("login expired");   // acct-r (note refused@…) is not listed
     expect(n.accounts[1].problem).toMatch(/^skills broken: no ce-work; limited until /);
@@ -188,7 +190,7 @@ describe("ds briefing-input", () => {
     expect(md).toMatch(/closed-bare \(closed [^)]+\): no debrief/);
     expect(md).toMatch(/shipped \(done [^)]+\): debrief:\n {2}> Shipped: the widget\./);
     expect(md).not.toContain("closed-old");
-    expect(md).not.toContain("old-done");
+    expect(md).not.toContain("old-done (");
     expect(f.progress.map((p) => p.squad)).toEqual(["alpha"]);   // progress lists only squads that moved
   });
 
@@ -250,18 +252,19 @@ describe("ds briefing-input", () => {
     expect(statSync(db).mtimeMs).toBe(before);
   });
 
-  test("a busy window (150 waiting squads, 40 questions, 30 alerts, 5,000 noise events) is cut at the line cap", () => {
+  test("a busy window (150 blocked squads, 40 questions, 30 cards, 5,000 noise events) is cut at the line cap", () => {
     const busy = mkdtempSync(join(tmpdir(), "ds-briefing-busy-"));
     try {
       const s = open(busy);
       const at = { observed_at: T, updated_at: T };
       s.tx(() => {
         for (let q = 0; q < 150; q++) {
-          insert(s, "squads", { project: L, topic: `sq-${q}`, status: "waiting-on-you", doc: {}, ...at });
+          insert(s, "squads", { project: L, topic: `sq-${q}`, status: "blocked", doc: {}, ...at });
           for (let u = 0; u < 10; u++) insert(s, "units", { project: L, squad: `sq-${q}`, slug: `u${u}`, ord: u, status: "dispatched", ...at });
         }
-        for (let q = 0; q < 40; q++) insert(s, "questions", { id: `q${q}`, project: L, squad: "sq-0", title: `Question ${q}?`, asked_at: MON, status: "open" });
-        for (let a = 0; a < 30; a++) insert(s, "observed_alerts", { project: L, id: `al-${a}`, doc: { title: `Alert ${a}` }, observed_at: T });
+        insert(s, "squads", { project: L, topic: "qs", status: "running", doc: { topic: "qs" }, observed_at: T, updated_at: T });
+        for (let q = 0; q < 40; q++) insert(s, "questions", { id: `q${q}`, project: L, squad: "qs", title: `Question ${q}?`, asked_at: MON, status: "open", doc: { id: `q${q}`, title: `Question ${q}?`, question: "?", since: new Date(MON * 1000).toISOString() } });
+        for (let a = 0; a < 30; a++) insert(s, "observed_alerts", { project: L, id: `al-${a}`, doc: { id: `al-${a}`, kind: "review_stopped", title: `Alert ${a}` }, observed_at: T });
         for (let i = 0; i < 5000; i++) {
           insert(s, "events", { at: MON + 60 + i, project: L, squad: `sq-${i % 60}`, unit: `u${i % 10}`, member: `builder/u${i % 10}`,
             kind: ["action", "spend", "unit_done", "member_started", "unit_pr"][i % 5], payload: { pr: 1000 + i } });
@@ -275,7 +278,7 @@ describe("ds briefing-input", () => {
       expect(out.length).toBe(MAX_LINES);
       expect(out.at(-1)).toMatch(/^… \d+ more lines cut \(cap 200\)$/);
       expect(out).toContain("  - … and 25 more open questions");
-      expect(out).toContain("  - … and 20 more alerts");
+      expect(out).toContain("  - … and 20 more cards");
     } finally { rmSync(busy, { recursive: true, force: true }); }
   });
 });
@@ -446,5 +449,72 @@ describe("Elsewhere and try it", () => {
       expect(md).toMatch(/- none \(done [^)]+\): debrief:\n(?: {2}> .*\n)* {2}try it: nothing to try — docs only/);
       expect(md).toMatch(/- bare \(done [^)]+\): debrief:\n(?: {2}> .*\n)* {2}try it: missing/);
     } finally { rmSync(w.d, { recursive: true, force: true }); }
+  });
+});
+
+// morning-brief-stale-items U1: the brief's Needs-you is the board's.
+describe("the brief's Needs-you matches the board's", () => {
+  const P = "pq";
+  let d = "";
+  beforeAll(() => { d = mkdtempSync(join(tmpdir(), "ds-briefing-parity-")); });
+  afterAll(() => rmSync(d, { recursive: true, force: true }));
+  const iso = (e: number) => new Date(e * 1000).toISOString();
+
+  test("closed, suspended and stale-waiting squads, loop notes, a merge card, a done squad and a proposal", async () => {
+    const { buildBoard } = await import("../../bin/board/board-data.ts");
+    const s = open(d);
+    const at = { observed_at: T, updated_at: T };
+    const q = (id: string, blocking = false, extra: Record<string, unknown> = {}) => ({ id, title: `Q ${id}`, question: "?", blocking, since: iso(T - 2 * H), ...extra });
+    const ask = (squad: string, e: Record<string, unknown>) => insert(s, "questions", { id: e.id, project: P, squad, title: e.title, asked_at: T - 2 * H, status: "open", blocking: e.blocking ? 1 : 0, doc: e });
+    s.tx(() => {
+      insert(s, "squads", { project: P, topic: "live", status: "waiting-on-you", doc: { topic: "live", proposed_squads: [{ id: "fx1", topic: "fix-it" }, { id: "fx2", topic: "old", status: "spawned" }] }, ...at });
+      // Open on closed / suspended / held squads, and a stale waiting-on-you with an empty queue: not on the board.
+      insert(s, "squads", { project: P, topic: "gone-sq", status: "closed", doc: { topic: "gone-sq" }, ...at });
+      ask("gone-sq", q("q-closed"));
+      insert(s, "squads", { project: P, topic: "sleepy", status: "suspended", doc: { topic: "sleepy" }, ...at });
+      ask("sleepy", q("q-susp"));
+      insert(s, "squads", { project: P, topic: "held", status: "on-hold", doc: { topic: "held" }, ...at });
+      ask("held", q("q-hold"));
+      insert(s, "squads", { project: P, topic: "stale", status: "waiting-on-you", doc: { topic: "stale" }, ...at });
+      ask("live", q("q1", true));
+      ask("live", q("q2", false, { title: "Auto-merge not armed", pr: "77" }));
+      insert(s, "squads", { project: P, topic: "fin", status: "done", doc: { topic: "fin" }, ...at });
+      insert(s, "squads", { project: P, topic: "stopped", status: "blocked", doc: { topic: "stopped" }, ...at });
+      for (let i = 0; i < 13; i++) insert(s, "observed_alerts", { project: P, id: `stop-${i}`, doc: { id: `stop-${i}`, title: "Stop command failed", question: "x", since: iso(T - H) }, observed_at: T });
+      insert(s, "observed_alerts", { project: P, id: "rv", doc: { id: "rv", kind: "review_stopped", title: "Reviews stopped", since: iso(T - H) }, observed_at: T });
+      insert(s, "observed_alerts", { project: P, id: "mc", doc: { id: "mc", kind: "merge_card", title: "Auto-merge not armed", ref: "#77", since: iso(T - H) }, observed_at: T });
+      insert(s, "observed_alerts", { project: P, id: "mc-grace", doc: { id: "mc-grace", kind: "merge_card", title: "Merge it by hand", since: iso(T - 60) }, observed_at: T });
+      insert(s, "requests", { project: P, kind: "studio", key: `briefing:${P}:2026-11-10`, created_at: TUE, payload: { since: MON, until: TUE, spend: {} } });
+    });
+    s.close();
+    const env = { DS_STATE_ROOT: d, DS_NOW: String(T), TZ: "Europe/Berlin" };
+    const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    try {
+      const board = await buildBoard(P);
+      const ro = openReadOnly(d);
+      const f = collect(ro, windowOf(ro, P, { date: "2026-11-10" }, T));
+      ro.close();
+      const key = (kind: string, id: unknown) => `${kind}:${id ?? ""}`;
+      const boardKeys = board.needs_you.map((n: any) => key(n.kind === "blocking" || n.kind === "question" ? "question" : n.kind === "approval" ? "proposal" : n.kind === "studio" ? "card" : "done", n.id ?? (n.kind === "approval" ? n.title : n.kind === "done" ? n.squad : "")));
+      const briefKeys = [
+        ...f.needs.questions.map((x) => key("question", x.id)), ...f.needs.alerts.map((x) => key("card", x.id)),
+        ...f.needs.proposals.map((x) => key("proposal", `Approve fix squad ${x.topic}?`)), ...f.needs.done.map((x) => key("done", x)),
+      ];
+      expect(briefKeys.sort()).toEqual(boardKeys.sort());
+      expect(f.needs.count).toBe(board.needs_count);
+      expect(f.needs.count).toBe(4);                        // q1, rv, the merge card, the done squad; the proposal is listed, not counted
+      expect(briefKeys).not.toContain("question:q-closed");
+      expect(f.needs.questions.map((x) => x.id)).toEqual(["q1"]);   // the Lead's merge copy (q2) is dropped for the Studio's card
+      expect(f.needs.squads.map((x) => x.squad)).toEqual(["stopped"]);   // blocked only; `stale` shows as running
+      expect(f.needs.notes).toEqual([{ title: "Stop command failed", count: 13 }]);
+      const md = render(f).join("\n");
+      expect(md).toContain(`Needs you: ${board.needs_count}`);
+      expect(md).toContain("- Loop notes (no answer needed; on the board under Loop notes): 13 × Stop command failed");
+      expect(md).not.toContain("alert: Stop command failed");
+      expect(md).not.toContain("squad stale");
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
   });
 });

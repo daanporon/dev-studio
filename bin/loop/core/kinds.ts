@@ -31,7 +31,7 @@ export const WISH_PAYLOADS = {
 export type WishPayload<S extends keyof typeof WISH_PAYLOADS> = Val<(typeof WISH_PAYLOADS)[S]>;
 
 // ---------------------------------------------------------------- requests
-const replay = obj({ argv: arr(str), kind: opt(str), key: opt(str), cwd: opt(str), from: opt(str) });
+const replay = obj({ argv: arr(str), kind: opt(str), key: opt(str), cwd: opt(str), from: opt(str), member: opt(str), gen: opt(str), wt: opt(str) });
 const MERGE = obj({ n: opt(num), repo: opt(str), method: opt(str), unit: opt(str), topic: opt(str), base: opt(str), ref: opt(str), head: opt(str), ep: opt(str) });
 const THROUGH = { request: opt(num) };
 

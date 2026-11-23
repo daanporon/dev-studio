@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { dsLabel, dsLoopArgs, readJson, settingsAt, stateRoot, writeErr } from "../lib/shared";
 import { dsExec, waitArgs } from "../lib/operator";
 import { readRoster } from "../loop/settings/settings";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = `--repo <selector> --topic <slug> [--type t] [--autonomy a] [--host h] [--framing f | --framing-file path] [--start s] — write a squad's running wish (spawn-squad.sh)`;
 
@@ -45,7 +46,7 @@ export async function run(raw: string[]): Promise<number> {
   }
   const keep = (o: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== ""));
   const fill = keep({ repo, type, autonomy, host, framing });
-  const from = process.env.ORCA_TERMINAL_HANDLE ?? "";
+  const from = whoAmI().handle ?? "";
   const payload = keep({ repo, type, autonomy, host, framing, start, from });
   return dsExec(["want", "squad", `${label}/${topic}`, "running", "--payload", JSON.stringify(payload), "--fill", JSON.stringify(fill), "--by", "spawn-squad", ...waitArgs(la.wait)]);
 }

@@ -36,7 +36,7 @@ git init -q --bare -b main "$ORIGIN"
 git init -q -b main "$SEED"
 mkdir -p "$SEED/bin/host"; cp "$ROOT/bin/host/update-host.sh" "$SEED/bin/host/update-host.sh"
 # U191: the port runs in TypeScript behind the one-line wrapper: the fixture carries ds and the files the command loads.
-mkdir -p "$SEED/bin/lib" "$SEED/bin/commands" "$SEED/bin/loop/settings"; cp "$ROOT/bin/loop/settings/projects.ts" "$SEED/bin/loop/settings/"; cp "$ROOT/bin/ds" "$ROOT/bin/ds.ts" "$SEED/bin/"; cp "$ROOT/bin/lib/shared.ts" "$ROOT/bin/lib/upkeep.ts" "$SEED/bin/lib/"; cp "$ROOT/bin/commands/update-host-ts.ts" "$SEED/bin/commands/"
+mkdir -p "$SEED/bin/lib" "$SEED/bin/commands" "$SEED/bin/loop/settings" "$SEED/bin/loop/core"; cp "$ROOT/bin/loop/settings/projects.ts" "$SEED/bin/loop/settings/"; cp "$ROOT/bin/loop/core/whoami.ts" "$SEED/bin/loop/core/"; cp "$ROOT/bin/ds" "$ROOT/bin/ds.ts" "$SEED/bin/"; cp "$ROOT/bin/lib/shared.ts" "$ROOT/bin/lib/upkeep.ts" "$SEED/bin/lib/"; cp "$ROOT/bin/commands/update-host-ts.ts" "$SEED/bin/commands/"
 fake "$SEED/bin/host/install.sh" <<'F'
 #!/usr/bin/env bash
 echo "install${*:+ $*}" >> "$CALLS"

@@ -14,9 +14,10 @@
 // PATH, and with the loop stopped it shows the last data behind a "loop down" banner.
 import { resolveBackUp, returnOf } from "../loop/settings/roster.ts";
 import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { ROOT } from "../lib/shared.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
-import { cardPlace } from "./card-place.ts";
+import { placeAlert, questionsCount, shownStatus, doneWaits, shortTitle, prNumber } from "./needs-rules.ts";
 import { githubView, githubLine, budgetCard, dropLeadMergeCopies } from "./github-view.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
 import { mangle } from "../loop/observers/orca.ts";
@@ -222,7 +223,6 @@ function squadBranches(db: Db, label: string, st: any): string[] {
 }
 
 // A unit's pr may be a bare number, "#123", or a full PR URL: reduce it to the number.
-const prNumber = (v: unknown): string => String(v).match(/(\d+)\/?$/)?.[1] ?? String(v).replace(/^#/, "");
 
 // U2: the one action button a Studio card may carry (`act: {action, topic, label}` in its doc). Only these
 // board actions (a subset of board-server.ts' ACTIONS that name a squad) are kept; anything else is dropped.
@@ -647,7 +647,7 @@ const heldOnly = (fin: Finish | null): boolean => fin?.state === "held-only";
 // so `done` still shows only once the stored status is no longer `running`).
 function displayStatus(st: any, status: string, retest: Retest | null = null, fin: Finish | null = null): string {
   // waiting-on-you with nothing queued (state from before resolve-question reset it) is running.
-  if (status === "waiting-on-you" && arr(st.waiting_on_you).length === 0) status = "running";
+  status = shownStatus(status, arr(st.waiting_on_you).length);
   if (status !== "running") return status;
   // U238: fixes merged after a Tester pass ended, nothing dispatched, no Tester up: the retest is owed.
   if (retest) return "retest due";
@@ -1872,15 +1872,18 @@ function noDb(label: string, why: string) {
   return board(null, label, [], [], [], { ws: {}, backendOk: false, loopDown: true });
 }
 
-export function buildBoard(project = "", topic = "", root = stateRoot()) {
+// The checkout's own state/ is the live root; a test's temp DS_STATE_ROOT is not (U253), and `liveRoot`
+// lets a test say which it is. On the live root a project the loop treats as a test project is not listed.
+export function isLiveRoot(root: string): boolean { return resolve(root) === resolve(join(ROOT, "state")); }
+export function buildBoard(project = "", topic = "", root = stateRoot(), liveRoot = isLiveRoot(root)) {
   const label = project ? dsLabel(project) : "";
   let s: Store;
   try { s = openReadOnly(root); } catch (e) { return noDb(label, String(e)); }
   focusMemo.clear();
-  try { return fromDb(new Db(s), label, topic); } finally { s.close(); focusMemo.clear(); }
+  try { return fromDb(new Db(s), label, topic, liveRoot); } finally { s.close(); focusMemo.clear(); }
 }
 
-function fromDb(db: Db, label: string, topic: string) {
+function fromDb(db: Db, label: string, topic: string, liveRoot = false) {
   // The Orca observer's rows are current when its newest is younger than the loop's stale window.
   const loop = loopStatus(db, label);
   const live: Live = { ws: {}, backendOk: false, loopDown: loop.down };
@@ -1893,7 +1896,7 @@ function fromDb(db: Db, label: string, topic: string) {
   // Every squad that isn't closed, by project then topic; one that can't be read renders as broken.
   const rows = db.all(`SELECT project, topic FROM squads WHERE COALESCE(status, '') != 'closed' AND doc IS NOT NULL
     ${label ? "AND project = ?" : ""} ${topic ? "AND topic = ?" : ""} ORDER BY project, topic`, ...[label, topic].filter(Boolean));
-  const read = rows.map((r) => {
+  const read = rows.filter((r) => !(liveRoot && !label && isTestProject(String(r.project)))).map((r) => {
     const l = String(r.project), t = String(r.topic);
     let st: any = null;
     try { st = squadDoc(db.s, l, t); } catch { /* a doc that won't parse */ }
@@ -1906,7 +1909,7 @@ function fromDb(db: Db, label: string, topic: string) {
     try { return squad(db, l, t, st, live, toks, accts); } catch { return broken(l, t); }
   }).sort(compareSquads);
   accountUsers(db, accts, label, squads);
-  const labels = label ? [label] : db.all("SELECT label FROM projects UNION SELECT project AS label FROM squads ORDER BY label").map((r) => String(r.label));
+  const labels = label ? [label] : db.all("SELECT label FROM projects UNION SELECT project AS label FROM squads ORDER BY label").map((r) => String(r.label)).filter((l) => !(liveRoot && !label && isTestProject(l)));
   return { ...board(db, label, labels, squads, accts, live), project_controls: !topic };
 }
 
@@ -1987,7 +1990,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     return { label: l, file: r.kind === "studio" ? "(queued)" : basename(String(p.file ?? r.key)), text, age_min: Math.max(0, Math.floor((NOW() - (Number(r.created_at) || NOW())) / 60)) };
   })).sort((a, b) => b.age_min - a.age_min) : [];
 
-  const active = squads.filter((s) => s.status !== "suspended" && s.status !== "on-hold");
+  const active = squads.filter((s) => questionsCount(s.status));
   const kind = { blocking: 0, approval: 1, question: 2 } as Record<string, number>;
   // The Studio's own alerts (observed_alerts, from state/<label>/alerts.json): the project's, not any squad's.
   // U2: a card's repo (its squad's, else the project's first resolved one), its PR (from `ref`) and its one action.
@@ -2018,7 +2021,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       ...alertAnswers(x),
       suggestion: acts ? (x.suggestion ?? null) : null, why: x.why ?? null, options: arr(x.options),
       age_min: ageMin(x.since),
-      place: cardPlace({ ...x, text }, NOW(), (db ? dsLimit(db, l, "needs_grace_min") : null) ?? 10, (db ? dsLimit(db, l, "refusal_needs_min") : null) ?? 240),
+      place: placeAlert({ ...x, text }, NOW(), db ? dsLimit(db, l, "needs_grace_min") : null, db ? dsLimit(db, l, "refusal_needs_min") : null),
     };
   })) : []).concat(githubCards).filter((a) => a.id).sort((a, b) => (b.age_min ?? 0) - (a.age_min ?? 0));
   // U1: only the asks are Needs-you. The rest are loop notes (newest first), also on their squad's row;
@@ -2029,7 +2032,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   for (const s of squads) s.questions = dropLeadMergeCopies(s.questions, (q: any) => q.pr?.num != null && studioMergePrs.has(`${s.label}:${q.pr.num}`));
   // squad-done-definition U4: a squad the Lead marked `done` waits only for the operator. Read-only: no alert is
   // written, so the row is gone once the squad is closed, archiving, or set back to running.
-  const doneRows = squads.filter((s) => s.status === "done" && s.display_status === "done" && !s.error).map((s) => ({
+  const doneRows = squads.filter((s) => doneWaits(s.status, s.display_status, !!s.error)).map((s) => ({
     squad: s.topic, label: s.label, kind: "done", id: null, from: "lead", card_squad: s.topic, repo_slug: s.repo_slug ?? null, pr: null,
     act: { action: "close", topic: s.topic, label: "Close squad" }, open: true,
     title: `${s.topic} is done — read the debrief, then Close squad`, titled: true,
@@ -2184,12 +2187,7 @@ function updateSummary(db: any, label: string) {
 
 // An untitled (older) question's one-line row. A plan question reads "Approve plan: <x>?";
 // otherwise the first sentence with absolute paths cut to file names, cut at 80 characters.
-export function shortTitle(q: string, id?: string | null): string {
-  const m = typeof id === "string" ? id.match(/^plan-(.+)$/) : null;
-  if (m && m[1]) return `Approve plan: ${m[1]}?`;
-  const t = q.replace(/\s+/g, " ").trim().replace(/(^|\s)~?\/\S*\/([^\s/]+)/g, "$1$2").split(/(?<=[.?!])\s/)[0];
-  return t.length > 80 ? t.slice(0, 80).replace(/\s\S*$/, "") + "…" : t;
-}
+export { shortTitle };
 
 // --- the text board -----------------------------------------------------------------------------
 
