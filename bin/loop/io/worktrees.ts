@@ -11,8 +11,8 @@
 // what the provider already made, and the next `list` or `prune` of its repo marks it gone when the
 // provider has no such worktree. A `remove` whose folder is already gone marks the row gone. No row is
 // ever deleted. The host is always `local` for now (other hosts come later, through a sideloop).
-import { existsSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { now as nowS, type Row, type Store } from "../core/store.ts";
 import { childEnv, type Out } from "./orca.ts";
 
@@ -49,6 +49,16 @@ export class WorktreeError extends Error {}
 
 const HOST = "local";
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** A path as git lists it: the real path of its nearest existing folder, the rest joined on. A worktree
+ *  root reached through a symlink would otherwise key the row by a path git never prints. */
+export function canon(path: string): string {
+  const abs = resolve(path);
+  let head = abs;
+  const rest: string[] = [];
+  while (!existsSync(head) && dirname(head) !== head) { rest.unshift(basename(head)); head = dirname(head); }
+  try { return join(realpathSync(head), ...rest); } catch { return abs; }
+}
 
 /** The provider called `name` (bin/loop/io/providers/<name>.ts). */
 export async function provider(name: string): Promise<Provider> {
@@ -92,7 +102,9 @@ function check(spec: Spec): void {
 export async function createWorktree(s: Store, providerName: string, spec: Spec, at = nowS()): Promise<{ row: Row; adopted: boolean }> {
   check(spec);
   const p = await provider(providerName);
-  const path = resolve(spec.path || p.pathFor(spec));
+  const repo = canon(spec.repo);
+  spec = { ...spec, repo };
+  const path = canon(spec.path || p.pathFor(spec));
   const had = rowAt(s, path);
   if (had && had.gone_at == null) {
     if (had.provider !== p.name) throw new WorktreeError(`worktrees: ${path} is recorded for provider '${had.provider}', not '${p.name}'`);
@@ -102,7 +114,7 @@ export async function createWorktree(s: Store, providerName: string, spec: Spec,
   // A field the spec leaves out keeps what a live row already records.
   const keep = (v: string | null | undefined, k: string) => v ?? (had && had.gone_at == null ? (had[k] as string | null) ?? null : null);
   const fields = { project: keep(spec.project, "project"), name: spec.name, parent_path: keep(spec.parent, "parent_path"), branch: spec.branch,
-    squad: keep(spec.squad, "squad"), role: keep(spec.role, "role"), provider: p.name, repo: resolve(spec.repo), gone_at: null };
+    squad: keep(spec.squad, "squad"), role: keep(spec.role, "role"), provider: p.name, repo, gone_at: null };
   s.upsert("worktrees", { host: HOST, path }, { ...fields, created_at: had && had.gone_at == null ? had.created_at : at });
   let made: Made;
   try { made = await p.create(spec, path); } catch (e) {
@@ -125,7 +137,7 @@ export async function createWorktree(s: Store, providerName: string, spec: Spec,
 /** Remove the worktree at `path` through the provider that made it; its branch is kept unless
  *  opts.deleteBranch and the provider finds it merged into opts.base. A refusal leaves the row live. */
 export async function removeWorktree(s: Store, path: string, opts: RemoveOpts = {}, at = nowS()): Promise<{ row: Row; gone: Gone }> {
-  const abs = resolve(path);
+  const abs = canon(path);
   const r = rowAt(s, abs);
   if (!r) throw new WorktreeError(`worktrees: no worktree recorded at ${abs}`);
   if (r.gone_at != null) return { row: r, gone: { removed: true, already: true, branch: "none", why: "already recorded gone" } };
@@ -146,7 +158,7 @@ export type ListOpts = { project?: string; provider?: string; repo?: string; all
 async function reconcile(s: Store, o: ListOpts, at: number): Promise<string[]> {
   const where = ["host = ?", "gone_at IS NULL", "repo IS NOT NULL"], args: string[] = [HOST];
   if (o.provider) { where.push("provider = ?"); args.push(o.provider); }
-  if (o.repo) { where.push("repo = ?"); args.push(resolve(o.repo)); }
+  if (o.repo) { where.push("repo = ?"); args.push(canon(o.repo)); }
   if (o.project) { where.push("project = ?"); args.push(o.project); }
   const rows = s.db.query(`SELECT * FROM worktrees WHERE ${where.join(" AND ")}`).all(...args) as Row[];
   const groups = new Map<string, Row[]>();
@@ -179,7 +191,7 @@ export async function listWorktrees(s: Store, o: ListOpts = {}, at = nowS()): Pr
   const where = ["host = ?"], args: string[] = [HOST];
   if (!o.all) where.push("gone_at IS NULL");
   if (o.provider) { where.push("provider = ?"); args.push(o.provider); }
-  if (o.repo) { where.push("repo = ?"); args.push(resolve(o.repo)); }
+  if (o.repo) { where.push("repo = ?"); args.push(canon(o.repo)); }
   if (o.project) { where.push("project = ?"); args.push(o.project); }
   const rows = s.db.query(`SELECT * FROM worktrees WHERE ${where.join(" AND ")} ORDER BY project, path`).all(...args) as Row[];
   return { rows, marked };
@@ -189,10 +201,10 @@ export async function listWorktrees(s: Store, o: ListOpts = {}, at = nowS()): Pr
 export async function pruneWorktrees(s: Store, o: ListOpts = {}, at = nowS()): Promise<{ marked: string[]; pruned: string[] }> {
   const where = ["host = ?", "repo IS NOT NULL"], args: string[] = [HOST];
   if (o.provider) { where.push("provider = ?"); args.push(o.provider); }
-  if (o.repo) { where.push("repo = ?"); args.push(resolve(o.repo)); }
+  if (o.repo) { where.push("repo = ?"); args.push(canon(o.repo)); }
   if (o.project) { where.push("project = ?"); args.push(o.project); }
   const pairs = s.db.query(`SELECT DISTINCT provider, repo FROM worktrees WHERE ${where.join(" AND ")}`).all(...args) as Row[];
-  if (o.repo && o.provider && !pairs.length) pairs.push({ provider: o.provider, repo: resolve(o.repo) });
+  if (o.repo && o.provider && !pairs.length) pairs.push({ provider: o.provider, repo: canon(o.repo) });
   const pruned: string[] = [];
   for (const pr of pairs) {
     if (!existsSync(String(pr.repo))) continue;

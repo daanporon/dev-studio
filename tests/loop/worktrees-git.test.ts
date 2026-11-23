@@ -3,7 +3,7 @@
 // `worktrees` table; a re-create is idempotent, an unmerged branch is kept on removal, and a crash
 // between git and the row is repaired on the next call. A temp repo and a temp state root.
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
@@ -193,6 +193,27 @@ describe("crash recovery", () => {
     expect(out).toEqual({ marked: [join(r.wts, "a1")], pruned: [r.repo] });
     expect(await (await provider("git")).list(r.repo)).toEqual([]);
   });
+  test("a repo that is not there right now (unmounted, moved) marks nothing gone", async () => {
+    const r = await rig();
+    await createWorktree(r.s, "git", spec(r, "a1"));
+    renameSync(r.repo, `${r.repo}.away`);
+    expect((await listWorktrees(r.s, {})).marked).toEqual([]);
+    expect((await pruneWorktrees(r.s, {})).marked).toEqual([]);
+    renameSync(`${r.repo}.away`, r.repo);
+    expect(row(r, join(r.wts, "a1"))?.gone_at).toBeNull();
+  });
+});
+
+test("a worktree root reached through a symlink is keyed by the real path git lists", async () => {
+  const r = await rig();
+  mkdirSync(join(r.dir, "real"));
+  symlinkSync(join(r.dir, "real"), join(r.dir, "link"));
+  const via = join(r.dir, "link", "a1"), real = join(r.dir, "real", "a1");
+  expect((await createWorktree(r.s, "git", spec(r, "a1", { path: via }))).row.path).toBe(real);
+  expect((await createWorktree(r.s, "git", spec(r, "a1", { path: via }))).adopted).toBe(true);
+  expect((await listWorktrees(r.s, {})).marked).toEqual([]);
+  expect((await removeWorktree(r.s, via)).gone).toMatchObject({ removed: true, already: false });
+  expect(events(r, "worktree_gone")).toEqual([]);
 });
 
 test("U5's Orca sync leaves a git row alone", async () => {
