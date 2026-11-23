@@ -1598,13 +1598,13 @@ function LeftoversBox({ s }) {
 const docAge = (t) => { if (!t) return ""; const m = Math.max(0, Math.floor((Date.now() / 1000 - t) / 60)); return m < 60 ? m + "m" : m < 48 * 60 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
 const docWhen = (t) => t ? new Date(t * 1000).toLocaleString() : "";
 
-function Docs({ s, onPlan, closed, toast }) {
+function Docs({ s, onPlan, closed, toast, atArchive }) {
   const [all, setAll] = useState({});
   const [menu, setMenu] = useState(null), [revoking, setRevoking] = useState(null);
   const byNew = (a, b) => (b.mtime || 0) - (a.mtime || 0);
   const groups = [
     // The debrief has no timestamp, so its group goes first; a closed squad without one says so.
-    { id: "debrief", label: "Debrief", items: s.debrief ? [{ kind: "debrief", name: "debrief" }] : closed ? [{ kind: "none", name: "no debrief" }] : [] },
+    { id: "debrief", label: "Debrief", items: s.debrief ? [{ kind: "debrief", name: "debrief" }] : closed ? [{ kind: "none", name: atArchive ? "written at archive" : "no debrief" }] : [] },
     { id: "plans", label: "Plans", items: [...(s.plans || [])].sort(byNew).map((p) => ({ kind: "plan", name: p.name, mtime: p.mtime, p })) },
     { id: "pages", label: "Review pages", items: [...(s.lavish || [])].sort(byNew).map((l) => ({ kind: "page", name: l.name, dir: l.dir, mtime: l.mtime, l })) },
   ].filter((g) => g.items.length);
@@ -1615,7 +1615,7 @@ function Docs({ s, onPlan, closed, toast }) {
       const shown = all[g.id] ? g.items : g.items.slice(0, 10);
       return html`<div key=${g.id} class="docs" data-docs=${g.id}><span class="dl">${g.label}</span>
         ${shown.map((i, n) => { const label = (count[i.name] > 1 && i.dir ? i.dir + "/" : "") + i.name;
-          if (i.kind === "none") return html`<span key="d0" class="mut nodebrief">no debrief</span>`;
+          if (i.kind === "none") return html`<span key="d0" class="mut nodebrief">${i.name}</span>`;
           if (i.kind === "debrief") return html`<div key="d1" class="plan" title="the squad's debrief" onClick=${() => onPlan({ name: s.topic + " — debrief", markdown: s.debrief })}>📝 debrief</div>`;
           const age = html`<span class="mut dage">${docAge(i.mtime)}</span>`;
           const tip = (i.kind === "plan" ? i.name : i.l.url || i.name) + (i.mtime ? " · " + docWhen(i.mtime) : "");
@@ -2829,7 +2829,7 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
         </div>`; })}
         ${s.role_tokens && Object.values(s.role_tokens).some((v) => v) && html`<div class="tier" title="price-weighted tokens per role, 7 days">spent 7d · ${["lead", "thinker", "builders (all units)", "review", "other"].map((r) => r + " ≈" + fmtTok(s.role_tokens[r.split(" ")[0]])).join(" · ")}</div>`}</div>`}
       <${PastAnswers} s=${s} />
-      <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} />
+      <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} atArchive=${true} />
       ${s.mermaid && html`<${GraphBox} s=${s} />`}
       ${(s.units || []).length > 0 && html`<${UnitsBox} s=${s} flow=${flow} toast=${toast} onPlan=${onPlan} />`}
       ${(s.leftovers || []).length > 0 && html`<${LeftoversBox} s=${s} />`}
