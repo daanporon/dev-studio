@@ -17,12 +17,13 @@
 //   - groups the queued stops (stopGroups): a row whose stack another open entry still exposes, or whose
 //     group already stopped after it was registered, is `skipped`; each other group is one `expose.stop`
 //     action (fulfil/expose-stop.ts), subject and episode `expose-stop:<lowest id>`,
-//   - raises one Studio alert per failed, timed-out or lost group.
+//   - raises one Studio alert per failed, timed-out or lost group, unless every entry ended `down` and none of its ports listens.
 import { existsSync } from "node:fs";
 import { endExposed, queueLateStops, settleStops, squadEnd, stopGroups, STOP_FAILED, type GoneWhy } from "../squad/exposed.ts";
 import { limitInt } from "../settings/limits.ts";
 import { wtPath } from "../observers/orca.ts";
 import { alertAction } from "./alerts.ts";
+import { target } from "../observers/exposed.ts";
 import { redact } from "../core/redact.ts";
 import type { Action, Reconciler } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
@@ -66,6 +67,40 @@ function groupIds(r: Row, res = stopResult(r)): number[] {
   return Array.isArray(res.ids) && res.ids.length ? res.ids.map(Number) : [Number(r.id)];
 }
 
+// The ports of a group's rows: each url's port and its `ports` column.
+function groupPorts(rows: Row[]): number[] {
+  const out = new Set<number>();
+  for (const r of rows) {
+    const t = target(String(r.url));
+    if (t) out.add(t.port);
+    let ps: unknown = [];
+    try { ps = JSON.parse(String(r.ports ?? "[]")); } catch { /* unreadable: none */ }
+    for (const p of Array.isArray(ps) ? ps : []) if (Number.isInteger(Number(p))) out.add(Number(p));
+  }
+  return [...out];
+}
+
+// Every port some live worktree's procs row lists as listening (observed_procs keeps only live worktrees).
+function listening(store: Store, project: string): Set<number> {
+  const out = new Set<number>();
+  let rows: Row[] = [];
+  try { rows = store.db.query("SELECT listen FROM observed_procs WHERE project = ? AND listen IS NOT NULL").all(project) as Row[]; } catch { return out; }   // before migration 0049
+  for (const r of rows) {
+    let l: unknown = [];
+    try { l = JSON.parse(String(r.listen)); } catch { /* unreadable: none */ }
+    for (const x of Array.isArray(l) ? l : []) if (Number.isInteger(Number((x as Row).port))) out.add(Number((x as Row).port));
+  }
+  return out;
+}
+
+// The probe saw the stack down before the stop ran, so a non-zero exit means "nothing to stop": no card
+// when every entry of the group ended `down` and none of its ports listens. A lost stop always alerts.
+function settledDown(store: Store, project: string, group: Row[]): boolean {
+  if (group.some((x) => x.gone_why !== "down" || x.stop_state === "lost")) return false;
+  const live = listening(store, project);
+  return !groupPorts(group).some((p) => live.has(p));
+}
+
 // One alert per failed, timed-out or lost group: the rows of a group share their stop_result's ids.
 function alerts(store: Store, project: string): Action[] {
   const rows = store.db.query(`SELECT * FROM exposed WHERE project = ? AND stop_state IN (${STOP_FAILED.map(() => "?").join(", ")}) ORDER BY id`)
@@ -76,7 +111,9 @@ function alerts(store: Store, project: string): Action[] {
     const low = Math.min(...ids);
     if (seen.has(low)) continue;
     seen.add(low);
-    const names = rows.filter((x) => ids.includes(Number(x.id))).map((x) => `'${x.name}'`);
+    const group = rows.filter((x) => ids.includes(Number(x.id)));
+    if (settledDown(store, project, group)) continue;
+    const names = group.map((x) => `'${x.name}'`);
     const how = r.stop_state === "lost" ? "was lost (the loop stopped while it ran; it is not run again)"
       : r.stop_state === "timeout" ? `timed out after ${Math.round(Number(res.ms ?? 0) / 1000)} s`
       : `failed with exit code ${res.code ?? "?"}`;
