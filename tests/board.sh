@@ -1504,5 +1504,17 @@ else
   eq "reask U1: the fixture has an open question" "none" "one"
 fi
 
+# ds-feedback-github-issues U4: the header's Feedback facts and the text board's FEEDBACK line. With no feedback_repo
+# the panel reads off but the notes still count; with one the draft count is the header number.
+dbw "INSERT INTO feedback_drafts (key, kind, title, body, leak, state, created_at, updated_at) VALUES ('fd:a', 'issue', 'T', 'B', 'ok', 'review', 1, 1), ('fd:b', 'issue', 'T2', 'B2', 'blocked', 'review', 1, 1), ('fd:c', 'issue', 'T3', 'B3', 'ok', 'filed', 1, 1)"
+dbw "INSERT INTO feedback_notes (key, project, text, source, state, at, updated_at) VALUES ('n1', 'p', 'one', 'cli', 'new', 1, 1), ('n2', 'p', 'two', 'cli', 'drafted', 1, 1), ('n3', 'p', 'three', 'cli', 'dismissed', 1, 1)"
+render "$LBL" --json > "$TMP/fb.json"
+jt "feedback U4: with no repo the header reads off and counts notes" "$TMP/fb.json" '.feedback.on == false and .feedback.repo == null and .feedback.notes == 3 and .feedback.review == 2'
+dbw "INSERT INTO config (project, file, key, value, observed_at) VALUES ('', 'limits.conf', 'feedback_repo', 'o/r', 1) ON CONFLICT (project, file, key) DO UPDATE SET value = 'o/r'"
+render "$LBL" --json > "$TMP/fb.json"
+jt "feedback U4: with a repo the header counts drafts to review" "$TMP/fb.json" '.feedback.on == true and .feedback.repo == "o/r" and .feedback.review == 2 and .feedback.blocked == 1 and .feedback.new == 1 and .feedback.dismissed == 1'
+has "feedback U4: the text board's FEEDBACK line" "$(render "$LBL")" "FEEDBACK  2 drafts to review (1 blocked by the leak check) · notes: 3 (1 new, 1 drafted, 0 filed, 0 fixed, 1 dismissed)"
+dbw "UPDATE config SET value = '-' WHERE key = 'feedback_repo'"
+
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
