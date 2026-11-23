@@ -1,0 +1,56 @@
+  handled, so I'm rarely idle and "queued · busy: terminal output" stays on. I haven't confirmed this
+  against the idle-detection code. That is what the new squad is for.
+  The new squad is studio-chat-queued-busy, a feature squad with checkpoints autonomy, starting at
+  investigate. It looks at why the Studio is judged busy and how long a message can wait. It also checks
+  whether the same happens for the Lead and Thinker chats. It recommends fixes, such as a delivery path
+  that doesn't need an idle prompt, like the inbox role-to-role messages use. It should also add a
+  visible wait reason and a "send anyway" option.
+  morning-brief-stale-items: I closed it at your request, so it's archived or archiving. Its state says
+  done, and the loop DB shows its plan question (board-agree?) was answered approved. The archive wish
+  had no result recorded yet when I checked. My query for the squad's units failed, so I don't know
+  whether its fixes merged. I can look at the PRs if you want.
+✻ Sautéed for 16s · done 3:54 PM
+❯ also check what is happening with that morning-brief-stale-items squad
+  Called plugin:context-mode:context-mode
+● The morning-brief-stale-items squad finished its work before you closed it, and it's now being
+  archived.
+  Merged (both units done):
+  - #51 list only the board's Needs-you items in the brief. The brief now shows only what the board
+    shows. This is the main fix for the stale tests.yml and realp items.
+  - #49 archive drops a squad's open questions. This is the cleanup you asked me to add: open questions
+    are dropped when a squad is archived.
+  Archive: its worktrees are removed and it's being archived. The archive debrief timed out ("no debrief
+  within 10 min"), so the squad has no debrief note. The Lead was gone or busy, which is the same reason
+  the other debriefs came out thin.
+  Still to check:
+  - The old orphan questions, like the tests.yml one (id 856), probably need a one-off cleanup. The
+    archive fix covers squads archived from now on. I haven't confirmed whether it also cleaned up the
+    old ones.
+  - I haven't looked at the "Stop command failed" count on realp, or whether the brief now agrees with the
+    board in practice. Tomorrow's morning brief is the real test.
+✻ Brewed for 7s · done 3:54 PM
+❯ so now  morning-brief-stale-items  is stuck?
+  Called plugin:context-mode:context-mode
+● It isn't clearly stuck, but it hasn't finished archiving either. I can't yet tell a slow tick from a
+  real stall.
+  - Squad row: status done, wish gone, with no result yet. The squad's JSON is still in the live squads
+    folder, not in the archive.
+  - Members: the Thinker and both builders are gone, and their worktrees were removed cleanly (pushed).
+    The Lead (member 1253) is the one left. Its stop action completed at 15:49, but its status still
+    reads running.
+  - Last event: about 5 minutes ago. The archive steps run one at a time: first the debrief wait (which
+    timed out after 10 minutes), then each member is stopped and removed. The Lead's worktree removal
+    should be next.
+  The loop has been slow all day, with swap at 100% and the CPU under pressure. An archive that takes
+  several minutes is plausible here. I'll recheck in a few minutes.
+  If the Lead is still running after that, the squad is stuck. The likely cause is the Lead's pane never
+  ending, which is related to the idle-detection problem the studio-chat-queued-busy squad is looking at.
+  If so, I'll look at forcing it.
+✻ Cooked for 9s · done 3:58 PM
+❯ other squads already archived after that one.
+● Calling plugin:context-mode:context-mode…
+✢ Booping… (2s · ↓ 213 tokens · thinking with low effort)
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt

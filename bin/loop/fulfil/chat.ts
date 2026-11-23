@@ -1,6 +1,7 @@
 // fulfil/chat.ts — kind `chat` (KTD5, board chat): a one-line message from the operator, typed into a
 // member's own agent terminal as `dev-studio board, the operator says: <text>`, only once the member
-// is ready (memberReady, member-ready.ts; for the Studio studioReady on its adopted handle). Payload
+// is ready (memberReady, member-ready.ts; for the Studio studioReady on its adopted handle; for a Claude member
+// recent output alone does not hold it, only a fresh transcript or the working marker on screen). Payload
 // {text, via?, files?}; `files` are stored image names (chat/files.ts, at most 4, text may then be empty):
 // each is resolved inside the squad's chat-files folder and the line ends with ` [images attached; open each
 // with your file-reading tool: <abs path>, …]`; a missing file or a bad name fails and types nothing. Member and squad sit on the row. The loop types it; the board only files the row.
@@ -97,8 +98,10 @@ const chat: Fulfiller = {
     }
     const studio = a.squad === STUDIO_SQUAD;
     const m = studio ? null : memberAt(store, a, wt);
-    const ready = studio ? studioReady(store, a.project, now, limitInt(store, a.project, "chat_quiet_s", 10), id)
-      : memberReady(store, a.project, wt, now, { quietS: limitInt(store, a.project, "chat_quiet_s", 10), agent: m!.agent, before: id });
+    // Screen noise alone never holds a chat to a Claude member (memberReady's screenNoise); other agents keep the quiet window.
+    const quietS = limitInt(store, a.project, "chat_quiet_s", 10);
+    const ready = studio ? studioReady(store, a.project, now, quietS, id, "ignore")
+      : memberReady(store, a.project, wt, now, { quietS, agent: m!.agent, before: id, screenNoise: "ignore" });
     if (!ready.ready) {
       const since = Number(parse(store.get("requests", { id })?.result).since ?? now);
       if (now - since >= limitInt(store, a.project, "chat_queue_min", 30) * 60) return { failed: `never ready: ${ready.why}` };
