@@ -22,7 +22,7 @@ const rows = (root: string, where = "1"): Row[] => { const s = store(root); retu
 // A clean env for a child: no caller identity, no loop front, the temp state root.
 function env(root: string, extra: Record<string, string> = {}): Record<string, string> {
   const e: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(DS_MEMBER|DS_GEN|DS_LOOP_CHILD|DS_NOW|ORCA_TERMINAL_HANDLE|CLAUDE_PROJECT_DIR)$/.test(k)) e[k] = v;
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(DS_MEMBER|DS_GEN|DS_BACKEND|DS_LOOP_CHILD|DS_NOW|ORCA_TERMINAL_HANDLE|CLAUDE_PROJECT_DIR)$/.test(k)) e[k] = v;
   return { ...e, DS_STATE_ROOT: root, ...extra };
 }
 function sh(argv: string[], o: { cwd?: string; env: Record<string, string> }): { rc: number; out: string; err: string } {
@@ -91,6 +91,21 @@ describe("ds finish", () => {
     expect(got[0]).toMatchObject({ member: "zzfin/sq/tester", unit: "u2-y", gen: "gen-t", outcome: "verdict", body: "fail: login breaks" });
     const l = sh([DS, "finish", "list", "--project", "zzfin", "--json"], { env: env(root) });
     expect(JSON.parse(l.out).map((r: Row) => r.member)).toEqual(["zzfin/sq/tester"]);
+  });
+
+  test("U11: on a squad not on Orca the verdict says it is the whole report (no worker_done); on Orca it does not", () => {
+    const root = temp("zzfin-cli-");
+    const s = store(root);
+    s.upsert("squads", { project: "zzfin", topic: "ontmux" }, { backend: "tmux", observed_at: 1, updated_at: 1 });
+    s.close();
+    const tmux = sh([DS, "finish", "-", "--outcome", "verdict", "--body", "pass", "--as", "ontmux/tester", "--project", "zzfin"], { env: env(root) });
+    expect(tmux.rc).toBe(0);
+    expect(tmux.out).toContain("squad on backend tmux: no worker_done");
+    const viaEnv = sh([DS, "finish", "-", "--outcome", "verdict", "--body", "pass", "--as", "sq/tester", "--project", "zzfin"], { env: env(root, { DS_BACKEND: "herdr" }) });
+    expect(viaEnv.out).toContain("squad on backend herdr: no worker_done");
+    const orca = sh([DS, "finish", "-", "--outcome", "verdict", "--body", "pass", "--as", "sq/researcher", "--project", "zzfin"], { env: env(root) });
+    expect(orca.rc).toBe(0);
+    expect(orca.out).not.toContain("worker_done");
   });
 
   test("DS_MEMBER names the finisher and '-' records no unit", () => {

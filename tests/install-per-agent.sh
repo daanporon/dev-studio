@@ -192,6 +192,8 @@ cp "$ROOT/bin/host/install-skills.sh" "$REPO/bin/host/install-skills.sh"; chmod 
 # orca.sh runs its ported verbs (status, account-list, claude-config-dir) through `ds backend` (U223).
 mkdir -p "$REPO/bin/backend" "$REPO/bin/commands"; cp "$ROOT/bin/backend/orca.sh" "$ROOT/bin/backend/orca.ts" "$ROOT/bin/backend/orca-cache.ts" "$ROOT/bin/backend/orca-client.ts" "$REPO/bin/backend/"
 cp "$ROOT/bin/ds" "$ROOT/bin/ds.ts" "$REPO/bin/"; cp "$ROOT/bin/commands/backend.ts" "$REPO/bin/commands/"
+# orca.ts builds its Claude launch lines from drivers/claude-launch.ts (U11), which imports nothing local.
+mkdir -p "$REPO/bin/loop/drivers"; cp "$ROOT/bin/loop/drivers/claude-launch.ts" "$REPO/bin/loop/drivers/"
 # shellcheck source=tests/lib/install-ts.sh
 . "$ROOT/tests/lib/install-ts.sh"; install_ts_copy "$REPO"
 mkdir -p "$REPO/conventions"

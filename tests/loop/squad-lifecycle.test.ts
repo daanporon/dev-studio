@@ -130,15 +130,18 @@ describe("squad create (U158)", () => {
     expect(String(squad(s, "new2").task_id ?? "")).toMatch(/^task_/);
   });
 
-  test("U9: a squad written on another backend is failed, never started on orca", async () => {
+  test("U11: a squad on another backend gets no Run, task or coordinator; its roles are wished", async () => {
     const { s, orca, tick } = await rig();
     s.want("squad", "fx/ontmux", "running", { payload: { repo: "path:/nonexistent/fixture-repo", type: "feature" },
       fill: { repo: "path:/nonexistent/fixture-repo", type: "feature", backend: "tmux", worktree_provider: "git" }, by: "test" });
     await tick(3);
     expect(orca.of("run-create")).toHaveLength(0);
     expect(orca.of("task-create")).toHaveLength(0);
-    expect(members(s, "ontmux")).toEqual([]);
-    expect(JSON.stringify(squad(s, "ontmux"))).toContain("is on backend tmux, which the loop cannot start yet");
+    expect(orca.calls.filter((c) => JSON.stringify(c.args).includes("ontmux"))).toEqual([]);
+    expect(squad(s, "ontmux").run_id ?? null).toBeNull();
+    expect(squad(s, "ontmux").status).toBe("running");
+    expect(s.get("coordinators", { project: "fx", squad: "ontmux" })).toBeNull();
+    expect((members(s, "ontmux") as { role: string }[]).map((m) => m.role)).toContain("lead");
   });
 });
 

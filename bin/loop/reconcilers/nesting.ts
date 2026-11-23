@@ -17,6 +17,7 @@ import type { Action, Reconciler } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
 import { liveSquads } from "./liveness.ts";
 import { alertAction } from "./alerts.ts";
+import { onContract } from "../squad/backend.ts";
 
 export const NEST_KIND = "nest-repairs";
 export const NEST_MAX = 3;          // repairs of one worktree per NEST_WINDOW_S before an alert replaces the next
@@ -40,6 +41,9 @@ const nesting: Reconciler = {
     const seen = (wt: string): Row | null => store.db.query("SELECT parent FROM observed_worktrees WHERE project = ? AND wt = ? AND gone_at IS NULL").get(project, wt) as Row | null;
     const out: Action[] = [];
     for (const sq of liveSquads(store, project)) {
+      // U11: only Orca nests worktrees and has the op that moves one (wt-set-parent). A squad on another
+      // backend gets its parent at create (`parents: native`) or keeps the tree in loop.db (`groups`, `none`).
+      if (onContract(store, project, String(sq.topic))) continue;
       const lead = sq.lead_wt ? String(sq.lead_wt) : null;
       const rows = store.db.query("SELECT id, wt, role FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND COALESCE(status, '') != 'gone' ORDER BY id")
         .all(project, String(sq.topic)) as Row[];

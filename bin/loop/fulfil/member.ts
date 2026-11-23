@@ -20,6 +20,7 @@ import { handoff, type Why } from "../squad/handoff.ts";
 import { DUPLICATE_CARD_AFTER } from "../reconcilers/members.ts";
 import { rolePrompt } from "../reconcilers/requests.ts";
 import { startedOn, type Member } from "../drivers/types.ts";
+import { onContract, stopOp } from "../squad/backend.ts";
 import type { Action } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
 import { deliver } from "./poke.ts";
@@ -140,7 +141,7 @@ const member: Fulfiller = {
       if (!r || view(x.store, r) !== "running") return true;
       // U200: a stop whose calls went out finishes once the agent reads gone; the presence and
       // reason checks below would drop it the moment the stop worked.
-      if (x.act?.openCall(x.store, stopKey(a, "worker-stop"))) return false;
+      if (x.act?.openCall(x.store, stopKey(a, stopOp(x.store, String(r.project), String(r.squad))))) return false;
       // A retried stop re-reads reality: the decider re-emits it if it is still owed, so a
       // stale one drops instead of stopping an agent that no longer matches the reason.
       const w = r.wt ? x.store.get("observed_workers", { project: r.project, wt: r.wt }) : null;
@@ -166,8 +167,9 @@ const member: Fulfiller = {
       const id = (a.payload as { id: number }).id, row = x.store.get("members", { id }), m = memberOf(x.store, { id });
       if (!row || !m) return true;
       if (lock(x.store, row, ["action:member"])) return false;
-      if (x.act.openCall(x.store, stopKey(a, "worker-stop"))) return true;   // U200: its calls went out; only the gone-check is left
-      if (!x.store.get("coordinators", { project: m.project, squad: m.squad })?.handle) return false;
+      if (x.act.openCall(x.store, stopKey(a, stopOp(x.store, m.project, m.squad)))) return true;   // U200: its calls went out; only the gone-check is left
+      // U11: a squad on a contract backend has no coordinator pane: its stop closes the member's terminals.
+      if (!onContract(x.store, m.project, m.squad) && !x.store.get("coordinators", { project: m.project, squad: m.squad })?.handle) return false;
       // A switch stop re-proves its row (the pick still lands elsewhere, the pin still differs):
       // the decider re-emits it while it holds, so a stale one waits instead of stopping for nothing.
       const why = (a.payload as { why?: string }).why;
@@ -201,13 +203,14 @@ const member: Fulfiller = {
       const { store, now: at } = x, id = (a.payload as { id: number }).id;
       const row = store.get("members", { id }), m = memberOf(store, { id });
       if (!row || !m || view(store, row) !== "running") return { dropped: "no longer wished running" };
+      const contract = onContract(store, m.project, m.squad), op = stopOp(store, m.project, m.squad);
       const keep = String(store.get("coordinators", { project: m.project, squad: m.squad })?.handle ?? "");
-      if (!keep) return { wait: "no coordinator pane" };
+      if (!keep && !contract) return { wait: "no coordinator pane" };
       const run = String(store.get("squads", { project: m.project, topic: m.squad })?.run_id ?? "");
       const makeSeat = (op: string) => x.act.seat(store, m.project, m.squad, stopKey(a, op), m.wt, at);
-      const r = await x.act.driver(makeSeat("worker-stop"), m.agent).stop(makeSeat, m, run, keep);
+      const r = await x.act.driver(makeSeat(op), m.agent).stop(makeSeat, m, run, keep);
       if (!r.ok) return { retry: r.error ?? "stop failed" };  // presence stays as observed
-      const sentAt = Number((store.db.query("SELECT at FROM orca_calls WHERE key = ? ORDER BY id DESC LIMIT 1").get(stopKey(a, "worker-stop")) as Row | null)?.at ?? 0);
+      const sentAt = Number((store.db.query("SELECT at FROM orca_calls WHERE key = ? ORDER BY id DESC LIMIT 1").get(stopKey(a, op)) as Row | null)?.at ?? 0);
       const why = (a.payload as { why?: string }).why;
       // U180: the stop reserves the place its tick's pick aimed for, until the member is placed or
       // pick_ttl_s passes: later picks count it as load, and its own start keeps it while it fits.
