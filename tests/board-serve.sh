@@ -1050,6 +1050,104 @@ eq "chat: no refused POST wrote a row" "$(crows)" "$N1"
 eq "chat: rows written: three plus the 2000-char one" "$((N1 - N0))" "4"
 eq "chat: resume the researcher"       "$(post -H "$O" -H "$CT" -d "{\"scope\":\"member\",\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wResearcher\"}" "http://127.0.0.1:$PORT/api/resume")" "200"
 
+# chat-image-upload U1: POST /api/chat-file stores one image per content hash under the state root
+# (`<label>/chat-files/<topic>/<sha256[:16]>.<ext>`, 0600), GET serves it back, each upload prunes
+# old ones, and a chat send may name stored images. Fixtures are magic bytes plus padding (no binary
+# is checked in).
+F="http://127.0.0.1:$PORT/api/chat-file"; CF="$DBR/$LBL/chat-files"
+img(){ printf '%b%s' "$1" "$2" > "$TMP/$3"; }   # img <magic, backslash escapes> <padding> <file>
+img '\x89PNG\r\n\x1a\n' 'one' a.png; img '\x89PNG\r\n\x1a\n' 'two' b.png; img '\x89PNG\r\n\x1a\n' 'three' c.png
+img '\xff\xd8\xff\xe0' 'jpeg' d.jpg; img 'RIFF\x04\x00\x00\x00WEBPVP8 ' 'webp' e.webp; img 'GIF89a' 'gif' f.gif
+printf '<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>' > "$TMP/s.svg"
+up(){ # up <file> <content-type> [topic] [wt] [project] [origin header] -> status; the answer in $TMP/up.out
+  curl -s -o "$TMP/up.out" -w '%{http_code}' -X POST -H "${6:-$O}" -H "Content-Type: $2" --data-binary "@$TMP/$1" \
+    "$F?project=${5:-$LBL}&topic=${3:-ans}&wt=${4:-wTh}"; }
+nfiles(){ find "$CF" -type f 2>/dev/null | wc -l | tr -d ' '; }
+eq "chat-file: a PNG for a live member is 200" "$(up a.png image/png)" "200"
+AID=$(jq -r '.id' "$TMP/up.out")
+eq "chat-file: named by its sha256's first 16 hex" "$AID" "$(sha256sum "$TMP/a.png" | cut -c1-16).png"
+eq "chat-file: the answer's url and bytes" "$(jq -c '[.url, .bytes]' "$TMP/up.out")" "[\"api/chat-file?project=$LBL&topic=ans&name=$AID\",$(wc -c < "$TMP/a.png" | tr -d ' ')]"
+eq "chat-file: stored 0600 in 0700 folders" "$(stat -c %a "$CF/ans/$AID") $(stat -c %a "$CF/ans") $(stat -c %a "$CF")" "600 700 700"
+eq "chat-file: the same bytes again, the same name" "$(up a.png image/png)$(jq -r '.id' "$TMP/up.out")" "200$AID"
+eq "chat-file: and one file" "$(nfiles)" "1"
+touch -d '10 days ago' "$CF/ans/$AID"; up a.png image/png >/dev/null
+eq "chat-file: a repeat upload resets the image's age" "$(( $(date +%s) - $(stat -c %Y "$CF/ans/$AID") < 60 ))" "1"
+for t in d.jpg:image/jpeg e.webp:image/webp f.gif:image/gif; do
+  f=${t%%:*}; ty=${t#*:}
+  eq "chat-file: a ${ty#image/} is 200 as .${f#*.}" "$(up "$f" "$ty")$(jq -r '.id | split(".")[1]' "$TMP/up.out")" "200${f#*.}"
+done
+N2=$(nfiles)
+eq "chat-file: a cross-origin upload is 403" "$(up b.png image/png ans wTh "$LBL" 'Origin: http://evil.example')" "403"
+eq "chat-file: no Origin is 403"        "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: image/png' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=ans&wt=wTh")" "403"
+eq "chat-file: text/plain is 415"       "$(up b.png text/plain)" "415"
+eq "chat-file: an SVG is 415"           "$(up s.svg image/svg+xml)" "415"
+eq "chat-file: an SVG labelled png is 415" "$(up s.svg image/png)" "415"
+eq "chat-file: a PNG labelled jpeg is 415" "$(up b.png image/jpeg)$(jq -r '.error' "$TMP/up.out")" "415not a png/jpeg/webp/gif"
+head -c $((6 * 1024 * 1024)) /dev/zero | cat "$TMP/b.png" - > "$TMP/big.png"
+eq "chat-file: a 6 MiB body is 413"     "$(up big.png image/png)" "413"
+head -c $((5 * 1024 * 1024 + 1 - $(wc -c < "$TMP/b.png"))) /dev/zero | cat "$TMP/b.png" - > "$TMP/over.png"
+eq "chat-file: 5 MiB + 1 byte is the handler's own 413" "$(up over.png image/png)$(jq -r '.error' "$TMP/up.out")" "413an image is at most 5 MiB"
+: > "$TMP/empty.png"
+eq "chat-file: an empty body is 400"    "$(up empty.png image/png)" "400"
+eq "chat-file: another project is 403"  "$(up b.png image/png ans wTh zzother)" "403"
+eq "chat-file: a bad topic is 400"      "$(up b.png image/png '../x')" "400"
+eq "chat-file: an ended member is 404"  "$(up b.png image/png ans wReviewer)" "404"
+eq "chat-file: an unknown member is 404" "$(up b.png image/png ans nope)" "404"
+eq "chat-file: GET is not an upload"    "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "$O" -H 'Content-Type: image/png' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=ans&wt=wTh")" "405"
+mkdir -p "$TMP/elsewhere"; ln -s "$TMP/elsewhere" "$CF/_studio"
+eq "chat-file: a symlinked folder is 500" "$(up b.png image/png _studio wStudio)$(jq -r '.error' "$TMP/up.out")" "500chat-files is not a plain folder"
+eq "chat-file: nothing written through it" "$(find "$TMP/elsewhere" -type f | wc -l | tr -d ' ')" "0"
+rm "$CF/_studio"
+eq "chat-file: no refused upload wrote a file" "$(nfiles)" "$N2"
+eq "chat-file: the Studio's folder is _studio" "$(up b.png image/png _studio wStudio)" "200"
+[ -f "$CF/_studio/$(jq -r '.id' "$TMP/up.out")" ]; eq "chat-file: stored under _studio" "$?" "0"
+# Serving: the bytes, with headers that keep a browser from running or sniffing it.
+eq "chat-file: GET is 200"              "$(curl -s -D "$TMP/fh.txt" -o "$TMP/served.png" -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "200"
+cmp -s "$TMP/a.png" "$TMP/served.png"; eq "chat-file: the same bytes" "$?" "0"
+fh(){ grep -i "^$1:" "$TMP/fh.txt" | cut -d' ' -f2- | tr -d '\r'; }
+eq "chat-file: served headers" "$(fh content-type)|$(fh x-content-type-options)|$(fh content-disposition)|$(fh content-security-policy)|$(fh cache-control)" \
+  "image/png|nosniff|inline|default-src 'none'; img-src 'self'|private, max-age=86400"
+eq "chat-file: HEAD is 200"             "$(curl -s -I -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "200"
+eq "chat-file: ../x.png is 400"         "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=../x.png")" "400"
+eq "chat-file: an uppercase name is 400" "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=${AID^^}")" "400"
+eq "chat-file: a .svg name is 400"      "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=0123456789abcdef.svg")" "400"
+eq "chat-file: an unknown name is 404"  "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=0123456789abcdef.png")" "404"
+eq "chat-file: another squad's folder is 404" "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=board-builders&name=$AID")" "404"
+eq "chat-file: another project is 403"  "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=zzother&topic=ans&name=$AID")" "403"
+ln -s "$CF/ans/$AID" "$CF/ans/fedcba9876543210.png"
+eq "chat-file: a symlinked file is 404" "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=fedcba9876543210.png")" "404"
+rm "$CF/ans/fedcba9876543210.png"
+eq "chat-file: an ended member's image still shows" "$(cp "$TMP/a.png" "$CF/ans/aaaaaaaaaaaaaaaa.png"; curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=aaaaaaaaaaaaaaaa.png")" "200"
+# A chat send may name stored images; text may then be empty.
+fbody(){ jq -nc --arg p "$LBL" --arg x "$1" --argjson f "$2" '{project: $p, topic: "ans", wt: "wTh", text: $x, files: $f}'; }
+eq "chat-file: a send with an image and no text is 202" "$(post -H "$O" -H "$CT" -d "$(fbody '' "[\"$AID\"]")" "$C")" "202"
+eq "chat-file: the chat row holds files" "$(reqrow "$(rid)" | jq -c '[.payload.text, .payload.files, .payload.via]')" "[\"\",[\"$AID\"],\"board\"]"
+eq "chat-file: text without files has no files key" "$(post -H "$O" -H "$CT" -d "$(fbody hi '[]')" "$C")$(reqrow "$(rid)" | jq -c '.payload | has("files")')" "202false"
+N3=$(crows)
+eq "chat-file: a send naming a missing image is 409" "$(post -H "$O" -H "$CT" -d "$(fbody hi '["0123456789abcdef.png"]')" "$C")$(jq -r '.error' "$TMP/post.out")" "409image 0123456789abcdef.png is gone — attach it again"
+eq "chat-file: a bad name in files is 400" "$(post -H "$O" -H "$CT" -d "$(fbody hi '["../../x.png"]')" "$C")" "400"
+eq "chat-file: five files are 400"      "$(post -H "$O" -H "$CT" -d "$(fbody hi '["a","b","c","d","e"]')" "$C")" "400"
+eq "chat-file: a name twice is 400"     "$(post -H "$O" -H "$CT" -d "$(fbody hi "[\"$AID\",\"$AID\"]")" "$C")" "400"
+eq "chat-file: files not a list is 400" "$(post -H "$O" -H "$CT" -d "$(fbody hi '"x"')" "$C")" "400"
+eq "chat-file: no text and no files is still 400" "$(post -H "$O" -H "$CT" -d "$(fbody '' '[]')" "$C")" "400"
+eq "chat-file: no refused send wrote a row" "$(crows)" "$N3"
+# Only the upload may send a big body: a 200 KiB JSON post is still 413.
+head -c $((200 * 1024)) /dev/zero | tr '\0' x | jq -Rc --arg p "$LBL" '{project: $p, topic: "ans", wt: "wTh", text: .}' > "$TMP/big.json"
+eq "chat-file: a 200 KiB JSON chat is 413" "$(post -H "$O" -H "$CT" --data-binary "@$TMP/big.json" "$C")" "413"
+eq "chat-file: a 200 KiB answer is 413" "$(post -H "$O" -H "$CT" --data-binary "@$TMP/big.json" "http://127.0.0.1:$PORT/api/answer")" "413"
+# The prune each upload runs first: an image past chat_files_keep_d (14) days goes, a younger one and a
+# file outside the name rule stay, a temp file over an hour old goes.
+B=$(up b.png image/png >/dev/null; jq -r '.id' "$TMP/up.out")
+touch -d '15 days ago' "$CF/ans/$AID"; touch -d '13 days ago' "$CF/ans/$B"
+printf x > "$CF/ans/notes.txt"; touch -d '100 days ago' "$CF/ans/notes.txt"
+printf x > "$CF/ans/.$AID.1.tmp"; touch -d '2 hours ago' "$CF/ans/.$AID.1.tmp"
+printf x > "$CF/ans/.$B.2.tmp"
+eq "chat-file: the next upload is 200"  "$(up c.png image/png)" "200"
+ex(){ [ -e "$CF/ans/$1" ] && echo y || echo n; }
+eq "chat-file: 15 days old gone, 13 kept, other file kept, old tmp gone, new tmp kept" "$(ex "$AID")$(ex "$B")$(ex notes.txt)$(ex ".$AID.1.tmp")$(ex ".$B.2.tmp")" "nyyny"
+eq "chat-file: a pruned image is 404"   "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "404"
+rm -f "$CF/ans/notes.txt" "$CF/ans/.$B.2.tmp"
+
 # GET /lavish/<key>: Lavish stops itself when idle; when it is down the board files one `lavish`
 # request and answers a page that reloads until the loop has started it, then redirects.
 L="http://127.0.0.1:$PORT/lavish"
