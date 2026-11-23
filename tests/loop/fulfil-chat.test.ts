@@ -14,6 +14,7 @@ import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { alertGone } from "../../bin/loop/reconcilers/alerts.ts";
 import { pause, resume } from "../../bin/loop/pause/pause.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -41,10 +42,11 @@ function imported(): Store {
 }
 
 const fulfillers = await load<Fulfiller & Reconciler>(DIRS.fulfil);
+const reconcilers = [(await import("../../bin/loop/reconcilers/send-fail.ts")).default as Reconciler, ...fulfillers];
 const picked: Picker = async () => ({ agent: "claude", model: "opus", effort: null, account: "acct-b" });
 function rig(s: Store, orca = new FakeOrca()) {
   const act = new LoopActuator({ orca, pick: picked, fulfillers: fulfillers.filter((f) => f.kinds) });
-  const loop = new Loop(s, { observers: [], reconcilers: fulfillers }, act, { projects: () => ["fx"] });
+  const loop = new Loop(s, { observers: [], reconcilers }, act, { projects: () => ["fx"] });
   loop.boot(T);
   const tick = async (at: number) => { const r = await loop.tick(at); await act.drain(); return r; };
   return { orca, tick };
@@ -102,15 +104,47 @@ describe("chat fulfiller", () => {
     await tick(T);
     expect(req(s, id).done_at).toBeNull();
     expect(result(s, id)).toEqual({ state: "queued", why: "busy: working", since: T });
-    // still mid-turn, output still moving: the why changes, nothing typed
-    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T + 8, tail: "│ ❯ │\n", tail_at: T + 9 });
+    // still mid-turn, Claude's working marker on the screen: the why changes, nothing typed
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T + 8, tail: "✢ Booping… (2s)\n│ ❯ │\n  ⏵⏵ bypass permissions on · esc to interrupt\n", tail_at: T + 9 });
     await tick(T + 10);
-    expect(result(s, id)).toEqual({ state: "queued", why: "busy: terminal output", since: T });
+    expect(result(s, id)).toEqual({ state: "queued", why: "busy: working on screen", since: T });
     expect(orca.of("poke").length).toBe(0);
     idleAt(s, B, T + 120);
     await tick(T + 120);
     expect(typed(orca)).toEqual([`${SAYS}hold on`]);
     expect(req(s, id).done_at).toBe(T + 120);
+  });
+
+  test("output alone does not hold a chat to a Claude member; a Codex member keeps the quiet window", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    // the pane printed 5 s ago, the transcript is 5 min old, the screen read after the print is an empty prompt
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T - 5, tail: "│ ❯ │\n", tail_at: T - 2, unread: 0, gone_at: null, observed_at: T });
+    s.upsert("observed_transcripts", { path: "/x/b.jsonl" }, { project: "fx", wt: B, mtime: T - 300, observed_at: T });
+    s.db.run("UPDATE members SET agent = 'codex' WHERE project = 'fx' AND wt = ?", [B]);
+    const id = chat(s, "codex waits");
+    await tick(T);
+    expect(result(s, id)).toEqual({ state: "queued", why: "busy: terminal output", since: T });
+    s.db.run("UPDATE members SET agent = 'claude' WHERE project = 'fx' AND wt = ?", [B]);
+    await tick(T + 1);
+    expect(typed(orca)).toEqual([`${SAYS}codex waits`]);
+  });
+
+  test("a member Orca still reads working after an Esc is typed into once its screen and transcript agree (studio-hung-agent-broken U4)", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    const transcript = (turn: string) => s.upsert("observed_transcripts", { path: join(ROOT, "tests", "fixtures", "liveness", `${turn}.jsonl`) },
+      { project: "fx", wt: B, mtime: T - 300, observed_at: T });
+    // Orca `working` (Esc runs no Stop hook), quiet for a minute, an empty prompt read since, the turn still open
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "working", last_output_at: T - 60, tail: "│ ❯ │\n", tail_at: T - 30, unread: 0, gone_at: null, observed_at: T });
+    transcript("open");
+    const id = chat(s, "are you there?");
+    await tick(T);
+    expect(result(s, id)).toEqual({ state: "queued", why: "busy: working", since: T });
+    // the newest transcript record is the Esc: the line goes in
+    s.db.run("DELETE FROM observed_transcripts WHERE wt = ?", [B]);
+    transcript("interrupted");
+    await tick(T + 10);
+    expect(typed(orca)).toEqual([`${SAYS}are you there?`]);
+    expect(req(s, id).done_at).toBe(T + 10);
   });
 
   test("an accepted send is a chat delivery: verified once working, never resent", async () => {
@@ -203,20 +237,74 @@ describe("chat fulfiller", () => {
     const s = imported(), { orca, tick } = rig(s);
     s.db.run("UPDATE requests SET done_at = ? WHERE project = 'fx' AND key LIKE 'file:fx/_studio/%'", [T]);
     s.upsert("members", { project: "fx", squad: "_studio", wt: STUDIO }, { role: "studio", suffix: "", agent: "claude", handle: "term_s1", status: "running", observed_at: T, updated_at: T });
-    const term = (lastOut: number) => s.upsert("observed_terminals", { project: "fx", handle: "term_s1" },
-      { wt: STUDIO, title: "claude", tail: "│ ❯ │\n", tail_at: lastOut + 5, doc: JSON.stringify({ agent: true, identity: "claude", last_output_at: lastOut, unread: 0 }), observed_at: T, gone_at: null });
-    term(T - 30);
+    const term = (lastOut: number, tail = "│ ❯ │\n") => s.upsert("observed_terminals", { project: "fx", handle: "term_s1" },
+      { wt: STUDIO, title: "claude", tail, tail_at: lastOut + 5, doc: JSON.stringify({ agent: true, identity: "claude", last_output_at: lastOut, unread: 0 }), observed_at: T, gone_at: null });
+    term(T - 10, "│ ❯ │\n  ⏵⏵ bypass permissions on · esc to interrupt\n");
     const id = Number(s.request("chat", { text: "morning", via: "board" }, { project: "fx", squad: "_studio", member: STUDIO }).row.id);
     s.db.run("UPDATE requests SET created_at = ? WHERE id = ?", [T, id]);
     await tick(T);
-    expect(result(s, id)).toEqual({ state: "queued", why: "busy: terminal output", since: T });
+    expect(result(s, id)).toEqual({ state: "queued", why: "busy: working on screen", since: T });
     expect(orca.of("poke-terminal").length).toBe(0);
-    term(T - 600);
+    // the turn ended and the pane printed again 5 s ago: screen noise alone does not hold a Claude Studio
+    term(T + 5);
     await tick(T + 10);
     expect(orca.of("poke-terminal").map((c) => c.args)).toEqual([["term_s1", `${SAYS}morning`]]);
     expect(orca.of("poke").length).toBe(0);
     expect(result(s, id)).toMatchObject({ ok: true, state: "sent" });
     expect(crewLog(s)).toBe("");
+  });
+
+  // A Studio seated and quiet for 10 s, its next poke-terminal calls refused with code 75 `activity: paused`.
+  function studioFailing(refusals: number) {
+    const s = imported(), { orca, tick } = rig(s);
+    s.db.run("UPDATE requests SET done_at = ? WHERE project = 'fx' AND key LIKE 'file:fx/_studio/%'", [T]);
+    s.upsert("members", { project: "fx", squad: "_studio", wt: STUDIO }, { role: "studio", suffix: "", agent: "claude", handle: "term_s1", status: "running", observed_at: T, updated_at: T });
+    s.upsert("observed_terminals", { project: "fx", handle: "term_s1" },
+      { wt: STUDIO, title: "claude", tail: "│ ❯ │\n", tail_at: T - 20, doc: JSON.stringify({ agent: true, identity: "claude", last_output_at: T - 30, unread: 0 }), observed_at: T, gone_at: null });
+    for (let i = 0; i < refusals; i++) orca.fail("poke-terminal", { code: 75, out: "", err: "activity: paused" });
+    const id = Number(s.request("chat", { text: "morning", via: "board" }, { project: "fx", squad: "_studio", member: STUDIO }).row.id);
+    s.db.run("UPDATE requests SET created_at = ? WHERE id = ?", [T, id]);
+    return { s, orca, tick, id };
+  }
+  const cards = (s: Store) => {
+    const f = join(s.root, "fx", "alerts.json");
+    return existsSync(f) ? (JSON.parse(readFileSync(f, "utf8")).alerts as Row[]).filter((x) => String(x.id).startsWith("sweep-send-fail")) : [];
+  };
+
+  test("a Studio chat quiet for 10 s is typed; a refused send shows why and flags failing", async () => {
+    const { s, orca, tick, id } = studioFailing(1);
+    await tick(T);
+    expect(req(s, id).done_at).toBeNull();
+    expect(result(s, id)).toEqual({ state: "queued", why: "send failed: activity: paused", failing: true });
+    expect(orca.of("poke-terminal").length).toBe(1);
+  });
+
+  test("the third failed send in a row raises one card, and a send that works clears it", async () => {
+    const { s, orca, tick, id } = studioFailing(3);
+    const H = 3600;
+    await tick(T); await tick(T + H);
+    expect(cards(s).length).toBe(0);
+    await tick(T + 2 * H);                       // the third refusal ends the tick; the reconciler sees it next tick
+    await tick(T + 2 * H + 10);
+    expect(cards(s).length).toBe(1);
+    expect(String(cards(s)[0].title)).toBe("Can't type into _studio: activity: paused");
+    expect(result(s, id)).toEqual({ state: "queued", why: "send failed: activity: paused", failing: true });
+    await tick(T + 2 * H + 20);
+    expect(cards(s).length).toBe(1);
+    expect(alertGone(s, "fx", cards(s)[0], T + 2 * H + 20)).toBe(false);
+    await tick(T + 3 * H);                       // the refusals are used up: this send works
+    expect(orca.of("poke-terminal").length).toBe(4);
+    expect(result(s, id)).toMatchObject({ ok: true, state: "sent" });
+    expect(alertGone(s, "fx", cards(s)[0], T + 3 * H)).toBe("typing into the member works again");   // the alerts reconciler then removes it
+  });
+
+  test("a member whose driver says failed is queued as send failed, failing", async () => {
+    const s = imported(), orca = new FakeOrca(), { tick } = rig(s, orca);
+    orca.pokes.set(B, [1]);
+    idleAt(s, B, T);
+    const id = chat(s, "ping");
+    await tick(T);
+    expect(result(s, id)).toEqual({ state: "queued", why: "send failed", failing: true });
   });
 
   test("a builder chat leaves one crew-chat line and no mail; a Lead chat leaves none", async () => {
@@ -300,5 +388,63 @@ describe("chat with images", () => {
     await tick(T + 2);
     expect(String(result(s, many).error)).toContain("at most 4");
     expect(typed(orca)).toEqual([]);
+  });
+
+  // studio-chat-queued-busy U4: Cancel and Send now.
+  const control = (s: Store, kind: "chat-cancel" | "chat-now", chatId: number) =>
+    Number(s.request(kind, { chat: chatId }, { project: "fx", squad: "demo", member: B }).row.id);
+
+  test("Cancel finishes a waiting chat as cancelled and types nothing; an already typed one is left", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    working(s, B, T);
+    const id = chat(s, "never mind");
+    await tick(T);
+    const c = control(s, "chat-cancel", id);
+    await tick(T + 1);
+    expect(req(s, id).done_at).not.toBeNull();
+    expect(result(s, id)).toEqual({ ok: false, state: "cancelled" });
+    expect(result(s, c)).toMatchObject({ ok: true, state: "cancelled" });
+    idleAt(s, B, T + 100);
+    await tick(T + 100);
+    expect(typed(orca)).toEqual([]);
+    // a typed chat: the control does nothing to it
+    const t = chat(s, "typed", B, T + 100);
+    await tick(T + 101);
+    expect(typed(orca)).toEqual([`${SAYS}typed`]);
+    const c2 = control(s, "chat-cancel", t);
+    await tick(T + 102);
+    expect(result(s, t)).toMatchObject({ ok: true, state: "turn started" });
+    expect(result(s, c2)).toMatchObject({ state: "already done" });
+  });
+
+  test("Send now skips the quiet window only: a transcript written 6 s ago holds a plain chat, not a `now` one", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    idleAt(s, B, T);
+    s.upsert("observed_transcripts", { path: "/x/b.jsonl" }, { project: "fx", wt: B, mtime: T - 6, observed_at: T });
+    const plain = chat(s, "plain");
+    await tick(T);
+    expect(result(s, plain)).toMatchObject({ state: "queued", why: "busy: transcript" });
+    expect(typed(orca)).toEqual([]);
+    control(s, "chat-now", plain);
+    await tick(T + 1);
+    await tick(T + 2);
+    expect(typed(orca)).toEqual([`${SAYS}plain`]);
+  });
+
+  test("Send now still waits for the screen read, the prompt and a working marker", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T - 6, tail: "│ ❯ half typed │\n", tail_at: T - 5, unread: 0, gone_at: null, observed_at: T });
+    const id = chat(s, "now please");
+    control(s, "chat-now", id);
+    await tick(T);
+    await tick(T + 1);
+    expect(result(s, id)).toMatchObject({ state: "queued", why: "text at the prompt" });
+    s.upsert("observed_workers", { project: "fx", wt: B }, { tail: "│ ❯ │\n", tail_at: T + 1 });
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "working", last_output_at: T + 2 });
+    await tick(T + 3);
+    expect(typed(orca)).toEqual([]);
+    idleAt(s, B, T + 10);
+    await tick(T + 10);
+    expect(typed(orca)).toEqual([`${SAYS}now please`]);
   });
 });

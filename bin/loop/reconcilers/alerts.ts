@@ -40,6 +40,8 @@
 //   account-skills U3, a broken account   (`sweep-account-skills.<account>-<n>`, reconcilers/account-skills.ts):
 //            gone once the account's skills read `ok` or `warn:`, or its row is gone; skills NULL (a
 //            10-column accounts.tsv) cannot be judged, so the day-old rule applies.
+//   loop-tick-8s U4, slow ticks   (`sweep-tick-alarm.slow-<n>`, reconcilers/tick-alarm.ts):
+//            gone once the spell closed (newest tick_slow avg_ms at or under tick_alarm_ms, no tick_slow row for 2 x DS_LOOP_SLOW_EVERY_S, or the limit 0).
 //   disk-pressure U3, a low disk   (`sweep-disk-pressure.<path>-<n>`, reconcilers/disk-pressure.ts):
 //            gone once the disk's spell closed (free space above disk_card_free_pct + 5 points, the limit 0, or the disk unlisted).
 import { existsSync, readFileSync } from "node:fs";
@@ -59,6 +61,7 @@ import { envInt } from "../core/tick.ts";
 import { allDone } from "../pause/wake.ts";
 import { retestDue } from "../squad/retest.ts";
 import { gitDir } from "../io/git-dir.ts";
+import { debriefTopic } from "../../board/card-place.ts";
 import { cancellationReality, cancellationRepository, sharedBuilder, sharedPr, prNumber } from "../squad/cancel.ts";
 
 const PICKER_STALE_S = 120;
@@ -342,7 +345,7 @@ function requestMoot(store: Store, project: string, subject: string): string | n
 // failed late stop, which stays because something may still be listening. A refusal card keeps its own rule, which also ends its refusals row.
 function archivedCard(store: Store, project: string, a: Row): boolean {
   const squad = typeof a.squad === "string" ? a.squad : "";
-  if (!squad || a.kind === REFUSAL_KIND || a.kind === "questions_dropped" || /^sweep-debrief-/.test(String(a.id ?? "")) || /(^|[ :·])Stop command failed$/.test(String(a.title ?? ""))) return false;
+  if (!squad || a.kind === REFUSAL_KIND || a.kind === "questions_dropped" || debriefTopic(a) !== null || /(^|[ :·])Stop command failed$/.test(String(a.title ?? ""))) return false;
   const sq = store.db.query("SELECT status, want, want_result FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, squad) as Row | null;
   return !!sq && (sq.status === "closed" || (sq.want === "gone" && String(sq.want_result ?? "").startsWith("done")));
 }
@@ -398,7 +401,7 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
   }
   const failed = /(^|[ :·])Restart failed$/.test(String(a.title)) ? text.match(/^(\S+) of (\S+) \(.* — the loop could not restart it/) : null;
   if (failed) return restartSettled(store, project, memberByLabel(store, project, failed[2], failed[1]), null, now);
-  if (/^sweep-debrief-/.test(id)) return false;                    // R3: stays until Mark read or Dismiss
+  if (/^sweep-debrief-/.test(id) || debriefTopic(a) !== null) return false;                    // R3: stays until Mark read or Dismiss
   const acct = id.match(/^sweep-account-skills\.(.+)-[0-9]+$/);
   if (acct) {
     const v = skillsOf(store, acct[1]);
@@ -411,6 +414,17 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
   if (disk) {
     const ep = store.get("episodes", { project, subject: `disk-pressure.${disk[1]}`, kind: "disk-pressure" });
     return ep && ep.ended_at == null ? false : "the disk has free space again";
+  }
+  // loop-tick-8s U4: a slow-ticks card goes once its spell closed (the newest tick_slow average at or under the limit, no tick_slow row for 2 windows, the limit off).
+  if (/^sweep-tick-alarm\.slow-[0-9]+$/.test(id)) {
+    const ep = store.get("episodes", { project, subject: "tick-alarm.slow", kind: "tick-alarm" });
+    return ep && ep.ended_at == null ? false : "ticks are fast again";
+  }
+  // studio-chat-queued-busy U2: a send-fail card goes once the member's streak ended (a send worked).
+  const sf = id.match(/^sweep-send-fail\.(.+)-[0-9]+$/);
+  if (sf) {
+    const ep = store.get("episodes", { project, subject: `send-fail:${project}/${sf[1]}`, kind: "send-fail" });
+    return ep && ep.ended_at == null ? false : "typing into the member works again";
   }
   const studio = (store.get("projects", { label: project })?.studio_wt as string | null) ?? null;
   if (/^(sweep|loop)-studio\.limit-/.test(id)) {

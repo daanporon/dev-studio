@@ -219,6 +219,15 @@ With explicit flags (`--repo` + `--topic`) it passes them straight through to
 /ds-start-squad --repo <project-selector> --topic add-login [--autonomy checkpoints|lfg] [--framing "what this squad should do"]
 ```
 
+The board's **Start squad** dialog does the same: its brief (up to 32 KiB) is written to
+`state/<project>/framings/board-start-<request>.md` and the Studio's line passes it as
+`--framing-file`. A start can carry up to 8 images (PNG, JPEG, WebP or GIF, at most 5 MiB each),
+uploaded while the dialog is open to `state/<project>/chat-files/_start/` (pruned after
+`chat_files_keep_d` days, like chat images). When the Studio's request is filed they are copied to
+`state/<project>/framings/board-start-<request>/` and kept with the brief, never pruned, and the
+brief ends with an `## Attached images` section listing their absolute paths, so every role that
+reads the brief can open them. Images are not checked for secrets.
+
 This creates the squad's Run + task and starts **the Lead + the Thinker** (the
 Lead `run-use`s the Run to become its coordinator). **Builders are on-demand** —
 the Lead spawns one per unit from the Thinker's plan, never before there's a plan
@@ -289,7 +298,7 @@ One name per state; the pill's hover, the expanded squad and the text board say 
 | `blocked` / `waiting-on-you` | the Lead | a question or blocker needs you | answer it in Needs-you |
 | `parked · N held` | the loop (computed) | nothing dispatched or ready; the only open work is N held units | release them, cancel them, suspend the squad, or leave it parked |
 | `wrapping up` | the loop (computed) | every unit done or cancelled, no open PR, no Tester; the Lead owes the test check and the debrief | nothing; a "Wrap-up stalled" card comes only if the Lead stops answering |
-| `done` | the Lead, after the debrief | finished; waits only for you | read the debrief, then Close squad (a Needs-you row says so) |
+| `done` | the Lead; the debrief is written at archive | finished; waits only for you | Close squad (the debrief is written then) (a Needs-you row says so) |
 | `pausing` `paused` `resuming` | you (Pause) | agents stopped, worktrees kept | Resume |
 | `suspended` | you (Suspend) | worktrees removed, branches kept | Restore |
 | `archiving` `suspending` | you | the loop is carrying it out | wait; it reads stuck after 15 min |
@@ -398,7 +407,7 @@ yet). The two warning states are the dropped-handoff failures made impossible to
 miss. The LEAD column shows a Lead only when the loop's own liveness check says it is stuck, never
 for being idle: `⚠LEAD-NOT-RESPONDING(Nm)` (idle with Run mail unread for `DS_SWEEP_SILENT_MIN`, 10 minutes; the loop pokes it
 twice and then asks for a restart), `⚠LEAD-HUNG(Nm)` (working with no output for `DS_SWEEP_HUNG_MIN`, 30 minutes, no long
-step open) and `⚠LEAD-UNREACHABLE` (Run mail the loop cannot deliver to it). The web board shows the
+step open, and its last turn neither ended nor stopped with Esc) and `⚠LEAD-UNREACHABLE` (Run mail the loop cannot deliver to it). The web board shows the
 same words in red. A Lead that is idle with nothing waiting shows nothing however long it has been idle.
 
 On the web board each squad has two dropdowns: **work units** (the list above, with
@@ -468,6 +477,22 @@ characters, no newlines) and Send: the loop types `dev-studio board, the operato
 it is paused. A chat to a Builder, Tester, Reviewer or Researcher also lands in the
 squad's `crew-chat.md`, so its Lead sees it on its next tick. The panel reads
 `GET /api/chat` every 3 s while open; `board.json` carries no turns.
+
+**Switch members inside the Chat panel.** With two or more live members in the squad, the panel
+shows a tab per member under its title (lead, thinker, each builder, …) in the Crew box's order, each
+with the box's mail count and a dot when that member wrote a reply you have not seen in this browser;
+one click shows that member's chat without closing the panel. On a phone the title's name is a button
+(`<member> ▾`, with the other members' mail and a dot) that opens the same list. What you typed for
+each member stays with it (per browser tab, kept across a switch, a close and a reload) until you send it.
+
+**Attach images in the Chat panel.** The 📎 button (or a paste into the box, or a drop anywhere on the
+panel) attaches up to 4 images; each shows as a 56 px thumbnail with ✕ and is uploaded at once. An image over
+3.5 MiB, with a long side over 2000 px, or of a type the server refuses (an iPhone HEIC) is redrawn in the
+page as a JPEG with its long side at most 2000 px first; a small one goes as it is. Send works with images
+and no text; the typed line then ends with the stored paths, which the member opens with its file-reading
+tool, and the bubble shows the thumbnails. Images are kept 14 days (an older bubble says `image removed`),
+are not checked for secrets, and a Muse member or a screen-only chat shows `this member may not see images`.
+Attached images stay in each member's draft across a switch.
 
 **Chat with the Studio from the board.** The board's top bar has a **💬 Studio** button (one per
 project on a host-wide board) that opens the same Chat panel on the project's Studio, titled

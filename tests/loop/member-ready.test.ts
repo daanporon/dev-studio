@@ -1,11 +1,12 @@
 // member-ready.test.ts — KTD4 (board chat): memberReady() on a squad member read by worktree, on a
 // copy of tests/fixtures/loop/state. Each guard refuses with its own why; an idle member with an
-// empty prompt read since its last output is ready. (The Studio's handle path: studio.test.ts.)
+// empty prompt read since its last output is ready; a board chat to a Claude member is not held by
+// output alone (screenNoise). (The Studio's handle path: studio.test.ts.)
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { memberReady } from "../../bin/loop/squad/member-ready.ts";
+import { memberReady, promptDraft, workingOnScreen, type ReadyOpts } from "../../bin/loop/squad/member-ready.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 
@@ -30,7 +31,7 @@ function idle(): Store {
   s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T - 60, tail: "some output\n│ ❯ │\n", tail_at: T - 30, unread: 0, gone_at: null, observed_at: T });
   return s;
 }
-const ready = (s: Store, o: Partial<{ before: number | null; agent: string | null }> = {}, now = T) =>
+const ready = (s: Store, o: Partial<ReadyOpts> = {}, now = T) =>
   memberReady(s, "fx", B, now, { quietS: 10, agent: "claude", ...o });
 const set = (s: Store, row: Row) => s.upsert("observed_workers", { project: "fx", wt: B }, row);
 
@@ -70,6 +71,111 @@ describe("memberReady", () => {
     // a codex driver knows no menus
     set(s, { tail: "What do you want to do?\n  1. Stop and wait\n│ ❯ │\n" });
     expect(ready(s, { agent: "codex" })).toEqual({ ready: true, why: "idle" });
+  });
+
+  describe("screenNoise: ignore (board chat)", () => {
+    // Real Claude Studio screens (scrubbed): one read mid-turn with `esc to interrupt` under the prompt
+    // box, one read at rest. Both have an empty prompt row.
+    const SHOT = (n: string) => readFileSync(join(ROOT, "tests", "fixtures", "member-ready", n), "utf8");
+    const WORKING = SHOT("claude-working.txt"), IDLE = SHOT("claude-idle.txt");
+    // printed 5 s ago, transcript 5 min old, the screen read after the print
+    function noisy(tail: string): Store {
+      const s = idle();
+      set(s, { last_output_at: T - 5, tail, tail_at: T - 2 });
+      s.upsert("observed_transcripts", { path: "/x/b.jsonl" }, { project: "fx", wt: B, mtime: T - 300, observed_at: T });
+      return s;
+    }
+    const chatReady = (s: Store, agent = "claude") => ready(s, { agent, screenNoise: "ignore" });
+
+    test("the fixtures are what they claim: both show an empty prompt, only one the marker", () => {
+      expect([promptDraft(WORKING), promptDraft(IDLE)]).toEqual(["", ""]);
+      expect([workingOnScreen(WORKING), workingOnScreen(IDLE)]).toEqual([true, false]);
+    });
+
+    test("a Claude member that printed 5 s ago with an empty prompt and no marker is ready", () => {
+      expect(chatReady(noisy(IDLE))).toEqual({ ready: true, why: "idle" });
+    });
+
+    test("the marker on screen, or a transcript written 5 s ago, is busy", () => {
+      expect(chatReady(noisy(WORKING))).toEqual({ ready: false, why: "busy: working on screen" });
+      const s = noisy(IDLE);
+      s.upsert("observed_transcripts", { path: "/x/b.jsonl" }, { project: "fx", wt: B, mtime: T - 5, observed_at: T });
+      expect(chatReady(s)).toEqual({ ready: false, why: "busy: transcript" });
+    });
+
+    test("a screen not read since the output still waits", () => {
+      const s = noisy(IDLE);
+      set(s, { tail_at: T - 8 });
+      expect(chatReady(s)).toEqual({ ready: false, why: "screen not read since its last output" });
+    });
+
+    test("the words quoted higher up in a reply are not the marker", () => {
+      const quoted = IDLE.replace("other squads already archived after that one.", "the pane says esc to interrupt while it works.");
+      expect(quoted).not.toBe(IDLE);
+      expect(chatReady(noisy(quoted))).toEqual({ ready: true, why: "idle" });
+    });
+
+    test("without the option, and for Muse or Codex, output 5 s ago is busy", () => {
+      expect(ready(noisy(IDLE))).toEqual({ ready: false, why: "busy: terminal output" });
+      expect(chatReady(noisy(IDLE), "codex")).toEqual({ ready: false, why: "busy: terminal output" });
+      expect(chatReady(noisy(IDLE), "muse")).toEqual({ ready: false, why: "busy: terminal output" });
+    });
+  });
+
+  describe("Orca `working` after an Esc (studio-hung-agent-broken U4)", () => {
+    // Esc runs no Stop hook, so Orca keeps `working`. The made-up transcripts of liveness U1: a turn
+    // interrupted by Esc, one that ended, one still open.
+    const TRANSCRIPT = (n: string) => join(ROOT, "tests", "fixtures", "liveness", `${n}.jsonl`);
+    const SHOT = (n: string) => readFileSync(join(ROOT, "tests", "fixtures", "member-ready", n), "utf8");
+    const IDLE = SHOT("claude-idle.txt"), WORKING = SHOT("claude-working.txt");
+    // Orca `working`, quiet a minute, the screen read after that output, the transcript 5 min old
+    function escaped(turn: string, tail = IDLE): Store {
+      const s = idle();
+      set(s, { state: "working", tail, tail_at: T - 30 });
+      s.upsert("observed_transcripts", { path: TRANSCRIPT(turn) }, { project: "fx", wt: B, mtime: T - 300, observed_at: T });
+      return s;
+    }
+    const busy = { ready: false, why: "busy: working" };
+
+    test("an interrupted or ended last turn with an idle screen read since the output is ready", () => {
+      expect(ready(escaped("interrupted"))).toEqual({ ready: true, why: "idle" });
+      expect(ready(escaped("ended"))).toEqual({ ready: true, why: "idle" });
+      expect(ready(escaped("interrupted"), { screenNoise: "ignore" })).toEqual({ ready: true, why: "idle" });
+    });
+
+    test("the working marker on screen, or an open turn, is still busy: working", () => {
+      expect(ready(escaped("interrupted", WORKING))).toEqual(busy);
+      expect(ready(escaped("open"))).toEqual(busy);
+    });
+
+    test("a screen older than the output, text at the prompt, another agent or no transcript is still busy: working", () => {
+      const old = escaped("interrupted");
+      set(old, { tail_at: T - 90 });
+      expect(ready(old)).toEqual(busy);
+      expect(ready(escaped("interrupted", "│ ❯ the operator typing │\n"))).toEqual(busy);
+      expect(ready(escaped("interrupted"), { agent: "codex" })).toEqual(busy);
+      const none = idle();
+      set(none, { state: "working" });
+      expect(ready(none)).toEqual(busy);
+    });
+
+    test("a headless run's transcript newer than the member's own says nothing about its turn", () => {
+      const s = escaped("open");
+      s.upsert("observed_transcripts", { path: TRANSCRIPT("interrupted") }, { project: "fx", wt: B, mtime: T - 100, entrypoint: "sdk-cli", observed_at: T });
+      expect(ready(s)).toEqual(busy);
+    });
+
+    test("a transcript last written before the member's process started is not its own", () => {
+      const s = escaped("interrupted");
+      set(s, { started_at: T - 200 });
+      expect(ready(s)).toEqual(busy);
+    });
+
+    test("every other guard still applies", () => {
+      const s = escaped("interrupted");
+      set(s, { unread: 1 });
+      expect(ready(s)).toEqual({ ready: false, why: "unread mail" });
+    });
   });
 
   test("only requests filed before `before` are ahead", () => {

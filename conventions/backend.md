@@ -1,8 +1,8 @@
 # Backend interface
 
 All backend access goes through a defined interface so the system is not
-hardwired to Orca (R19, KTD9). Orca is the only backend shipped now; another is
-a sibling adapter under `bin/backend/`.
+hardwired to Orca (R19, KTD9). Orca is the only backend the loop runs on now; another is
+a sibling adapter under `bin/backend/` (herdr, contract v2, below).
 
 There are two contracts:
 
@@ -130,6 +130,32 @@ it on its own backend: `conformance({name, make, cwd, wait?, survive?})`.
 and as a server that outlives its caller. It also shows the checks catch an answer outside its type.
 `tests/loop/server-unit.test.ts` covers `server-unit.ts` on both paths.
 
+### The tmux backend
+
+`bin/backend/tmux.ts` (U14) is the first v2 backend on a real multiplexer. Capabilities: `parents`
+`groups`, `state` `none` (`agent.state` is always `unknown`; the loop's own readers give the state),
+`turn_confirm` `none`, `keys` `native`.
+
+- One tmux server per project: `projectTmux(<project>, {stateRoot})` uses the socket `-L ds-<project>`
+  and starts its server through `server-unit.ts` (unit `ds-tmux-<project>`, log
+  `<state root>/<project>/loop/tmux-server.log`) on the first create. The server runs
+  `tmux -f /dev/null -D`, so no user config is read, with `exit-empty` off. Its environment is the
+  caller's without `ORCA_*`, `TMUX*`, `DS_MEMBER`, `DS_WT`, `DS_GEN` and `DS_BACKEND`.
+- Every client call passes `-N`, so a call never starts a server inside the loop's cgroup.
+- One session per squad (the terminal's `group`; `.`, `:` and other characters become `_`; no group
+  means session `_ds`) and one window per member, made with `-c <cwd>` and `-e` for each env entry.
+- A terminal's id is its pane id (`%7`). The window option `@ds_meta` keeps cwd, label, group, gen and
+  the create time. It is set in the same tmux command list as the window, so a listed terminal always
+  has its gen.
+- Text is loaded into a paste buffer from stdin and pasted, so tmux never parses it. `submit` then
+  presses Enter. Keys go through `send-keys`.
+- `read` is `capture-pane`. `last_output` is the window's `window_activity`, because tmux 3.4 has no
+  `pane_activity` and each window holds one pane.
+- No server, or a server with no session left, lists no terminals and answers `not_found` for an id.
+
+`tests/loop/backend-tmux.test.ts` runs the conformance suite, including `survive`, on a private socket
+(`tmux.ts caller` is its caller). When no `tmux` binary is on `PATH` it skips with the reason printed.
+
 ### Adding a v2 backend
 
 1. Implement `Backend` (`call(op, req)`) under `bin/backend/<name>.ts`.
@@ -138,6 +164,72 @@ and as a server that outlives its caller. It also shows the checks catch an answ
 4. Pass the conformance suite in a test of its own.
 5. Anything it needs from the agents' host beyond these ops is a local read: list it in
    `docs/backends/local-reads.md`.
+
+### The herdr backend (`bin/backend/herdr.ts`)
+
+The first v2 backend (orca-backend-alternatives U15). [herdr](https://github.com/herdrdev/herdr) is a
+terminal multiplexer for agents: a server owns workspaces, tabs and panes, and sees which agent runs in a
+pane and whether it is working. The adapter speaks herdr's socket API (newline-delimited JSON). The loop
+does not use it yet.
+
+- **Pinned.** `HERDR_VERSION` 0.9.5, protocol 22. A server that answers another protocol fails every op.
+  `fetchHerdr(dir)` downloads that release's Linux binary and checks its sha256. `DS_HERDR_BIN` names a
+  local binary instead, and `DS_HERDR_FETCH=0` downloads nothing.
+- **Its server.** `startHerdr({bin, dir, name})` writes `<dir>/config.toml`, starts `herdr server` through
+  `server-unit.ts` and waits for an answer on `<dir>/herdr.sock`. The server runs in its own session
+  (`HERDR_SESSION=ds-<name>`, `HERDR_SOCKET_PATH`, `HERDR_CONFIG_PATH`), apart from any herdr the
+  operator runs. The config sets `resume_agents_on_restore = false` (the loop restarts its members
+  itself), turns off herdr's update and agent-manifest checks, and turns off sound. `herdr integration
+  install` is never run.
+- **Layout B.** There is one workspace per group (a squad) and one tab per terminal (a member), each
+  started with its own cwd and env. The group's first terminal makes the workspace and takes its first
+  tab. A later one adds a tab. Closing the last tab closes the workspace. A terminal made without a
+  group goes to one shared workspace.
+- **Facts live in herdr.** Any client reads the same answers, so a new loop process, or a client after
+  its caller is killed, sees the same terminals. The terminal id is the adapter's own (`h-<random>`),
+  kept as the pane token `ds_id`, because herdr's pane ids (`w1:p2`) are positions that are not stable
+  over a server's life. cwd, label, group, gen and created_at are base64url JSON cut into 80-character
+  tokens (`ds_n`, `ds_m0`…). Facts too long for 13 pieces answer `bad_request`. A group's workspace
+  carries `ds_g`. Only panes with a `ds_id` are listed. Tokens are not restored after a herdr server
+  restart, so the restored panes are not listed.
+- **Capabilities.** `parents: groups`, `state: native` (herdr's `agent_status`: `working` → working,
+  `blocked` → waiting, `idle` and `done` → idle, else unknown), `keys: native`, `turn_confirm: none`. A
+  send answers once herdr has taken the bytes. herdr's turn signal, `agent prompt --wait`, only works
+  for an agent herdr already recognises.
+- **`last_output`** hashes the visible screen and keeps the hash and the time it changed in pane tokens
+  (`ds_oh`, `ds_oa`). The time is when a read first saw the change.
+- `bun bin/backend/herdr.ts caller <bin> <dir> <name> [home]` is the conformance suite's survive caller.
+- `tests/loop/backend-herdr.test.ts` runs the conformance suite (the server outliving its caller
+  included) and layout B against the pinned binary in a temp HOME. When the binary can't be fetched,
+  it skips those cases and prints why. The mappings and the protocol pin always run. How well herdr
+  reads agent state is a trial of its own (U16c).
+
+## A backend per squad
+
+Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
+lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
+`herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
+others, the first being its default). Only `orca` is one the loop can start a squad on today (herdr's v2
+adapter, above, is not wired to squad starts yet); the rest are listed so a project can name them, and a
+start on one is refused with a line that says it is not built yet.
+
+- **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
+  pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
+  project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
+  refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet and a
+  binary missing on PATH; a refused spawn writes no wish and never falls back to `orca`.
+- **Written once.** The squad's row keeps `backend`, `backend_host` (`local`; the machine it runs on) and
+  `worktree_provider` (migration 0054; every existing squad reads `orca`/`local`/`orca`). Once the loop
+  has started the squad the columns cannot change (a table trigger), and `spawn-squad` refuses a different
+  `--backend` for it; a later change of `default_backend` touches only new squads. A closed squad started
+  again under its topic may pick again.
+- **Not `squads.host`.** That column is spawn-squad's dev-env host (`--host`), unchanged; the backend's
+  machine is `backend_host`.
+- **Shown.** The board's squad row and box carry a chip with the backend (and the tool, when it is not the
+  backend's default) for a squad off `orca`; the text board adds ` · on:<backend>[/<tool>]` to its line.
+  Settings → Agents & nudges lists both keys.
+- **Started.** The loop's squad fulfiller (`bin/loop/fulfil/squad.ts`) starts only `orca` squads; a wish
+  for another fails with `squad <topic> is on backend <name>, which the loop cannot start yet`.
 
 ## The Orca adapter (contract v1)
 

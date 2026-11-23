@@ -23,7 +23,7 @@ export const RESTART_MODES = ["now", "idle"] as const;
 
 // A wish's payload (`want_payload`), by subject. A string is a stored replay and is not checked.
 export const WISH_PAYLOADS = {
-  squad: obj({ from: opt(str), id: opt(num) }),
+  squad: obj({ from: opt(str), id: opt(num), backend: opt(str), backend_host: opt(str), worktree_provider: opt(str) }),   // backend…: U9, chosen once at spawn
   member: obj({ why: opt(str), prompt: opt(str), agent: opt(str), model: opt(str), effort: opt(str), account: opt(str), ctx: opt(num),
     request: opt(bool), unit: opt(str), spec: opt(str), pauseResume: opt(str) }),
   service: obj({ bind: opt(str), hosts: opt(str) }),
@@ -44,6 +44,8 @@ export const REQUESTS = {
   answer: obj({ id: str, answer: str, seq: opt(num), card_wt: opt(str), choices: opt(arr(any)), transcript: opt(str), tool_use_id: opt(str), via: opt(str) }),
   board: obj({ file: str, text: str }),
   chat: obj({ text: str, via: opt(str), request: opt(num), files: opt(arr(str)) }),
+  "chat-cancel": obj({ chat: num, request: opt(num) }),
+  "chat-now": obj({ chat: num, request: opt(num) }),
   dismiss: obj({ id: str, answer: opt(str) }),
   duplicate: obj({ wt: opt(str), handle: opt(str), newest: opt(str), runHandle: opt(str), mismatch: opt(bool), first: opt(num) }),
   "finish-unit": replay,
@@ -68,7 +70,7 @@ export const REQUESTS = {
   "send-role": replay,
   skills: obj({ role: opt(str), reset: opt(bool), set: opt(rec) }),
   squad: obj({ id: opt(num), op: opt(str) }),
-  studio: obj({ action: str, topic: opt(str), line: opt(str), framing: opt(str), id: opt(str), answer: opt(str), request: opt(num), label: opt(str), date: opt(str), since: opt(num), until: opt(num), spend: opt(any), merges_upto: opt(any) }),
+  studio: obj({ action: str, topic: opt(str), line: opt(str), framing: opt(str), files: opt(arr(str)), id: opt(str), answer: opt(str), request: opt(num), label: opt(str), date: opt(str), since: opt(num), until: opt(num), spend: opt(any), merges_upto: opt(any) }),
   "studio-move": obj({ handle: opt(str), agent: opt(str), account: opt(str), model: opt(str), effort: opt(str), from: opt(str), why: opt(str), notice: opt(str) }),
   withdraw: obj({ of: opt(str), key: opt(str), episode: opt(str) }),
   "worktree.remove": obj({ label: opt(str), topic: opt(str), wt: opt(str), path: opt(str), unit: opt(str), merged: opt(bool) }),
@@ -133,6 +135,9 @@ export const FACTS = {
   message_replied: obj({ id: num, reply: opt(num), request: opt(num) }),
   message_sent: obj({ key: str, to: str, from: str, kind: str, subject: str }),
   finish_recorded: obj({ key: str, member: str, unit: opt(str), outcome: str, gen: opt(str) }),
+  worktree_created: obj({ path: str, provider: str, branch: str, adopted: bool, parent: opt(str) }),
+  worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
+  worktree_gone: obj({ path: str, provider: str, why: str }),
   builder_wish_settled: obj({ id: num, unit: str, was: opt(str) }),
   builder_wish_withdrawn: obj({ id: num, unit: str, why: str, by: str, reason: opt(str) }),
   member_drift_cleared: obj({ id: opt(num), path: opt(str), status: opt(str) }),

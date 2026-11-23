@@ -54,6 +54,7 @@ import { now, ROOT, type Row, type Store } from "./store.ts";
 import { spreadDue } from "./timers.ts";
 import { retireCapacityFacts } from "../fulfil/pending.ts";
 import { envInt } from "./tick.ts";
+import { loopStopping } from "./stopping.ts";
 import { carded, classify, clear, causeOf, fingerprint, lapse, launchRetryAt, LAUNCH_TRIES, refuse, REFUSAL_KIND, standing } from "../io/refusals.ts";
 import { keepStartFailed } from "../squad/start-failed.ts";
 import { redact, redactPayload } from "./redact.ts";
@@ -342,6 +343,9 @@ export class LoopActuator implements Actuator {
     else if ("dropped" in r) { set = { state: "dropped", ended_at: at, next_at: null, action: null, result: r.dropped }; kind = "action_dropped"; }
     // A pending action is acted again from the next tick at the soonest, never twice in this one.
     else if ("wait" in r) pending(holder ? at + HELD_GAP : Math.max(r.at ?? 0, at + 1), { wait: r.wait });
+    // A step the loop's own shutdown killed (checked now, when the result is recorded) is no failure: the next loop process runs it
+    // on its first tick, uncounted and with no refusal row.
+    else if ("retry" in r && loopStopping()) pending(at + 1);
     else if (cls === "wait") pending(at + REFUSED_WAIT);
     // seat().call binds a fresh sender on these causes itself; the action gets one more try, uncounted.
     else if (cls === "fixable" && saved.fixed !== cause) pending(at + 1, { fixed: cause });
@@ -526,7 +530,10 @@ export class LoopActuator implements Actuator {
         return via(await this.sender(store, project, squad ?? "", at, true));
       },
       send: (op, args, extra) => {
-        const target = op === "poke-terminal" ? store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ?").get(args[0]) as Row | null : null;
+        // A handle can have rows under two projects (a worktree another project once claimed): the
+        // action's own project's row first, else a live row.
+        const target = op === "poke-terminal" ? store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ? ORDER BY (project = ?) DESC, (gone_at IS NULL) DESC, observed_at DESC")
+          .get(args[0], project) as Row | null : null;
         const physical = target ? { project: String(target.project), member: String(target.wt) }
           : ["poke", "keys", "ping"].includes(op) ? { project, member: args[0] } : { project, squad, member };
         const block = this.block(store, physical);

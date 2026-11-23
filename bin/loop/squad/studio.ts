@@ -17,6 +17,12 @@ import type { Row, Store } from "../core/store.ts";
 export const STUDIO_SQUAD = "_studio";
 // U264: the subject of a Studio move's episodes and cards (reconcilers/limits.ts, fulfil/studio.ts).
 export const MOVE = "studio.move";
+// studio-hung-agent-broken U2: the broken Studio's card (reconcilers/liveness.ts) and its answers. "Restart Studio"
+// records RESTART_APPROVED (fulfil/studio.ts dismiss), which reconcilers/studio.ts turns into one studio-move, why "restart".
+export const STUDIO_CARD_TITLE = "Studio not responding";
+export const RESTART_STUDIO = "Restart Studio";
+export const STUDIO_FINE = "It's fine";
+export const RESTART_APPROVED = "studio:restart-approved";
 
 export type StudioTerm = { handle: string; title: string | null; identity: string | null };
 export type StudioView = { wt: string; agent: string; member: Row | null; terms: StudioTerm[]; candidates: StudioTerm[]; recorded: string | null };
@@ -113,14 +119,15 @@ export { promptDraft } from "./member-ready.ts";
 // memberReady() holds on it (member-ready.ts: quiet for `quietS`, an empty prompt read since the last
 // output, no picker or menu, no unread mail, no typed action ahead of `before`), plus the Studio's own:
 // no request filed for the Studio (requests/_studio/ or a queued board `studio` row) and no open
-// question it asked. Orca's worker state is not consulted: the worktree also holds ds-loop panes and shells.
-export function studioReady(store: Store, project: string, now: number, quietS = 120, before: number | null = null): Ready {
+// question it asked. `screenNoise` is memberReady's (board chat only). Orca's worker state is not
+// consulted: the worktree also holds ds-loop panes and shells.
+export function studioReady(store: Store, project: string, now: number, quietS = 120, before: number | null = null, screenNoise?: "ignore"): Ready {
   const no = (why: string) => ({ ready: false, why });
   const v = studioView(store, project);
   if (!v) return no("no Studio worktree");
   const h = v.member?.handle as string | null;
   if (!h) return no("no Studio terminal adopted");
-  const r = memberReady(store, project, v.wt, now, { quietS, handle: h, agent: v.agent, before });
+  const r = memberReady(store, project, v.wt, now, { quietS, handle: h, agent: v.agent, before, screenNoise });
   if (!r.ready) return r;
   const req = `file:${project}/_studio/`;
   if (store.db.query("SELECT 1 FROM requests WHERE project = ? AND done_at IS NULL AND (substr(key, 1, ?) = ? OR kind = 'studio') LIMIT 1").get(project, req.length, req)) return no("a request waits for the Studio");

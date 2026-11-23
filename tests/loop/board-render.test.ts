@@ -10,6 +10,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mount as mountPage, type Run } from "./board-mount";
+import { BACKEND_NAMES } from "../../bin/backend/registry.ts";
 
 const root = join(import.meta.dir, "../..");
 const page = readFileSync(join(root, "web/board.html"), "utf8");
@@ -158,8 +159,8 @@ test("a member with 2 unread messages shows 'Inbox 2' and opens the 'Inbox · <m
 });
 
 // ---- board-start-squad-box U1: the Start squad dialog.
-async function startDialog(reply: (body: any) => any) {
-  const r = await mount(board, false);
+async function startDialog(reply: (body: any) => any, b: any = board) {
+  const r = await mount(b, false);
   const w = r.window, doc = w.document, posts: any[] = [];
   w.fetch = async (url: string, init?: any) => {
     if (String(url) !== "api/request") return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
@@ -187,7 +188,7 @@ test("Start squad: a multi-line brief and the fields are one POST that keeps eve
     await d.click(d.btn(/^Send$/)); await d.click(d.btn(/^Sending…$/));
     d.text()?.dispatchEvent(new d.w.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
     await d.wait(120);
-    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan" }]);
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan", backend: "orca" }]);
     expect(d.doc.querySelector('[role="dialog"][aria-label="Start squad"]')).toBeNull();
     expect(d.doc.body.textContent).toContain("sent to the Studio: start squad my-topic (request #7)");
     expect(d.r.errors).toEqual([]);
@@ -215,7 +216,7 @@ test("Start squad: a 400 keeps the dialog and the text; testing disables Start a
     await d.set(".start-type", "testing", "change");
     expect(d.doc.querySelector(".start-start").disabled).toBe(true);
     await d.click(d.btn(/^Send$/));
-    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "a\nb", type: "testing", autonomy: "checkpoints" }]);
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "a\nb", type: "testing", autonomy: "checkpoints", backend: "orca" }]);
     expect(d.doc.querySelector(".start-text").value).toBe("a\nb");
     expect(d.doc.body.textContent).toContain("not sent: the text has a control character on line 2");
     expect(d.btn(/^Send$/)).toBeTruthy();
@@ -500,6 +501,40 @@ test("a Debrief card shows 'Debrief · <topic>', opens the archived debrief and 
   } finally { await w.happyDOM.close(); }
 });
 
+// debrief-in-needs-you U3: an old-id card (`loop-debrief-…` with reason `debrief-<topic>`) is a Debrief card like the new one.
+test("an old-id and a new-id Debrief card both show in Needs you, with linked PRs; Open falls back to the card text; Mark read answers only its card", async () => {
+  const mk = (id: string, topic: string, extra: any = {}) => ({ squad: "_studio", label: "fixture", kind: "studio", card_squad: null, id, debrief: topic, reason: `debrief-${topic}`, from: null,
+    title: "Debrief: " + topic, titled: true, text: `1. Set out to do ${topic}.\n2. Shipped #123 and #45.`, choices: [], options: ["Mark read"], act: null, age_min: 3000, about: null, repo_slug: "o/r", ...extra });
+  const oldC = mk("loop-debrief-oldy-1uy1p7zj2un2e", "oldy"), newC = mk("sweep-debrief-newy-1", "newy");
+  const archived = { topic: "newy", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [], debrief: "NEWY-ARCHIVED-BODY" };
+  const r = await mount({ ...board, needs_you: [oldC, newC], loop_notes: [], archived: [archived] }, false);
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) === "api/answer") posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && doc.querySelectorAll(".qnote").length < 2; k++) await wait(25);
+    const notes = [...doc.querySelectorAll(".qnote")] as any[];
+    expect(notes.map((n) => n.querySelector(".sq").textContent)).toEqual([expect.stringContaining("Debrief · oldy"), expect.stringContaining("Debrief · newy")]);
+    expect(notes[0].querySelectorAll('a[href="https://github.com/o/r/pull/123"]').length).toBe(1);
+    expect(notes[0].querySelector(".lndet.dbr")).not.toBeNull();
+    expect(doc.querySelectorAll(".lnnote").length).toBe(0);
+    notes[1].querySelector('[data-ev="open-debrief"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("NEWY-ARCHIVED-BODY");
+    notes[0].querySelector('[data-ev="open-debrief"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("The full debrief of this squad is not on the board.");
+    expect(doc.body.textContent).toContain("Set out to do oldy.");
+    notes[0].querySelector('[data-ev="mark-read"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(posts).toEqual([expect.objectContaining({ topic: "_studio", id: "loop-debrief-oldy-1uy1p7zj2un2e", answer: "Mark read" })]);
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
 // chat-with-studio U1: the header's Studio button(s), the badge, the new-reply dot and the opener, on the real page.
 const studio = (over: any = {}) => ({ label: "fixture", wt: "/w/st", handle: "term_s", adopted: true, unread: 0, reply_due: 0, working: false, reply_at: null,
   agent: "claude", walk: null, model_label: null, account: null, account_label: null, ctx: null, ctx_level: null, ...over });
@@ -552,4 +587,38 @@ test("chat-with-studio U1: a non-adopted Studio's button is disabled with its re
   try {
     expect(btns(r2).map((x) => x.textContent.trim().replace(/\s+/g, " "))).toEqual(["💬 Studio · a", "💬 Studio · b"]);
   } finally { await r2.window.happyDOM.close(); }
+});
+
+// ---- orca-backend-alternatives U9: the dialog presets the project's default_backend and sends the backend picked.
+test("Start squad: Backend starts on the project's default_backend, follows the project, and is sent", async () => {
+  const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", default_backend: "tmux" }, { label: "other", default_backend: "orca" }] };
+  const d = await startDialog(() => ({ status: 202, body: { ok: true, id: 3 } }), b);
+  try {
+    expect(d.doc.querySelector(".start-backend").value).toBe("tmux");
+    // The page's list is a copy of the registry's; this keeps the two the same.
+    expect([...d.doc.querySelectorAll(".start-backend option")].map((o: any) => o.value)).toEqual([...BACKEND_NAMES]);
+    await d.set(".start-project", "other", "change");
+    expect(d.doc.querySelector(".start-backend").value).toBe("orca");
+    await d.set(".start-project", "fixture", "change");
+    await d.set(".start-backend", "herdr", "change");
+    await d.set(".start-text", "go");
+    await d.click(d.btn(/^Send$/));
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "go", type: "feature", autonomy: "checkpoints", backend: "herdr" }]);
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+
+test("a squad off orca shows its backend chip, with the worktree tool only when it is not the backend's default", async () => {
+  const sq = (topic: string, over: any) => ({ label: "fixture", topic, type: "feature", autonomy: "orchestration", ship_mode: "ce-pipeline", display_status: "working", display_key: "working", phase: "build", status: "active", members: [], units: [], questions: [], ...over });
+  const r = await mount({ ...board, squads: [sq("plain", { backend: "orca", worktree_provider: "orca", provider_default: true }),
+    sq("ontmux", { backend: "tmux", worktree_provider: "git", provider_default: true }), sq("ontree", { backend: "tmux", worktree_provider: "treehouse", provider_default: false })] }, false);
+  try {
+    const doc = r.window.document;
+    for (let k = 0; k < 40 && doc.querySelectorAll(".row.squad").length < 3; k++) await new Promise((res) => setTimeout(res, 25));
+    const rowOf = (t: string) => [...doc.querySelectorAll(".row.squad")].find((e: any) => e.textContent.includes(t)) as any;
+    expect(rowOf("plain").querySelector(".sqbackend")).toBeNull();
+    expect(rowOf("ontmux").querySelector(".sqbackend").textContent).toBe("tmux");
+    expect(rowOf("ontree").querySelector(".sqbackend").textContent).toBe("tmux · treehouse");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
 });

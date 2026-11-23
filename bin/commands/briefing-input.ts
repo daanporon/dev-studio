@@ -6,6 +6,7 @@
 // Output: one bounded markdown bundle (at most MAX_LINES lines), or --json. Accounts are named
 // <agent>:<account>, never by label (accounts.tsv's label holds email addresses, KTD9), and any
 // email address left in free text is masked.
+import { readFileSync } from "node:fs";
 import { now, openReadOnly, type Row, type Store } from "../loop/core/store.ts";
 import { parse } from "../loop/core/cli.ts";
 import { limitInt } from "../loop/settings/limits.ts";
@@ -339,13 +340,14 @@ export function collect(s: Store, w: Window): Facts {
   const quiet = all.filter((p) => p.live && p.status !== "done" && !mergedSquad.has(p.squad)).map((p) => p.squad);
 
   const finished: Facts["finished"] = [];
-  const entry = (squad: string, how: "done" | "closed", at: number, debrief: string | null) => ({ squad, how, at, debrief, try_it: tryItOf(debrief) });
+  // No debrief at done (debrief-in-needs-you U2): a done squad's Try it comes from its newest approved plan's "## Try it" section.
+  const entry = (squad: string, how: "done" | "closed", at: number, debrief: string | null, doc: Row | null = null) => ({ squad, how, at, debrief, try_it: debrief ? tryItOf(debrief) : tryItOf(planTryIt(doc)) });
   const debriefOf = (d: Row | null) => (typeof d?.debrief === "string" && d.debrief.trim() ? d.debrief.trim() : null);
   for (const q of squadRows) {
     const t = String(q.topic);
-    if (q.status === "done" && doneAt.has(t)) finished.push(entry(t, "done", doneAt.get(t)!, debriefOf(obj(q.doc))));
+    if (q.status === "done" && doneAt.has(t)) finished.push(entry(t, "done", doneAt.get(t)!, debriefOf(obj(q.doc)), obj(q.doc)));
   }
-  for (const a of archived) finished.push(entry(String(a.doc.topic), "closed", a.at, debriefOf(a.doc)));
+  for (const a of archived) finished.push(entry(String(a.doc.topic), "closed", a.at, debriefOf(a.doc), a.doc));
 
   // 5. Spend over the window: this snapshot minus the previous brief's (KTD4); the day before the same way.
   const live = new Set(all.map((p) => p.squad));
@@ -478,6 +480,26 @@ function elsewhereOf(s: Store, label: string, since: number, until: number, prev
   return out;
 }
 
+// The "## Try it" section of the newest approved plan in the doc's `approved_plans` (the `<plan>.approved.md` copy, else the plan),
+// shaped as a debrief's Try it part for tryItOf; null when there is none.
+export function planTryIt(doc: Row | null): string | null {
+  const plans = Array.isArray(doc?.approved_plans) ? (doc!.approved_plans as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  for (const p of [...plans].reverse()) {
+    for (const f of [p.replace(/\.md$/, "") + ".approved.md", p]) {
+      let text: string;
+      try { text = readFileSync(f, "utf8"); } catch { continue; }
+      const lines = text.split("\n");
+      const i = lines.findIndex((l) => /^##\s+try it\b/i.test(l));
+      if (i < 0) continue;
+      let j = i + 1;
+      while (j < lines.length && !/^##\s/.test(lines[j])) j++;
+      const body = lines.slice(i + 1, j).join("\n").trim();
+      if (body) return "Try it:\n" + body;
+    }
+  }
+  return null;
+}
+
 // The debrief's "Try it" part: a line starting (after a list marker or **) with "Try it".
 export function tryItOf(debrief: string | null): TryIt {
   if (!debrief) return { kind: "missing" };
@@ -561,7 +583,7 @@ export function render(f: Facts): string[] {
   L.push("## 4. Done or closed in the window");
   if (!f.finished.length) L.push("- none");
   for (const x of f.finished.slice(0, CAP.finished)) {
-    L.push(`- ${x.squad} (${x.how} ${dayTime(x.at)}): ${x.debrief ? "debrief:" : "no debrief"}`);
+    L.push(`- ${x.squad} (${x.how} ${dayTime(x.at)}): ${x.debrief ? "debrief:" : x.how === "done" ? "debrief at archive" : "no debrief"}`);
     if (x.debrief) {
       const lines = x.debrief.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim());
       for (const l of lines.slice(0, CAP.debrief)) L.push(`  > ${oneLine(l, 200)}`);

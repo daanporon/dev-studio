@@ -133,6 +133,11 @@ else does. The ones you read most:
 - `picks`: which agent, model and account each start got, and why.
 - `deliveries`: text the loop typed into a terminal, and whether a turn started.
 - `coordinators`: the loop's own pane in each squad's Run.
+- `orca_runs`, `orca_coordinators`, `orca_dispatches`, `orca_workers`,
+  `orca_pauses`: a copy of each Orca-only value the tables above hold (a
+  squad's Run and task, its coordinator, every dispatch, each worker's
+  current dispatch, the dispatch a pause went out under). Triggers fill them
+  on every write; nothing reads them yet.
 - `timers`: due times that fire at the start of a tick.
 
 **What happened.**

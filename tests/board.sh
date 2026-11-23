@@ -593,7 +593,7 @@ jt "U5: archived squad with a debrief" "$TMP/g2.json" '.archived[] | select(.top
 jt "U5: archived squad without one: null" "$TMP/g2.json" '.archived[] | select(.topic=="old-feature") | .debrief==null'
 jt "U5: a done live squad carries its debrief" "$TMP/g2.json" '.squads[] | select(.topic=="dd-sq") | .debrief=="live debrief"'
 rm -f "$SD/dd-sq.json"
-eq "U5: page shows the Debrief group in Docs and the muted label" "$(grep -cF 'const DebriefChip' "$ROOT/web/board.html")$(grep -cF 'id: "debrief", label: "Debrief"' "$ROOT/web/board.html")$(grep -cF '>no debrief<' "$ROOT/web/board.html")$(grep -cF '<${Docs} s=${a} onPlan=${setPlan} closed=${true}' "$ROOT/web/board.html")$(grep -cF 'closed=${s.status === "done"}' "$ROOT/web/board.html")" "01111"
+eq "U5: page shows the Debrief group in Docs and the muted label" "$(grep -cF 'const DebriefChip' "$ROOT/web/board.html")$(grep -cF 'id: "debrief", label: "Debrief"' "$ROOT/web/board.html")$(grep -cF 'class="mut nodebrief">${i.name}<' "$ROOT/web/board.html")$(grep -cF '<${Docs} s=${a} onPlan=${setPlan} closed=${true}' "$ROOT/web/board.html")$(grep -cF 'closed=${s.status === "done"}' "$ROOT/web/board.html")" "01111"
 rm -rf "$AD"
 
 # U5: briefs. No files -> empty list; ten files over two weeks -> newest first, only the first has markdown.
@@ -657,16 +657,18 @@ eq "text board: not-responding markers" "$(SEED="$TMP/seed-st.json" tb "zzstall_
 # .beat, the Lead worktree's last_output_at and the last relayed Run mail; .beat counts only
 # when it is newer. A Lead whose relay keeps failing after its last output shows unreachable.
 QD="$DS_STATE_ROOT/zzquiet_$$/squads"; mkdir -p "$QD"
-for t in q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11; do printf '{"run_id":"%s","status":"running","members":[{"role":"lead","wt":"wtQ%s"}],"units":[]}' "$t" "${t#q}" > "$QD/$t.json"; done
+for t in q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12; do printf '{"run_id":"%s","status":"running","members":[{"role":"lead","wt":"wtQ%s"}],"units":[]}' "$t" "${t#q}" > "$QD/$t.json"; done
 touch -t "$(date -v-12H +%Y%m%d%H%M 2>/dev/null || date -d '-12 hours' +%Y%m%d%H%M)" "$QD/q1.beat"
 touch -t "$(date -v-61M +%Y%m%d%H%M 2>/dev/null || date -d '-61 min' +%Y%m%d%H%M)" "$QD/q5.beat"
 touch -t "$(date -v-60M +%Y%m%d%H%M 2>/dev/null || date -d '-60 min' +%Y%m%d%H%M)" "$QD/q6.beat"
 cat > "$TMP/seed-q.json" <<JSON
 {"workers":[["wtQ1","working",null,null,120],["wtQ2","working"],["wtQ3","working",null,null,3660],["wtQ4","working",null,null,120],["wtQ5","working"],["wtQ6","working"],
-  ["wtQ7","done",null,null,4800],["wtQ8","idle",null,null,4800],["wtQ9","idle",null,null,4800],["wtQ10","working",null,null,2100],["wtQ11","done",null,null,4800]],
+  ["wtQ7","done",null,null,4800],["wtQ8","idle",null,null,4800],["wtQ9","idle",null,null,4800],["wtQ10","working",null,null,2100],["wtQ11","done",null,null,4800],
+  ["wtQ12","working",null,null,2100]],
  "unread":[["wtQ8",1,900],["wtQ9",1,300],["wtQ11",0,3600]],
  "terminals":[["tq1","wtQ1","q1"]],
- "worktrees":[["wtQ1",null],["wtQ2",null],["wtQ3",null],["wtQ4",null],["wtQ5",null],["wtQ6",null],["wtQ7",null],["wtQ8",null],["wtQ9",null],["wtQ10",null],["wtQ11",null]],
+ "transcripts":[["wtQ12","claude-x",null,null,"$ROOT/tests/fixtures/liveness/interrupted.jsonl"]],
+ "worktrees":[["wtQ12",null],["wtQ1",null],["wtQ2",null],["wtQ3",null],["wtQ4",null],["wtQ5",null],["wtQ6",null],["wtQ7",null],["wtQ8",null],["wtQ9",null],["wtQ10",null],["wtQ11",null]],
  "events":[]}
 JSON
 QN="$NOW"
@@ -687,6 +689,7 @@ jt "idle Lead, 80 min, nothing unread: no verdict (the screenshot case)" "$TMP/q
 jt "idle Lead, unread 15 min: not responding"        "$TMP/q.json" '.squads[] | select(.topic=="q8") | .lead | .silent==true and .verdict=="not responding" and (.since_s|floor) >= 899 and .since_s < 960'
 jt "idle Lead, unread 5 min: no verdict yet"          "$TMP/q.json" '.squads[] | select(.topic=="q9") | .lead | .silent==false and .verdict==null'
 jt "working Lead, no output 35 min: hung"             "$TMP/q.json" '.squads[] | select(.topic=="q10") | .lead | .verdict=="hung" and (.since_s|floor) >= 2099'
+jt "working Lead, no output 35 min, last turn stopped with Esc: not hung" "$TMP/q.json" '.squads[] | select(.topic=="q12") | .lead | .verdict != "hung"'
 jt "old unread episode but the count is 0: no verdict" "$TMP/q.json" '.squads[] | select(.topic=="q11") | .lead | .verdict==null'
 jt "an unreachable relay wins over another verdict"   "$TMP/q.json" '.squads[] | select(.topic=="q3") | .lead | .verdict=="unreachable"'
 jt "one not-responding Lead is no stall"              "$TMP/q.json" '.stall == null'
@@ -1326,6 +1329,8 @@ OLDC="$(date -u -d "@$((NOWC-1200))" +%Y-%m-%dT%H:%M:%SZ)"
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-when "Review stopped" "Reviews stopped" "restart it" "" '{"kind":"out_of_credits"}' >/dev/null
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-acts "Studio limited" "Studio is limited" "move it" "" '{"kind":"out_of_credits","acts_on_answer":true}' >/dev/null
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-two "Two answers" "Pick one" "" "" '{"kind":"out_of_credits","options":["Fixed","Switch it off"]}' >/dev/null
+# studio-hung-agent-broken U2: the broken Studio's card as liveness.ts files it (no option, two answers in fields).
+"$ROOT/bin/lib/alerts.sh" "$CRA" add na-studio "Studio not responding" "studio (hung since 09:00) — the $LBL Studio (your cockpit terminal claude, term_s) has shown no output for 35 min while Orca reads it as working" "" "The loop never restarts the Studio on its own." '{"kind":"agent_broken","restart":true,"handle":"term_s","options":["Restart Studio","It'"'"'s fine"]}' >/dev/null
 jq --arg t "$OLDC" '.alerts |= map(.since = $t)' "$CRA" > "$CRA.t" && mv "$CRA.t" "$CRA"
 HOSTST="$TMP/stcr" mkdb "$LBL"; render "$LBL" --json > "$TMP/na.json"
 NA='.needs_you[] | select(.id=="%s")'
@@ -1333,6 +1338,7 @@ jt "dismiss-only: no option, no choices, no when"  "$TMP/na.json" "[${NA/\%s/na-
 jt "dismiss-only: a lone non-acting option is when" "$TMP/na.json" "[${NA/\%s/na-when}] | .[0] | .choices == [] and .when == \"restart it\" and .suggestion == null and .options == [\"restart it\"]"
 jt "dismiss-only: a lone acting option is a choice" "$TMP/na.json" "[${NA/\%s/na-acts}] | .[0] | [.choices[].label] == [\"move it\"] and .when == null and .acts_on_answer == true"
 jt "dismiss-only: two options stay choices"        "$TMP/na.json" "[${NA/\%s/na-two}] | .[0] | [.choices[].label] == [\"Fixed\",\"Switch it off\"] and .when == null"
+jt "studio-hung-agent-broken U2: the Studio card in Needs-you offers Restart Studio and It's fine" "$TMP/na.json" "[${NA/\%s/na-studio}] | .[0] | .title == \"Studio not responding\" and ([.choices[].label] == [\"Restart Studio\",\"It's fine\"]) and .when == null"
 rm -f "$CRA"
 
 S2='.squads[] | select(.topic=="ov-sq")'
@@ -1471,6 +1477,25 @@ dbw "UPDATE episodes SET ended_at = $DNOW, state = 'closed' WHERE kind = 'disk-p
 render "$LBL" --json > "$TMP/disk.json"
 jt "disk U3: a closed spell leaves no disk field"         "$TMP/disk.json" 'has("disk") | not'
 dbw "DELETE FROM observed_alerts WHERE id LIKE 'sweep-disk-pressure%'"
+
+# loop-tick-8s U4: a slow-ticks card (sweep-tick-alarm.slow-<n>) is a Needs-you card, not a loop note.
+dbw "INSERT INTO observed_alerts (project, id, doc, observed_at) VALUES ('$LBL', 'sweep-tick-alarm.slow-1', '{\"id\":\"sweep-tick-alarm.slow-1\",\"asker\":\"sweep\",\"title\":\"Loop ticks slow: 9.0 s\",\"question\":\"Loop ticks slow: 9.0 s a tick over the last 3 windows (limit 6.0 s), slow for 20 min. Slowest steps a tick: observe:orca 4.5 s.\",\"since\":\"2026-11-20T09:00:00Z\"}', $DNOW)"
+render "$LBL" --json > "$TMP/tickalarm.json"
+jt "tick-alarm U4: the card is in Needs-you" "$TMP/tickalarm.json" '([.needs_you[] | select(.id=="sweep-tick-alarm.slow-1")] | length == 1) and ([.loop_notes[] | select(.id=="sweep-tick-alarm.slow-1")] | length == 0)'
+dbw "DELETE FROM observed_alerts WHERE id LIKE 'sweep-tick-alarm%'"
+
+# reasked-question-shows-answered U1: an answered earlier asking of a re-asked question (same id, status answered)
+# changes nothing on the text board: the open asking is printed once, as before.
+RQ="$(bun -e 'const {Database}=require("bun:sqlite");const d=new Database(process.argv[1],{readonly:true});const r=d.query("SELECT squad, id, question FROM questions WHERE project = ? AND status = \x27open\x27 AND question IS NOT NULL ORDER BY seq LIMIT 1").get(process.argv[2]);console.log(r?JSON.stringify(r):"")' "$DBR/loop.db" "$LBL")"
+if [ -n "$RQ" ]; then
+  RQ_Q="$(printf '%s' "$RQ" | jq -r .question)"; RQ_ID="$(printf '%s' "$RQ" | jq -r .id)"; RQ_SQ="$(printf '%s' "$RQ" | jq -r .squad)"
+  RQ_BEFORE="$(render "$LBL" | grep -cF -- "$RQ_Q" || true)"
+  dbw "INSERT INTO questions (project, squad, id, asker, blocking, question, asked_at, status, answer, answered_via, answered_at, doc) VALUES ('$LBL', '$RQ_SQ', '$RQ_ID', 'lead', 1, '$(printf '%s' "$RQ_Q" | sed "s/'/''/g")', 1, 'answered', 'earlier', 'board', 2, '{}')"
+  eq "reask U1: an answered earlier asking leaves the text board's question line count" "$(render "$LBL" | grep -cF -- "$RQ_Q" || true)" "$RQ_BEFORE"
+  eq "reask U1: the question is printed once" "$RQ_BEFORE" "1"
+else
+  eq "reask U1: the fixture has an open question" "none" "one"
+fi
 
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

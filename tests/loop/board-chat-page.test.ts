@@ -37,12 +37,13 @@ function panel(reply: any = { agent: "claude", source: "transcript", turns: [], 
   const h = hooks(), posts: any[] = [], fetches: string[] = [], timers: any[] = [], cleared: any[] = [], listeners = new Map<string, any>();
   let closed = 0;
   const marks = new Map<string, any>(), lstoreStub = { get: (k: string, d: any) => marks.has(k) ? marks.get(k) : d, set: (k: string, v: any) => { marks.set(k, v); } };
+  const drafts = new Map<string, any>(), storeStub = { get: (k: string, d: any) => drafts.has(k) ? JSON.parse(drafts.get(k)) : d, set: (k: string, v: any) => { drafts.set(k, JSON.stringify(v)); }, del: (k: string) => { drafts.delete(k); } };
   const fetchStub = async (url: string) => { fetches.push(url); return { ok: true, status: 200, json: async () => reply }; };
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
-  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore",
-    `${chatSrc} return { ChatPanel, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey };`);
+  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store",
+    `${chatSrc} return { ChatPanel, ChatCtl, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
   const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); return { ok: true, id: 7 }; }, fetchStub,
-    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub);
+    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub);
   let seen = 0;
   const props: any = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; }, onSeen: () => { seen++; } };
   const render = () => { h.reset(); return mod.ChatPanel(props); };
@@ -180,6 +181,21 @@ test("each send not yet in the transcript shows at the bottom where it is: queue
   expect(textOf(rows[4])).toContain("never ready: working");
 });
 
+test("chat-missing-replies U2: a delivered send with no operator turn sits among the turns at its typed time (done_at), queued and failed at the bottom", () => {
+  const p = panel();
+  p.render();
+  const turns = [{ role: "assistant", text: "before", at: T - 60 }, { role: "assistant", text: "after", at: T + 300 }];
+  const sends = [{ id: 1, text: "lost question", at: T - 30, done_at: T, state: "turn started", why: null },
+    { id: 2, text: "waiting", at: T + 10, done_at: null, state: "queued", why: "busy" },
+    { id: 3, text: "broken", at: T + 20, done_at: null, state: "failed", why: "never ready" },
+    { id: 4, text: "typed late", at: T + 400, done_at: T + 500, state: "sent", why: null }];
+  p.setData({ agent: "claude", source: "transcript", turns, sends });
+  const rows = rowsOf(p.render());
+  expect(rows.map((r) => (textOf(r).match(/before|lost question|after|waiting|broken|typed late/) || [])[0])).toEqual(["before", "lost question", "after", "typed late", "waiting", "broken"]);
+  expect(textOf(rows[1])).toContain("turn started");
+  expect(p.mod.chatRows(turns, sends.slice(0, 1)).map((r: any) => r.day ? "day" : r.send ? "send" : "turn")).toEqual(["turn", "send", "turn"]);
+});
+
 test("crew-terminal-access U5: a send is shown once: pending at the bottom, then as its timed operator turn", () => {
   const p = panel();
   p.render();
@@ -258,10 +274,10 @@ test("crew-terminal-access U5: the log follows the newest row, stays put once sc
 test("a squad question card opens the chat panel of the member its answer goes to; a Studio alert has none", () => {
   const h = hooks();
   const ChatPanel = () => null;
-  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel",
+  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss",
     `${cut("AskOverlay")} return AskOverlay;`);
   const AskOverlay = make(h.useState, h.useEffect, html, async () => {}, new Map(), (n: any) => n.label + "/" + n.squad + "/" + n.id,
-    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel);
+    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel, (v: any) => ({ current: v }), (n: any) => n.label + "/" + n.squad + "/" + n.id, () => "00:00:00");
   const q = { label: "p", squad: "one", id: "q1", kind: "blocking", from: "builder-x", chat_wt: "/w/bx", chat_label: "builder-x", title: "T", text: "T", choices: [], suggestion: null, source: "lead" };
   const render = (n: any) => { h.reset(); return nodes(AskOverlay({ items: [n], at: "p/one/q1", setAt: () => {}, onClose: () => {}, onShow: () => {}, toast: () => {} })); };
   const btn = render(q).find((n) => n.strings.includes('class="btn chat-btn"'))!;
@@ -306,4 +322,53 @@ test("chat-with-studio U1: the Studio chat titles itself, marks the newest reply
   q.render(); q.setData({ agent: "claude", source: "transcript", sends: [], turns: [{ role: "assistant", text: "a", at: T }] });
   q.render(); q.h.effects[2]();
   expect(q.marks.size).toBe(0);
+});
+
+test("studio-chat-queued-busy U4: a waiting send shows its age, why, give-up time and tone, and Cancel / Send now on the right ones", async () => {
+  const p = panel();
+  p.render();
+  const q = { text: "a", state: "queued", failing: false, now: false, first: false, why: "busy: working", age_s: 420, gives_up_at: T + 600 };
+  p.setData({ agent: "claude", source: "transcript", turns: [], sends: [
+    { id: 1, ...q, first: true },                                                              // plain queued, oldest
+    { id: 2, ...q, why: "an earlier message waits", gives_up_at: null, age_s: 5 },             // behind an earlier chat: no clock
+    { id: 3, ...q, failing: true, why: "send failed" },                                         // failing: red
+    { id: 4, text: "d", state: "cancelled", why: null },
+    { id: 5, ...q, now: true, why: "busy: working" }] });
+  const rows = rowsOf(p.render());
+  expect(rows.map(cls)).toEqual(["chat-turn op wait", "chat-turn op wait", "chat-turn op bad", "chat-turn op mut", "chat-turn op wait"]);
+  const t = rows.map(textOf);
+  expect(t[0]).toContain("queued 7 min · busy: working");
+  expect(t[0]).toContain("gives up at ");
+  expect(t[1]).toContain("queued <1 min");
+  expect(t[1]).not.toContain("gives up at");
+  expect(t[2]).toContain("send failing 7 min · send failed");
+  expect(t[3]).toContain("cancelled");
+  expect(t[3]).not.toContain("Cancel");
+  expect(t[4]).toContain("send now asked · busy: working");
+  // the control row: one component per queued send, none on the cancelled one
+  const ctls = (n: any) => nodes(n).filter((m) => m.values.some((v: any) => typeof v === "function" && v.name === "ChatCtl")).length;
+  expect(rows.map(ctls)).toEqual([1, 1, 1, 0, 1]);
+  const btns = (x: any) => [textOf(p.mod.ChatCtl({ x, project: "p", reload: () => {} }))];
+  expect(btns({ id: 1, first: true, now: false }).join()).toContain("Send now");
+  expect(btns({ id: 2, first: false, now: false }).join()).not.toContain("Send now");
+  expect(btns({ id: 5, first: true, now: true }).join()).not.toContain("Send now");
+  expect(btns({ id: 5, first: true, now: true }).join()).toContain("Cancel");
+});
+
+test("studio-chat-queued-busy U4: a press posts once, disables both buttons and reloads; a 409 says already typed", async () => {
+  for (const [status, msg] of [[0, ""], [409, "already typed"]] as const) {
+    const p = panel(); let reloads = 0;
+    const posts: any[] = [];
+    const src = (post: any) => new Function("useState", "html", "post", `${chatSrc} return { ChatCtl };`)(p.h.useState, html, post).ChatCtl;
+    const Ctl = src(async (...a: any[]) => { posts.push(a); if (status) throw Object.assign(new Error("already typed"), { status }); return {}; });
+    p.h.reset();
+    const btn = nodes(Ctl({ x: { id: 8, first: true, now: false }, project: "p", reload: () => { reloads++; } })).find((n) => n.strings.includes('chat-now'))!;
+    await fnIn(btn)();
+    expect(posts).toEqual([["api/chat-now", { project: "p", id: 8 }]]);
+    expect(reloads).toBe(1);
+    p.h.reset();
+    const after = nodes(Ctl({ x: { id: 8, first: true, now: false }, project: "p", reload: () => {} }));
+    expect(after.filter((n) => n.strings.includes("<button")).every((n) => n.values.includes(true))).toBe(true);
+    expect(textOf(after)).toContain(msg);
+  }
 });

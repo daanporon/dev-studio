@@ -260,6 +260,17 @@ jt "answer: the request is done"     <(reqrow "$A7") '.done_at != null and .resu
 eq "answer: unknown id is 409"       "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"nope\",\"answer\":\"x\"}" "$U")" "409"
 eq "answer: path in topic is 400"    "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"../ans\",\"id\":\"q9\",\"answer\":\"x\"}" "$U")" "400"
 eq "answer: empty answer is 400"     "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"  \"}" "$U")" "400"
+# reasked-question-shows-answered U1: two askings share an id (q9: the first answered from the board, the second
+# open); the answer names the asking it saw by `since` and answers that row only.
+bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.argv[1]);
+  d.run("INSERT INTO questions (project, squad, id, asker, blocking, question, asked_at, status, answer, answered_via, answered_at, doc) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
+    [process.argv[2], "ans", "q9", "lead", "notes?", Date.parse("2026-10-08T08:00:00Z") / 1000, "answered", "first", "board", 1, "{}"]);' "$DBR/loop.db" "$LBL"
+eq "answer since: the first asking's since is 409" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"x\",\"since\":\"2026-10-08T08:00:00Z\"}" "$U")" "409"
+has "answer since: 409 says asked again" "$(cat "$TMP/post.out")" "answered or asked again"
+eq "answer since: nothing answered by the 409" "$(dbq "SELECT COUNT(*) AS n FROM questions WHERE squad = 'ans' AND id = 'q9' AND status = 'open'" | jq '.[0].n')" "1"
+eq "answer since: the open asking's since is 202" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"second\",\"since\":\"2026-10-08T09:00:00Z\"}" "$U")" "202"
+eq "answer since: only the open row was answered" "$(dbq "SELECT status, answer FROM questions WHERE squad = 'ans' AND id = 'q9' ORDER BY seq" | jq -c '[.[] | [.status, .answer]] | sort')" '[["answered","first"],["answered","second"]]'
+eq "answer since: the first asking's answer is untouched" "$(dbq "SELECT COUNT(*) AS n FROM questions WHERE squad = 'ans' AND id = 'q9' AND answer = 'first'" | jq '.[0].n')" "1"
 # A terminal-picker mirror is answered by keystroke, never prose + Enter (that selects the
 # highlighted option): an option is its digit with no Enter; free text is the "Type
 # something." digit, then the text + Enter.
@@ -883,6 +894,13 @@ eq "request: the brief is in its file, newlines kept" "$(for f in "$DBR/$LBL"/fr
 eq "request: two starts, two files"  "$(find "$RD" -name 'board-start-*.txt' | wc -l | tr -d ' ')" "2"
 has "request: other squad's file"    "$(cat "$RD"/board-close-ans-2-*.txt 2>/dev/null)" "/ds-close-squad ans-2"
 rm -f "$RD"/board-close-ans-2-*.txt "$RD/board-close-ans-$C1.txt"
+# U9: the Start dialog's backend reaches /ds-start-squad as --backend; an unknown one is 400.
+rm -f "$RD"/board-start-*.txt
+eq "request: start on a backend"     "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"on tmux\",\"backend\":\"tmux\"}")" "202"
+eq "request: unknown backend is 400" "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"x\",\"backend\":\"screen\"}")" "400"
+ff
+has "request: start passes backend"  "$(cat "$RD"/board-start-*.txt 2>/dev/null)" "/ds-start-squad --repo $LBL --backend tmux --framing-file $DBR/$LBL/framings/board-start-"
+rm -f "$RD"/board-start-*.txt
 DS_STATE_ROOT="$DBR" bun -e 'import { open } from "'"$ROOT"'/bin/loop/core/store.ts"; import { doneRequests } from "'"$ROOT"'/bin/loop/db/import-json.ts"; const s = open(); doneRequests(s, s.root, process.argv[1]); s.close();' "$LBL"
 eq "request: done once the Studio removed the file" "$(req "{\"project\":\"$LBL\",\"action\":\"close\",\"topic\":\"ans\"}")" "202"
 eq "request: start without brief"    "$(req "{\"project\":\"$LBL\",\"action\":\"start\"}")" "400"
@@ -996,6 +1014,14 @@ eq "chat: an idle member is not working" "$(cq ans wTh)$(jq -c '.working' "$TMP/
 dbw "UPDATE observed_workers SET state = 'working' WHERE project = '$LBL' AND wt = 'wTh'"
 eq "chat: a member mid-turn is working" "$(cq ans wTh)$(jq -c '.working' "$TMP/chat.out")" "200true"
 dbw "UPDATE observed_workers SET state = 'idle' WHERE project = '$LBL' AND wt = 'wTh'"
+# chat-role-switcher U1: `crew` is the squad's live members in the Crew box's order, each with its mail counts and the
+# time of its newest assistant text turn (null without one or on a screen tail); `[]` for the Studio.
+jt "chat: crew lists the live members with counts" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '(.crew | length) >= 1 and ([.crew[] | has("wt","label","role","unread","reply_due","reply_at")] | all) and ((.crew[] | select(.wt == "wTh") | .reply_at) == 2)'
+jt "chat: a screen-tail member's reply_at is null" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '([.crew[] | select(.wt == "wTester") | .reply_at] | all(. == null))'
+jt "chat: the Studio has no crew" <(cq _studio wStudio >/dev/null; cat "$TMP/chat.out") '.crew == []'
+dbw "UPDATE members SET status = 'gone' WHERE project = '$LBL' AND squad = 'ans' AND wt = 'wTester'"
+jt "chat: a gone member is left out of crew" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '([.crew[] | select(.wt == "wTester")] | length) == 0'
+dbw "UPDATE members SET status = 'running' WHERE project = '$LBL' AND squad = 'ans' AND wt = 'wTester'"
 eq "chat: GET an unknown member is 404" "$(cq ans nope)" "404"
 eq "chat: GET a member of another squad is 404" "$(cq board-builders wTh)" "404"
 eq "chat: GET without wt is 400"       "$(curl -s -o /dev/null -w '%{http_code}' "$C?project=$LBL&topic=ans")" "400"
@@ -1040,6 +1066,24 @@ eq "chat: pause the researcher"        "$(post -H "$O" -H "$CT" -d "{\"scope\":\
 eq "chat: a paused member is 409"      "$(post -H "$O" -H "$CT" -d "$(cbody wResearcher hi)" "$C")" "409"
 eq "chat: no refused POST wrote a row" "$(crows)" "$N1"
 eq "chat: rows written: three plus the 2000-char one" "$((N1 - N0))" "4"
+# studio-chat-queued-busy U4: /api/chat-cancel and /api/chat-now name an open chat request; a send carries its age and clock.
+CX="http://127.0.0.1:$PORT/api/chat-cancel"; CN="http://127.0.0.1:$PORT/api/chat-now"
+cid(){ jq -nc --arg p "$LBL" --argjson i "$1" '{project: $p, id: $i}'; }
+TK=$(dbq "SELECT id FROM requests WHERE kind = 'chat' AND member = 'wTh' AND done_at IS NULL ORDER BY id LIMIT 1" | jq '.[0].id')
+dbw "UPDATE requests SET created_at = CAST(strftime('%s','now') AS INTEGER) - 420, result = '{\"state\":\"queued\",\"why\":\"busy: working\",\"since\":'||(CAST(strftime('%s','now') AS INTEGER) - 400)||'}' WHERE id = $TK"
+jt "chat: a queued send has age, clock and first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "(.sends[] | select(.id == $TK)) | .state == \"queued\" and .age_s >= 420 and .failing == false and .now == false and .first == true and (.gives_up_at > 0)"
+jt "chat: a queued send behind another has no clock and is not first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "([.sends[] | select(.state == \"queued\" and .id != $TK)] | all(.first == false))"
+NQ=$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind IN ('chat-cancel','chat-now')" | jq '.[0].n')
+eq "chat-now: an open chat is 202"      "$(post -H "$O" -H "$CT" -d "$(cid "$TK")" "$CN")" "202"
+eq "chat-now: its row names the chat"   "$(reqrow "$(rid)" | jq -c '[.kind, .member, .squad, .payload.chat]')" "[\"chat-now\",\"wTh\",\"ans\",$TK]"
+eq "chat-cancel: an open chat is 202"   "$(post -H "$O" -H "$CT" -d "$(cid "$TK")" "$CX")" "202"
+eq "chat-cancel: its row names the chat" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.chat]')" "[\"chat-cancel\",$TK]"
+eq "chat-cancel: a typed chat is 409"   "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CX")" "409"
+eq "chat-now: a typed chat is 409"      "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CN")" "409"
+eq "chat-now: no such request is 404"   "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CN")" "404"
+eq "chat-now: a bad id is 400"          "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"id\":\"x\"}" "$CN")" "400"
+eq "chat-now: foreign Origin is 403"    "$(post -H 'Origin: http://evil.example' -H "$CT" -d "$(cid "$TK")" "$CN")" "403"
+eq "chat-cancel: only the two accepted rows" "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind IN ('chat-cancel','chat-now')" | jq '.[0].n')" "$((NQ + 2))"
 eq "chat: resume the researcher"       "$(post -H "$O" -H "$CT" -d "{\"scope\":\"member\",\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wResearcher\"}" "http://127.0.0.1:$PORT/api/resume")" "200"
 
 # chat-image-upload U1: POST /api/chat-file stores one image per content hash under the state root
@@ -1139,6 +1183,33 @@ ex(){ [ -e "$CF/ans/$1" ] && echo y || echo n; }
 eq "chat-file: 15 days old gone, 13 kept, other file kept, old tmp gone, new tmp kept" "$(ex "$AID")$(ex "$B")$(ex notes.txt)$(ex ".$AID.1.tmp")$(ex ".$B.2.tmp")" "nyyny"
 eq "chat-file: a pruned image is 404"   "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "404"
 rm -f "$CF/ans/notes.txt" "$CF/ans/.$B.2.tmp"
+# chat-image-upload U4: the Start squad dialog's images go to topic _start with no member (no squad yet),
+# and a start may name up to 8 of them.
+ups(){ # ups <file> [project] [extra query] -> status; the answer in $TMP/up.out
+  curl -s -o "$TMP/up.out" -w '%{http_code}' -X POST -H "$O" -H "Content-Type: image/png" --data-binary "@$TMP/$1" "$F?project=${2:-$LBL}&topic=_start${3:-}"; }
+eq "start-file: an upload to _start with no wt is 200" "$(ups a.png)" "200"
+SID=$(jq -r '.id' "$TMP/up.out")
+eq "start-file: stored under _start, 0600" "$(stat -c %a "$CF/_start/$SID" 2>&1)" "600"
+eq "start-file: with a wt is 400"       "$(ups b.png "$LBL" '&wt=wTh')" "400"
+eq "start-file: another project is 403" "$(ups b.png zzother)" "403"
+eq "start-file: over 5 MiB is 413"      "$(ups big.png)" "413"
+eq "start-file: a cross-origin upload is 403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://evil.example' -H 'Content-Type: image/png' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=_start")" "403"
+eq "start-file: an SVG is 415"          "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$O" -H 'Content-Type: image/png' --data-binary "@$TMP/s.svg" "$F?project=$LBL&topic=_start")" "415"
+eq "start-file: GET serves it"          "$(curl -s -o "$TMP/served.png" -w '%{http_code}' "$F?project=$LBL&topic=_start&name=$SID"; cmp -s "$TMP/a.png" "$TMP/served.png" && echo same)" "200same"
+eq "start-file: a second image"         "$(ups b.png)" "200"
+SID2=$(jq -r '.id' "$TMP/up.out")
+sbody(){ jq -nc --arg p "$LBL" --argjson f "$1" '{project: $p, action: "start", text: "look", files: $f}'; }
+eq "start-file: a start with 2 files is 202" "$(req "$(sbody "[\"$SID\",\"$SID2\"]")")" "202"
+eq "start-file: the studio row holds the names" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.action, .payload.files]')" "[\"studio\",\"start\",[\"$SID\",\"$SID2\"]]"
+srows(){ dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'" | jq '.[0].n'; }
+N4=$(srows)
+eq "start-file: 9 files are 400"        "$(req "$(sbody "$(jq -nc '[range(9) | tostring * 16 + ".png"]')")")" "400"
+eq "start-file: a bad name is 400"      "$(req "$(sbody '["../x.png"]')")" "400"
+eq "start-file: a missing one is 409"   "$(req "$(sbody '["0123456789abcdef.png"]')")$(jq -r '.error' "$TMP/post.out")" "409image 0123456789abcdef.png is gone — attach it again"
+CID="$(sha256sum "$TMP/c.png" | cut -c1-16).png"
+eq "start-file: c.png is stored for a chat only" "$([ -f "$CF/ans/$CID" ] && [ ! -e "$CF/_start/$CID" ] && echo y)" "y"
+eq "start-file: a chat image is not a start's" "$(req "$(sbody "[\"$CID\"]")")" "409"
+eq "start-file: no refused start wrote a row" "$(srows)" "$N4"
 
 # GET /lavish/<key>: Lavish stops itself when idle; when it is down the board files one `lavish`
 # request and answers a page that reloads until the loop has started it, then redirects.

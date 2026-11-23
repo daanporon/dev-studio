@@ -115,6 +115,16 @@ describe("the archive's final-debrief step", () => {
     expect(card(reconcile(s, T + 710))[0].text).toBe("Set out to do: the debrief step — written at done; 2 units added after it.");
   });
 
+  test("a Lead that reads working is still asked, once", () => {
+    const s = fixture();
+    s.upsert("observed_workers", { project: "p", wt: "r::/nowhere/lead" }, { state: "working" });
+    archiveWish(s);
+    const acts = reconcile(s, T);
+    expect(acts.length).toBeGreaterThan(0);
+    expect(archiveDebriefStep(s, "p", "one")).toMatchObject({ state: "open", poked_at: T });
+    expect(reconcile(s, T + 30)).toEqual([]);
+  });
+
   test("skipped: a suspended squad archives with no wait", () => {
     const s = fixture({ status: "suspended", want: "suspended" });
     archiveWish(s);
@@ -146,8 +156,8 @@ describe("the archive's final-debrief step", () => {
     expect(reconcile(s, T)).toEqual([]);
     expect(archiveDebriefStep(s, "p", "one")).toMatchObject({ state: "skipped", why: "archive_debrief_min is 0" });
     const doc = await archive(s, T + 60);
-    expect(doc).toMatchObject({ debrief: "No debrief was written.", debrief_source: "done" });
-    expect(card(reconcile(s, T + 70))).toEqual([expect.objectContaining({ title: "Debrief: one", text: "No debrief was written. — no debrief was written." })]);
+    expect(doc).toMatchObject({ debrief: "No debrief was written (skipped: archive_debrief_min is 0).", debrief_source: "done" });
+    expect(card(reconcile(s, T + 70))).toEqual([expect.objectContaining({ title: "Debrief: one", text: "No debrief was written (skipped: archive_debrief_min is 0). — no debrief (skipped: archive_debrief_min is 0)." })]);
   });
 
   test("a paused or limited Lead, or none at all, is skipped at once", () => {
@@ -156,6 +166,7 @@ describe("the archive's final-debrief step", () => {
     archiveWish(s);
     reconcile(s, T);
     expect(archiveDebriefStep(s, "p", "one")).toMatchObject({ state: "skipped", why: "the Lead is limited" });
+    expect(finalDebrief({}, [], archiveDebriefStep(s, "p", "one")).debrief).toBe("No debrief was written (skipped: the Lead is limited).");
     const t = fixture();
     t.db.run("UPDATE members SET wt = NULL WHERE role = 'lead'");
     archiveWish(t);
@@ -179,13 +190,14 @@ describe("the archive's final-debrief step", () => {
 describe("finalDebrief", () => {
   const units = [{ slug: "u1", status: "done", pr: "#1" }, { slug: "u2", status: "done", pr: "https://github.com/o/r/pull/12" }, { slug: "u3", status: "cancelled", pr: null }];
   test("the fallback line lists the units not in debrief_units, with PR and status", () => {
-    const f = finalDebrief({ debrief: "old", debrief_at: "2026-11-20T10:00:00Z", debrief_units: ["u1", "u3"] }, units, false);
+    const f = finalDebrief({ debrief: "old", debrief_at: "2026-11-20T10:00:00Z", debrief_units: ["u1", "u3"] }, units, null);
     expect(f).toEqual({ debrief: "Written at done (2026-11-20T10:00:00Z); 1 unit was added after it: u2 #12 (done).\n\nold", source: "done", late: 1, first: "old" });
-    expect(finalDebrief({ debrief: "old", debrief_at: "x", debrief_units: ["u1", "u2", "u3"] }, units, false).debrief).toBe("Written at done (x); no units were added after it.\n\nold");
+    expect(finalDebrief({ debrief: "old", debrief_at: "x", debrief_units: ["u1", "u2", "u3"] }, units, null).debrief).toBe("Written at done (x); no units were added after it.\n\nold");
   });
   test("an older debrief with no units list, none at all, and the Lead's own", () => {
-    expect(finalDebrief({ debrief: "old" }, units, false).debrief).toBe("Written before the archive; units added after it are not known.\n\nold");
-    expect(finalDebrief({}, units, false)).toMatchObject({ debrief: "No debrief was written.", source: "done" });
-    expect(finalDebrief({ debrief: "new", debrief_units: [] }, units, true)).toMatchObject({ debrief: "new", source: "archive" });
+    expect(finalDebrief({ debrief: "old" }, units, null).debrief).toBe("Written before the archive; units added after it are not known.\n\nold");
+    expect(finalDebrief({}, units, null)).toMatchObject({ debrief: "No debrief was written.", source: "done" });
+    expect(finalDebrief({}, units, { state: "timeout", why: "no debrief within 10 min" } as never).debrief).toBe("No debrief was written (timeout: no debrief within 10 min).");
+    expect(finalDebrief({ debrief: "new", debrief_units: [] }, units, { state: "written" } as never)).toMatchObject({ debrief: "new", source: "archive" });
   });
 });

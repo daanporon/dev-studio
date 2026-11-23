@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, stateRoot, readIfs } from "./shared";
+import { BACKEND_NAMES, PROVIDER_SETTINGS } from "../backend/registry";
 import { confWord, textWord } from "./lib";
 import { ownText } from "./settings-rows.ts";
 
@@ -136,6 +137,8 @@ export function limitValueProblem(key: string, val: string): string {
   if (key === "base_update" && !["merge", "rebase"].includes(val)) return `${key} must be merge or rebase (got '${val}')`;
   if (key === "builder_host_brake" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
   if (key === "unblock_first" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
+  if (key === "default_backend" && !(BACKEND_NAMES as readonly string[]).includes(val)) return `${key} must be ${BACKEND_NAMES.join(", ")} (got '${val}')`;
+  if (key === "worktree_provider" && !(PROVIDER_SETTINGS as readonly string[]).includes(val)) return `${key} must be ${PROVIDER_SETTINGS.join(", ")} (got '${val}')`;
   switch (key) {
     case "review_block_severity": case "review_block_severity_risky":
       if (!["P0", "P1", "P2", "P3"].includes(val)) return `${key} must be P0, P1, P2 or P3 (got '${val}')`;
@@ -148,6 +151,12 @@ export function limitValueProblem(key: string, val: string): string {
     case "review_delta_wide_lines": case "review_delta_full_lines": case "flow_stuck_floor_min": case "flow_quiet_min": case "needs_grace_min": case "refusal_needs_min":
     case "loop_stall_banner_n": case "loop_stall_banner_min": case "expose_down_min": case "expose_warn_min": case "chat_quiet_s": case "chat_queue_min": case "msg_chase_min": case "msg_reply_alert_min": case "archive_debrief_min": case "prompt_wait_min":
       if (/[^0-9]/.test(val)) return `${key} must be a non-negative integer (got '${val}')`;
+      break;
+    case "tick_alarm_ms":
+      if (!/^\d+$/.test(val)) return `tick_alarm_ms must be a non-negative integer of ms, 0 = off (got '${val}')`;
+      break;
+    case "tick_alarm_windows":
+      if (!/^\d+$/.test(val) || Number(val) < 1 || Number(val) > 20) return `tick_alarm_windows must be a whole number from 1 to 20 (got '${val}')`;
       break;
     case "briefing_merges_lag_min":
       if (!/^\d+$/.test(val) || Number(val) > 120) return `briefing_merges_lag_min must be whole minutes from 0 to 120 (got '${val}')`;
