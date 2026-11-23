@@ -27,6 +27,7 @@ import { rescuePages } from "../io/rescue.ts";
 import type { Row, Store } from "../core/store.ts";
 import type { Action } from "../core/plugins.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
+import { onContract } from "../squad/backend.ts";
 
 type P = ActionPayload<"member.close">;
 const CLOSE_VIEWS = ["stopped", "archived", "suspended"];
@@ -160,7 +161,7 @@ const close: Fulfiller = {
   ready(a, x) {
     if (payloadOf<"member.close">(a)?.phase !== "stop") return true;
     const r = rowOf(x, a), m = r ? memberOf(x.store, { id: Number(r.id) }) : null;
-    return !!m && !!x.store.get("coordinators", { project: m.project, squad: m.squad })?.handle;
+    return !!m && (onContract(x.store, m.project, m.squad) || !!x.store.get("coordinators", { project: m.project, squad: m.squad })?.handle);
   },
 
   async exec(a, x): Promise<Result> {
@@ -171,7 +172,8 @@ const close: Fulfiller = {
     const { store, now: at } = x, m = memberOf(store, { id: Number(r.id) });
     if (!m?.wt) return { dropped: "no worktree" };
     const keep = String(store.get("coordinators", { project: m.project, squad: m.squad })?.handle ?? "");
-    if (!keep) return { wait: "no coordinator pane" };
+    // U11: a squad on a contract backend has no coordinator: its stop closes the member's terminals.
+    if (!keep && !onContract(store, m.project, m.squad)) return { wait: "no coordinator pane" };
     const run = String(store.get("squads", { project: m.project, topic: m.squad })?.run_id ?? "");
     const makeSeat = (op: string) => x.act.seat(store, m.project, m.squad, `close:${a.episode}:${op}`, m.wt, at);
     const res = await x.act.driver(makeSeat("worker-stop"), m.agent).stop(makeSeat, m, run, keep);

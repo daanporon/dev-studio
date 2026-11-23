@@ -104,6 +104,8 @@ const ONLY_ACTIONS = {
   "cleanup.report": obj({ refused: opt(str) }),
   // exposed-cleanup U2: run one group of queued stop commands (exposed rows `ids`, one command) once.
   "expose.stop": obj({ ids: arr(num), cmd: str, cwd: opt(str) }),
+  // ds-feedback-github-issues U2: one drafter pass over the `new` notes (`keys`, oldest first) for `repo`.
+  "feedback.draft": obj({ repo: str, keys: arr(str) }),
   board_start: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_restart: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_stop: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
@@ -142,6 +144,7 @@ export const FACTS = {
   exposed: obj({ name: str, role: opt(str), scope: opt(str), suffix: opt(str), url: opt(str), audience: opt(str), stop: opt(bool), ports: opt(arr(num)) }),
   feedback_imported: obj({ file: str, lines: num, added: num, renamed: opt(str) }),
   feedback_noted: obj({ key: str, project: str, member: opt(str), source: str }),
+  feedback_drafted: obj({ repo: str, notes: num, drafts: num, blocked: num, kept: num, model: opt(str), account: opt(str), head: opt(str) }),
   // U3: a draft on its way out, out (filed #issue), edited, dismissed (a draft or one note), a note restored.
   feedback_posting: obj({ draft: num, repo: str, kind: str, target: opt(num) }),
   feedback_filed: obj({ draft: num, repo: str, issue: num, url: str, notes: arr(num), found: bool }),

@@ -162,7 +162,7 @@ describe("feedback-post", () => {
     const id = draft(s, { state: "posting", title: "About zebrafoxtrot" });
     const req = file(s, "feedback-post", { draft: id });
     await tick();
-    expect(request(s, req)).toMatchObject({ ok: false, error: expect.stringMatching(/^leak check: line 1: /) });
+    expect(request(s, req)).toMatchObject({ ok: false, error: expect.stringMatching(/^leak check: a word of the host-local list/) });
     expect(calls()).toEqual([]);
     expect(d(s, id)).toMatchObject({ state: "review", leak: "blocked" });
   });
@@ -174,7 +174,7 @@ describe("feedback-post", () => {
     await tick();
     const r = request(s, req);
     expect(r).toMatchObject({ done: true, ok: false });
-    expect(r.error).toMatch(/^leak check: line \d+: /);
+    expect(r.error).toMatch(/^leak check: a word of the host-local list/);
     expect(r.error).not.toContain("zebrafoxtrot");
     expect(r.error).not.toContain(stub);
     expect(calls()).toEqual([]);

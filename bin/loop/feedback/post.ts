@@ -4,16 +4,18 @@
 //   feedbackRepo   the host-level `feedback_repo` (owner/name), or null while it is `-` (posting off)
 //   finalText      the title and body exactly as posted: the drafter's body with any marker lines it
 //                  carried dropped, then the marker line the label workflow reads and the `ds-key` line
-//   leakCheck      tests/leak-guard.sh --text on that final text (the host word list; a missing or empty
-//                  list is a hit), the guard's finding labels without the file path or the matched value
+//   leakCheck      U2's check (feedback/leak.ts) on the final title and body together: the host word
+//                  list (a missing or empty one is a hit), the kinds of hit without the matched value
 //   Gh             the GitHub calls a post makes (REST through `gh api`, DS_GH for a stub): find a post by
 //                  its key, create an issue, comment on one, and the reset time of a used-up budget
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ROOT, type Row, type Store } from "../core/store.ts";
+import { type Row, type Store } from "../core/store.ts";
 import { limitEnv } from "../settings/limits.ts";
 import { spawn, type Out } from "../io/orca.ts";
+import { leakCheck as checkText } from "./leak.ts";
+import { finalBody } from "./prompt.ts";
 import { RESET_GRACE_S } from "../io/github-budget.ts";
 
 const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
@@ -30,10 +32,10 @@ export function feedbackRepo(store: Store): string | null {
   return null;
 }
 
-// The marker the label workflow reads (.github/scripts/feedback-labels.mjs) and the post's key line.
+// The words the label workflow (.github/scripts/feedback-labels.mjs) takes in prompt.ts's marker line, and
+// the hidden key line an add-to comment ends with (an issue gets it from prompt.ts finalBody).
 export const WORD = /^[a-z0-9][a-z0-9-]{0,31}$/;
-export const marker = (area: string, kind: string): string => `<!-- ds-feedback v1 area:${area} kind:${kind} -->`;
-export const keyLine = (key: string): string => `<!-- ds-key:${key} -->`;
+const keyLine = (key: string): string => `<!-- ds-key:${key} -->`;
 const OURS = /^\s*<!-- ds-(feedback v1 |key:)[^\n]*-->\s*$/;
 
 /** A draft's area and kind words for the marker; an unusable one reads `other` (the workflow labels it so). */
@@ -42,26 +44,17 @@ const word = (v: unknown, dflt: string) => { const t = String(v ?? "").trim().to
 /** The title and body as they go out. An add-to comment has no title. */
 export function finalText(d: Row): { title: string | null; body: string } {
   const own = String(d.body ?? "").split("\n").filter((l) => !OURS.test(l)).join("\n").replace(/\s+$/, "");
-  const tail = d.kind === "add-to" ? [keyLine(String(d.key))] : [marker(word(d.area, "other"), word(d.label, "other")), keyLine(String(d.key))];
-  return { title: d.kind === "add-to" ? null : String(d.title ?? "").trim(), body: `${own}\n\n${tail.join("\n")}\n` };
+  if (d.kind === "add-to") return { title: null, body: `${own}\n\n${keyLine(String(d.key))}\n` };
+  return { title: String(d.title ?? "").trim(), body: finalBody(own, word(d.area, "other"), word(d.label, "other"), String(d.key)) };
 }
 
 export type Leak = { leak: "ok" | "blocked"; why: string | null };
 export type LeakCheck = (title: string | null, body: string) => Promise<Leak>;
 
-/** The word-list check on the final text: tests/leak-guard.sh --text, run from this checkout. */
+/** The word-list check on the final text, title and body in one text. */
 export const leakCheck: LeakCheck = async (title, body) => {
-  const dir = mkdtempSync(join(tmpdir(), "ds-feedback-"));
-  try {
-    const file = join(dir, "post.md");
-    writeFileSync(file, `${title ?? ""}\n\n${body}`, { mode: 0o600 });
-    const r = await spawn(["bash", join(ROOT, "tests", "leak-guard.sh"), "--text", file], { LEAK_GUARD_SELFTEST: "0" }, 60_000);
-    if (r.code === 0) return { leak: "ok", why: null };
-    // `FAIL leak-guard --text:` then `<file>:<line>: <label>` per hit (never the value); keep `line N: label`.
-    const lines = `${r.out}\n${r.err}`.split("\n").map((l) => l.trim()).filter((l) => l && !/^FAIL leak-guard/.test(l))
-      .map((l) => (l.startsWith(file) ? `line ${l.slice(file.length + 1)}` : l));
-    return { leak: "blocked", why: lines.join("; ").slice(0, 500) || `leak-guard exit ${r.code}` };
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const r = await checkText(`${title ?? ""}\n\n${body}`);
+  return r.ok ? { leak: "ok", why: null } : { leak: "blocked", why: r.why };
 };
 
 export type Posted = { issue: number; url: string };
