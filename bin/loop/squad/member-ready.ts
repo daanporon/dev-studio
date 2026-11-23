@@ -7,6 +7,8 @@
 // or chat request, or a delivery not yet taken) is ahead of this one. Each refusal names its own why.
 // A board chat to a Claude member passes `screenNoise: "ignore"`: output alone does not hold it, only a
 // fresh transcript or Claude's working marker on a screen read since that output.
+// A Claude member Orca reads `working` whose last turn ended or was interrupted (Esc) and whose screen
+// shows an empty prompt with no working marker is not working (stoppedAtPrompt, U4).
 //
 // A member is read by worktree (observed_workers: the worktree's agent terminal, the one the backend's
 // poke types into). The Studio is read by its adopted handle only (observed_terminals), since its
@@ -15,6 +17,7 @@
 import { driverModule } from "../drivers/index.ts";
 import type { Seat } from "../drivers/types.ts";
 import type { Row, Store } from "../core/store.ts";
+import { turnEnded } from "../reconcilers/liveness.ts";
 
 export type Ready = { ready: boolean; why: string };
 export type ReadyOpts = {
@@ -62,6 +65,18 @@ function menuOn(agent: string | null | undefined, tail: string): boolean {
   try { return driverModule(agent).make(NO_SEAT).answerMenu(tail) != null; } catch { return false; }
 }
 
+// studio-hung-agent-broken U4: a Claude member Orca still reads `working` after an Esc (no Stop hook
+// runs, so Orca keeps `working` until the next turn ends) is not working when its screen and transcript
+// agree: the newest screen read, taken since its last output, shows an empty prompt and no working
+// marker, and its transcript's last turn ended or was interrupted (liveness.ts turnEnded). Cheap checks
+// first, the transcript parse last. No transcript, or a screen older than the output: still working.
+function stoppedAtPrompt(store: Store, wt: string, agent: string | null | undefined, out: number, tail: string, tailAt: number | null): boolean {
+  if ((agent || "claude") !== "claude") return false;
+  if (tailAt == null || tailAt < out) return false;
+  if (promptDraft(tail) !== "" || workingOnScreen(tail)) return false;
+  return turnEnded(store, wt);
+}
+
 export function memberReady(store: Store, project: string, wt: string, now: number, o: ReadyOpts): Ready {
   const no = (why: string): Ready => ({ ready: false, why });
   let out: number, tail: string, tailAt: number | null, unread: number;
@@ -73,8 +88,8 @@ export function memberReady(store: Store, project: string, wt: string, now: numb
   } else {
     const w = store.db.query("SELECT state, last_output_at, tail, tail_at, unread, gone_at FROM observed_workers WHERE project = ? AND wt = ?").get(project, wt) as Row | null;
     if (!w || w.gone_at != null) return no("no live terminal");
-    if (w.state === "working") return no("busy: working");
     out = Number(w.last_output_at ?? 0); tail = String(w.tail ?? ""); tailAt = w.tail_at == null ? null : Number(w.tail_at); unread = Number(w.unread ?? 0);
+    if (w.state === "working" && !stoppedAtPrompt(store, wt, o.agent, out, tail, tailAt)) return no("busy: working");
   }
   const noise = o.screenNoise === "ignore" && (o.agent || "claude") === "claude";
   if (!noise && now - out < o.quietS) return no("busy: terminal output");
