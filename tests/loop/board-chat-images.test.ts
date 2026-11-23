@@ -194,6 +194,19 @@ test("a send with no text posts the ids, clears the draft and shows a pending bu
   } finally { t.close(); }
 }, 15000);
 
+test("a send clears the image-limit note together with the thumbnails", async () => {
+  const t = await open();
+  try {
+    await t.pick(t.file("a.png"), t.file("b.png"), t.file("c.png"), t.file("d.png"));
+    await t.pick(t.file("e.png"));
+    expect(t.doc.querySelector(".qfoot").textContent).toContain("Up to 4 images");
+    await t.click(t.doc.querySelector(".qfoot .btn.pri"));
+    await t.until(() => t.posts.length === 1);
+    await t.until(() => t.thumbs().length === 0);
+    expect(t.doc.querySelector(".qfoot").textContent).not.toContain("Up to 4 images");
+  } finally { t.close(); }
+}, 15000);
+
 test("text with images posts both; a 409 'gone' drops that thumbnail only and shows the error", async () => {
   const t = await open();
   try {
