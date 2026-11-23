@@ -120,5 +120,6 @@ export function stopServerSync(h: ServerHandle): void {
     const ctl = which("systemctl");
     if (ctl) Bun.spawnSync([ctl, "--user", "stop", h.unit], { timeout: 15_000, stdout: "ignore", stderr: "ignore" });
   }
+  if (!Number.isInteger(h.pid) || h.pid <= 0) return; // a unit-only handle: never signal pid 0 (our own group)
   try { process.kill(h.via === "detached" ? -h.pid : h.pid, "SIGKILL"); } catch { /* gone */ }
 }
