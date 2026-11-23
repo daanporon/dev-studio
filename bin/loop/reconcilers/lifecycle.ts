@@ -792,10 +792,12 @@ function updateQueue(store: Store, project: string, t: number, updates: Map<stri
   const slots = store.db.query("SELECT * FROM episodes WHERE project = ? AND kind = 'lifecycle:update-branch'").all(project) as Row[];
   for (const nwo of new Set([...updates.keys(), ...slots.map((r) => String(r.subject))])) {
     const key = { project, subject: nwo, kind: "lifecycle:update-branch" }, line = (updates.get(nwo) ?? []).sort((a, b) => a.n - b.n);
-    let slot = slots.find((r) => r.subject === nwo) ?? null;
+    const row = slots.find((r) => r.subject === nwo) ?? null;
+    let slot = row?.state === "updating" ? row : null;
     const held = slot ? line.find((c) => c.ref === slot!.episode_key) : undefined;
+    // A free slot keeps its row (state `free`, the last PR it held), so nothing is deleted.
     if (slot && !held && (!onTrack.has(String(slot.episode_key)) || t >= Number(slot.next_at ?? 0))) {
-      store.db.run("DELETE FROM episodes WHERE id = ?", [Number(slot.id)]);
+      store.upsert("episodes", key, { state: "free", observed_at: t, next_at: null, ended_at: t });
       slot = null;
     }
     const next = slot ? held : line[0];
