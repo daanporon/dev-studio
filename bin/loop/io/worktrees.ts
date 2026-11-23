@@ -1,7 +1,7 @@
 // worktrees.ts — the loop makes and removes worktrees itself (orca-backend-alternatives U7), through one
 // provider interface: `create`, `remove`, `list`, `prune`. A provider is one file, bin/loop/io/providers/
-// <name>.ts, found by name (`provider()`), so a later provider (treehouse U8, orca U8b) adds only its own
-// file. `git` (plain `git worktree add/remove`) is the first. Each call writes or updates the worktree's
+// <name>.ts, found by name (`provider()`), so a later provider (orca U8b) adds only its own file. `git`
+// (plain `git worktree add/remove`) is the first, `treehouse` (a leased slot of its warm pool, U8) the second. Each call writes or updates the worktree's
 // `worktrees` row (U5, keyed by host + path) with the provider's name; only the provider reads its own id
 // (`orca_id`, `lease`). Only squads on a new backend will call it (wired up in U11); `ds worktree` wraps
 // it for tests and operators.
@@ -10,7 +10,9 @@
 // a crash between the two leaves a row that names the folder: the next create of the same path adopts
 // what the provider already made, and the next `list` or `prune` of its repo marks it gone when the
 // provider has no such worktree. A `remove` whose folder is already gone marks the row gone. No row is
-// ever deleted. The host is always `local` for now (other hosts come later, through a sideloop).
+// ever deleted. A provider that picks the folder itself (`pathFor` gives null: treehouse's pool slot) can
+// only be recorded after it ran, so it must adopt what an interrupted create made (treehouse finds its slot
+// by the lease holder); its other live rows of the same name are marked gone. The host is always `local` for now (other hosts come later, through a sideloop).
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { now as nowS, type Row, type Store } from "../core/store.ts";
@@ -33,12 +35,14 @@ export type Made = { path: string; branch: string; adopted: boolean; lease?: str
 export type RemoveOpts = { force?: boolean; deleteBranch?: boolean; base?: string };
 /** removed: the folder went (or was already gone); branch: what became of its branch. */
 export type Gone = { removed: boolean; already: boolean; branch: "kept" | "deleted" | "none"; why?: string };
-export type Listed = { path: string; branch: string | null; head: string | null; prunable: boolean };
+/** lease: the lease holding it, when the provider leases (a row on another lease is gone). */
+export type Listed = { path: string; branch: string | null; head: string | null; prunable: boolean; lease?: string | null };
 
 export interface Provider {
   name: string;
-  pathFor(spec: Spec): string;
-  create(spec: Spec, path: string): Promise<Made>;
+  /** Where the spec's worktree goes; null when the provider picks it (then `create` gets null). */
+  pathFor(spec: Spec): string | null;
+  create(spec: Spec, path: string | null): Promise<Made>;
   remove(row: Row, opts: RemoveOpts): Promise<Gone>;
   list(repo: string): Promise<Listed[]>;
   prune(repo: string): Promise<Out>;
@@ -104,18 +108,18 @@ export async function createWorktree(s: Store, providerName: string, spec: Spec,
   const p = await provider(providerName);
   const repo = canon(spec.repo);
   spec = { ...spec, repo };
-  const path = canon(spec.path || p.pathFor(spec));
+  const fixed = p.pathFor(spec);
+  if (fixed == null) return createPicked(s, p, spec, at);
+  const path = canon(spec.path || fixed);
   const had = rowAt(s, path);
   if (had && had.gone_at == null) {
     if (had.provider !== p.name) throw new WorktreeError(`worktrees: ${path} is recorded for provider '${had.provider}', not '${p.name}'`);
     if (had.branch && had.branch !== spec.branch) throw new WorktreeError(`worktrees: ${path} is recorded on branch '${had.branch}', not '${spec.branch}'`);
   }
   // The intent: the row names the folder before the provider makes it (see the header).
-  // A field the spec leaves out keeps what a live row already records.
-  const keep = (v: string | null | undefined, k: string) => v ?? (had && had.gone_at == null ? (had[k] as string | null) ?? null : null);
-  const fields = { project: keep(spec.project, "project"), name: spec.name, parent_path: keep(spec.parent, "parent_path"), branch: spec.branch,
-    squad: keep(spec.squad, "squad"), role: keep(spec.role, "role"), provider: p.name, repo, gone_at: null };
-  s.upsert("worktrees", { host: HOST, path }, { ...fields, created_at: had && had.gone_at == null ? had.created_at : at });
+  const live = liveRow(had);
+  const fields = fieldsFor(spec, p, live);
+  s.upsert("worktrees", { host: HOST, path }, { ...fields, created_at: live ? live.created_at : at });
   let made: Made;
   try { made = await p.create(spec, path); } catch (e) {
     // Nothing was made: the row goes back to gone (a fresh one was never a worktree), with the why.
@@ -125,13 +129,46 @@ export async function createWorktree(s: Store, providerName: string, spec: Spec,
     }
     throw e;
   }
+  return recordMade(s, p, path, fields, live, made, at);
+}
+
+const liveRow = (r: Row | null): Row | null => (r && r.gone_at == null ? r : null);
+
+// The row's fields for a spec; a field the spec leaves out keeps what the live row already records.
+function fieldsFor(spec: Spec, p: Provider, live: Row | null) {
+  const keep = (v: string | null | undefined, k: string) => v ?? (live ? (live[k] as string | null) ?? null : null);
+  return { project: keep(spec.project, "project"), name: spec.name, parent_path: keep(spec.parent, "parent_path"), branch: spec.branch,
+    squad: keep(spec.squad, "squad"), role: keep(spec.role, "role"), provider: p.name, repo: spec.repo, gone_at: null };
+}
+
+// What the provider made, on the row at `path` (one `worktree_created` unless an adopt changed nothing).
+function recordMade(s: Store, p: Provider, path: string, fields: ReturnType<typeof fieldsFor>, live: Row | null, made: Made, at: number): { row: Row; adopted: boolean } {
   const set = { ...fields, branch: made.branch, lease: made.lease ?? null, orca_id: made.orca_id ?? null };
-  const changed = !had || had.gone_at != null || !made.adopted || Object.entries(set).some(([k, v]) => (had[k] ?? null) !== v);
+  const changed = !live || !made.adopted || Object.entries(set).some(([k, v]) => (live[k] ?? null) !== v);
   if (changed) {
-    s.fact("worktree_created", [{ table: "worktrees", key: { host: HOST, path }, set }],
+    s.fact("worktree_created", [{ table: "worktrees", key: { host: HOST, path }, set: live ? set : { ...set, created_at: at } }],
       { ...ctx(fields), payload: { path, provider: p.name, branch: made.branch, adopted: made.adopted, ...(fields.parent_path ? { parent: fields.parent_path } : {}) } });
   }
   return { row: rowAt(s, path) as Row, adopted: made.adopted };
+}
+
+// A provider that picks the folder (see the header): it runs first, and the row is written at the path it
+// gave. A live row of the same name and repo on another branch is refused before it runs.
+async function createPicked(s: Store, p: Provider, spec: Spec, at: number): Promise<{ row: Row; adopted: boolean }> {
+  const same = s.db.query("SELECT * FROM worktrees WHERE host = ? AND provider = ? AND repo = ? AND name = ? AND gone_at IS NULL ORDER BY created_at DESC")
+    .all(HOST, p.name, spec.repo, spec.name) as Row[];
+  const other = same.find((r) => r.branch && r.branch !== spec.branch);
+  if (other) throw new WorktreeError(`worktrees: '${spec.name}' is recorded at ${other.path} on branch '${other.branch}', not '${spec.branch}'`);
+  const made = await p.create(spec, null);
+  const path = canon(made.path);
+  const live = liveRow(rowAt(s, path));
+  if (live && live.provider !== p.name) throw new WorktreeError(`worktrees: ${p.name} gave ${path}, which is recorded for provider '${live.provider}'`);
+  for (const r of same) {
+    if (r.path === path) continue;
+    s.fact("worktree_gone", [{ table: "worktrees", key: { host: HOST, path: r.path }, set: { gone_at: at } }],
+      { ...ctx(r), payload: { path: String(r.path), provider: p.name, why: `'${spec.name}' is now at ${path}` } });
+  }
+  return recordMade(s, p, path, fieldsFor(spec, p, live), live, made, at);
 }
 
 /** Remove the worktree at `path` through the provider that made it; its branch is kept unless
@@ -173,12 +210,13 @@ async function reconcile(s: Store, o: ListOpts, at: number): Promise<string[]> {
     const by = new Map(listed.map((l) => [l.path, l]));
     for (const r of rs) {
       const l = by.get(String(r.path));
-      if (l && !l.prunable && existsSync(String(r.path))) {
+      const moved = l && l.lease !== undefined && r.lease != null && l.lease !== r.lease;
+      if (l && !l.prunable && !moved && existsSync(String(r.path))) {
         if (l.branch && l.branch !== r.branch) s.upsert("worktrees", { host: HOST, path: r.path }, { branch: l.branch });
         continue;
       }
       s.fact("worktree_gone", [{ table: "worktrees", key: { host: HOST, path: r.path }, set: { gone_at: at } }],
-        { ...ctx(r), payload: { path: String(r.path), provider: name, why: l ? "folder gone" : `not a ${name} worktree of ${repo}` } });
+        { ...ctx(r), payload: { path: String(r.path), provider: name, why: moved ? `lease ${r.lease} no longer holds it` : l ? "folder gone" : `not a ${name} worktree of ${repo}` } });
       marked.push(String(r.path));
     }
   }
