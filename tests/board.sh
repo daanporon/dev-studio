@@ -1249,6 +1249,16 @@ jt "studio: on the claude account, its walk not unknown" "$TMP/studio.json" '.st
 st="$(DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" 2>&1)"
 has "studio: the text board's Studio line" "$st" "studio $SL: claude"
 has "studio: the line names the account" "$st" "@acct-studio"
+# chat-with-studio U1: the entry carries the Crew box's mail count (a message stored under squad _studio, role studio),
+# whether it is mid-turn and the time of its newest assistant text turn; a quiet Studio has 0 / false / null.
+jt "studio: a quiet Studio has no mail, is not working and has no reply" "$TMP/studio.json" '.studio[0] | .unread == 0 and .reply_due == 0 and .working == false and .reply_at == null'
+DS_STATE_ROOT="$SR" bun "$ROOT/tests/board-studio-db.ts" "$SL" --chatty
+DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" --json > "$TMP/studio-chatty.json"
+jt "studio: mail sent to _studio/studio counts as unread" "$TMP/studio-chatty.json" '.studio[0] | .unread == 1 and .reply_due == 0'
+jt "studio: working from observed_workers" "$TMP/studio-chatty.json" '.studio[0].working == true'
+jt "studio: reply_at is the newest assistant text turn" "$TMP/studio-chatty.json" '.studio[0].reply_at != null and (now - .studio[0].reply_at) > 50 and (now - .studio[0].reply_at) < 120'
+st="$(DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" 2>&1)"
+has "studio: the text line shows the mail count" "$st" "mail:1"
 # U5: after a Studio move the board shows no Studio moved line (the event stays in the Event log).
 DS_STATE_ROOT="$SR" bun "$ROOT/tests/board-studio-db.ts" "$SL" --moved
 DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" --json > "$TMP/studio-moved.json"

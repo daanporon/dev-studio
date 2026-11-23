@@ -469,6 +469,13 @@ it is paused. A chat to a Builder, Tester, Reviewer or Researcher also lands in 
 squad's `crew-chat.md`, so its Lead sees it on its next tick. The panel reads
 `GET /api/chat` every 3 s while open; `board.json` carries no turns.
 
+**Chat with the Studio from the board.** The board's top bar has a **💬 Studio** button (one per
+project on a host-wide board) that opens the same Chat panel on the project's Studio, titled
+`Chat · Studio · <project>`. The loop types your line in once the Studio has been quiet for two
+minutes. The button shows the mail waiting for the Studio (the Crew box's unread + waiting-for-reply
+count), a dot when the Studio wrote a reply you have not seen in this browser, and `working` while it
+is mid-turn. Until the loop has adopted the Studio's terminal the button is greyed out and says so.
+
 **Take back a plan approval.** Approved the wrong plan, or changed your mind? Run
 `bin/role/squad-state.sh <state> revoke-plan <plan> --why "<why>"` (or tell the Thinker to).
 The plan leaves `approved_plans` (the squad keeps `revoked_plans`: who, when, why), its

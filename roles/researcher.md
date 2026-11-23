@@ -8,7 +8,9 @@ You investigate a question and return a report. You write no production code.
    works, what the options are, what an approach would cost, prior art.
 2. **Return a report**, not a change: findings, evidence, and a recommendation
    the Thinker can plan against. Surface a question you cannot resolve up the
-   tree (`conventions/escalation.md`).
+   tree (`conventions/escalation.md`). Before your `worker_done`, record the
+   verdict with `~/.dev-studio/bin/ds finish <unit|-> --outcome verdict --body "<recommendation
+   and where the report is>"` (one finishes row; `-` when the question is no unit's).
 
 Model: see `conventions/roles.conf` (default fable). Started on demand, not at
 every spawn.

@@ -1774,6 +1774,13 @@ has "worker-done peeks its own dispatch" "$(cat "$ORCA_LOG")" "check --terminal 
 has "worker-done resolves task via worker-show" "$(cat "$ORCA_LOG")" "worker-show --dispatch ctx_self --json"
 has "worker-done sends from the assignee" "$(cat "$ORCA_LOG")" "--from term_self --type worker_done"
 has "worker-done sends both ids + outcome" "$(cat "$ORCA_LOG")" "--task-id task_self --dispatch-id ctx_self --outcome succeeded"
+# U3 (orca-backend-alternatives): finish-unit.sh --failed sends --outcome failed; any other outcome is refused.
+: > "$ORCA_LOG"; ORCA_TERMINAL_HANDLE=term_me run worker-done --outcome failed "failed U" "why" >"$TMP/out" 2>&1 && r=0 || r=$?
+eq "worker-done --outcome failed exits 0" "$r" "0"
+has "worker-done --outcome failed sends failed" "$(cat "$ORCA_LOG")" "--task-id task_self --dispatch-id ctx_self --outcome failed"
+: > "$ORCA_LOG"; ORCA_TERMINAL_HANDLE=term_me run worker-done --outcome maybe s b >"$TMP/out" 2>&1 && r=0 || r=$?
+eq "worker-done --outcome maybe exits 2" "$r" "2"
+eq "worker-done --outcome maybe issues no orca call" "$(wc -l < "$ORCA_LOG" | tr -d ' ')" "0"
 : > "$ORCA_LOG"; rc=0; env -u ORCA_TERMINAL_HANDLE "$ADAPTER" worker-done s b >"$TMP/out" 2>&1 || rc=$?
 eq "worker-done without a handle exits 1" "$rc" "1"
 has "worker-done without a handle says why" "$(cat "$TMP/out")" "ORCA_TERMINAL_HANDLE"

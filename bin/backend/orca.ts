@@ -1608,14 +1608,21 @@ const INBOX: Record<string, Verb> = {
     ctx.out(`send-run-worker: delivered to ${got || to} (${id})\n`);
     return 0;
   },
-  /** <subject> <body> -> complete THIS terminal's active dispatch with outcome succeeded
-   *  (bin/role/finish-unit.sh ends a Builder's unit with this). Discovers the ids itself — the dispatch via
+  /** [--outcome succeeded|failed] <subject> <body> -> complete THIS terminal's active dispatch with that outcome
+   *  (default succeeded; bin/role/finish-unit.sh ends a Builder's unit with this, --failed with failed). Discovers the ids itself — the dispatch via
    *  `check --peek` on $ORCA_TERMINAL_HANDLE (marks nothing read), task + sender handle via `worker-show` — so
    *  the caller passes no ids and can't complete the wrong dispatch. HOST-CONFIRMED 2026-10-28: `check
    *  --peek` carries .result.dispatchId even with zero unread (envelope metadata, not a message), and
    *  `worker-show` carries .result.dispatch.taskId + .assigneeHandle (docs/orca-notes.md). */
   async "worker-done"(ctx, a) {
-    if (a.length < 2) { ctx.err("usage: worker-done <subject> <body>\n"); return 2; }
+    const usage = () => { ctx.err("usage: worker-done [--outcome succeeded|failed] <subject> <body>\n"); return 2; };
+    let outcome = "succeeded";
+    if (a[0] === "--outcome") {
+      outcome = a[1] ?? "";
+      if (outcome !== "succeeded" && outcome !== "failed") return usage();
+      a = a.slice(2);
+    }
+    if (a.length < 2) return usage();
     const me = ctx.env.ORCA_TERMINAL_HANDLE;
     if (!me) { ctx.err("orca adapter: worker-done needs ORCA_TERMINAL_HANDLE — run it in the dispatched worker's own terminal\n"); return 1; }
     const check = await inboxCheck(ctx, ["--terminal", me, "--peek"]);
@@ -1632,7 +1639,7 @@ const INBOX: Record<string, Verb> = {
     const task = sp < 0 ? ids : ids.slice(0, sp), from = sp < 0 ? ids : ids.slice(sp + 1);
     if (!task || !from) { ctx.err(`orca adapter: worker-done could not resolve task/sender for dispatch ${disp}\n`); return 1; }
     const s = await orca(ctx, ["orchestration", "send", "--from", from, "--type", "worker_done", "--subject", a[0], "--body", a[1],
-      "--task-id", task, "--dispatch-id", disp, "--outcome", "succeeded", "--json", "--full"]);
+      "--task-id", task, "--dispatch-id", disp, "--outcome", outcome, "--json", "--full"]);
     if (s.code !== 0) { ctx.err(`orca adapter: worker-done failed for task ${task} (dispatch ${disp}; see error above)\n`); return 1; }
     ctx.out(`worker-done: completed task ${task} (dispatch ${disp})\n`);
     return 0;

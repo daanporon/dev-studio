@@ -499,3 +499,57 @@ test("a Debrief card shows 'Debrief · <topic>', opens the archived debrief and 
     expect(r.errors).toEqual([]);
   } finally { await w.happyDOM.close(); }
 });
+
+// chat-with-studio U1: the header's Studio button(s), the badge, the new-reply dot and the opener, on the real page.
+const studio = (over: any = {}) => ({ label: "fixture", wt: "/w/st", handle: "term_s", adopted: true, unread: 0, reply_due: 0, working: false, reply_at: null,
+  agent: "claude", walk: null, model_label: null, account: null, account_label: null, ctx: null, ctx_level: null, ...over });
+const btns = (r: Run) => [...r.root.querySelectorAll(".hdr .studio-btn")] as any[];
+const wait = (ms = 60) => new Promise((x) => setTimeout(x, ms));
+
+test("chat-with-studio U1: an adopted Studio's button opens the chat on _studio; no badge or dot while quiet", async () => {
+  const r = await mountPage({ ...board, studio: [studio()] }, false, { "api/chat": { agent: "claude", source: "transcript", turns: [], sends: [] } });
+  try {
+    expect(btns(r)).toHaveLength(1);
+    expect(btns(r)[0].disabled).toBe(false);
+    expect(btns(r)[0].querySelector(".msg-badge")).toBeNull();
+    expect(btns(r)[0].querySelector(".studio-dot")).toBeNull();
+    btns(r)[0].click(); await wait();
+    expect(r.urls).toContain("api/chat?project=fixture&topic=_studio&wt=%2Fw%2Fst");
+    expect(r.root.querySelector(".chat .mhd")!.textContent).toContain("Chat · Studio · fixture");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+test("chat-with-studio U1: the badge shows unread + reply_due, a reply newer than the seen mark gives a dot until the panel was open", async () => {
+  const at = Math.floor(Date.now() / 1000);
+  const turns = [{ role: "assistant", text: "hello", at }];
+  const b = { ...board, studio: [studio({ unread: 1, reply_due: 2, working: true, reply_at: at })] };
+  const r = await mountPage(b, false, { "api/chat": { agent: "claude", source: "transcript", turns, sends: [] } });
+  try {
+    // first visit: no mark, so reply_at becomes the mark and there is no dot
+    expect(btns(r)[0].querySelector(".msg-badge")!.textContent).toBe("3");
+    expect(btns(r)[0].querySelector(".studio-dot")).toBeNull();
+    expect(btns(r)[0].textContent).toContain("working");
+  } finally { await r.window.happyDOM.close(); }
+  const r2 = await mountPage({ ...b, studio: [studio({ reply_at: at + 100 })] }, false, { "api/chat": { agent: "claude", source: "transcript", turns: [{ role: "assistant", text: "newer", at: at + 100 }], sends: [] } });
+  try {
+    r2.window.localStorage.setItem("b:chat-seen:fixture//w/st", JSON.stringify(at));
+    btns(r2)[0].click(); await wait();   // opening re-renders; the panel loads and marks the newer reply seen
+    expect(r2.window.localStorage.getItem("b:chat-seen:fixture//w/st")).toBe(JSON.stringify(at + 100));
+    (r2.root.querySelector(".chat .mhd button") as any).click(); await wait();
+    expect(r2.root.querySelector(".chat")).toBeNull();
+    expect(btns(r2)[0].querySelector(".studio-dot")).toBeNull();
+  } finally { await r2.window.happyDOM.close(); }
+});
+
+test("chat-with-studio U1: a non-adopted Studio's button is disabled with its reason; a host-wide board has one labelled button each", async () => {
+  const r = await mountPage({ ...board, studio: [studio({ adopted: false, handle: null })] }, false);
+  try {
+    expect(btns(r)[0].disabled).toBe(true);
+    expect(btns(r)[0].title).toContain("has not adopted");
+  } finally { await r.window.happyDOM.close(); }
+  const r2 = await mountPage({ ...board, project: "", studio: [studio({ label: "a", wt: "/w/a" }), studio({ label: "b", wt: "/w/b" })] }, false);
+  try {
+    expect(btns(r2).map((x) => x.textContent.trim().replace(/\s+/g, " "))).toEqual(["💬 Studio · a", "💬 Studio · b"]);
+  } finally { await r2.window.happyDOM.close(); }
+});

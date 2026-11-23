@@ -132,6 +132,7 @@ export const FACTS = {
   message_read: obj({ ids: arr(num), by: str }),
   message_replied: obj({ id: num, reply: opt(num), request: opt(num) }),
   message_sent: obj({ key: str, to: str, from: str, kind: str, subject: str }),
+  finish_recorded: obj({ key: str, member: str, unit: opt(str), outcome: str, gen: opt(str) }),
   builder_wish_settled: obj({ id: num, unit: str, was: opt(str) }),
   builder_wish_withdrawn: obj({ id: num, unit: str, why: str, by: str, reason: opt(str) }),
   member_drift_cleared: obj({ id: opt(num), path: opt(str), status: opt(str) }),
