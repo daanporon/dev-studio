@@ -238,6 +238,40 @@ describe("a squad on a contract backend (U11)", () => {
     expect(sends(r.fake).map((x) => x.text)).not.toContain("echo $(id)");
   });
 
+  test("a crash after the line went out replays on boot: no Orca ask, the same generation, the line not typed again", async () => {
+    const r = await rig();
+    await startLead(r);
+    const call = r.fake.call.bind(r.fake);
+    let thrown = 0;
+    r.fake.call = (async (op: Op, req: unknown) => {
+      const res = await call(op, req as never);
+      if (op === "terminal.send" && String((req as { text: string }).text).includes("claude --") && !thrown++) throw new Error("the loop died here");
+      return res;
+    }) as FakeContract["call"];
+    const id = builder(r, "u7");
+    for (let i = 0; i < 5 && !thrown; i++) await r.tick();
+    expect(thrown).toBe(1);
+    const row = () => r.s.db.query("SELECT * FROM orca_calls WHERE op = 'terminal.create' AND payload LIKE '%builder-u7%' ORDER BY id DESC LIMIT 1").get() as Row;
+    const first = row();
+    expect(JSON.parse(String(first.result)).typed).toBe(true);
+    // As a crash leaves it: the row still out, unsettled (the catch never ran).
+    r.s.db.run("UPDATE orca_calls SET state = 'sent' WHERE id = ?", [first.id as number]);
+    const orca2 = new FakeOrca();
+    const act2 = new LoopActuator({ orca: orca2, pick: system, fulfillers: fulfillers.filter((f) => f.kinds), backends: () => ({ backend: r.fake, caps: r.fake.caps }) });
+    const loop2 = new Loop(r.s, { observers: [], reconcilers: [decider, ...reconcilers, ...fulfillers] }, act2, { projects: () => ["fx"] });
+    loop2.boot(r.now());
+    await act2.boot(r.s, r.now());   // as bin/loop/main.ts does after a restart
+    expect(row().state).toBe("absent");
+    expect(lock(r.s, member(r.s, id))).toBe(false);
+    expect(orca2.calls.filter((c) => JSON.stringify(c.args).includes(String(first.retry_id)))).toEqual([]);
+    let at = r.now();
+    for (let i = 0; i < 6 && row().state !== "completed"; i++) { at += 5; await loop2.tick(at); await act2.drain(); }
+    expect(row()).toMatchObject({ state: "completed", retry_id: first.retry_id });
+    const cwd = pathOf(member(r.s, id));
+    expect(creates(r.fake).filter((c) => c.cwd === cwd)).toHaveLength(1);
+    expect(sends(r.fake).filter((x) => x.text.includes("claude --") && live(r.fake, cwd).some((t) => t.t.id === x.id))).toHaveLength(1);
+  });
+
   test("a restart closes the old terminal first; a stop closes the member's terminals", async () => {
     const r = await rig();
     await startLead(r);
