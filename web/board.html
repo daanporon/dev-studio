@@ -225,7 +225,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .qplain{margin:8px 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:5px} .qplain li{font-size:13px} .qplain b{color:var(--mut);font-weight:600;margin-right:6px}
 .qfacts{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0} .qfact{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--line);background:#1b2029;color:var(--fg)}
 .qdetails{margin:8px 0;font-size:12.5px} .qdetails summary{cursor:pointer;color:var(--mut)}
-.qnote .lndet{font-size:12px;color:var(--mut);white-space:normal;overflow-wrap:anywhere;margin-top:2px}
+.qnote .lndet{font-size:12px;color:var(--mut);white-space:normal;overflow-wrap:anywhere;margin-top:2px} .qnote .lndet.dbr{white-space:pre-line}
 .qnote.sent .l2{color:var(--mut)} .qnote .ok{color:var(--green);font:12px var(--mono)}
 .lnrow{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--line);cursor:pointer;font-size:12.5px;color:var(--mut)}
 .lnrow:hover{background:var(--panel2)} .lnrow .sp{flex:1}
@@ -1598,13 +1598,13 @@ function LeftoversBox({ s }) {
 const docAge = (t) => { if (!t) return ""; const m = Math.max(0, Math.floor((Date.now() / 1000 - t) / 60)); return m < 60 ? m + "m" : m < 48 * 60 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
 const docWhen = (t) => t ? new Date(t * 1000).toLocaleString() : "";
 
-function Docs({ s, onPlan, closed, toast }) {
+function Docs({ s, onPlan, closed, toast, atArchive }) {
   const [all, setAll] = useState({});
   const [menu, setMenu] = useState(null), [revoking, setRevoking] = useState(null);
   const byNew = (a, b) => (b.mtime || 0) - (a.mtime || 0);
   const groups = [
     // The debrief has no timestamp, so its group goes first; a closed squad without one says so.
-    { id: "debrief", label: "Debrief", items: s.debrief ? [{ kind: "debrief", name: "debrief" }] : closed ? [{ kind: "none", name: "no debrief" }] : [] },
+    { id: "debrief", label: "Debrief", items: s.debrief ? [{ kind: "debrief", name: "debrief" }] : closed ? [{ kind: "none", name: atArchive ? "written at archive" : "no debrief" }] : [] },
     { id: "plans", label: "Plans", items: [...(s.plans || [])].sort(byNew).map((p) => ({ kind: "plan", name: p.name, mtime: p.mtime, p })) },
     { id: "pages", label: "Review pages", items: [...(s.lavish || [])].sort(byNew).map((l) => ({ kind: "page", name: l.name, dir: l.dir, mtime: l.mtime, l })) },
   ].filter((g) => g.items.length);
@@ -1615,7 +1615,7 @@ function Docs({ s, onPlan, closed, toast }) {
       const shown = all[g.id] ? g.items : g.items.slice(0, 10);
       return html`<div key=${g.id} class="docs" data-docs=${g.id}><span class="dl">${g.label}</span>
         ${shown.map((i, n) => { const label = (count[i.name] > 1 && i.dir ? i.dir + "/" : "") + i.name;
-          if (i.kind === "none") return html`<span key="d0" class="mut nodebrief">no debrief</span>`;
+          if (i.kind === "none") return html`<span key="d0" class="mut nodebrief">${i.name}</span>`;
           if (i.kind === "debrief") return html`<div key="d1" class="plan" title="the squad's debrief" onClick=${() => onPlan({ name: s.topic + " — debrief", markdown: s.debrief })}>📝 debrief</div>`;
           const age = html`<span class="mut dage">${docAge(i.mtime)}</span>`;
           const tip = (i.kind === "plan" ? i.name : i.l.url || i.name) + (i.mtime ? " · " + docWhen(i.mtime) : "");
@@ -2829,7 +2829,7 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
         </div>`; })}
         ${s.role_tokens && Object.values(s.role_tokens).some((v) => v) && html`<div class="tier" title="price-weighted tokens per role, 7 days">spent 7d · ${["lead", "thinker", "builders (all units)", "review", "other"].map((r) => r + " ≈" + fmtTok(s.role_tokens[r.split(" ")[0]])).join(" · ")}</div>`}</div>`}
       <${PastAnswers} s=${s} />
-      <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} />
+      <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} atArchive=${true} />
       ${s.mermaid && html`<${GraphBox} s=${s} />`}
       ${(s.units || []).length > 0 && html`<${UnitsBox} s=${s} flow=${flow} toast=${toast} onPlan=${onPlan} />`}
       ${(s.leftovers || []).length > 0 && html`<${LeftoversBox} s=${s} />`}
@@ -3671,7 +3671,8 @@ function App() {
       const dTopic = debrief ? n.debrief : "";
       const openDebrief = () => { // the topic comes from the card's title; the text is the archived doc's debrief
         const a = (data.archived || []).find((x) => x.topic === dTopic && (!n.label || x.label === n.label || x.label == null));
-        setPlan({ name: dTopic + " — debrief", markdown: a && a.debrief ? a.debrief : "No debrief was written." });
+        // No archived squad, or an empty debrief: show the card's own text, saying the full one is not on the board.
+        setPlan({ name: dTopic + " — debrief", markdown: a && a.debrief ? a.debrief : (n.text || n.title || "") + "\n\nThe full debrief of this squad is not on the board." });
       };
       const markRead = async () => {
         if (sentQ.has(akey(n))) return;
@@ -3694,7 +3695,8 @@ function App() {
           ${debrief && html`<button class="btn sm" data-ev="open-debrief" onClick=${(e) => { e.stopPropagation(); openDebrief(); }}>Open</button>`}
           ${debrief && html`<button class="btn sm" data-ev="mark-read" onClick=${(e) => { e.stopPropagation(); markRead(); }}>Mark read</button>`}</div>
         <div class="l2">${linkedQ(n.title, n.repo_slug)}</div>
-        ${n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
+        ${debrief ? (n.text && n.text !== n.title && html`<div class="lndet dbr">${linkedQ(n.text, n.repo_slug)}</div>`)
+          : n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
           : n.text && n.text !== n.title && html`<div class="lndet">${linkedQ(n.text, n.repo_slug)}</div>`}
         ${n.why && html`<div class="lndet">Why: ${linkedQ(n.why, n.repo_slug)}</div>`}
         ${sent && html`<div class="lndet ok">${brief || debrief ? "✓ marked read" : n.squad === "_studio" ? "✓ dismissed" : "✓ sent"}</div>`}</div>`;

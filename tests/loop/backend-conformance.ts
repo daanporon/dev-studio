@@ -157,7 +157,11 @@ export function conformance(s: Subject): void {
     });
 
     it("named keys type with keys native and are refused as unsupported without", async ({ b, caps, create, screenHas }) => {
-      const t = await create(), m = marker();
+      const m = marker(), up = marker();
+      const t = await create({ env: { DS_CONFORMANCE: up } });
+      // Wait for the shell itself: a real shell that starts after the keys can drop the input typed before it.
+      await b.call("terminal.send", { id: t.id, text: "echo $DS_CONFORMANCE", submit: true });
+      expect(await screenHas(t.id, up)).toBe(true);
       await b.call("terminal.send", { id: t.id, text: `${m}k` });
       expect(await screenHas(t.id, `${m}k`)).toBe(true);
       const a = await b.call("terminal.send", { id: t.id, keys: ["Backspace", "z"] });
