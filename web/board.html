@@ -279,6 +279,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-th{position:relative;flex:none;width:56px;height:56px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel2);display:flex;align-items:center;justify-content:center}
 .chat-th img{width:100%;height:100%;object-fit:cover;display:block} .chat-th.bad{border-color:var(--red);color:var(--red);font:9px/1.2 var(--mono);padding:2px;text-align:center;overflow-wrap:anywhere}
 .chat-rm{position:absolute;top:1px;right:1px;width:20px;height:20px;padding:0;border:0;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:11px;line-height:20px;cursor:pointer}
+.start-imgs{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px} .mbox.drop{outline:2px dashed var(--blue);outline-offset:-6px}
 .chat-th .dot.spin{margin:0} .chat-attach{padding:0 8px} .mbox.chat.drop{outline:2px dashed var(--blue);outline-offset:-6px}
 .chat-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px} .chat-img{display:block;max-width:160px;max-height:160px;border-radius:8px;border:1px solid var(--line)}
 .chat-imgchip{font:11px var(--mono);color:var(--dim);border:1px dashed var(--line);border-radius:8px;padding:2px 8px}
@@ -2638,6 +2639,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, card })
 // text keeps every newline; the checks below are the server's contract, in its words.
 const BRIEF_MAX = 32 * 1024;
 // U9: the backends a squad can start on (bin/backend/registry.ts BACKEND_NAMES); the Start dialog presets the project's default_backend.
+const START_IMAGES = 8;
 const START_BACKENDS = ["orca", "orca-lite", "tmux", "herdr"];
 // The squad's backend chip, only off orca; the worktree tool joins it when it is not the backend's default.
 function backendChip(s) {
@@ -2661,6 +2663,42 @@ function StartSquad({ project, projects, toast, onClose }) {
   const [type, setType] = useState("feature"), [autonomy, setAutonomy] = useState("checkpoints"), [start, setStart] = useState("auto");
   const [err, setErr] = useState(null), [sending, setSending] = useState(false), [discard, setDiscard] = useState(false);
   const busy = useRef(false), refs = { text: useRef(null), slug: useRef(null) };
+  // Images (chat-image-upload U5): shrunk and uploaded at once to topic _start of the dialog's project; only the names ride with Start.
+  const [files, setFiles] = useState([]), [ups, setUps] = useState([]), [note, setNote] = useState(""), [drag, setDrag] = useState(false);
+  const pick = useRef(null), seq = useRef(0), held = useRef([]), slots = useRef(0), gen = useRef(0);
+  const uploading = ups.some((u) => u.state === "up");
+  const putHeld = (arr) => { held.current = arr; setFiles(arr); };
+  const attach = (list) => {
+    const imgs = imageFiles(list), g = gen.current, upUrl = "api/chat-file?project=" + encodeURIComponent(proj) + "&topic=_start";
+    if (!imgs.length) return;
+    setNote("");
+    for (const f of imgs) {
+      if (held.current.length + slots.current >= START_IMAGES) { setNote("Up to " + START_IMAGES + " images per squad — remove one first."); break; }
+      const k = ++seq.current;
+      slots.current++;
+      setUps((u) => [...u, { k, state: "up" }]);
+      (async () => {
+        try {
+          const r = await uploadImage(await shrinkImage(f), upUrl);
+          if (g === gen.current) {
+            if (!held.current.some((x) => x.id === r.id)) putHeld([...held.current, { id: r.id, url: r.url, name: f.name || "image" }]);
+            setUps((u) => u.filter((x) => x.k !== k));
+          }
+        } catch (e) { if (g === gen.current) setUps((u) => u.map((x) => (x.k === k ? { ...x, state: "bad", msg: String(e.message || e) } : x))); }
+        finally { if (g === gen.current) slots.current--; }
+      })();
+    }
+  };
+  const changeProject = (l) => {
+    if (l !== proj && (held.current.length || ups.length)) { gen.current++; slots.current = 0; putHeld([]); setUps([]); setNote("images belong to one project — attach them again"); }
+    setProj(l); setBackend(backendOf(l));
+  };
+  const dropFile = (id) => { putHeld(held.current.filter((x) => x.id !== id)); setNote(""); };
+  const onPaste = (e) => {
+    const d = e.clipboardData, got = imageFiles(d && d.files && d.files.length ? d.files : Array.from((d && d.items) || []).filter((x) => x.kind === "file").map((x) => x.getAsFile()));
+    if (got.length) { e.preventDefault(); attach(got); }   // a text paste is left alone
+  };
+  const dragHas = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files");
   const backendOf = (l) => ((projects || []).find((p) => p.label === l) || {}).default_backend || "orca";
   const [backend, setBackend] = useState(() => backendOf(project));
   const labels = (projects || []).map((p) => p.label);
@@ -2669,11 +2707,11 @@ function StartSquad({ project, projects, toast, onClose }) {
   const say = (m) => { toast(m); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast(null), 4000); };
   const tryClose = () => { if (text.trim() && !discard) setDiscard(true); else onClose(); };
   const send = async () => {
-    if (busy.current) return;
+    if (busy.current || uploading) return;
     const bad = startProblem({ text, slug });
     if (bad) { setErr(bad); const r = refs[bad.field].current; if (r) r.focus(); return; }
     setErr(null);
-    const body = { project: proj, action: "start", text, ...(slug.trim() ? { slug: slug.trim() } : {}), type, autonomy, ...(type !== "testing" && start !== "auto" ? { start } : {}), backend };
+    const body = { project: proj, action: "start", text, ...(slug.trim() ? { slug: slug.trim() } : {}), type, autonomy, ...(type !== "testing" && start !== "auto" ? { start } : {}), backend, ...(files.length ? { files: files.map((f) => f.id) } : {}) };
     busy.current = true; setSending(true);
     try {
       const b = await post("api/request", body);
@@ -2681,6 +2719,8 @@ function StartSquad({ project, projects, toast, onClose }) {
       say("sent to the Studio: start squad " + (slug.trim() || "slug from the text") + " (request #" + b.id + ")");
     } catch (e) {
       busy.current = false; setSending(false);
+      const gone = /^image (\S+) is gone/.exec(String(e.message || ""));
+      if (e.status === 409 && gone) putHeld(held.current.filter((x) => x.id !== gone[1]));   // that thumbnail goes; the rest stay
       say("not sent: " + (e.status === 413 ? "the request is too large" : e.status == null ? "could not reach the board" : e.message || e));
     }
   };
@@ -2690,17 +2730,30 @@ function StartSquad({ project, projects, toast, onClose }) {
     else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
   };
   return html`<div class="modal startsq" onClick=${(e) => { if (e.target === e.currentTarget) tryClose(); }} onKeyDown=${onKey}>
-    <div class="mbox" style=${{ width: "min(720px,100%)" }} role="dialog" aria-label="Start squad">
+    <div class=${"mbox" + (drag ? " drop" : "")} style=${{ width: "min(720px,100%)" }} role="dialog" aria-label="Start squad"
+      onDragOver=${(e) => { if (dragHas(e)) { e.preventDefault(); if (!drag) setDrag(true); } }}
+      onDragLeave=${(e) => { if (!(e.relatedTarget && e.currentTarget.contains(e.relatedTarget))) setDrag(false); }}
+      onDrop=${(e) => { if (dragHas(e)) { e.preventDefault(); setDrag(false); attach(e.dataTransfer.files); } }}>
       <div class="mhd">Start squad<span class="sp"></span><button class="btn sm mclose" onClick=${tryClose}>✕</button></div>
       <div class="md cancelform" style=${{ overflowY: "auto" }}>
         <label><b>What should the squad do?</b> <span class="mut">(paste the whole brief; Ctrl/Cmd+Enter sends)</span></label>
-        <textarea class="start-text" ref=${refs.text} rows="16" style=${{ width: "100%", resize: "vertical", fontFamily: "inherit" }} value=${text} onInput=${(e) => { setText(e.target.value); setErr(null); setDiscard(false); }}></textarea>
+        <textarea class="start-text" ref=${refs.text} rows="16" style=${{ width: "100%", resize: "vertical", fontFamily: "inherit" }} value=${text} onInput=${(e) => { setText(e.target.value); setErr(null); setDiscard(false); }} onPaste=${onPaste}></textarea>
+        <div class="start-imgs">
+          <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
+          <button type="button" class="btn sm chat-attach start-attach" title="Attach images (up to 8) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}>📎</button>
+          ${note && html`<span class="err start-imgnote">${note}</span>`}
+          ${(files.length > 0 || ups.length > 0) && html`<div class="chat-strip">${files.map((f) => html`<div key=${f.id} class="chat-th" title=${f.name}><img src=${f.url} alt=${f.name} />
+            <button type="button" class="chat-rm" aria-label=${"Remove " + f.name} onClick=${() => dropFile(f.id)}>✕</button></div>`)}
+            ${ups.map((u) => html`<div key=${"u" + u.k} class=${"chat-th" + (u.state === "bad" ? " bad" : "")} title=${u.msg || "uploading"}>${u.state === "bad"
+              ? html`<span>${u.msg.length > 40 ? u.msg.slice(0, 39) + "…" : u.msg}</span><button type="button" class="chat-rm" aria-label="Dismiss" onClick=${() => setUps((l) => l.filter((x) => x.k !== u.k))}>✕</button>`
+              : html`<span class="dot spin" role="status" aria-label="Uploading"></span>`}</div>`)}</div>`}
+        </div>
         <div class=${"start-count" + (bytes > BRIEF_MAX ? " bad" : " mut")}>${lines} line${lines === 1 ? "" : "s"} · ${(bytes / 1024).toFixed(1)} KiB of 32 KiB</div>
         ${err && err.field === "text" && html`<div class="start-err bad">${err.msg}</div>`}
         <div style=${{ display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "10px" }}>
           <label>Topic slug<br/><input class="start-slug" ref=${refs.slug} type="text" value=${slug} placeholder="made from the text when empty" onInput=${(e) => { setSlug(e.target.value); setErr(null); }} />
             ${err && err.field === "slug" && html`<div class="start-err bad">${err.msg}</div>`}</label>
-          <label>Project<br/>${labels.length > 1 ? html`<select class="start-project" value=${proj} onChange=${(e) => { setProj(e.target.value); setBackend(backendOf(e.target.value)); }}>${labels.map((l) => html`<option key=${l} value=${l}>${l}</option>`)}</select>` : html`<span class="mono">${proj}</span>`}</label>
+          <label>Project<br/>${labels.length > 1 ? html`<select class="start-project" value=${proj} onChange=${(e) => changeProject(e.target.value)}>${labels.map((l) => html`<option key=${l} value=${l}>${l}</option>`)}</select>` : html`<span class="mono">${proj}</span>`}</label>
           <label>Type<br/><select class="start-type" value=${type} onChange=${(e) => { setType(e.target.value); if (e.target.value === "testing") setStart("auto"); }}><option value="feature">feature</option><option value="testing">testing</option></select></label>
           <label>Autonomy<br/><select class="start-autonomy" value=${autonomy} onChange=${(e) => setAutonomy(e.target.value)}><option value="checkpoints">checkpoints</option><option value="lfg">lfg</option></select></label>
           <label>Start<br/><select class="start-start" value=${start} disabled=${type === "testing"} onChange=${(e) => setStart(e.target.value)}>${["auto", "plan", "brainstorm", "ask", "investigate", "fix"].map((v) => html`<option key=${v} value=${v}>${v}</option>`)}</select></label>
@@ -2709,7 +2762,7 @@ function StartSquad({ project, projects, toast, onClose }) {
         ${discard && html`<div class="start-discard bad" style=${{ marginTop: "10px" }}>Discard this brief? <button class="btn sm start-discard-yes" onClick=${onClose}>Discard</button> <button class="btn sm" onClick=${() => setDiscard(false)}>Keep editing</button></div>`}
       </div>
       <div class="mhd" style=${{ borderTop: "1px solid var(--line)", borderBottom: 0 }}><span class="sp"></span>
-        <button class="btn sm" onClick=${tryClose}>Cancel</button> <button class="btn sm start-go" disabled=${sending} onClick=${send}>${sending ? "Sending…" : "Send"}</button></div>
+        <button class="btn sm" onClick=${tryClose}>Cancel</button> <button class="btn sm start-go" disabled=${sending || uploading} onClick=${send}>${sending ? "Sending…" : uploading ? "Uploading…" : "Send"}</button></div>
     </div></div>`;
 }
 function CancelUnit({ s, u, toast, onClose }) {
