@@ -84,3 +84,19 @@ describe("U287 merge cards", () => {
     expect(cardPlace({ ...card, since: new Date((NOW - 3600) * 1000).toISOString() }, NOW)).toBe("needs");
   });
 });
+
+describe("loopnotes U3: cards that need a person", () => {
+  const cards = [
+    { id: "sweep-studio.adopt-1", title: "Studio terminal not adopted" },
+    { id: "sweep-x-2", title: "Lifecycle failed" },
+  ];
+  test("an adopt card and a Lifecycle-failed card are later inside the grace, needs after it", () => {
+    for (const c of cards) {
+      expect(cardPlace({ ...c, since: new Date((NOW - 60) * 1000).toISOString() }, NOW)).toBe("later");
+      expect(cardPlace({ ...c, since: new Date((NOW - 3600) * 1000).toISOString() }, NOW)).toBe("needs");
+    }
+  });
+  test("an unrelated title is still a note", () => {
+    expect(cardPlace({ id: "sweep-other-1", title: "Something else", since: new Date((NOW - 3600) * 1000).toISOString() }, NOW)).toBe("note");
+  });
+});

@@ -24,6 +24,11 @@
 //            the member it names is gone or recovered, a refusal card's row (U150) no longer stands.
 //            A kind this cannot judge goes once it is over a day old without a repeat (alerts.sh add
 //            of the same id restamps `since`).
+//   Archive                a card naming a squad (`squad`) whose newest row reads `closed` (or wants `gone` with a
+//            `done…` result) is gone, "its squad was archived"; not the `sweep-debrief-<topic>-…` card, a
+//            `questions_dropped` card or a `Stop command failed` card.
+//   Lifecycle failed       (squad form, "The loop could not make the <want> squad <topic>: …") is gone once the
+//            squad row is gone, its `want` is no longer the one named, or its `status` equals it.
 //   U67, Restart failed    one card per member (fulfil/request.ts giveUp, kind restart_failed, its member's
 //            worktree and episode): gone once the member is gone, its limit episode closed, or it runs on
 //            a listed account; a card from before U67 is matched by its text "<who> of <squad> (…".
@@ -332,7 +337,17 @@ function requestMoot(store: Store, project: string, subject: string): string | n
   }
   return null;
 }
+// A card of an archived squad: its newest squads row reads `closed`, or wants `gone` with a `done…` result.
+// Exempt: the archive's own cards (the debrief and the dropped-questions card are meant to be read) and a
+// failed late stop, which stays because something may still be listening.
+function archivedCard(store: Store, project: string, a: Row): boolean {
+  const squad = typeof a.squad === "string" ? a.squad : "";
+  if (!squad || a.kind === "questions_dropped" || /^sweep-debrief-/.test(String(a.id ?? "")) || /(^|[ :·])Stop command failed$/.test(String(a.title ?? ""))) return false;
+  const sq = store.db.query("SELECT status, want, want_result FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, squad) as Row | null;
+  return !!sq && (sq.status === "closed" || (sq.want === "gone" && String(sq.want_result ?? "").startsWith("done")));
+}
 export function alertGone(store: Store, project: string, a: Row, now = Math.floor(Date.now() / 1000)): string | false | null {
+  if (archivedCard(store, project, a)) return "its squad was archived";
   if (a.kind === "cancel_failed") {
     const u = store.get("units", { project, squad: a.squad, slug: a.unit });
     if (u?.status !== "cancelled") return "the unit is no longer cancelled";
@@ -409,6 +424,12 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
   }
   const studioCause = text.match(/^studio \(([^)]*?) since /);
   if (studioCause) return recovered(store, project, studio, studioCause[1], since) ? "the Studio is running again" : false;
+  // Lifecycle failed, squad form (fulfil/squad.ts giveUp): gone once the squad's wish moved on.
+  const lifecycle = text.match(/^The loop could not make the (\S+) squad (\S+): /);
+  if (lifecycle) {
+    const sq = store.db.query("SELECT status, want FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, lifecycle[2]) as Row | null;
+    return !sq || sq.want !== lifecycle[1] || sq.status === lifecycle[1] ? "the squad's wish moved on" : false;
+  }
   const named = text.match(/^(\S+) of (\S+) \((.*?) since /), made = text.match(/^The loop could not make the running (\S+)(?: (\S+))? of ([^\s:]+):/);
   const [who, squad, cause] = named ? [named[1], named[2], named[3]] : made ? [made[2] ? `${made[1]}-${made[2]}` : made[1], made[3], "failed"] : [null, null, null];
   if (!who || !squad) return null;
