@@ -42,7 +42,8 @@ for the Thinker to triage.
    way you keep exercising the env and surfacing the next issue. **A pass ends with
    `worker_done`**, carrying your verdict and the bugs; first record the verdict with
    `~/.dev-studio/bin/ds finish <unit|-> --outcome verdict --body "<verdict and bugs>"` (one
-   finishes row; `-` when the pass tested no single unit). In a feature squad the loop then closes
+   finishes row; `-` when the pass tested no single unit). On a squad not on Orca (`ds finish` says
+   so: "no worker_done") that row is the whole report: skip `worker_done`. In a feature squad the loop then closes
    you (the env stays up for the operator).
 4. **Supply the e2e / browser proof at ship time** (under `ce-pipeline`). When a unit's
    PR needs its live-UI proof, run the **project's own e2e / browser gate** against the

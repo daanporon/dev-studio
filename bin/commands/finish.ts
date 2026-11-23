@@ -1,5 +1,6 @@
 // ds finish — the finish record (orca-backend-alternatives U3): a worker records that it ended its work,
-// with its outcome, before it sends worker_done. A Tester's or Researcher's verdict is `--outcome
+// with its outcome, before it sends worker_done (none on a squad not on `orca`: U11, the row is the whole
+// finish, and the command says so). A Tester's or Researcher's verdict is `--outcome
 // verdict`; a Builder's end goes through finish-unit.sh, which writes the same row. Who you are is
 // DS_MEMBER, else this worktree's member, else --as <squad>/<role[-suffix]> --project <label>; the
 // generation is DS_GEN (none when unset). The row is written directly: no request, no action.
@@ -65,6 +66,9 @@ export async function run(args: string[]): Promise<number> {
     const r = recordFinish(s, { member: m, unit, outcome, body, gen: process.env.DS_GEN || null, wt: toplevel(), key: opt.key || undefined });
     if (flag.has("json")) print({ created: r.created, finish: r.row });
     else console.log(`${r.created ? "finish recorded" : "finish already recorded"}: #${r.row.id} ${memberName(m)} ${unit ?? "-"} ${outcome}${r.row.gen ? ` gen=${r.row.gen}` : ""}`);
+    // U11: a squad on a contract backend has no Run to send worker_done to: this row is the whole report.
+    const on = process.env.DS_BACKEND || String(s.get("squads", { project: m.project, topic: m.squad })?.backend ?? "orca");
+    if (!flag.has("json") && on !== "orca") console.log(`squad on backend ${on}: no worker_done — this finish row is your report`);
     return 0;
   } finally { s.close(); }
 }

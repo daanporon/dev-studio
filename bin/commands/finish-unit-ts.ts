@@ -168,6 +168,9 @@ export async function run(raw: string[]): Promise<number> {
 
   // U3 (orca-backend-alternatives): the finish row, on every path, then the journal, then worker_done. Its
   // key is the unit, HEAD and outcome, so a replayed or re-run finish writes no second row.
+  // U11: a squad on a contract backend (DS_BACKEND, set on its terminals; else its loop.db row) has no
+  // Run: the finish row is its whole finish, and no worker_done is sent.
+  let squadOn = process.env.DS_BACKEND || "";
   if (label) {
     const env = process.env.DS_MEMBER ? parseMember(process.env.DS_MEMBER) : null;
     const member: Member = env ?? { project: label, squad: topic, role: "builder", suffix: UNIT };
@@ -177,20 +180,27 @@ export async function run(raw: string[]): Promise<number> {
       try {
         recordFinish(s, { member, unit: UNIT, outcome, body, gen: process.env.DS_GEN || null, wt: toplevel(),
           key: `finish-unit:${label}/${topic}/${UNIT}@${head}:${outcome}` });
+        squadOn ||= String(s.get("squads", { project: label, topic })?.backend ?? "");
       } finally { s.close(); }
     } catch (e) {
       writeErr(`finish-unit: could not record the finish in loop.db (${(e as Error).message}) — fix it and re-run; nothing was sent\n`);
       return 1;
     }
+    const sent = squadOn && squadOn !== "orca" ? "no worker_done (no Run)" : "";
     const [jt, jw] = FAILED
-      ? [`unit failed: ${FAILED}`, "finish-unit.sh --failed recorded the finish and sent worker_done --outcome failed"]
+      ? [`unit failed: ${FAILED}`, `finish-unit.sh --failed recorded the finish and sent ${sent || "worker_done --outcome failed"}`]
       : NO_PR
-      ? ["unit finished without a PR (--no-pr)", "finish-unit.sh sent worker_done with no PR recorded"]
-      : [`unit finished: PR #${PR} on ${br}`, "finish-unit.sh recorded the PR and sent worker_done"];
+      ? ["unit finished without a PR (--no-pr)", `finish-unit.sh sent ${sent || "worker_done"} with no PR recorded`]
+      : [`unit finished: PR #${PR} on ${br}`, `finish-unit.sh recorded the PR and sent ${sent || "worker_done"}`];
     const j = await runCmd([join(ROOT, "bin", "role", "journal.sh"), label, topic, `builder-${UNIT}`, "add", "keep", jt, jw]);
     if (j.rc !== 0) writeErr("finish-unit: warning: journal note failed (continuing)\n");
   } else writeErr(`finish-unit: warning: '${STATE}' is not state/<project>/squads/<topic>.json — skipping the finish record and journal note\n`);
 
+  const done = FAILED ? `finish-unit: unit '${UNIT}' ended failed\n` : NO_PR ? `finish-unit: unit '${UNIT}' finished (no PR)\n` : `finish-unit: unit '${UNIT}' finished (PR #${PR})\n`;
+  if (squadOn && squadOn !== "orca") {
+    writeOut(`finish-unit: squad on backend ${squadOn}: no worker_done (the finish row is the finish)\n${done}`);
+    return 0;
+  }
   const wd = await runCmd([BACKEND, "worker-done", ...(FAILED ? ["--outcome", "failed"] : []), subject, body]);
   const wdOut = trim(wd.out + wd.err);
   if (wd.rc !== 0) {
@@ -203,6 +213,6 @@ export async function run(raw: string[]): Promise<number> {
     return 1;
   }
   if (wdOut) writeOut(wdOut + "\n");
-  writeOut(FAILED ? `finish-unit: unit '${UNIT}' ended failed\n` : NO_PR ? `finish-unit: unit '${UNIT}' finished (no PR)\n` : `finish-unit: unit '${UNIT}' finished (PR #${PR})\n`);
+  writeOut(done);
   return 0;
 }
