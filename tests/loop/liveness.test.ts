@@ -367,7 +367,7 @@ describe("studio-hung-agent-broken U1: an agent at its prompt after Esc is not h
     await t.tick(T);
     expect(leadVerdict(t.s, "fx", LEAD, T)).toEqual({ verdict: "hung", since: T - 40 * MIN });
     expect(hungMarks(t)).toEqual([`demo.${B2NAME}`, "demo.lead"]);
-    expect(t.alerts().map(t.text)).toEqual([expect.stringMatching(/^studio \(hung since .*\) — nobody above it can restart it$/)]);
+    expect(t.alerts().map(t.text)).toEqual([expect.stringMatching(/^studio \(hung since \d\d:\d\d\) — the fx Studio \(your cockpit terminal; the loop has adopted none\) has shown no output for 40 min while Orca reads it as working$/)]);
   });
 
   test("turnEnded: no transcript, or one last written before this process started, keeps today's rule", async () => {
