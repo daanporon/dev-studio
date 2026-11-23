@@ -131,10 +131,11 @@ export function importFile(s: Store, file: string, at = now()): ImportResult {
 /** The notes, newest first, narrowed by state or project. */
 export function listNotes(s: Store, o: { state?: string; project?: string; limit?: number } = {}): Row[] {
   const where: string[] = [], args: (string | number)[] = [];
-  if (o.state) { where.push("state = ?"); args.push(o.state); }
-  if (o.project) { where.push("project = ?"); args.push(o.project); }
+  if (o.state) { where.push("n.state = ?"); args.push(o.state); }
+  if (o.project) { where.push("n.project = ?"); args.push(o.project); }
   args.push(o.limit ?? 50);
-  return s.db.query(`SELECT * FROM feedback_notes${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY at DESC, id DESC LIMIT ?`).all(...args) as Row[];
+  // The draft's issue and the PR that fixed it ride along (ds-feedback-github-issues U5).
+  return s.db.query(`SELECT n.*, d.issue AS issue, d.fix_pr AS fix_pr, d.fix_here AS fix_here FROM feedback_notes n LEFT JOIN feedback_drafts d ON d.id = n.draft_id${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY n.at DESC, n.id DESC LIMIT ?`).all(...args) as Row[];
 }
 
 /** How many notes are in each state. */
@@ -148,5 +149,6 @@ export function noteCounts(s: Store): Record<string, number> {
 export function noteLine(r: Row): string {
   const who = r.squad ? `${r.squad}/${r.role ?? "?"}` : String(r.role ?? "-");
   const text = String(r.text).split("\n")[0].slice(0, 100);
-  return `#${r.id}  ${stamp(Number(r.at))}  ${r.project}  ${who}  ${r.state}  ${text}`;
+  const state = r.state === "fixed" ? `fixed${r.fix_pr != null ? ` in #${r.fix_pr}` : ""}${r.fix_here ? " (in your version)" : ""}` : r.state;
+  return `#${r.id}  ${stamp(Number(r.at))}  ${r.project}  ${who}  ${state}  ${text}`;
 }
