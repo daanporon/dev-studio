@@ -127,6 +127,20 @@ describe("archive drops a squad's open questions (morning-brief-stale-items U2)"
     expect(cards(s).length).toBe(1);
   });
 
+  // debrief-in-needs-you pages U1: the squad's Try it page moves to archive/ with its plans.
+  test("the squad's Try it page moves to archive/; a page that only shares the prefix stays", async () => {
+    const { s, tick } = await rig();
+    seedQuestions(s);
+    const sd = join(s.root, "fx", "squads");
+    writeFileSync(join(sd, "demo-try-it.md"), "# Try it — demo\n\n1. one\n");
+    writeFileSync(join(sd, "demo-x-try-it.md"), "# someone else's\n");
+    await archive(s, tick);
+    const arch = join(s.root, "fx", "archive");
+    expect(existsSync(join(sd, "demo-try-it.md"))).toBe(false);
+    expect(readFileSync(join(arch, "demo-try-it.md"), "utf8")).toContain("1. one");
+    expect(existsSync(join(sd, "demo-x-try-it.md"))).toBe(true);
+  });
+
   test("a replayed archive raises no second card and reopens nothing", async () => {
     const { s, tick, act, now } = await rig();
     seedQuestions(s);

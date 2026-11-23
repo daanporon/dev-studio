@@ -103,6 +103,7 @@ describe("the store backend", () => {
     expect(ss(r, file, "add-unit", "a").code).toBe(0);
     expect(ss(r, file, "set-unit-status", "a", "done", "--no-pr").code).toBe(0);
     expect(ss(r, file, "add-member", "tester", "1", "wt_t").code).toBe(0);
+    writeFileSync(file.replace(/\.json$/, "-try-it.md"), "# Try it\n\n1. one\n");
     expect(ss(r, file, "set-status", "done").code).toBe(0);
     const t = root(true);
     expect(ss(t.root, t.file, "set-type", "testing").code).toBe(0);
