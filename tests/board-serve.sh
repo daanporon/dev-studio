@@ -1066,6 +1066,24 @@ eq "chat: pause the researcher"        "$(post -H "$O" -H "$CT" -d "{\"scope\":\
 eq "chat: a paused member is 409"      "$(post -H "$O" -H "$CT" -d "$(cbody wResearcher hi)" "$C")" "409"
 eq "chat: no refused POST wrote a row" "$(crows)" "$N1"
 eq "chat: rows written: three plus the 2000-char one" "$((N1 - N0))" "4"
+# studio-chat-queued-busy U4: /api/chat-cancel and /api/chat-now name an open chat request; a send carries its age and clock.
+CX="http://127.0.0.1:$PORT/api/chat-cancel"; CN="http://127.0.0.1:$PORT/api/chat-now"
+cid(){ jq -nc --arg p "$LBL" --argjson i "$1" '{project: $p, id: $i}'; }
+TK=$(dbq "SELECT id FROM requests WHERE kind = 'chat' AND member = 'wTh' AND done_at IS NULL ORDER BY id LIMIT 1" | jq '.[0].id')
+dbw "UPDATE requests SET created_at = CAST(strftime('%s','now') AS INTEGER) - 420, result = '{\"state\":\"queued\",\"why\":\"busy: working\",\"since\":'||(CAST(strftime('%s','now') AS INTEGER) - 400)||'}' WHERE id = $TK"
+jt "chat: a queued send has age, clock and first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "(.sends[] | select(.id == $TK)) | .state == \"queued\" and .age_s >= 420 and .failing == false and .now == false and .first == true and (.gives_up_at > 0)"
+jt "chat: a queued send behind another has no clock and is not first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "([.sends[] | select(.state == \"queued\" and .id != $TK)] | all(.first == false))"
+NQ=$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind IN ('chat-cancel','chat-now')" | jq '.[0].n')
+eq "chat-now: an open chat is 202"      "$(post -H "$O" -H "$CT" -d "$(cid "$TK")" "$CN")" "202"
+eq "chat-now: its row names the chat"   "$(reqrow "$(rid)" | jq -c '[.kind, .member, .squad, .payload.chat]')" "[\"chat-now\",\"wTh\",\"ans\",$TK]"
+eq "chat-cancel: an open chat is 202"   "$(post -H "$O" -H "$CT" -d "$(cid "$TK")" "$CX")" "202"
+eq "chat-cancel: its row names the chat" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.chat]')" "[\"chat-cancel\",$TK]"
+eq "chat-cancel: a typed chat is 409"   "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CX")" "409"
+eq "chat-now: a typed chat is 409"      "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CN")" "409"
+eq "chat-now: no such request is 404"   "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CN")" "404"
+eq "chat-now: a bad id is 400"          "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"id\":\"x\"}" "$CN")" "400"
+eq "chat-now: foreign Origin is 403"    "$(post -H 'Origin: http://evil.example' -H "$CT" -d "$(cid "$TK")" "$CN")" "403"
+eq "chat-cancel: only the two accepted rows" "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind IN ('chat-cancel','chat-now')" | jq '.[0].n')" "$((NQ + 2))"
 eq "chat: resume the researcher"       "$(post -H "$O" -H "$CT" -d "{\"scope\":\"member\",\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wResearcher\"}" "http://127.0.0.1:$PORT/api/resume")" "200"
 
 # chat-image-upload U1: POST /api/chat-file stores one image per content hash under the state root
