@@ -40,7 +40,13 @@ import { actionBlock, actionTargets, actionVersion, deferredMail, paused, versio
 import { outside, sender } from "../messages/coordinator.ts";
 import { driverModule } from "../drivers/index.ts";
 import { startIdentity } from "./whoami.ts";
-import { startedOn, type Driver, type Member, type Seat, type Squad } from "../drivers/types.ts";
+import { startedOn, wtName, type ContractSeat, type Driver, type Member, type Seat, type Squad, type StartMeta } from "../drivers/types.ts";
+import { contract as contractDriver, localPath } from "../drivers/contract.ts";
+import { claudeSettings } from "../drivers/claude-launch.ts";
+import { checked, type Backend, type Capabilities, type Terminal } from "../../backend/contract.ts";
+import { projectTmux, TMUX_CAPS } from "../../backend/tmux.ts";
+import { createWorktree } from "../io/worktrees.ts";
+import { allSkills, deniedMcpServers, disabledPlugins, isProjectSkill, mcpLevels, pluginLevels, projectRules, shippedRules, skillOverrides } from "../settings/skills.ts";
 import { errOf, inDoubt, shell, spawn, type Orca, type Out } from "../io/orca.ts";
 import { DIRS, load, type Action, type Actuator, type Reconciler, type TickCtx } from "./plugins.ts";
 import { pick } from "../capacity/pick.ts";
@@ -100,9 +106,12 @@ const startSlots = () => envInt("DS_LOOP_START_SLOTS", 4);
 // U239: these kinds run in the background like a start: the tick claims, the call runs on its own and
 // its result settles the episode. Their own slots; one at a time per subject and per member worktree;
 // a call that has not ended after DS_LOOP_BG_TIMEOUT_S (120) settles as a retry and frees its subject.
-export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "finish-unit", "studio-move", "expose.stop"]);
+export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "finish-unit", "studio-move", "expose.stop", "feedback.draft"]);
 const bgSlots = () => envInt("DS_LOOP_BG_SLOTS", 6);
-const bgTimeoutMs = () => envInt("DS_LOOP_BG_TIMEOUT_S", 120) * 1000;
+// A kind whose call runs longer than the default gets its own limit (the drafter's headless call ends
+// itself at DS_FEEDBACK_DRAFT_S; this is that plus a minute, so the loop never frees its subject first).
+const BG_TIMEOUT_S: Record<string, () => number> = { "feedback.draft": () => envInt("DS_FEEDBACK_DRAFT_S", 900) + 60 };
+const bgTimeoutMs = (kind: string) => (BG_TIMEOUT_S[kind]?.() ?? envInt("DS_LOOP_BG_TIMEOUT_S", 120)) * 1000;
 
 const claimKey = (a: Action) => ({ project: a.project, subject: a.subject, kind: `action:${a.kind}` });
 const errText = (e: unknown) => (e as Error)?.message ?? String(e);
@@ -148,10 +157,13 @@ export class LoopActuator implements Actuator {
   private unseated = new Map<string, string>();            // squad -> why its last rebind failed
   private seatSeen = new Map<string, { sig: string; at: number }>(); // squad -> its seat as last checked with Orca (U244)
   private seatFailed = new Set<string>();                  // squads whose start or send failed on the seat (U244)
+  private contracts = new Map<string, Contracted>();       // U11: "<backend>/<project>" -> its contract backend
+  private inFlight = new Set<string>();                    // U11: contract calls running now, by retry id
   private relayPeekAt = new Map<string, number>();         // squad -> when its Run's inbox was last peeked (U244)
   private unrelayed = new Map<string, string>();           // squad -> why its last relay failed
 
-  constructor(private opts: { orca?: Orca; pick?: Picker; fulfillers?: Fulfiller[]; slots?: number; bgSlots?: number; bgTimeoutMs?: number } = {}) {
+  constructor(private opts: { orca?: Orca; pick?: Picker; fulfillers?: Fulfiller[]; slots?: number; bgSlots?: number; bgTimeoutMs?: number;
+    backends?: (name: string, project: string, store: Store) => Contracted } = {}) {
     this.orca = opts.orca ?? shell();
     this.pick = opts.pick ?? ladderPick;
   }
@@ -171,6 +183,9 @@ export class LoopActuator implements Actuator {
 
   // After a restart: settle the calls a crash cut short, and put back the starts that were running.
   async boot(store: Store, at: number): Promise<void> {
+    // U11: a contract call (op `terminal.create`, …) has no request-show: one a crash cut short is put
+    // out of the member lock, unsettled, so its action's replay keeps its retry id (and generation).
+    store.db.run("UPDATE orca_calls SET state = 'absent' WHERE settled_at IS NULL AND state IN ('sent', 'pending') AND op LIKE '%.%'");
     const open = store.db.query("SELECT * FROM orca_calls WHERE settled_at IS NULL AND state IN ('sent', 'pending') ORDER BY id").all() as Row[];
     for (const c of open) await this.ask(store, c, at);
     store.db.run("UPDATE episodes SET state = 'pending', next_at = ? WHERE kind LIKE 'action:%' AND state IN ('acted', 'running') AND ended_at IS NULL AND action IS NOT NULL", [at]);
@@ -274,7 +289,7 @@ export class LoopActuator implements Actuator {
         this.bgCount++; keys.forEach((k) => this.bgBusy.add(k));
         const run = this.activity.run(a, () => Promise.resolve().then(() => f.exec(a, x)).then((res) => ("background" in res ? res.background : res)));
         let timer: ReturnType<typeof setTimeout>;
-        const limit = new Promise<Result>((ok) => { const ms = this.opts.bgTimeoutMs ?? bgTimeoutMs(); timer = setTimeout(() => ok({ retry: `timed out after ${ms / 1000}s` }), ms); timer.unref?.(); });
+        const limit = new Promise<Result>((ok) => { const ms = this.opts.bgTimeoutMs ?? bgTimeoutMs(a.kind); timer = setTimeout(() => ok({ retry: `timed out after ${ms / 1000}s` }), ms); timer.unref?.(); });
         const free = () => { clearTimeout(timer); this.bgCount--; keys.forEach((k) => this.bgBusy.delete(k)); this.timed(a.kind, t0, true); };
         r = { background: Promise.race([run, limit]).finally(free) };
       } else r = await this.activity.run(a, () => f.exec(a, x));
@@ -515,8 +530,12 @@ export class LoopActuator implements Actuator {
   // (fulfil/member.ts): a Claude start then carries its identity, and `gen()` is its generation.
   seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null): Seat {
     let gen: string | null = null;
-    const row = squad ? store.db.query("SELECT project, topic, run_id, repo, lead_wt FROM squads WHERE project = ? AND topic = ?").get(project, squad) as Squad | null : null;
+    const row = squad ? store.db.query("SELECT project, topic, run_id, repo, lead_wt, backend, worktree_provider FROM squads WHERE project = ? AND topic = ?").get(project, squad) as (Squad & { backend?: string; worktree_provider?: string }) | null : null;
     const studio_wt = (store.get("projects", { label: project })?.studio_wt as string | null | undefined) ?? null;
+    if (row && squad && (row.backend ?? "orca") !== "orca") {
+      const { backend: _b, worktree_provider: _p, ...sq } = row;
+      return this.contractSeat(store, { ...sq, studio_wt }, String(row.backend), String(row.worktree_provider ?? "git"), key, member, at, ident, (g) => { gen = g; }, () => gen);
+    }
     return {
       squad: { ...(row ?? { project, topic: squad ?? "", run_id: null, repo: null, lead_wt: null }), studio_wt },
       call: async (op, args) => {
@@ -678,7 +697,158 @@ export class LoopActuator implements Actuator {
     store.event("plugin_error", { project, squad, payload: { plugin: "actuator", error } });
   }
 
-  driver(seat: Seat, agent: string | null): Driver { return driverModule(agent).make(seat); }
+  driver(seat: Seat, agent: string | null): Driver { return (seat.contract ? contractDriver : driverModule(agent)).make(seat); }
+
+  // U11: the contract backend `name` for a project's squads (made once): tmux by default; a test passes
+  // its fake through `backends`. orca-lite and herdr have no adapter yet (bin/backend/registry.ts).
+  private contracted(store: Store, name: string, project: string): Contracted {
+    const k = `${name}/${project}`;
+    let c = this.contracts.get(k);
+    if (!c) {
+      c = this.opts.backends?.(name, project, store)
+        ?? (name === "tmux" ? { backend: checked(projectTmux(project, { stateRoot: store.root })), caps: TMUX_CAPS } : null)
+        ?? (() => { throw new Error(`backend ${name}: the loop has no adapter for it`); })();
+      this.contracts.set(k, c);
+    }
+    return c;
+  }
+
+  // U11: the seat of a squad on a contract backend. Its Orca ops refuse: such a squad has no Run,
+  // sender pane or coordinator, and nothing it does reaches Orca.
+  private contractSeat(store: Store, squad: Squad, name: string, provider: string, key: string, member: string | null, at: number,
+    ident: string | null, setGen: (g: string) => void, gen: () => string | null): Seat {
+    const project = squad.project, topic = squad.topic, target = { project, squad: topic, member };
+    const noOrca = (op: string): Promise<Out> => Promise.resolve({ code: 2, out: "", err: `squad ${topic} is on backend ${name}: no Orca op (${op})` });
+    const c = (): Contracted => this.contracted(store, name, project);
+    const blocked = (): string | null => { const b = this.block(store, target); return b ? `activity: ${b}` : null; };
+    const contract: ContractSeat = {
+      backend: name, provider,
+      get caps() { return c().caps; },
+      start: (req, meta) => {
+        const b = blocked();
+        if (b) return Promise.resolve({ ok: false, error: b, busy: true });
+        return this.contractStart(store, c().backend, { ...req, env: { ...req.env, DS_BACKEND: name, DS_WT: req.cwd, ...(ident ? { DS_MEMBER: ident } : {}) } }, meta,
+          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen);
+      },
+      close: (cwd) => {
+        const b = blocked();
+        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` });
+      },
+      ask: (op, req) => c().backend.call(op, req),
+      worktree: async (m) => {
+        const repo = String(squad.repo ?? store.get("projects", { label: project })?.home_repo ?? "").replace(/^path:/, "");
+        if (!repo) return { ok: false, error: `squad ${topic} has no repo` };
+        // Only a worktree on this host's paths nests one: a Studio on Orca (`<repo id>::<path>`) is not its parent.
+        const parent = localPath(m.role === "lead" ? squad.studio_wt : squad.lead_wt);
+        try {
+          const { row } = await createWorktree(store, provider, { repo, name: wtName(m), branch: wtName(m), base: "HEAD", parent, project, squad: topic, role: m.role }, at);
+          return { ok: true, path: String(row.path) };
+        } catch (e) { return { ok: false, error: `worktree ${wtName(m)}: ${(e as Error).message}` }; }
+      },
+      settings: (role, path) => {
+        const shipped = shippedRules(), mine = projectRules(store.db as unknown as Parameters<typeof projectRules>[0], project), skills = allSkills(false, path);
+        const so = skillOverrides(skills.map((x) => x.name), role, shipped, mine, new Set(skills.filter(isProjectSkill).map((x) => x.name)));
+        const mcp = mcpLevels(role, shipped, mine), window = compactWindow(store, project, role);
+        return claudeSettings({ window: /^\d+$/.test(window) ? window : "", skillOverrides: so, denied: deniedMcpServers(mcp), plugins: disabledPlugins(pluginLevels(role, shipped, mine)) });
+      },
+    };
+    return { squad, call: noOrca, send: noOrca, window: (role) => compactWindow(store, project, role), gen, contract };
+  }
+
+  // The orca_calls row under a contract seat's key: as call() looks it up (same project and member).
+  private lastCall(store: Store, o: { key: string; project: string; member: string | null }): Row | null {
+    return store.db.query("SELECT * FROM orca_calls WHERE key = ? AND (project IS NULL OR project = ?) AND (? IS NULL OR member IS NULL OR member = ?) ORDER BY id DESC LIMIT 1")
+      .get(o.key, o.project, o.member, o.member) as Row | null;
+  }
+  private writeCall(store: Store, last: Row | null, op: string, payload: string[], o: CallAt): string {
+    if (last && last.op === op && last.settled_at == null) {
+      store.db.run("UPDATE orca_calls SET state = 'sent', at = ? WHERE id = ?", [o.at, last.id as number]);
+      return String(last.retry_id);
+    }
+    const retry = crypto.randomUUID();
+    store.db.run("INSERT INTO orca_calls (retry_id, key, op, project, squad, member, sender, payload, at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent')",
+      [retry, o.key, op, o.project, o.squad, o.member, o.sender, JSON.stringify(payload), o.at]);
+    return retry;
+  }
+  private settleCall(store: Store, retry: string, state: "completed" | "failed" | "absent", result: string, at: number): void {
+    store.db.run("UPDATE orca_calls SET state = ?, result = ?, settled_at = ? WHERE retry_id = ?", [state, result, state === "absent" ? null : at, retry]);
+  }
+
+  // U11: a start on a contract backend, one orca_calls row (op terminal.create) under the seat's key, its
+  // retry id the terminal's DS_GEN. Before the create it lists the folder's terminals: one of this
+  // generation is this start's own, made before a crash or a lost answer (no second one is made); any
+  // other is an old agent's, closed first (a crashed member's restart). The launch line is typed once:
+  // the row notes `typed` before the send, and a replay that finds it set never types again. A thrown
+  // call leaves the row unsettled and out of the member lock (`absent`), so the replay keeps the id.
+  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void): ReturnType<ContractSeat["start"]> {
+    const last = this.lastCall(store, o);
+    if (last?.op === "terminal.create" && last.state === "completed") {
+      setGen(String(last.retry_id));
+      return { ok: true, terminal: (JSON.parse(String(last.result)) as Progress).terminal! };
+    }
+    if (last?.op === "terminal.create" && last.settled_at == null && this.inFlight.has(String(last.retry_id)))
+      return { ok: false, error: `start ${last.retry_id} still in flight`, busy: true };
+    const retry = this.writeCall(store, last, "terminal.create", [JSON.stringify(req), JSON.stringify(meta)], o);
+    const [rq, mt] = (JSON.parse(String((store.db.query("SELECT payload FROM orca_calls WHERE retry_id = ?").get(retry) as Row).payload)) as string[]).map((x) => JSON.parse(x));
+    const r0 = rq as typeof req, m0 = mt as StartMeta;
+    const was = last?.retry_id === retry && last.result ? JSON.parse(String(last.result)) as Progress : {};
+    let progress: Progress = was.terminal ? was : {};
+    this.inFlight.add(retry);
+    try {
+      let t = progress.terminal ?? null;
+      if (!t) {
+        const l = await b.call("terminal.list", {});
+        if (!l.ok) { this.settleCall(store, retry, "absent", JSON.stringify({ error: l.error.message }), o.at); return { ok: false, error: `terminal.list: ${l.error.message}` }; }
+        t = l.terminals.find((x) => x.gen === retry) ?? null;
+        for (const old of l.terminals.filter((x) => x.cwd === r0.cwd && x.gen !== retry)) {
+          const c = await b.call("terminal.close", { id: old.id });
+          if (!c.ok && c.error.code !== "not_found") { this.settleCall(store, retry, "absent", JSON.stringify({ error: c.error.message }), o.at); return { ok: false, error: `terminal.close ${old.id}: ${c.error.message}` }; }
+        }
+      }
+      if (!t) {
+        const c = await b.call("terminal.create", { ...r0, env: { ...r0.env, DS_GEN: retry } });
+        if (!c.ok) { this.settleCall(store, retry, "failed", JSON.stringify({ error: c.error.message }), o.at); return { ok: false, error: `terminal.create: ${c.error.message}` }; }
+        t = c.terminal;
+      }
+      if (!progress.typed) {
+        progress = { terminal: t, typed: true };
+        store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [JSON.stringify(progress), retry]);
+        const s = await b.call("terminal.send", { id: t.id, text: m0.line, submit: true });
+        if (!s.ok) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: s.error.message }), o.at); return { ok: false, error: `terminal.send: ${s.error.message}` }; }
+      }
+      this.settleCall(store, retry, "completed", JSON.stringify({ terminal: t, typed: true }), o.at);
+      setGen(retry);
+      return { ok: true, terminal: t };
+    } catch (e) {
+      this.settleCall(store, retry, "absent", JSON.stringify({ ...progress, error: (e as Error).message }), o.at);
+      return { ok: false, error: (e as Error).message };
+    } finally { this.inFlight.delete(retry); }
+  }
+
+  // U11: close every terminal in a folder, one orca_calls row (op terminal.close) under the seat's key.
+  // A gone terminal answers closed:false (or not_found between the list and the close): a replay is safe.
+  private async contractClose(store: Store, b: Backend, cwd: string, o: CallAt): Promise<{ ok: boolean; error?: string }> {
+    const last = this.lastCall(store, o);
+    if (last?.op === "terminal.close" && last.state === "completed") return { ok: true };
+    if (last?.op === "terminal.close" && last.settled_at == null && this.inFlight.has(String(last.retry_id))) return { ok: false, error: "close still in flight" };
+    const retry = this.writeCall(store, last, "terminal.close", [JSON.stringify({ cwd })], o);
+    this.inFlight.add(retry);
+    try {
+      const l = await b.call("terminal.list", {});
+      if (!l.ok) { this.settleCall(store, retry, "absent", l.error.message, o.at); return { ok: false, error: `terminal.list: ${l.error.message}` }; }
+      const closed: string[] = [];
+      for (const t of l.terminals.filter((x) => x.cwd === cwd)) {
+        const c = await b.call("terminal.close", { id: t.id });
+        if (!c.ok && c.error.code !== "not_found") { this.settleCall(store, retry, "failed", c.error.message, o.at); return { ok: false, error: `terminal.close ${t.id}: ${c.error.message}` }; }
+        closed.push(t.id);
+      }
+      this.settleCall(store, retry, "completed", JSON.stringify({ closed }), o.at);
+      return { ok: true };
+    } catch (e) {
+      this.settleCall(store, retry, "absent", (e as Error).message, o.at);
+      return { ok: false, error: (e as Error).message };
+    } finally { this.inFlight.delete(retry); }
+  }
 }
 
 // A seconds knob that may be 0 (always); unset or not a number: the default.
@@ -758,6 +928,11 @@ export function finishRequest(store: Store, a: Action, result: unknown, at: numb
 export const failRequest = (a: Action, x: Exec, why: string): true => { finishRequest(x.store, a, { ok: false, error: why }, x.now); return true; };
 
 export const actuator = new LoopActuator();
+
+// U11: a contract backend the loop runs squads on, and what it can do.
+export type Contracted = { backend: Backend; caps: Capabilities };
+type CallAt = { key: string; project: string; squad: string | null; member: string | null; at: number; sender: string };
+type Progress = { terminal?: Terminal; typed?: boolean };
 
 // The DS_MEMBER a call carries: only a Claude start or resume, whose terminal the adapter opens and so
 // can give an environment (claudeTab, resumeTab). A start Orca types itself (Codex, Muse) has none.

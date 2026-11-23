@@ -44,6 +44,8 @@
 //            gone once the spell closed (newest tick_slow avg_ms at or under tick_alarm_ms, no tick_slow row for 2 x DS_LOOP_SLOW_EVERY_S, or the limit 0).
 //   disk-pressure U3, a low disk   (`sweep-disk-pressure.<path>-<n>`, reconcilers/disk-pressure.ts):
 //            gone once the disk's spell closed (free space above disk_card_free_pct + 5 points, the limit 0, or the disk unlisted).
+//   ds-feedback-github-issues U2, no leak word list   (`sweep-feedback.words-<n>`, reconcilers/feedback.ts):
+//            gone once the spell closed (the list holds a word, feedback_repo is -, or no note is due).
 import { existsSync, readFileSync } from "node:fs";
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
@@ -419,6 +421,11 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
   if (/^sweep-tick-alarm\.slow-[0-9]+$/.test(id)) {
     const ep = store.get("episodes", { project, subject: "tick-alarm.slow", kind: "tick-alarm" });
     return ep && ep.ended_at == null ? false : "ticks are fast again";
+  }
+  // ds-feedback-github-issues U2: the drafter's word-list card goes once its spell closed (the list holds a word, the repo is `-`, no note is due).
+  if (/^sweep-feedback\.words-[0-9]+$/.test(id)) {
+    const ep = store.get("episodes", { project, subject: "feedback.words", kind: "feedback-words" });
+    return ep && ep.ended_at == null ? false : "the leak word list is in place";
   }
   // studio-chat-queued-busy U2: a send-fail card goes once the member's streak ended (a send worked).
   const sf = id.match(/^sweep-send-fail\.(.+)-[0-9]+$/);

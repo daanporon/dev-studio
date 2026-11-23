@@ -20,7 +20,8 @@ import type { Row, Store } from "../core/store.ts";
 export const LOCK_KINDS = ["member", "member.close", "role", "request-restart", "request-switch",
   "pause-control", "cancel.stop", "rebind", "unbind", "duplicate"].map((k) => `action:${k}`);
 export const LOCK_OPS = ["worker-start", "worker-resume", "role-start", "terminal-create", "terminal-close",
-  "terminal-close-worktree", "pause-close", "pause-release", "dispatch-abandon", "worker-stop", "worker-release"];
+  "terminal-close-worktree", "pause-close", "pause-release", "dispatch-abandon", "worker-stop", "worker-release",
+  "terminal.create", "terminal.close"];   // U11: a contract backend's start and stop (core/actuator.ts contractStart)
 
 const who = (m: Row) => `${m.role}${m.suffix ? `-${m.suffix}` : ""}`;
 const iso = (v: unknown) => (v ? Math.floor(Date.parse(String(v)) / 1000) : NaN);
@@ -82,13 +83,14 @@ export function startEpisode(store: Store, m: Row): string {
 export const stopCallKey = (id: number, episode: string, op: string) => `stop:${id}:${episode}:${op}`;
 
 // A stop of this member waits on reality: its member action's episode has not ended and that
-// episode's worker-stop call went out (its last row not failed). Only then can the old agent's
-// dispatch settle any tick now, so the Orca observer reads its Run every tick (account-move-slow U1).
+// episode's worker-stop call (U11: its terminal.close, on a contract backend) went out (its last row not
+// failed). Only then can the old agent's dispatch settle any tick now, so the Orca observer reads its Run
+// every tick (account-move-slow U1).
 export function stopOpen(store: Store, project: string, id: number): boolean {
   const ep = store.get("episodes", { project, subject: `member:${id}`, kind: "action:member" });
   if (!ep || ep.ended_at != null || ["done", "dropped", "failed"].includes(String(ep.state))) return false;
-  const call = store.db.query("SELECT state FROM orca_calls WHERE key = ? ORDER BY id DESC LIMIT 1")
-    .get(stopCallKey(id, String(ep.episode_key), "worker-stop")) as Row | null;
+  const call = store.db.query("SELECT state FROM orca_calls WHERE key IN (?, ?) ORDER BY id DESC LIMIT 1")
+    .get(stopCallKey(id, String(ep.episode_key), "worker-stop"), stopCallKey(id, String(ep.episode_key), "terminal.close")) as Row | null;
   return !!call && call.state !== "failed";
 }
 
@@ -97,7 +99,7 @@ export function stopOpen(store: Store, project: string, id: number): boolean {
 export function startInFlight(store: Store, m: Row): boolean {
   if (m.want === "running" && startSent(store, m.id, startEpisode(store, m))) return true;
   const p = String(m.project), wt = String(m.wt ?? "");
-  return !!store.db.query("SELECT 1 FROM orca_calls WHERE project = ? AND member = ? AND op IN ('worker-start', 'worker-resume', 'role-start') AND state IN ('sent', 'pending')").get(p, wt)
+  return !!store.db.query("SELECT 1 FROM orca_calls WHERE project = ? AND member = ? AND op IN ('worker-start', 'worker-resume', 'role-start', 'terminal.create') AND state IN ('sent', 'pending')").get(p, wt)
     || !!store.db.query(`SELECT 1 FROM episodes WHERE project = ? AND state = 'running' AND
         kind IN ('action:member', 'action:role') AND (subject = ? OR json_extract(action, '$.action.payload.id') = ?)`).get(p, `member:${m.id}`, Number(m.id));
 }
