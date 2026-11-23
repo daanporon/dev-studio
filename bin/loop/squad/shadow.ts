@@ -18,11 +18,10 @@
 import { effective, paused } from "../pause/pause.ts";
 import { memberUnit } from "../pause/pause-conditions.ts";
 import { STANDING } from "../drivers/types.ts";
-import { graceS } from "../capacity/slot.ts";
-import { reality } from "../core/decide.ts";
+import { reality, walkReality } from "../core/decide.ts";
+import { finishOf, nameOf } from "./finish-read.ts";
 import { lastStart, view } from "./member-state.ts";
 import { turnEnded, workerDone } from "../reconcilers/liveness.ts";
-import { roleName } from "../messages/messages.ts";
 import { runWorkers, type RunWorker } from "./run-reads.ts";
 import { stopping } from "./cancel.ts";
 import { settledTask } from "../reconcilers/members.ts";
@@ -35,8 +34,7 @@ export type Pair = { point: Point; subject: string; member: string; id: number |
 // A disagreement that agrees again within this many ticks of its first is transient and not counted.
 export const TRANSIENT_TICKS = 2;
 
-/** The member's DS_MEMBER name, `<project>/<squad>/<role[-suffix]>`. */
-export const nameOf = (m: Row) => `${m.project}/${m.squad}/${roleName(String(m.role), String(m.suffix ?? ""))}`;
+export { nameOf };
 
 /** The members the shadow reads: the latest row per identity with a worktree and a generation, not the Studio, not gone. */
 export function tracked(store: Store, project: string): Row[] {
@@ -46,12 +44,7 @@ export function tracked(store: Store, project: string): Row[] {
     ORDER BY m.id`).all(project) as Row[];
 }
 
-/** The finish row of this member's current generation (the newest one). */
-export function finishOf(store: Store, m: Row): Row | null {
-  if (!m.gen) return null;
-  return store.db.query("SELECT * FROM finishes WHERE project = ? AND member = ? AND gen = ? ORDER BY id DESC LIMIT 1")
-    .get(String(m.project), nameOf(m), String(m.gen)) as Row | null;
-}
+export { finishOf };
 
 const worker = (store: Store, m: Row): Row | null => (m.wt ? store.get("observed_workers", { project: m.project, wt: m.wt }) : null);
 const oneShot = (m: Row) => m.role !== "builder" && !STANDING.has(String(m.role));
@@ -69,15 +62,7 @@ export function newView(store: Store, m: Row): string | null {
 }
 
 /** reality() read from the process walk alone (the live dispatch no longer holds a member running). */
-export function newReality(store: Store, m: Row, now: number): string {
-  const w = worker(store, m), placed = lastStart(m);
-  const unread = !w || w.gone_at != null || Number(w.account_at ?? 0) <= placed;
-  if (w && w.gone_at == null && w.walk === "running") return "running";
-  if (w && w.gone_at != null && Number(w.gone_at) > placed) return "none";
-  if (placed && unread) return now - placed < graceS() ? "starting" : "unknown";
-  if (!w || w.gone_at != null || w.walk === "none") return "none";
-  return "unknown";
-}
+export const newReality = walkReality;
 
 // The decider's input: the view when it is not running, else the reality ("none" = it would start it).
 export function startPair(store: Store, m: Row, now: number): Pair {

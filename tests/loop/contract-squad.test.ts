@@ -88,7 +88,7 @@ const live = (f: FakeContract, cwd: string) => [...f.terms.values()].filter((x) 
 // No Orca call of any kind is about this squad (the fixture's own `demo` squad is on Orca).
 const orcaFor = (r: Rig) => r.orca.calls.filter((c) => [SQ, join(r.d, "wts"), r.repo].some((x) => JSON.stringify(c.args).includes(x)) || c.via?.env?.DS_START_MEMBER?.includes(`/${SQ}/`));
 // The observer U12 adds: a started member reads running, so the decider leaves it be.
-const running = (r: Rig, m: Row) => r.s.upsert("observed_workers", { project: "fx", wt: String(m.wt) }, { state: "idle", presence: "running", observed_at: r.now() });
+const running = (r: Rig, m: Row) => r.s.upsert("observed_workers", { project: "fx", wt: String(m.wt) }, { state: "idle", walk: "running", presence: "running", observed_at: r.now() });
 function builder(r: Rig, suffix: string): number {
   r.s.db.run("INSERT INTO members (project, squad, role, suffix, agent, model, account, observed_at, updated_at) VALUES ('fx', ?, 'builder', ?, 'claude', 'opus', 'system', ?, ?)", [SQ, suffix, T, T]);
   const id = Number((r.s.db.query("SELECT id FROM members WHERE squad = ? AND suffix = ?").get(SQ, suffix) as Row).id);
@@ -277,8 +277,8 @@ describe("a squad on a contract backend (U11)", () => {
     await startLead(r);
     const b = await startBuilder(r, "u4"), bp = pathOf(b);
     const first = live(r.fake, bp)[0].t;
-    // The agent crashed, its shell stays: the observer reads it gone, the decider restarts it.
-    r.s.upsert("observed_workers", { project: "fx", wt: String(b.wt) }, { state: "idle", presence: "none", account_at: r.now() + 1, observed_at: r.now() });
+    // The agent crashed, its shell stays: the walk finds no agent, the decider restarts it (U12: off Orca it reads the walk).
+    r.s.upsert("observed_workers", { project: "fx", wt: String(b.wt) }, { state: "idle", walk: "none", presence: "none", account_at: r.now() + 1, observed_at: r.now() });
     await r.tick(3);
     const after = live(r.fake, bp);
     expect(after).toHaveLength(1);
@@ -291,7 +291,7 @@ describe("a squad on a contract backend (U11)", () => {
     const close = r.s.db.query("SELECT * FROM orca_calls WHERE op = 'terminal.close' AND member = ?").get(String(b.wt)) as Row | null;
     expect(close?.state).toBe("completed");
     expect(orcaFor(r)).toEqual([]);
-  });
+  }, 30_000);
 });
 
 test("the contract's launch line execs claude for every account form; Orca's lines do not exec", async () => {

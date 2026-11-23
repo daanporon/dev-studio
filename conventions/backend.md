@@ -292,8 +292,7 @@ backend (U11, "Started" below).
     folder path, through the contract seat, one `orca_calls` row per step key so a replay closes nothing
     twice) and removes its worktree through the squad's recorded provider (`io/worktrees.ts`
     `removeWorktree`, by path), all in `squad/removal.ts`: a close (`fulfil/close.ts`), a cancel
-    (`fulfil/cancel.ts`: the stop closes, the remove closes again and is forced as `worktree-rm force` is on Orca;
-    until U12 no observer sees these terminals, so a live Builder can skip the stop), a
+    (`fulfil/cancel.ts`: the stop closes, the remove closes again and is forced as `worktree-rm force` is on Orca), a
     leftover pass (`fulfil/worktree.ts`) and a host tidy of a class `d` tree (`fulfil/cleanup-act.ts`,
     found by its live `worktrees` row; no `worktree ps` read, and the tree is probed again before the
     removal). The provider keeps the branch (an unmerged one always); a dirty or unpushed tree is kept as
@@ -301,9 +300,18 @@ backend (U11, "Started" below).
     checks (`pause.ts` `gateBlock` on the action's `childActivity` gate; blocked answers 75, a wait), and
     a `terminal.close` that fails keeps the tree, since no backend drops a terminal with its folder. A cancel reads the tree from the `worktrees` row when Orca has none. Squads on
     `orca` keep `terminal-close-worktree` and `worktree-rm` by id. `tests/loop/contract-removal.test.ts`.
+  - **Observed (U12).** `observers/contract.ts` reads these members, not the Orca observer (whose known
+    worktrees and gone sweeps skip every worktree and folder of a squad off Orca): per member the newest
+    terminal `terminal.list` shows in its folder (its own `DS_GEN` first), `terminal.last_output`,
+    `terminal.read` and, on `state: native`, `agent.state`, plus the host's process walk. Its state is
+    idle when the walk finds no agent process, else the native answer; on `state: none`, working while
+    the transcript or output moved within `chat_quiet_s` (or `esc to interrupt` shows), idle at an empty
+    prompt with the agent alive, else unknown. A terminal no longer listed marks the worker gone; a
+    failed list marks nothing. The decider reads the walk alone (`walkReality`), and the finish row
+    (`ds finish`, of the member's generation) stands in for Orca's dispatch: it ends a one-shot role,
+    retires a Tester, lets a done Builder retire and carries the Lead's failed / no-PR report.
   - **Role scripts (U11b).** See "Role scripts off Orca" below.
-  - **Not yet.** The observer that reads these members' state is U12's. `nesting.ts` skips such a
-    squad (only Orca moves a worktree under a parent).
+  - **Not yet.** `nesting.ts` skips such a squad (only Orca moves a worktree under a parent).
 
 ### Role scripts off Orca
 

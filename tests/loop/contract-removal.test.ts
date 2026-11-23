@@ -85,7 +85,8 @@ const pathOf = (m: Row) => String(m.wt).replace(/^local::/, "");
 const member = (s: Store, id: number) => s.db.query("SELECT * FROM members WHERE id = ?").get(id) as Row;
 const live = (f: FakeContract, cwd: string) => [...f.terms.values()].filter((t) => t.t.cwd === cwd);
 const tree = (s: Store, path: string) => s.get("worktrees", { host: "local", path });
-const running = (r: Rig, m: Row, state = "idle") => r.s.upsert("observed_workers", { project: "fx", wt: String(m.wt) }, { state, presence: "running", gone_at: null, observed_at: r.now() });
+// These rows stand in for the contract observer (U12): the decider reads a squad off Orca from the walk alone.
+const running = (r: Rig, m: Row, state = "idle") => r.s.upsert("observed_workers", { project: "fx", wt: String(m.wt) }, { state, presence: "running", walk: "running", account_at: r.now(), gone_at: null, observed_at: r.now() });
 const ended = (r: Rig, m: Row) => r.s.upsert("observed_workers", { project: "fx", wt: String(m.wt) }, { state: "idle", presence: "none", gone_at: r.now(), observed_at: r.now() });
 // No Orca call of any kind names this squad or its folders (the fixture's own `demo` squad is on Orca).
 const orcaFor = (r: Rig) => r.orca.calls.filter((c) => [SQ, join(r.d, "wts")].some((v) => JSON.stringify(c.args).includes(v)) || c.via?.env?.DS_START_MEMBER?.includes(`/${SQ}/`));

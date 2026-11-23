@@ -6,7 +6,7 @@
 //   view(m)          its effective wish: pause.ts effective() (archived, suspended, paused, own wish),
 //                    plus a Builder whose unit is done, merged or cancelled reads archived, and a
 //                    one-shot role (not standing, not a Builder) whose task dispatch completed reads
-//                    stopped. A view only: no row changes.
+//                    stopped (U12: off Orca, one with a finish row of its generation). A view only.
 //   lastStart(m)     the newest start of this member the loop knows (placed_at, started), epoch s.
 //   walkedGone(w, t) a walk read after a stop's call at t found no agent (account-move-slow U2).
 //   startEpisode(m)  the start act's episode: stable across wish edits (a model write mid-start keeps
@@ -15,6 +15,8 @@
 import { effective, startSent } from "../pause/pause.ts";
 import { memberUnit, mergedUnit } from "../pause/pause-conditions.ts";
 import { STANDING } from "../drivers/types.ts";
+import { onContract } from "./backend.ts";
+import { finishOf } from "./finish-read.ts";
 import type { Row, Store } from "../core/store.ts";
 
 export const LOCK_KINDS = ["member", "member.close", "role", "request-restart", "request-switch",
@@ -44,6 +46,8 @@ export function view(store: Store, m: Row): View {
     const u = memberUnit(store, { project: String(m.project), squad: String(m.squad), role: "builder", suffix: String(m.suffix ?? ""), member: (m.wt as string | null) ?? null });
     if (u && (u.status === "cancelled" || u.status === "merged" || mergedUnit(store, u))) return "archived";
   } else if (e === "running" && !STANDING.has(String(m.role)) && m.wt) {
+    // U12: off Orca there is no dispatch; a finish row of the member's generation ends the one-shot.
+    if (onContract(store, String(m.project), String(m.squad))) return finishOf(store, m) ? "stopped" : e;
     const w = store.get("observed_workers", { project: m.project, wt: m.wt });
     if (w?.dispatch === "completed") return "stopped";
   }

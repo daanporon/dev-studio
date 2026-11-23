@@ -43,9 +43,8 @@ import { startIdentity } from "./whoami.ts";
 import { startedOn, wtName, type ContractSeat, type Driver, type Member, type Seat, type Squad, type StartMeta } from "../drivers/types.ts";
 import { contract as contractDriver, localPath } from "../drivers/contract.ts";
 import { claudeSettings } from "../drivers/claude-launch.ts";
-import { checked, type Backend, type Capabilities, type Terminal } from "../../backend/contract.ts";
-import { projectTmux, TMUX_CAPS } from "../../backend/tmux.ts";
-import { ORCA_LITE_CAPS, orcaLite } from "../../backend/orca-lite.ts";
+import type { Backend, Terminal } from "../../backend/contract.ts";
+import { contracts, sharedContracts, type Contracted } from "../squad/contracts.ts";
 import { createWorktree } from "../io/worktrees.ts";
 import { allSkills, deniedMcpServers, disabledPlugins, isProjectSkill, mcpLevels, pluginLevels, projectRules, shippedRules, skillOverrides } from "../settings/skills.ts";
 import { errOf, inDoubt, shell, spawn, type Orca, type Out } from "../io/orca.ts";
@@ -158,7 +157,7 @@ export class LoopActuator implements Actuator {
   private unseated = new Map<string, string>();            // squad -> why its last rebind failed
   private seatSeen = new Map<string, { sig: string; at: number }>(); // squad -> its seat as last checked with Orca (U244)
   private seatFailed = new Set<string>();                  // squads whose start or send failed on the seat (U244)
-  private contracts = new Map<string, Contracted>();       // U11: "<backend>/<project>" -> its contract backend
+  private contracts: (store: Store, name: string, project: string) => Contracted; // U11: its contract backend per name and project
   private inFlight = new Set<string>();                    // U11: contract calls running now, by retry id
   private relayPeekAt = new Map<string, number>();         // squad -> when its Run's inbox was last peeked (U244)
   private unrelayed = new Map<string, string>();           // squad -> why its last relay failed
@@ -167,6 +166,7 @@ export class LoopActuator implements Actuator {
     backends?: (name: string, project: string, store: Store) => Contracted } = {}) {
     this.orca = opts.orca ?? shell();
     this.pick = opts.pick ?? ladderPick;
+    this.contracts = opts.backends || opts.orca ? contracts(opts.backends, this.orca) : sharedContracts;
   }
 
   private fulfillers(): Promise<Map<string, Fulfiller>> {
@@ -700,22 +700,9 @@ export class LoopActuator implements Actuator {
 
   driver(seat: Seat, agent: string | null): Driver { return (seat.contract ? contractDriver : driverModule(agent)).make(seat); }
 
-  // U11: the contract backend `name` for a project's squads (made once): tmux, or orca-lite (U13) on this
-  // actuator's Orca runner with its facts in <root>/<project>/loop/orca-lite-terminals.json; a test passes
-  // its fake through `backends`. herdr has no adapter here yet, and the registry (bin/backend/registry.ts)
-  // still refuses a spawn on orca-lite or herdr.
-  private contracted(store: Store, name: string, project: string): Contracted {
-    const k = `${name}/${project}`;
-    let c = this.contracts.get(k);
-    if (!c) {
-      c = this.opts.backends?.(name, project, store)
-        ?? (name === "tmux" ? { backend: checked(projectTmux(project, { stateRoot: store.root })), caps: TMUX_CAPS } : null)
-        ?? (name === "orca-lite" ? { backend: checked(orcaLite({ orca: this.orca, keep: join(store.root, project, "loop", "orca-lite-terminals.json") })), caps: ORCA_LITE_CAPS } : null)
-        ?? (() => { throw new Error(`backend ${name}: the loop has no adapter for it`); })();
-      this.contracts.set(k, c);
-    }
-    return c;
-  }
+  // U11: the contract backend `name` for a project's squads (squad/contracts.ts: tmux, or orca-lite on this
+  // actuator's Orca runner; a test passes its fake through `backends`).
+  private contracted(store: Store, name: string, project: string): Contracted { return this.contracts(store, name, project); }
 
   // U11: the seat of a squad on a contract backend. Its Orca ops refuse: such a squad has no Run,
   // sender pane or coordinator, and nothing it does reaches Orca.
@@ -933,8 +920,6 @@ export const failRequest = (a: Action, x: Exec, why: string): true => { finishRe
 
 export const actuator = new LoopActuator();
 
-// U11: a contract backend the loop runs squads on, and what it can do.
-export type Contracted = { backend: Backend; caps: Capabilities };
 type CallAt = { key: string; project: string; squad: string | null; member: string | null; at: number; sender: string };
 type Progress = { terminal?: Terminal; typed?: boolean };
 

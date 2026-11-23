@@ -91,6 +91,8 @@ import { wake } from "../pause/wake.ts";
 import { settledDispatch } from "./members.ts";
 import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioView } from "../squad/studio.ts";
 import { memo } from "../capacity/walk-memo.ts";
+import { onContract } from "../squad/backend.ts";
+import { finishOf } from "../squad/finish-read.ts";
 
 export const POKE_TEXT = "dev-studio loop: you went quiet with unread messages. Check your inbox now and carry on with your work.";
 export const QUIET_POKE_TEXT = "dev-studio loop: you have been working with no output for a while — are you stuck? If you are, ask your Lead; if not, carry on with your work.";
@@ -157,9 +159,22 @@ export function workerDone(store: Store, project: string, squad: string, dispatc
     ORDER BY seen_at DESC LIMIT 1`)
     .get(project, squad, String(dispatch), now - DONE_GRACE_S) as { subject: string | null; body: string | null; outcome: string | null } | null;
   if (!r) return null;
-  const lines = [r.subject, ...String(r.body ?? "").split("\n")].map((l) => String(l ?? "").trim()).filter(Boolean).slice(0, 3);
-  const text = lines.join(" / ");
-  return { outcome: r.outcome || "unknown", text: text.length > 400 ? `${text.slice(0, 399)}…` : text || "(no body)" };
+  return { outcome: r.outcome || "unknown", text: reportText([r.subject, ...String(r.body ?? "").split("\n")]) };
+}
+
+// A report's first three non-empty lines, joined, at most 400 characters.
+function reportText(lines: unknown[]): string {
+  const text = lines.map((l) => String(l ?? "").trim()).filter(Boolean).slice(0, 3).join(" / ");
+  return text.length > 400 ? `${text.slice(0, 399)}…` : text || "(no body)";
+}
+
+// U12: workerDone for a squad off Orca: the failed or no-PR finish row of the worktree's member's
+// current generation, read once DONE_GRACE_S old (as the relayed worker_done is), with its generation.
+export function finishDone(store: Store, project: string, squad: string, wt: string, now: number): { outcome: string; text: string; gen: string } | null {
+  const m = store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project, squad, wt) as Row | null;
+  const f = m ? finishOf(store, m) : null;
+  if (!f || (f.outcome !== "failed" && f.outcome !== "no-pr") || Number(f.at) > now - DONE_GRACE_S) return null;
+  return { outcome: String(f.outcome), text: reportText(String(f.body ?? "").split("\n")), gen: String(m!.gen) };
 }
 
 // U267 (2): a Builder's branch head, read with one `git rev-parse HEAD` in its worktree when it is due.
@@ -689,13 +704,16 @@ class Pass {
     const file = (ep: string, text: string) => this.actions.push({ project: this.project, squad, member, subject: `${key}.idle`, kind: "request.file", episode: ep,
       payload: { target: above, path: `requests/${above}/${key}.idle-${this.now}.txt`, text } });
     // (1) The task ended through the Builder's own worker_done with no PR: one report, never a poke.
-    const done = u.pr ? null : workerDone(this.store, this.project, squad, w.dispatch_id, this.now);
+    // U12: off Orca, its failed or no-PR finish row of this generation is that report.
+    const contract = onContract(this.store, this.project, squad);
+    const fin = !u.pr && contract ? finishDone(this.store, this.project, squad, wt, this.now) : null;
+    const done = u.pr ? null : contract ? fin : workerDone(this.store, this.project, squad, w.dispatch_id, this.now);
     if (done) {
-      const ep = `failed|${u.slug}|${w.dispatch_id}`;
+      const ep = `failed|${u.slug}|${fin ? `gen:${fin.gen}` : w.dispatch_id}`;
       if (recorded || (row?.episode_key === ep && row.state === "failed_report")) return;
       this.store.upsert("episodes", k, { squad, started_at: this.now, ended_at: null, count: 1, episode_key: ep, state: "failed_report", source: "loop", observed_at: this.now });
       stall("failed_report", null);
-      file(ep, `${done.outcome === "failed" ? "failed report" : "report with no PR"}: ${member} of ${squad} ended its task on unit ${u.slug} with no PR (worker_done, outcome ${done.outcome}): ${done.text}. Answer it, mark the unit done, dispatch it again, split it or cancel it.\n`);
+      file(ep, `${done.outcome === "failed" ? "failed report" : "report with no PR"}: ${member} of ${squad} ended its task on unit ${u.slug} with no PR (${contract ? "ds finish" : "worker_done"}, outcome ${done.outcome}): ${done.text}. Answer it, mark the unit done, dispatch it again, split it or cancel it.\n`);
       return;
     }
     // A failed report is over once a new dispatch (or a PR) replaced the one it named.
