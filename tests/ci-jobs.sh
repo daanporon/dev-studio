@@ -38,7 +38,7 @@ bad() { echo "FAIL $1"; printf '%s\n' "$2"; fail=1; }
 run_ci() { # <CI_JOBS or ""> -> $out, $rc
   rm -f "$TMP"/*.started "$TMP/sc.calls"
   rc=0
-  out="$(env -u GITHUB_BASE_REF -u CI_JOBS ${1:+CI_JOBS=$1} PATH="$TMP/path:$PATH" bash "$TMP/root/tests/ci.sh" 2>&1)" || rc=$?
+  out="$(env -u GITHUB_BASE_REF -u CI_JOBS CI_SLOTS=0 ${1:+CI_JOBS=$1} PATH="$TMP/path:$PATH" bash "$TMP/root/tests/ci.sh" 2>&1)" || rc=$?
 }
 
 run_ci 2
@@ -80,13 +80,13 @@ done
 rm -f "$TMP/root/tests/a.sh" "$TMP/root/tests/d.sh"
 printf '#!/usr/bin/env bash\nmkdir "$TMPDIR/zzclean-AbCdEf" "$TMPDIR/pause-lifecycle-GhIjKl" "$TMPDIR/pause-lifecycle-MnOpQr"\n' > "$TMP/root/tests/e.sh"
 mkdir -p "$TMP/rt"
-rc=0; out="$(env -u CI_JOBS XDG_RUNTIME_DIR="$TMP/rt" PATH="$TMP/path:$PATH" bash "$TMP/root/tests/ci.sh" 2>&1)" || rc=$?
+rc=0; out="$(env -u CI_JOBS CI_SLOTS=0 XDG_RUNTIME_DIR="$TMP/rt" PATH="$TMP/path:$PATH" bash "$TMP/root/tests/ci.sh" 2>&1)" || rc=$?
 { [ "$rc" = 1 ] && grep -q '^FAIL  temp-dirs ' <<< "$out" && grep -q 'zzclean x1' <<< "$out" && grep -q 'pause-lifecycle x2' <<< "$out" \
   && grep -q '^ci: failed: .*temp-dirs' <<< "$out"; } \
   && ok "temp dirs: a test that leaves dirs fails the run and they are named" || bad "temp dirs: leak not caught (rc=$rc)" "$out"
 [ -z "$(ls "$TMP/rt")" ] && ok "temp dirs: the run's temp root is removed after a failing run" || bad "temp dirs: left in the run root: $(ls "$TMP/rt")" "$out"
 rm "$TMP/root/tests/e.sh"
-rc=0; out="$(env -u CI_JOBS XDG_RUNTIME_DIR="$TMP/rt" PATH="$TMP/path:$PATH" bash "$TMP/root/tests/ci.sh" 2>&1)" || rc=$?
+rc=0; out="$(env -u CI_JOBS CI_SLOTS=0 XDG_RUNTIME_DIR="$TMP/rt" PATH="$TMP/path:$PATH" bash "$TMP/root/tests/ci.sh" 2>&1)" || rc=$?
 { [ "$rc" = 0 ] && grep -q '^ok    temp-dirs ' <<< "$out"; } \
   && ok "temp dirs: a clean run passes the guard" || bad "temp dirs: clean run (rc=$rc)" "$out"
 
