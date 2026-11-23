@@ -238,7 +238,14 @@ board "$LBL" > "$TMP/big.json" 2>"$TMP/big.err" || true
 jt "big plan: squad renders"          "$TMP/big.json" '.squads[] | select(.topic=="big") | .plans[0].markdown | length > 1500000' '.squads | map(.topic)'
 jt "big plan: archived renders"       "$TMP/big.json" '.archived[] | select(.topic=="big") | .plans[0].markdown | length > 1500000' '.archived | length'
 eq "big plan: no jq error"            "$(grep -c 'Argument list too long' "$TMP/big.err" || true)" "0"
-rm -rf "$SD/big.json" "$SD/big-alpha-plan.md" "$DS_STATE_ROOT/$LBL/archive"
+# debrief-in-needs-you pages U1: a squad's Try it page (<topic>-try-it.md) is its `try_it`, live in squads/ and archived in archive/; none is null.
+printf '# Try it — big\n\n## 2026-11-23 — a\n\n1. Open the board; see it.\n' > "$SD/big-try-it.md"
+printf '# Try it — big\n\n1. Open the board; see it archived.\n' > "$DS_STATE_ROOT/$LBL/archive/big-try-it.md"
+board "$LBL" > "$TMP/big.json" 2>"$TMP/big.err" || true
+jt "try it: a live squad carries its page"     "$TMP/big.json" '.squads[] | select(.topic=="big") | .try_it.name == "big-try-it.md" and (.try_it.markdown | contains("see it.")) and .try_it.mtime > 0'
+jt "try it: an archived squad carries its page" "$TMP/big.json" '.archived[] | select(.topic=="big") | .try_it.markdown | contains("archived")'
+jt "try it: a squad without a page has null"   "$TMP/big.json" '[.squads[] | select(.topic!="big") | .try_it] | all(. == null)'
+rm -rf "$SD/big.json" "$SD/big-alpha-plan.md" "$SD/big-try-it.md" "$DS_STATE_ROOT/$LBL/archive"
 
 # A suspended squad: its question is NOT counted and NOT in the inbox; it sorts after running.
 printf '{"run_id":"r2","status":"suspended","type":"feature","autonomy":"checkpoints","members":[{"role":"lead","wt":"wl2","owns":[],"for":""}],"units":[],"waiting_on_you":[{"id":"q2","asker":"lead","blocking":true,"question":"parked","since":"2026-10-08T09:00:00Z"}]}' > "$SD/parked.json"

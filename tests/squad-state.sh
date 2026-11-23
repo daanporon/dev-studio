@@ -24,6 +24,8 @@ PASS=0
 FAIL=0
 
 tmp() { mktemp "${TMPDIR:-/tmp}/squad-state-test.XXXXXX"; }
+# debrief-in-needs-you pages U1: a feature squad needs a current Try it page next to its file before done.
+tryit() { local f="${1//\"/}"; printf '# Try it — t\n\n## 2026-11-23 — a\n\n1. Open the board; see the squad.\n' > "${f%.json}-try-it.md"; }
 # fixture dir <name>: a temp dir for squad files; on the marked re-run (section 8) a squads/ dir
 # under the marked root, so its files are served from the store.
 fixdir() { local d; d="$(mktemp -d "${TMPDIR:-/tmp}/$1.XXXXXX")"; [ -z "${SQUAD_STATE_MARKED:-}" ] || { d="$d/squads"; mkdir -p "$d"; }; printf '%s' "$d"; }
@@ -98,8 +100,30 @@ check "another status with dispatched units still works" "blocked" "$("$SS" "$d"
 observe_pr "$d" a 81 MERGED; "$SS" "$d" set-unit-status "a" "done" >/dev/null
 "$SS" "$d" cancel-unit "b" >/dev/null 2>&1
 # debrief-in-needs-you U2: done needs no debrief (the loop asks for it at archive); set-debrief refuses an empty one.
+tryit "$d"
 "$SS" "$d" set-status "done" >/dev/null 2>"$d.err"; rc=$?
 check "done without a debrief works" "0" "$rc"
+# debrief-in-needs-you pages U1: done on a feature squad needs a current Try it page (a squads/ file; the file backend checks existence only).
+if [ -n "${SQUAD_STATE_MARKED:-}" ]; then
+  ty="$(tmp)"; "$SS" "$ty" add-unit "a" >/dev/null 2>&1; "$SS" "$ty" set-unit-status "a" "dispatched" "wt_a" >/dev/null
+  "$SS" "$ty" set-unit-pr "a" "81" >/dev/null; observe_pr "$ty" a 81 MERGED; "$SS" "$ty" set-unit-status "a" "done" >/dev/null
+  "$SS" "$ty" set-status "done" >/dev/null 2>"$ty.err"; rc=$?
+  check "done without a Try it page is refused" "1" "$rc"
+  check "the Try it refusal names the page path" "1" "$(grep -c -- "-try-it.md is missing" "$ty.err")"
+  check "the Try it refusal says the Thinker writes it" "1" "$(grep -c "the Thinker writes it" "$ty.err")"
+  check "a refused done leaves the squad running" "running" "$("$SS" "$ty" get | jq -r '.status')"
+  # an older page than the last unit_done is refused; a newer one passes
+  bun -e 'const path = require("node:path"), { open } = require(path.join(process.argv[1], "bin/loop/core/store.ts")), file = process.argv[2];
+    const project = path.basename(path.dirname(path.dirname(file))), topic = path.basename(file, ".json");
+    open().db.query("INSERT INTO events (project, squad, unit, kind, at) VALUES (?, ?, ?, ?, ?)").run(project, topic, "a", "unit_done", Math.floor(Date.now() / 1000) + 3600)' "$ROOT" "$ty" 2>/dev/null
+  tryit "$ty"
+  "$SS" "$ty" set-status "done" >/dev/null 2>"$ty.err"; rc=$?
+  check "done with a Try it page older than the last unit done is refused" "1" "$rc"
+  check "the stale refusal says out of date" "1" "$(grep -c "out of date" "$ty.err")"
+  touch -d "@$(( $(date +%s) + 7200 ))" "${ty%.json}-try-it.md"
+  "$SS" "$ty" set-status "done" >/dev/null 2>"$ty.err"; rc=$?
+  check "done with a current Try it page passes" "0" "$rc"
+fi
 "$SS" "$d" set-status "running" >/dev/null 2>&1
 before="$(cat "$d")"
 "$SS" "$d" set-debrief "" >/dev/null 2>"$d.err"; rc=$?
@@ -126,6 +150,7 @@ rm -f "$d.txt"
 # U2: a planned unit refuses done too, and the refusal names the unit and its command.
 "$SS" "$d" add-unit "c" >/dev/null 2>&1
 before="$(cat "$d")"
+tryit "$d"
 "$SS" "$d" set-status "done" >/dev/null 2>"$d.err"; rc=$?
 check "done with an unheld planned unit refuses" "1" "$rc"
 check "planned refusal leaves state unchanged" "$before" "$(cat "$d")"
@@ -142,6 +167,7 @@ phs="$("$SS" "$hk" get | jq -r '.units[]|select(.plan_unit=="U9").slug')"
 "$SS" "$hk" set-debrief "d
 Try it: nothing to try by hand — x" >/dev/null
 before="$(cat "$hk")"
+tryit "$hk"
 "$SS" "$hk" set-status "done" >/dev/null 2>"$hk.err"; rc=$?
 check "done with held units refuses" "1" "$rc"
 check "held refusal leaves state unchanged" "$before" "$(cat "$hk")"
@@ -150,6 +176,7 @@ check "reasoned hold names set-unit-hold off" "1" "$(grep -c 'unit frozen is hel
 check "plan hold names dropping HELD" "1" "$(grep -c "unit $phs is held by its plan — drop HELD" "$hk.err")"
 check "every held unit offers cancel-unit" "3" "$(grep -c 'cancel-unit .* --why' "$hk.err")"
 "$SS" "$hk" cancel-unit fup --why x >/dev/null 2>&1; "$SS" "$hk" cancel-unit frozen --why x >/dev/null 2>&1; "$SS" "$hk" cancel-unit "$phs" --why x >/dev/null 2>&1
+tryit "$hk"
 "$SS" "$hk" set-status "done" >/dev/null 2>&1; rc=$?
 check "done once every held unit is cancelled works" "0" "$rc"
 # all done plus a Tester member, and no units at all, still succeed
@@ -159,14 +186,17 @@ tm="$(tmp)"
 "$SS" "$tm" add-member tester 1 wt_t >/dev/null 2>&1
 "$SS" "$tm" set-debrief "d
 Try it: nothing to try by hand — x" >/dev/null
+tryit "$tm"
 "$SS" "$tm" set-status "done" >/dev/null 2>&1; rc=$?
 check "done with all units done (and a Tester) works" "0" "$rc"
 nu="$(tmp)"
 "$SS" "$nu" set-debrief "d
 Try it: nothing to try by hand — x" >/dev/null
+tryit "$nu"
 "$SS" "$nu" set-status "done" >/dev/null 2>&1; rc=$?
 check "done with no units works" "0" "$rc"
 "$SS" "$d" cancel-unit "c" --why "not needed" >/dev/null 2>&1
+tryit "$d"
 "$SS" "$d" set-status "done" >/dev/null 2>&1; rc=$?
 check "done with only done/cancelled units works" "0" "$rc"
 check "done with only done/cancelled units sticks" "done" "$("$SS" "$d" get | jq -r '.status')"
@@ -182,13 +212,16 @@ check "done refusal writes no journal" "absent" "$([ -e "$JF" ] && echo present 
 "$SS" "$JD/squads/topic.json" set-status "blocked" >/dev/null
 check "non-done status writes no journal" "absent" "$([ -e "$JF" ] && echo present || echo absent)"
 observe_pr "$JD/squads/topic.json" a 81 MERGED; "$SS" "$JD/squads/topic.json" set-unit-status "a" "done" >/dev/null
+tryit "$JD/squads/topic.json"
 "$SS" "$JD/squads/topic.json" set-status "done" >/dev/null 2>&1
 check "set-status done lands one lead decision" "1" "$(grep -c '\[decision\] squad set to done' "$JF" 2>/dev/null)"
+tryit "$JD/squads/topic.json"
 "$SS" "$JD/squads/topic.json" set-status "done" >/dev/null 2>&1
 check "a repeated done adds no second decision" "1" "$(grep -c '\[decision\] squad set to done' "$JF")"
 # best-effort: an unwritable journal dir warns but the status still sticks
 rm -rf "$JD/journals"; : > "$JD/journals"
 "$SS" "$JD/squads/topic.json" set-status "running" >/dev/null
+tryit "$JD/squads/topic.json"
 "$SS" "$JD/squads/topic.json" set-status "done" >/dev/null 2>"$JD/err"; rc=$?
 check "journal failure doesn't block done" "0" "$rc"
 check "journal failure still sets done" "done" "$("$SS" "$JD/squads/topic.json" get | jq -r '.status')"
@@ -653,6 +686,7 @@ check "rekey follows lead_wt"               "wtLead2" "$("$SS" "$f" get | jq -r 
 f="$(tmp)"
 "$SS" "$f" set-debrief "d
 Try it: nothing to try by hand — x" >/dev/null
+tryit "$f"
 "$SS" "$f" set-status "done" >/dev/null
 check "write leaves valid json" "ok" "$(jq -e . "$f" >/dev/null 2>&1 && echo ok || echo bad)"
 check "no stray temp left" "0" "$(find "$(dirname "$f")" -name '.squad-state.*' 2>/dev/null | wc -l | tr -d ' ')"
