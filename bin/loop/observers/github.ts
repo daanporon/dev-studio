@@ -582,11 +582,11 @@ function applyFeedback(store: Store, p: Poll, held: Set<string>, at: number): vo
       const drafts = store.db.query("SELECT id, state, fix_pr, fix_here FROM feedback_drafts WHERE repo = ? AND issue = ? AND state IN ('filed', 'fixed')").all(repo, n) as Row[];
       for (const d of drafts) {
         if (d.state === "fixed") {
-          if (o.state === "fixed" && here && !d.fix_here) store.db.run("UPDATE feedback_drafts SET fix_here = 1, updated_at = ? WHERE id = ?", [at, d.id]);
+          if (o.state === "fixed" && here && !d.fix_here) store.db.run("UPDATE feedback_drafts SET fix_here = 1, updated_at = ? WHERE id = ?", [at, d.id as string]);
           continue;
         }
-        store.db.run("UPDATE feedback_drafts SET state = ?, fix_pr = ?, fix_here = ?, updated_at = ? WHERE id = ?", [o.state, o.pr, o.state === "fixed" ? here : null, at, d.id]);
-        store.db.run("UPDATE feedback_notes SET state = ?, updated_at = ? WHERE draft_id = ? AND state IN ('drafted', 'filed')", [o.state, at, d.id]);
+        store.db.run("UPDATE feedback_drafts SET state = ?, fix_pr = ?, fix_here = ?, updated_at = ? WHERE id = ?", [o.state, o.pr ?? null, o.state === "fixed" ? here : null, at, d.id as string]);
+        store.db.run("UPDATE feedback_notes SET state = ?, updated_at = ? WHERE draft_id = ? AND state IN ('drafted', 'filed')", [o.state, at, d.id as string]);
         store.event(o.state === "fixed" ? "feedback_fixed" : "feedback_closed", { payload: { draft: d.id, repo, issue: n, pr: o.pr, in_your_version: !!here } });
       }
     }
