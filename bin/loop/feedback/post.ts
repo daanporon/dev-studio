@@ -1,0 +1,121 @@
+// post.ts — what a reviewed feedback draft becomes on GitHub (ds-feedback-github-issues U3). Only a
+// draft's own columns ever leave the host (title, body, area, label): never a note's raw text.
+//
+//   feedbackRepo   the host-level `feedback_repo` (owner/name), or null while it is `-` (posting off)
+//   finalText      the title and body exactly as posted: the drafter's body with any marker lines it
+//                  carried dropped, then the marker line the label workflow reads and the `ds-key` line
+//   leakCheck      tests/leak-guard.sh --text on that final text (the host word list; a missing or empty
+//                  list is a hit), the guard's finding labels without the file path or the matched value
+//   Gh             the GitHub calls a post makes (REST through `gh api`, DS_GH for a stub): find a post by
+//                  its key, create an issue, comment on one, and the reset time of a used-up budget
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ROOT, type Row, type Store } from "../core/store.ts";
+import { limitEnv } from "../settings/limits.ts";
+import { spawn, type Out } from "../io/orca.ts";
+import { RESET_GRACE_S } from "../io/github-budget.ts";
+
+const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+
+/** The repo feedback is posted to: the env var, else the default row, else the first project row (by
+ *  label) that names one; null while it is `-` or unset (posting off). Host-level like disk_watch_paths. */
+export function feedbackRepo(store: Store): string | null {
+  const ok = (v: unknown): string | null => { const t = String(v ?? "").trim(); return REPO.test(t) ? t : null; };
+  const ev = process.env[limitEnv("feedback_repo")]?.trim();
+  if (ev) return ok(ev);
+  const rows = store.db.query("SELECT project, value FROM config WHERE file = 'limits.conf' AND key = 'feedback_repo' ORDER BY project = '' DESC, project")
+    .all() as { project: string; value: string | null }[];
+  for (const r of rows) { const v = ok(r.value); if (v) return v; }
+  return null;
+}
+
+// The marker the label workflow reads (.github/scripts/feedback-labels.mjs) and the post's key line.
+export const WORD = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export const marker = (area: string, kind: string): string => `<!-- ds-feedback v1 area:${area} kind:${kind} -->`;
+export const keyLine = (key: string): string => `<!-- ds-key:${key} -->`;
+const OURS = /^\s*<!-- ds-(feedback v1 |key:)[^\n]*-->\s*$/;
+
+/** A draft's area and kind words for the marker; an unusable one reads `other` (the workflow labels it so). */
+const word = (v: unknown, dflt: string) => { const t = String(v ?? "").trim().toLowerCase(); return WORD.test(t) ? t : dflt; };
+
+/** The title and body as they go out. An add-to comment has no title. */
+export function finalText(d: Row): { title: string | null; body: string } {
+  const own = String(d.body ?? "").split("\n").filter((l) => !OURS.test(l)).join("\n").replace(/\s+$/, "");
+  const tail = d.kind === "add-to" ? [keyLine(String(d.key))] : [marker(word(d.area, "other"), word(d.label, "other")), keyLine(String(d.key))];
+  return { title: d.kind === "add-to" ? null : String(d.title ?? "").trim(), body: `${own}\n\n${tail.join("\n")}\n` };
+}
+
+export type Leak = { leak: "ok" | "blocked"; why: string | null };
+export type LeakCheck = (title: string | null, body: string) => Promise<Leak>;
+
+/** The word-list check on the final text: tests/leak-guard.sh --text, run from this checkout. */
+export const leakCheck: LeakCheck = async (title, body) => {
+  const dir = mkdtempSync(join(tmpdir(), "ds-feedback-"));
+  try {
+    const file = join(dir, "post.md");
+    writeFileSync(file, `${title ?? ""}\n\n${body}`, { mode: 0o600 });
+    const r = await spawn(["bash", join(ROOT, "tests", "leak-guard.sh"), "--text", file], { LEAK_GUARD_SELFTEST: "0" }, 60_000);
+    if (r.code === 0) return { leak: "ok", why: null };
+    // `FAIL leak-guard --text:` then `<file>:<line>: <label>` per hit (never the value); keep `line N: label`.
+    const lines = `${r.out}\n${r.err}`.split("\n").map((l) => l.trim()).filter((l) => l && !/^FAIL leak-guard/.test(l))
+      .map((l) => (l.startsWith(file) ? `line ${l.slice(file.length + 1)}` : l));
+    return { leak: "blocked", why: lines.join("; ").slice(0, 500) || `leak-guard exit ${r.code}` };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+};
+
+export type Posted = { issue: number; url: string };
+export type Gh = {
+  /** The issue (or, with `on`, the comment on issue `on`) whose body holds `ds-key:<key>`, made at or after `since`. */
+  find(repo: string, key: string, since: number, on: number | null): Promise<Posted | null | Out>;
+  create(repo: string, title: string, body: string): Promise<Posted | Out>;
+  comment(repo: string, issue: number, body: string): Promise<Posted | Out>;
+  /** When a used-up REST budget is full again (reset + grace), or null when it is not used up or unreadable. */
+  resetAt(now: number): Promise<number | null>;
+};
+export const isOut = (v: unknown): v is Out => !!v && typeof v === "object" && "code" in v && "err" in v;
+
+const ghArgv = () => (process.env.DS_GH || "gh").split(/\s+/).filter(Boolean);
+const iso = (t: number) => new Date(t * 1000).toISOString().replace(/\.\d+Z$/, "Z");
+
+async function api(args: string[], input?: unknown): Promise<Out> {
+  if (input === undefined) return spawn([...ghArgv(), "api", ...args], {}, 60_000);
+  const dir = mkdtempSync(join(tmpdir(), "ds-feedback-"));
+  try {
+    const file = join(dir, "input.json");
+    writeFileSync(file, JSON.stringify(input), { mode: 0o600 });
+    return await spawn([...ghArgv(), "api", ...args, "--input", file], {}, 60_000);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+function posted(r: Out, issue?: number): Posted | Out {
+  if (r.code !== 0) return r;
+  try {
+    const j = JSON.parse(r.out);
+    const n = issue ?? Number(j?.number);
+    if (Number.isInteger(n) && n > 0 && typeof j?.html_url === "string") return { issue: n, url: j.html_url };
+  } catch { /* below */ }
+  return { code: 1, out: r.out, err: "gh api: no issue number and URL in the answer" };
+}
+
+export const gh: Gh = {
+  async find(repo, key, since, on) {
+    const path = on == null ? `repos/${repo}/issues?state=all&sort=created&direction=desc&per_page=100&since=${iso(since)}`
+      : `repos/${repo}/issues/${on}/comments?per_page=100&since=${iso(since)}`;
+    const jq = `[.[] | select((.body // "") | contains(${JSON.stringify(`ds-key:${key}`)})) | {number, html_url}] | first // empty`;
+    const r = await api([path, "--jq", jq]);
+    if (r.code !== 0) return r;
+    if (!r.out.trim()) return null;
+    return posted(r, on ?? undefined);
+  },
+  create: async (repo, title, body) => posted(await api(["-X", "POST", `repos/${repo}/issues`], { title, body })),
+  comment: async (repo, issue, body) => posted(await api(["-X", "POST", `repos/${repo}/issues/${issue}/comments`], { body }), issue),
+  async resetAt(now) {
+    const r = await api(["rate_limit", "--jq", ".resources.core"]);
+    if (r.code !== 0) return null;
+    try {
+      const c = JSON.parse(r.out);
+      return Number(c?.remaining) <= 0 && Number(c?.reset) > now ? Number(c.reset) + RESET_GRACE_S : null;
+    } catch { return null; }
+  },
+};
