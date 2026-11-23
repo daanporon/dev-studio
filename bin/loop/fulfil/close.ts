@@ -28,6 +28,9 @@ import type { Row, Store } from "../core/store.ts";
 import type { Action } from "../core/plugins.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
 import { onContract } from "../squad/backend.ts";
+import { byContract, contractCloseTerminals, contractRemoveTree } from "../squad/removal.ts";
+import { worktreeAt } from "../io/worktrees.ts";
+import { errOf } from "../io/orca.ts";
 
 type P = ActionPayload<"member.close">;
 const CLOSE_VIEWS = ["stopped", "archived", "suspended"];
@@ -79,7 +82,10 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   if (runId && wt) await x.act.orca.run("worker-release", [runId, wt], { env: x.act.childActivity(x.store, a) });
   const tree = store.get("observed_worktrees", { project: r.project, wt });
   const path = String(tree?.path ?? (wt.includes("::") ? wt.split("::").at(-1) : "") ?? "");
-  const branch = String(tree?.branch ?? "");
+  // U11c: a squad on a contract backend has no Orca worktree row: its provider's row names the branch.
+  const contract = byContract(store, { project: String(r.project), squad: String(r.squad) });
+  const branch = String(tree?.branch ?? (contract && path ? worktreeAt(store, path)?.branch : "") ?? "");
+  const w = { project: String(r.project), squad: String(r.squad), wt, path };
   if (!path || !existsSync(path)) { finish("archived: worktree already gone"); return { done: true, result: "removed: already gone" }; }
   // U3: copy its pages and notes out first, whatever the probe says next; a replay copies nothing twice.
   const saved = await rescuePages(store, String(r.project), String(r.squad), r.suffix ? `${r.role}-${r.suffix}` : String(r.role), path);
@@ -116,13 +122,17 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   // exposed-cleanup U2: end what this worktree exposed and run its stop commands before the tree goes.
   const stops = removalHold(store, String(r.project), wt, suspended ? "worktree-removed" : "owner-gone", at);
   if (stops) return { wait: stops };
-  await x.act.orca.run("terminal-close-worktree", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
+  if (contract) {
+    // No backend drops a contract terminal with its tree (Orca's worktree-rm does): one left open keeps it.
+    const c = await contractCloseTerminals(a, x, w);
+    if (c.code !== 0) return { retry: errOf(c, "terminal.close") };
+  } else await x.act.orca.run("terminal-close-worktree", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
   // U1 (KTD10): the project's cleanup_on_close, then stop what is still running in the tree, then probe again.
   const tidy = await closeTidy.before(a, x, path);
   const again = await check(true);
   if (!("files" in again)) return again;
   const { dirty, unpushed, files } = again;
-  const rm = await x.act.orca.run("worktree-rm", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
+  const rm = contract ? await contractRemoveTree(a, x, w) : await x.act.orca.run("worktree-rm", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
   if (rm.code === 75) return { wait: "activity changed before removal" };   // the backend's pause/generation fence: not a refusal
   if (rm.code !== 0) {
     const err = (rm.err || rm.out).split("\n").filter((l) => l.trim()).at(-1)?.slice(0, 200) || "no detail from backend";

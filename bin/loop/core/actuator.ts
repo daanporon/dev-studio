@@ -166,7 +166,7 @@ export class LoopActuator implements Actuator {
     backends?: (name: string, project: string, store: Store) => Contracted } = {}) {
     this.orca = opts.orca ?? shell();
     this.pick = opts.pick ?? ladderPick;
-    this.contracts = opts.backends ? contracts(opts.backends) : sharedContracts;
+    this.contracts = opts.backends || opts.orca ? contracts(opts.backends, this.orca) : sharedContracts;
   }
 
   private fulfillers(): Promise<Map<string, Fulfiller>> {
@@ -700,7 +700,8 @@ export class LoopActuator implements Actuator {
 
   driver(seat: Seat, agent: string | null): Driver { return (seat.contract ? contractDriver : driverModule(agent)).make(seat); }
 
-  // U11: the contract backend `name` for a project's squads (squad/contracts.ts; a test passes its fake through `backends`).
+  // U11: the contract backend `name` for a project's squads (squad/contracts.ts: tmux, or orca-lite on this
+  // actuator's Orca runner; a test passes its fake through `backends`).
   private contracted(store: Store, name: string, project: string): Contracted { return this.contracts(store, name, project); }
 
   // U11: the seat of a squad on a contract backend. Its Orca ops refuse: such a squad has no Run,

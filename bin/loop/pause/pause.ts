@@ -355,6 +355,15 @@ const controls = new Set(["board_start", "board_restart", "board_stop", "board_g
 const mail = new Set(["poke", "answer", "reply", "send-role", "send-peer", "notify-squads"]);
 export function deferredMail(a: Action): boolean { return mail.has(a.kind); }
 export function actionVersion(store: Store, a: Action): string { return JSON.stringify(actionTargets(store, a).map((t) => version(store, t))); }
+// The fence a child script checks before each mutation (check-activity.ts, exit 75), on the gate
+// `childActivity` hands it: a paused target, or a version moved since the gate was made. U11c: a provider's
+// removal for a squad off Orca runs in process and checks the same gate.
+export type ActivityGate = { targets: Target[]; version: string; mail?: boolean; control?: Action; resume?: Action };
+export function gateBlock(store: Store, gate: ActivityGate): string | null {
+  if (gate.control?.kind === "pause-control") return pauseControlBlock(store, gate.control);
+  if (gate.targets.some((t) => paused(store, t)) && !(gate.resume && resumeAction(store, gate.resume))) return "paused";
+  return !gate.mail && JSON.stringify(gate.targets.map((t) => version(store, t))) !== gate.version ? "generation changed" : null;
+}
 export function actionBlock(store: Store, a: Action): "paused" | "generation changed" | null {
   if (a.kind === "pause-control") return pauseControlBlock(store, a) ? "generation changed" : null;
   // U232: matched on the payload's stable `card`, never on the display title.
