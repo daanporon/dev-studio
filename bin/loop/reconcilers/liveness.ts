@@ -159,9 +159,13 @@ export function workerDone(store: Store, project: string, squad: string, dispatc
     ORDER BY seen_at DESC LIMIT 1`)
     .get(project, squad, String(dispatch), now - DONE_GRACE_S) as { subject: string | null; body: string | null; outcome: string | null } | null;
   if (!r) return null;
-  const lines = [r.subject, ...String(r.body ?? "").split("\n")].map((l) => String(l ?? "").trim()).filter(Boolean).slice(0, 3);
-  const text = lines.join(" / ");
-  return { outcome: r.outcome || "unknown", text: text.length > 400 ? `${text.slice(0, 399)}…` : text || "(no body)" };
+  return { outcome: r.outcome || "unknown", text: reportText([r.subject, ...String(r.body ?? "").split("\n")]) };
+}
+
+// A report's first three non-empty lines, joined, at most 400 characters.
+function reportText(lines: unknown[]): string {
+  const text = lines.map((l) => String(l ?? "").trim()).filter(Boolean).slice(0, 3).join(" / ");
+  return text.length > 400 ? `${text.slice(0, 399)}…` : text || "(no body)";
 }
 
 // U12: workerDone for a squad off Orca: the failed or no-PR finish row of the worktree's member's
@@ -170,8 +174,7 @@ export function finishDone(store: Store, project: string, squad: string, wt: str
   const m = store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project, squad, wt) as Row | null;
   const f = m ? finishOf(store, m) : null;
   if (!f || (f.outcome !== "failed" && f.outcome !== "no-pr") || Number(f.at) > now - DONE_GRACE_S) return null;
-  const text = String(f.body ?? "").split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 3).join(" / ");
-  return { outcome: String(f.outcome), text: text.length > 400 ? `${text.slice(0, 399)}…` : text || "(no body)", gen: String(m!.gen) };
+  return { outcome: String(f.outcome), text: reportText(String(f.body ?? "").split("\n")), gen: String(m!.gen) };
 }
 
 // U267 (2): a Builder's branch head, read with one `git rev-parse HEAD` in its worktree when it is due.
@@ -703,8 +706,8 @@ class Pass {
     // (1) The task ended through the Builder's own worker_done with no PR: one report, never a poke.
     // U12: off Orca, its failed or no-PR finish row of this generation is that report.
     const contract = onContract(this.store, this.project, squad);
-    const fin = u.pr || !contract ? null : finishDone(this.store, this.project, squad, wt, this.now);
-    const done = u.pr || contract ? fin : workerDone(this.store, this.project, squad, w.dispatch_id, this.now);
+    const fin = !u.pr && contract ? finishDone(this.store, this.project, squad, wt, this.now) : null;
+    const done = u.pr ? null : contract ? fin : workerDone(this.store, this.project, squad, w.dispatch_id, this.now);
     if (done) {
       const ep = `failed|${u.slug}|${fin ? `gen:${fin.gen}` : w.dispatch_id}`;
       if (recorded || (row?.episode_key === ep && row.state === "failed_report")) return;

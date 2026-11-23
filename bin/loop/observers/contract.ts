@@ -117,12 +117,13 @@ function write(store: Store, project: string, topic: string, s: Seen, r: { out: 
   walks: Map<string, Walk> | null, failed: boolean, now: number, quiet: number): void {
   const wt = String(s.m.wt), prev = store.get("observed_workers", { project, wt });
   const wtRow = store.db.query("SELECT branch, parent_path FROM worktrees WHERE host = 'local' AND path = ?").get(s.path) as Row | null;
+  const tree = (agents: number | null) => store.upsert("observed_worktrees", { project, wt }, { path: s.path, branch: wtRow?.branch ?? null,
+    parent: wtRow?.parent_path ? `local::${wtRow.parent_path}` : null, doc: { agents, backend: "contract" }, observed_at: now, gone_at: null });
   if (!s.t || !r) {
     // Its terminal is gone: the worker with it. The walk's last verdict stays for the decider.
     if (prev && prev.gone_at == null) store.upsert("observed_workers", { project, wt }, { gone_at: now, observed_at: now, presence: "none" });
     store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND wt = ? AND gone_at IS NULL", [now, project, wt]);
-    store.upsert("observed_worktrees", { project, wt }, { path: s.path, branch: wtRow?.branch ?? null, parent: wtRow?.parent_path ? `local::${wtRow.parent_path}` : null,
-      doc: { agents: 0, backend: "contract" }, observed_at: now, gone_at: null });
+    tree(0);
     return;
   }
   let ran: Row = failed ? { walk: "unknown" } : {};
@@ -145,8 +146,7 @@ function write(store: Store, project: string, topic: string, s: Seen, r: { out: 
     doc: { squad: topic, role: s.m.role, suffix: s.m.suffix ?? "", backend: "contract", terminal: s.t.id, agent_states: [state], terminals_seen_at: now },
     ...(r.tail != null ? { tail: r.tail, tail_at: now, suspect: 0 } : { suspect: 1 }),
     ...ran, presence: walk === "running" ? "running" : walk === "none" ? "none" : "unknown", observed_at: now, gone_at: null });
-  store.upsert("observed_worktrees", { project, wt }, { path: s.path, branch: wtRow?.branch ?? null, parent: wtRow?.parent_path ? `local::${wtRow.parent_path}` : null,
-    doc: { agents: walk === "running" ? 1 : walk === "none" ? 0 : null, backend: "contract" }, observed_at: now, gone_at: null });
+  tree(walk === "running" ? 1 : walk === "none" ? 0 : null);
 }
 
 export default contractObserver();
