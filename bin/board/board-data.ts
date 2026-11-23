@@ -14,7 +14,8 @@
 // PATH, and with the loop stopped it shows the last data behind a "loop down" banner.
 import { resolveBackUp, returnOf } from "../loop/settings/roster.ts";
 import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { familyOf, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { debriefTopic } from "./card-place.ts";
@@ -505,16 +506,41 @@ function questionDoc(db: Db, label: string, topic: string, x: any, units: any[] 
 
 // Lavish review pages (observed_sessions) of a squad: the artifact sits in one of its worktrees, or in its
 // pages folder `<state root>/<label>/pages/<topic>/` or the legacy `<label>/squads/<topic>-board/`. A live
-// and an archived squad read the same way (an archived one has no worktrees).
+// and an archived squad read the same way (an archived one has no worktrees: the worktrees its `pages_rescued`
+// events name stand in). A page whose file is gone gets `saved`, the path under the state root of the copy the
+// rescue made when its worktree closed (served by GET /page/<saved>); a saved page no session stands for is
+// listed too, with `key` null. Nothing is listed twice.
 function lavish(db: Db, st: any, label: string, topic: string) {
-  const wts = arr(st?.worktrees).map(String).map((w) => w.includes("::") ? w.slice(w.lastIndexOf("::") + 2) : w).filter(Boolean);
+  const rescued = db.all("SELECT payload FROM events WHERE kind = 'pages_rescued' AND project = ? AND squad = ? ORDER BY id", label, topic)
+    .map((e) => parse(e.payload) ?? {}).filter((p) => typeof p.path === "string" && typeof p.dest === "string");
+  const wts = [...arr(st?.worktrees).map(String).map((w) => w.includes("::") ? w.slice(w.lastIndexOf("::") + 2) : w), ...rescued.map((p) => String(p.path))].filter(Boolean);
   const homes = [`${db.s.root}/${label}/pages/${topic}/`, `${db.s.root}/${label}/squads/${topic}-board/`];
-  return db.all("SELECT file, url, status, doc FROM observed_sessions WHERE COALESCE(status, '') != 'log' ORDER BY file")
+  const taken = new Set<string>(); // absolute files and page families a listed entry stands for
+  const out = db.all("SELECT file, url, status, doc FROM observed_sessions WHERE COALESCE(status, '') != 'log' ORDER BY file")
     .filter((s) => wts.some((w) => String(s.file).startsWith(w + "/")) || homes.some((h) => String(s.file).startsWith(h)))
     .map((s) => {
       const d = parse(s.doc) ?? {}, f = String(s.file);
-      return { key: d.key ?? null, name: basename(f), dir: basename(f.slice(0, f.lastIndexOf("/"))), mtime: Number(d.mtime) || 0, url: s.url ?? null, status: s.status ?? null };
+      const e: any = { key: d.key ?? null, name: basename(f), dir: basename(f.slice(0, f.lastIndexOf("/"))), mtime: Number(d.mtime) || 0, url: s.url ?? null, status: s.status ?? null };
+      taken.add(f);
+      for (const p of rescued) {
+        if (!f.startsWith(String(p.path) + "/")) continue;
+        const copy = savedCopy(db.s.root, label, topic, String(p.dest), f.slice(String(p.path).length + 1));
+        if (!copy) continue;
+        taken.add(copy.file); taken.add(familyOf(copy.file));
+        if (!isFile(f)) { e.saved = underRoot(db.s.root, copy.file); e.mtime ||= copy.mtime; break; }
+      }
+      return e;
     });
+  // Saved pages no session stands for (one per page: the newest of its rescue copies).
+  const extra = new Map<string, { file: string; mtime: number }>();
+  for (const file of pageFiles(db.s.root, label, topic)) {
+    const fam = familyOf(file);
+    if (taken.has(file) || taken.has(fam)) continue;
+    const m = fileMtime(file), cur = extra.get(fam);
+    if (!cur || m > cur.mtime) extra.set(fam, { file, mtime: m });
+  }
+  for (const [fam, x] of extra) out.push({ key: null, name: basename(fam), dir: basename(dirname(fam)), mtime: x.mtime, url: null, status: null, saved: underRoot(db.s.root, x.file) });
+  return out;
 }
 
 // What a squad's members expose for the operator to open (expose-hosted-services R8): the open `exposed`
