@@ -1,12 +1,15 @@
 // fulfil/chat.ts — kind `chat` (KTD5, board chat): a one-line message from the operator, typed into a
 // member's own agent terminal as `dev-studio board, the operator says: <text>`, only once the member
-// is ready (memberReady, member-ready.ts; for the Studio studioReady on its adopted handle). Payload
+// is ready (memberReady, member-ready.ts; for the Studio studioReady on its adopted handle; for a Claude member
+// recent output alone does not hold it, only a fresh transcript or the working marker on screen). Payload
 // {text, via?, files?}; `files` are stored image names (chat/files.ts, at most 4, text may then be empty):
 // each is resolved inside the squad's chat-files folder and the line ends with ` [images attached; open each
 // with your file-reading tool: <abs path>, …]`; a missing file or a bad name fails and types nothing. Member and squad sit on the row. The loop types it; the board only files the row.
 //
 // The request's `result` (JSON) says where the message is, for the board's chat panel:
 //   {"state":"queued","why":…,"since"?:…}     not typed yet, and why; rewritten only when the why changes
+//   {"state":"queued","why":"send failed[: <err>]","failing":true,"since"?:…}   the send itself failed (the
+//                                               Studio's error text is kept; a member's driver says only "failed")
 //   {"ok":true,"state":"sent"|"turn started",…} typed; `delivery` names the deliveries row of a send the
 //                                               agent only accepted, which poke.ts's verify turns into
 //                                               verified (turn started) or escalates
@@ -27,6 +30,7 @@ import type { Row, Store } from "../core/store.ts";
 import { STUDIO_SQUAD, studioReady, studioView } from "../squad/studio.ts";
 import { payloadOf } from "../core/kinds.ts";
 import { deliver } from "./poke.ts";
+import { STUDIO_MEMBER, sendFailed, sendOk } from "../squad/send-fail.ts";
 import { chatLine } from "../chat/turns.ts";
 import { CHAT_FILES_MAX, IMAGES_MARK, chatFilePath } from "../chat/files.ts";
 import { existsSync } from "node:fs";
@@ -39,14 +43,17 @@ const parse = (s: unknown): Row => { try { const o = JSON.parse(String(s ?? ""))
 
 // The why a request was last queued with, "" when none.
 const lastWhy = (r: Row | null) => { const o = parse(r?.result); return o.state === "queued" ? String(o.why ?? "") : ""; };
+const lastFailing = (r: Row | null) => { const o = parse(r?.result); return o.state === "queued" && o.failing === true; };
 
 // `since` (exec only): when the member's own readiness started to be waited on. A chat held back by
 // a pause or an earlier chat (run()) has none, so its chat_queue_min starts once it is next in line.
-function queue(store: Store, id: number, why: string, since?: number): void {
+// `failing` (exec only): the send itself failed, so the why is `send failed[: <err>]`; `since` stays as it was.
+function queue(store: Store, id: number, why: string, since?: number, failing = false): void {
   const r = store.get("requests", { id });
-  if (!r || r.done_at != null || lastWhy(r) === why) return;
-  store.upsert("requests", { id }, { result: JSON.stringify({ state: "queued", why, ...(since != null ? { since } : {}) }) });
+  if (!r || r.done_at != null || (lastWhy(r) === why && lastFailing(r) === failing)) return;
+  store.upsert("requests", { id }, { result: JSON.stringify({ state: "queued", why, ...(failing ? { failing: true } : {}), ...(since != null ? { since } : {}) }) });
 }
+const sinceOf = (store: Store, id: number): number | undefined => { const n = parse(store.get("requests", { id })?.result).since; return n == null ? undefined : Number(n); };
 
 // The crew-chat.md line: `- <iso> operator → <topic>/<role[-suffix]>: <text, first 200 chars>`.
 function crewLog(store: Store, project: string, topic: string, role: string, suffix: string, text: string, at: number, images = 0): void {
@@ -91,8 +98,10 @@ const chat: Fulfiller = {
     }
     const studio = a.squad === STUDIO_SQUAD;
     const m = studio ? null : memberAt(store, a, wt);
-    const ready = studio ? studioReady(store, a.project, now, 120, id)
-      : memberReady(store, a.project, wt, now, { quietS: limitInt(store, a.project, "chat_quiet_s", 10), agent: m!.agent, before: id });
+    // Screen noise alone never holds a chat to a Claude member (memberReady's screenNoise); other agents keep the quiet window.
+    const quietS = limitInt(store, a.project, "chat_quiet_s", 10);
+    const ready = studio ? studioReady(store, a.project, now, quietS, id, "ignore")
+      : memberReady(store, a.project, wt, now, { quietS, agent: m!.agent, before: id, screenNoise: "ignore" });
     if (!ready.ready) {
       const since = Number(parse(store.get("requests", { id })?.result).since ?? now);
       if (now - since >= limitInt(store, a.project, "chat_queue_min", 30) * 60) return { failed: `never ready: ${ready.why}` };
@@ -106,12 +115,23 @@ const chat: Fulfiller = {
       const h = studioView(store, a.project)?.member?.handle as string | null;
       if (!h) return { retry: "no Studio terminal adopted" };
       const r = await seat.send("poke-terminal", [h, line]);
-      if (r.code !== 0) return { retry: `poke-terminal ${h}: not sent` };
+      if (r.code !== 0) {
+        const err = (r.err || r.out || "").trim() || `poke-terminal exit ${r.code}`;
+        sendFailed(store, a.project, STUDIO_MEMBER, err, now);
+        queue(store, id, `send failed: ${err}`, sinceOf(store, id), true);
+        return { retry: `poke-terminal ${h}: not sent: ${err}` };
+      }
+      sendOk(store, a.project, STUDIO_MEMBER, now);
       finishRequest(store, a, { ok: true, state: "sent", delivered: "sent" }, now);
       return { done: true, result: "sent" };
     }
     const r = await x.act.driver(seat, m!.agent).poke(m!, line);
-    if (r === "failed") return { retry: `chat ${wt}: not sent` };
+    if (r === "failed") {
+      sendFailed(store, a.project, wt, "send failed", now);
+      queue(store, id, "send failed", sinceOf(store, id), true);
+      return { retry: `chat ${wt}: not sent` };
+    }
+    sendOk(store, a.project, wt, now);
     const delivery = r === "accepted" ? deliver(store, { project: a.project, squad: a.squad ?? m!.squad, member: wt, kind: "chat", text: line, request: id }, now) : null;
     finishRequest(store, a, { ok: true, state: r === "started" ? "turn started" : "sent", delivered: r, delivery }, now);
     if (m!.role && !HUB.has(m!.role)) {

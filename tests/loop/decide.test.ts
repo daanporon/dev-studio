@@ -267,6 +267,20 @@ describe("decide", () => {
     expect(decide(ctx(s)).filter((a) => (a.payload as Row).stop).length).toBe(1);
   });
 
+  test("studio-hung-agent-broken U1: no hung stop when the transcript's last turn was interrupted or ended; an open turn still stops", () => {
+    const stops = (fixtureName: string | null) => {
+      const s = fixture();
+      const b = member(s, "builder", { want: "running", placed_at: T - 7200 }, { unit: "dispatched", presence: "running", walkAt: T });
+      s.upsert("observed_workers", { project: "p", wt: b.wt }, { state: "working", last_output_at: T - 40 * 60, started_at: T - 7200, observed_at: T });
+      if (fixtureName) s.upsert("observed_transcripts", { path: join(import.meta.dir, "..", "fixtures", "liveness", fixtureName) }, { project: "p", wt: b.wt, mtime: T - 40 * 60, size: 1, observed_at: T });
+      return decide(ctx(s)).filter((a) => (a.payload as Row).stop).map((a) => (a.payload as Row).why);
+    };
+    expect(stops("interrupted.jsonl")).toEqual([]);
+    expect(stops("ended.jsonl")).toEqual([]);
+    expect(stops("open.jsonl")).toEqual(["hung"]);
+    expect(stops(null)).toEqual(["hung"]);
+  });
+
   test("U153: hung -> stop; loop restart expiring; RSS idle-only and throttled; fresh session meets reload+clear", () => {
     const s = fixture();
     const b = member(s, "builder", { want: "running", placed_at: T - 7200 }, { unit: "dispatched", presence: "running", walkAt: T });

@@ -17,6 +17,7 @@ import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pr
 import { basename, join, resolve } from "node:path";
 import { ROOT } from "../lib/shared.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
+import { debriefTopic } from "./card-place.ts";
 import { placeAlert, questionsCount, shownStatus, doneWaits, shortTitle, prNumber } from "./needs-rules.ts";
 import { githubView, githubLine, budgetCard, dropLeadMergeCopies } from "./github-view.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
@@ -48,6 +49,7 @@ import { settle, type Finish } from "../loop/squad/squad-finish.ts";
 import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
 import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
+import { BACKEND_NAMES, DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
 
@@ -1469,6 +1471,14 @@ const ctxLevel = (db: Db, c: number | null, label: string) => {
   return c >= (dsLimit(db, label, "context_compact") ?? 150000) ? "red" : c >= (dsLimit(db, label, "context_warn") ?? 100000) ? "amber" : "ok";
 };
 
+// U9: the backend a squad runs on and its worktree tool (squads.backend, squads.worktree_provider, migration 0054).
+function squadBackend(db: Db, label: string, topic: string): { backend: string; worktree_provider: string; provider_default: boolean } {
+  let r: any = null;
+  try { r = db.one("SELECT backend, worktree_provider FROM squads WHERE project = ? AND topic = ?", label, topic); } catch { /* a db before migration 0054 */ }
+  const backend = String(r?.backend ?? DEFAULT_BACKEND), provider = String(r?.worktree_provider ?? (isBackend(backend) ? defaultProvider(backend) : "orca"));
+  return { backend, worktree_provider: provider, provider_default: !isBackend(backend) || provider === defaultProvider(backend) };
+}
+
 // One squad. Units are listed in NATURAL ORDER (first u-number in the slug; none -> last); a
 // planned unit is READY when every dep is done, else BLOCKED; a dispatched unit carries its
 // Builder's live state, or "gone" when that worktree vanished. The mermaid text draws the DAG.
@@ -1579,6 +1589,8 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
     pause: { ...activity, descendants_paused: !inactive && members.some((m) => ["pausing", "paused"].includes(m.pause?.state)) },
     type: st.type ?? "feature", autonomy: st.autonomy ?? "checkpoints", ship_mode: shipMode(db, label, String(st.repo ?? "")),
     task_id: st.task_id ?? null, run_id: st.run_id ?? null, framing: st.framing ?? null,
+    // U9: written once at spawn. The page shows a chip only off `orca`, the tool only when not the default.
+    ...squadBackend(db, label, topic),
     // The focus squad (squad-priority U2): `focus` = this squad is the one that counts now; `focus_squad` = the
     // project's focus value while it is not (a suspended focus keeps it), for the menu's "replaces <squad>".
     focus: focusSquad(db.s, label) === topic,
@@ -2009,10 +2021,13 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const allAlerts = (db ? labels.flatMap((l) => db.all("SELECT doc FROM observed_alerts WHERE project = ? ORDER BY rowid", l).map((r) => {
     const x = parse(r.doc) ?? {};
     const text = String(x.question ?? x.text ?? "");
-    const aslug = slugOf(l, typeof x.squad === "string" ? x.squad : null);
+    // A debrief card's repo is its archived squad's (resolved like a live squad's), before the project's.
+    const dTopic = debriefTopic(x);
+    const dRepo = dTopic ? archivedDocs(db, l).filter((a) => a.st && typeof a.st === "object" && String(a.st.topic ?? "") === dTopic && a.st.repo).sort((p, q) => String(q.st.closed_at ?? "").localeCompare(String(p.st.closed_at ?? "")))[0]?.st.repo : null;
+    const aslug = (dRepo && repoSlug(db, l, String(dRepo))) || slugOf(l, typeof x.squad === "string" ? x.squad : null);
     const acts = alertActs(x);
     return {
-      repo_slug: aslug, pr: cardPr(db, l, x.ref, aslug), act: cardAct(x.act),
+      debrief: dTopic, repo_slug: aslug, pr: cardPr(db, l, x.ref, aslug), act: cardAct(x.act),
       project: l, id: x.id ?? null, from: typeof x.asker === "string" && x.asker !== "sweep" ? x.asker : null, text, title: x.title ?? shortTitle(text, x.id ?? null),
       card: typeof x.kind === "string" ? x.kind : typeof x.card === "string" ? x.card : null, reason: typeof x.reason === "string" ? x.reason : null,
       squad: typeof x.squad === "string" ? x.squad : null, unit: typeof x.unit === "string" ? x.unit : null,
@@ -2061,7 +2076,9 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     backend_ok: live.backendOk,
     project: label || null,
     projects: db ? labels.map((project) => ({ label: project, pause: { ...projection(db.s, { project }),
-      descendants_paused: !!db.one("SELECT 1 FROM pause_intents WHERE project = ? AND cleared_at IS NULL LIMIT 1", project) } })) : [],
+      descendants_paused: !!db.one("SELECT 1 FROM pause_intents WHERE project = ? AND cleared_at IS NULL LIMIT 1", project) },
+      // U9: what the Start squad dialog presets its Backend field to.
+      default_backend: ((v) => (isBackend(v) ? v : DEFAULT_BACKEND))(limit(db.s, project, "default_backend")) })) : [],
     prerequisites: db ? labels.flatMap((project) => [
       ...db.all("SELECT squad, slug, status, hold FROM units WHERE project = ? ORDER BY squad, id", project).map((u) => ({ kind: "unit", project, squad: u.squad, slug: u.slug,
         label: `${project}/${u.squad}/${u.slug}`, state: u.status, hold: !!u.hold, url: `#sq-${project}/${u.squad}` })),
@@ -2084,11 +2101,11 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     // The inbox: every question and proposed fix from squads that aren't on hold: blocking first,
     // then approvals, then questions, oldest first; each carries the command to copy.
     needs_you: [...studioAlerts.map((a) => ({
-      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: String(a.id ?? "").match(/^sweep-debrief-(.+)-[0-9]+$/)?.[1] ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true,
+      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true,
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
-        squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
+        squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, since: q.since ?? null, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
         text: q.question, title: q.title, titled: q.titled, choices: q.choices,
         suggestion: q.suggestion, why: q.why, options: q.options, age_min: q.age_min, command: null,
         source: q.source ?? null, picker_answerable: q.picker_answerable ?? null,
@@ -2267,7 +2284,7 @@ export function renderText(b: Board): string {
   }
   for (const a of b.studio_alerts) {
     const ag = a.age_min == null || a.age_min < 0 ? "?" : a.age_min >= 60 ? `${Math.floor(a.age_min / 60)}h` : `${a.age_min}m`;
-    o.push(`studio: ${a.text.replace(/[\t\n]/g, " ")} (${ag}) — then dismiss it on the web board${a.suggestion ? ` ("${a.suggestion}")` : ""}`);
+    o.push(`studio: ${(a.debrief ? a.text.split("\n")[0] : a.text).replace(/[\t\n]/g, " ")} (${ag}) — then dismiss it on the web board${a.suggestion ? ` ("${a.suggestion}")` : ""}`);
   }
   if (b.studio_alerts.length) o.push(RULE);
   for (const st of b.studio) {
@@ -2286,7 +2303,7 @@ export function renderText(b: Board): string {
     if (s.still_active) live += " ⚠still-active";
     if (s.lead.verdict === "unreachable") live += " ⚠LEAD-UNREACHABLE";
     else if (s.lead.verdict) live += ` ⚠LEAD-${s.lead.verdict === "hung" ? "HUNG" : "NOT-RESPONDING"}(${Math.floor((s.lead.since_s ?? 0) / 60)}m)`;
-    o.push("", `▣ ${s.type === "testing" ? "🧪 " : ""}${(s as any).focus ? "★ " : ""}${s.topic}  [${s.display_status}${s.phase_stuck ? " ⚠stuck" : ""}]${s.held && s.display_key !== "held-only" ? ` ${s.held} held` : ""}  ${s.type}/${s.autonomy} · ship:${s.ship_mode}${live}${s.exposed_summary && s.exposed_summary.open ? `  open:${s.exposed_summary.open}` : ""}${s.exposed_summary && s.exposed_summary.down ? ` (${s.exposed_summary.down} down)` : ""}`);
+    o.push("", `▣ ${s.type === "testing" ? "🧪 " : ""}${(s as any).focus ? "★ " : ""}${s.topic}  [${s.display_status}${s.phase_stuck ? " ⚠stuck" : ""}]${s.held && s.display_key !== "held-only" ? ` ${s.held} held` : ""}  ${s.type}/${s.autonomy} · ship:${s.ship_mode}${s.backend && s.backend !== "orca" ? ` · on:${s.backend}${s.provider_default ? "" : `/${s.worktree_provider}`}` : ""}${live}${s.exposed_summary && s.exposed_summary.open ? `  open:${s.exposed_summary.open}` : ""}${s.exposed_summary && s.exposed_summary.down ? ` (${s.exposed_summary.down} down)` : ""}`);
     if ("error" in s) o.push(`   ${s.framing}`);
     else {
       if (s.explain) o.push(`   ${s.display_status}: ${s.explain.means} (set by ${s.explain.set_by}). You can: ${s.explain.you_can}.`);
@@ -2382,7 +2399,7 @@ function withDb<T>(fn: (db: Db) => T, root = stateRoot()): T | null {
 export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] }[] = [
   { name: "Context & compaction", keys: ["studio_move"], prefixes: ["context_", "compact_", "auto_compact_"] },
   { name: "Accounts & model picking", keys: ["limit_pct", "limit_wait_max", "credits_hold_h", "fallback_return_min"], prefixes: ["pick_"] },
-  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "archive_debrief_min", "notes_cap"] },
+  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "default_backend", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "archive_debrief_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
   { name: "Board & machine", keys: ["board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
@@ -2422,7 +2439,7 @@ export function limitsJson(project: string, root = stateRoot()) {
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
       const hint = key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
-      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
+      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : key === "default_backend" ? [...BACKEND_NAMES] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
     const used = new Set(limits.map((l) => l.group));
     return { project, groups: [...LIMIT_GROUPS.map((g) => g.name).filter((n) => used.has(n)), ...(used.has("Other") ? ["Other"] : [])], limits };
@@ -2883,6 +2900,33 @@ function chatSend(db: Db, r: Row, topic: string) {
   return { ...base, state, why: state === "not taken" ? "typed, but no turn started" : null };
 }
 
+// The chat panel's member switcher (chat-role-switcher U1): the squad's live members `chatMember` accepts, in the
+// Crew box's order (member rows by id, one per worktree), each with the box's mail counts (`msgCounts`) and
+// `reply_at`, the time of the newest assistant text turn in its observed_chat row (null: none, gone or a screen
+// tail). One members read and one observed_chat read for the squad. `[]` for the Studio.
+function chatCrew(db: Db, project: string, topic: string) {
+  if (topic === "_studio") return [];
+  const seen = new Set<string>(), live: Row[] = [];
+  for (const m of db.all(`SELECT * FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone'
+    AND COALESCE(status, '') != 'gone' ORDER BY id`, project, topic)) {
+    const wt = String(m.wt);
+    if (seen.has(wt)) continue;
+    seen.add(wt); live.push(m);
+  }
+  const chats = new Map<string, Row>();
+  try { for (const c of db.all("SELECT wt, source, turns, gone_at FROM observed_chat WHERE project = ?", project)) chats.set(String(c.wt), c); }
+  catch { /* loop.db before migration 0044 */ }
+  const counts = msgCounts(db, project, topic);
+  return live.map((m) => {
+    const c = chats.get(String(m.wt)), n = counts.get(`${m.role ?? ""}\0${m.suffix ?? ""}`);
+    let reply_at: number | null = null;
+    if (c && c.gone_at == null && c.source !== "screen")
+      for (const t of arr(parse(String(c.turns ?? "[]"))))
+        if (t?.role === "assistant" && !t.tool && t.at != null && Number.isFinite(Number(t.at)) && (reply_at == null || Number(t.at) > reply_at)) reply_at = Number(t.at);
+    return { wt: String(m.wt), label: (m.role ?? "") + (m.suffix ? "-" + m.suffix : ""), role: m.role ?? null, unread: n?.unread ?? 0, reply_due: n?.reply_due ?? 0, reply_at };
+  });
+}
+
 // GET /api/chat: one member's recent turns (observed_chat, redacted and capped by the loop) and its last
 // 10 chat requests, newest last. Nothing else: no transcript, file or screen is read here. null: no
 // loop.db; {missing: true}: no such live member.
@@ -2898,6 +2942,7 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     // Mid-turn, as the board's crew row reads it (observed_workers.state), for the panel's "Working…" line.
     const w = db.one("SELECT state, gone_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
     return {
+      crew: chatCrew(db, o.project, o.topic),
       agent: (c?.agent as string | null) ?? (m.agent as string | null) ?? null, source: (c?.source as string | null) ?? null,
       turns: c && c.gone_at == null ? (parse(String(c.turns ?? "[]")) ?? []) : [], updated_at: c?.updated_at == null ? null : Number(c.updated_at),
       working: w?.gone_at == null && w?.state === "working", sends,

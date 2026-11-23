@@ -116,6 +116,10 @@ function holdForRevalidation(store: Store, r: Row, at: number): void {
 
 async function create(a: Action, x: Exec, r: Row): Promise<Result> {
   const { store, now: at } = x, project = String(r.project), topic = String(r.topic), id = Number(r.id);
+  // U9: the loop drives only Orca with Runs so far; spawn-squad refuses any backend not built, so a row on
+  // another one is a hand-written wish. Fail it, never start it on orca instead.
+  const backend = String(r.backend ?? "orca");
+  if (backend !== "orca") return { failed: `squad ${topic} is on backend ${backend}, which the loop cannot start yet` };
   // Re-spawning an archived topic: the closed row starts over — a new Run, task, doc and
   // coordinator, and create keys scoped to this wish so no old call replays.
   if (["closed", "gone"].includes(String(r.status ?? ""))) {
@@ -207,7 +211,7 @@ async function archive(a: Action, x: Exec, r: Row): Promise<Result> {
     doc.waiting_on_you = [];
     if (dropped.length) doc.dropped_questions = [...(Array.isArray(doc.dropped_questions) ? doc.dropped_questions : []), ...dropped];
     // debrief-on-archive U1: the Lead's final debrief, else the done-time one under a line naming what it misses.
-    const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r)?.state === "written");
+    const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r));
     doc.debrief = final.debrief; doc.debrief_source = final.source;
     const arch = join(store.root, project, "archive");
     mkdirSync(arch, { recursive: true });

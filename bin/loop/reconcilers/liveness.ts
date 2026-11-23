@@ -7,6 +7,7 @@ import { stopping } from "../squad/cancel.ts";
 // A member is broken when it is
 //   dead            no observed worker (outside the spawn grace)              episode gone|<wt>
 //   hung            working with no output for HUNG_MIN                       hung|<wt>|<last output>
+//                   (not when its transcript's last turn ended or was interrupted: turnEnded)
 //   exited          not working and no agent left in its worktree (outside the spawn grace)
 //                                                                             exited|<wt>
 //   not responding  a Lead idle or done with Run mail unread for SILENT_MIN   silent|<wt>|<first unread>
@@ -85,8 +86,10 @@ import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
 import { tailOf } from "../observers/state.ts";
 import { redact } from "../core/redact.ts";
+import { INTERRUPTED } from "../chat/turns.ts";
 import { wake } from "../pause/wake.ts";
 import { settledDispatch } from "./members.ts";
+import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioView } from "../squad/studio.ts";
 
 export const POKE_TEXT = "dev-studio loop: you went quiet with unread messages. Check your inbox now and carry on with your work.";
 export const QUIET_POKE_TEXT = "dev-studio loop: you have been working with no output for a while — are you stuck? If you are, ask your Lead; if not, carry on with your work.";
@@ -243,13 +246,45 @@ export function foregroundOpen(store: Store, wt: string): boolean | null {
   try { statSync(t.path); } catch { return null; }
   return openCalls(store, wt)?.foreground ?? false;
 }
-// One parse of the newest transcript's last MB: is a foreground tool call open, and which background
-// tasks it started have not reported done (oldest first, with the command each ran). null with no transcript row.
-export type OpenCalls = { foreground: boolean; background: { id: string; command: string }[] };
+// Did the last turn of these transcript lines end (studio-hung-agent-broken U1)? The newest record that
+// says where a turn stands decides: an Esc (a user record starting `[Request interrupted by user`) or a turn
+// end (system `stop_hook_summary` / `turn_duration`) ends it; an assistant record, a tool result or any
+// other user line (a prompt, a typed loop line, a task notification, a slash command, Stop hook feedback)
+// opens it. Records that say nothing about the turn are skipped: meta and compaction-summary user records,
+// a local command's output, other system records (away_summary, compact_boundary) and the bookkeeping
+// types (attachments, snapshots, queue operations). Read from the end, so it stops at the first such record.
+const LOCAL_OUTPUT = /^\s*<local-command-/;
+export function linesEnded(lines: string[]): boolean {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.includes('"assistant"') && !line.includes('"user"') && !line.includes('"system"')) continue;
+    let j: Row;
+    try { j = JSON.parse(line); } catch { continue; } // the cut first line, a half-written last one
+    if (j?.type === "assistant") return false;
+    if (j?.type === "system") {
+      if (j.subtype === "stop_hook_summary" || j.subtype === "turn_duration") return true;
+      continue;
+    }
+    if (j?.type !== "user" || j.isMeta === true || j.isCompactSummary === true) continue;
+    const c = (j.message as Row | undefined)?.content;
+    const texts = typeof c === "string" ? [c] : Array.isArray(c) ? (c as Row[]).filter((x) => x?.type === "text").map((x) => String(x.text ?? "")) : [];
+    if (texts.some((s) => INTERRUPTED.test(s))) return true;
+    if (Array.isArray(c) && (c as Row[]).some((x) => x?.type === "tool_result")) return false;
+    if (texts.length && texts.every((s) => LOCAL_OUTPUT.test(s))) continue;
+    return false;
+  }
+  return false;
+}
+
+// One parse of the newest transcript's last MB: is a foreground tool call open, which background tasks it
+// started have not reported done (oldest first, with the command each ran), and did its last turn end
+// (`linesEnded`). null with no transcript row.
+export type OpenCalls = { foreground: boolean; background: { id: string; command: string }[]; ended: boolean };
 export function openCalls(store: Store, wt: string): OpenCalls | null {
   const t = store.db.query("SELECT path FROM observed_transcripts WHERE wt = ? ORDER BY mtime DESC").get(wt) as { path: string } | null;
   if (!t) return null;
   const lines = tailOf(t.path, 1024 * 1024).split("\n");
+  const ended = linesEnded(lines);
   const results = new Set<string>(), bg = new Map<string, string>(), bgIds = new Map<string, string>();
   let last: string | null = null;
   for (const line of lines) {
@@ -280,7 +315,19 @@ export function openCalls(store: Store, wt: string): OpenCalls | null {
       }
     }
   }
-  return { foreground: last !== null && !results.has(last), background: [...bgIds].map(([id, use]) => ({ id, command: bg.get(use) ?? "" })) };
+  return { foreground: last !== null && !results.has(last), background: [...bgIds].map(([id, use]) => ({ id, command: bg.get(use) ?? "" })), ended };
+}
+
+// studio-hung-agent-broken U1: is a Claude member Orca reads `working` really at its prompt? Its newest
+// transcript's last turn ended or was interrupted (Esc runs no Stop hook, so Orca keeps `working` until the
+// next turn ends). false with no transcript (Codex, Muse, none yet), one that can't be read, or one last
+// written before the member's process started (a new session that has not written its own yet).
+export function turnEnded(store: Store, wt: string): boolean {
+  const t = store.db.query("SELECT mtime FROM observed_transcripts WHERE wt = ? ORDER BY mtime DESC").get(wt) as { mtime: number | null } | null;
+  if (!t) return false;
+  const w = store.db.query("SELECT started_at FROM observed_workers WHERE wt = ? AND gone_at IS NULL").get(wt) as { started_at: number | null } | null;
+  if (w?.started_at && t.mtime != null && Number(t.mtime) < Number(w.started_at)) return false;
+  return openCalls(store, wt)?.ended ?? false;
 }
 
 // A Builder at its prompt (builder-idle-no-pr-card U1): Orca reads it `working`, but its turn ended
@@ -359,7 +406,7 @@ export function leadVerdict(store: Store, project: string, wt: string, now: numb
   const hung = knob(store, project, "HUNG_MIN", 30) * 60, silent = knob(store, project, "SILENT_MIN", 10) * 60;
   if (w.state === "working") {
     const out = Number(w.last_output_at ?? 0);
-    if (out > 0 && now - out >= hung && !longStepOpen(store, project, wt, now, out, hung)) return { verdict: "hung", since: out };
+    if (out > 0 && now - out >= hung && !longStepOpen(store, project, wt, now, out, hung) && !turnEnded(store, wt)) return { verdict: "hung", since: out };
     return null;
   }
   if (w.state !== "idle" && w.state !== "done") return null;
@@ -430,8 +477,11 @@ class Pass {
     if (!w) return grace && this.inGrace(wt) ? null : { cause: "dead", since: n, ep: `gone|${wt}` };
     if (w.state === "working") {
       const out = Number(w.last_output_at ?? 0);
-      if (out > 0 && n - out >= this.k.hung * 60 && this.longStep(wt, out, this.k.hung * 60)) return null;
-      return out > 0 && n - out >= this.k.hung * 60 ? { cause: "hung", since: out, ep: `hung|${wt}|${out}` } : null;
+      if (!(out > 0 && n - out >= this.k.hung * 60)) return null;
+      if (this.longStep(wt, out, this.k.hung * 60)) return null;
+      // U1: Esc (or a turn end Orca has not caught up with) leaves the member at its prompt, not hung.
+      if (turnEnded(this.store, wt)) return null;
+      return { cause: "hung", since: out, ep: `hung|${wt}|${out}` };
     }
     if (this.agents(wt) === 0) return grace && this.inGrace(wt) ? null : { cause: "exited", since: n, ep: `exited|${wt}` };
     return first != null && n - first >= this.k.silent * 60 ? { cause: "not responding", since: first, ep: `silent|${wt}|${first}` } : null;
@@ -442,7 +492,8 @@ class Pass {
   longStep(wt: string, out: number, extra = 0): boolean { return longStepOpen(this.store, this.project, wt, this.now, out, extra); }
 
   alert(squad: string | null, key: string, ep: string, text: string, to: "squad" | "@project",
-    option = "look at it, then restart it by hand (restart-role.sh)", why = "the loop does not restart an agent twice in a row or one that did not come back"): void {
+    option = "look at it, then restart it by hand (restart-role.sh)", why = "the loop does not restart an agent twice in a row or one that did not come back",
+    card: { title?: string; fields?: Record<string, unknown> } = {}): void {
     const k = { project: this.project, subject: key, kind: "alerted" };
     const row = this.store.get("episodes", k);
     let seen: string[] = [];
@@ -450,13 +501,32 @@ class Pass {
     if (seen.some((e) => this.same(row, ep, e))) return;
     seen.push(ep);
     this.store.upsert("episodes", k, { squad, started_at: this.now, episode_key: ep, count: seen.length, state: JSON.stringify(seen), source: "loop", observed_at: this.now });
-    this.actions.push({ project: this.project, squad, subject: key, kind: "alert", episode: ep, payload: { title: "Agent broken", card: "agent_broken", text, option, why, to } });
+    this.actions.push({ project: this.project, squad, subject: key, kind: "alert", episode: ep,
+      payload: { title: card.title ?? "Agent broken", card: "agent_broken", text, option, why, to, ...(card.fields ? { fields: card.fields } : {}) } });
+  }
+
+  // studio-hung-agent-broken U2: the Studio's own card. It names the project's Studio terminal and, with an
+  // adopted handle, offers Restart Studio (fulfil/studio.ts records the approval, reconcilers/studio.ts
+  // files the restart). The text keeps starting `studio (<cause> since `, which alertGone (alerts.ts) clears on.
+  studioAlert(key: string, b: Broken, what: string): void {
+    const v = studioView(this.store, this.project), handle = (v?.member?.handle as string | null) || null;
+    const term = handle ? v!.terms.find((t) => t.handle === handle) : undefined;
+    const where = handle ? `your cockpit terminal ${term?.title || "untitled"}, ${handle}` : "your cockpit terminal; the loop has adopted none";
+    const state = b.cause === "hung" ? `has shown no output for ${Math.max(0, Math.round((this.now - b.since) / 60))} min while Orca reads it as working`
+      : b.cause === "exited" ? "has no agent running in its worktree" : b.cause === "dead" ? "is no longer listed by Orca" : `is ${b.cause}`;
+    const text = `${what} — the ${this.project} Studio (${where}) ${state}`;
+    const why = "The loop never restarts the Studio on its own.";
+    // No handle, nothing to restart through: the one acknowledgement, as before.
+    if (!handle) { this.alert(null, key, b.ep, text, "@project", "look at it, then restart it by hand", why, { title: STUDIO_CARD_TITLE }); return; }
+    this.alert(null, key, b.ep, text, "@project", "", why,
+      { title: STUDIO_CARD_TITLE, fields: { restart: true, handle, options: [RESTART_STUDIO, STUDIO_FINE] } });
   }
 
   // handle: one request per episode; a RECHECK_MIN recheck; a second break within REBREAK_MIN goes up.
   handle(squad: string | null, key: string, target: string, member: string, topic: string, b: Broken): void {
     const what = `${member}${topic ? ` of ${topic}` : ""} (${b.cause} since ${hhmm(b.since)})`;
     const to = squad ? "squad" : "@project";
+    if (target === "_operator" && key === "_studio") { this.studioAlert(key, b, what); return; }
     if (target === "_operator") { this.alert(squad, key, b.ep, `${what} — nobody above it can restart it`, to); return; }
     const k = { project: this.project, subject: key, kind: "req" };
     const req = this.store.get("episodes", k), t = Number(req?.started_at ?? 0);
