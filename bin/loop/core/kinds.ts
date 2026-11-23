@@ -98,6 +98,8 @@ const ONLY_ACTIONS = {
   "cleanup.report": obj({ refused: opt(str) }),
   // exposed-cleanup U2: run one group of queued stop commands (exposed rows `ids`, one command) once.
   "expose.stop": obj({ ids: arr(num), cmd: str, cwd: opt(str) }),
+  // ds-feedback-github-issues U2: one drafter pass over the `new` notes (`keys`, oldest first) for `repo`.
+  "feedback.draft": obj({ repo: str, keys: arr(str) }),
   board_start: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_restart: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_stop: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
@@ -136,6 +138,7 @@ export const FACTS = {
   exposed: obj({ name: str, role: opt(str), scope: opt(str), suffix: opt(str), url: opt(str), audience: opt(str), stop: opt(bool), ports: opt(arr(num)) }),
   feedback_imported: obj({ file: str, lines: num, added: num, renamed: opt(str) }),
   feedback_noted: obj({ key: str, project: str, member: opt(str), source: str }),
+  feedback_drafted: obj({ repo: str, notes: num, drafts: num, blocked: num, kept: num, model: opt(str), account: opt(str), head: opt(str) }),
   limit_cleared: ep,
   limit_expired: ep,
   limit_wait: ep,
@@ -148,6 +151,11 @@ export const FACTS = {
   worktree_created: obj({ path: str, provider: str, branch: str, adopted: bool, parent: opt(str) }),
   worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
   worktree_gone: obj({ path: str, provider: str, why: str }),
+  // U10 (squad/shadow.ts): the shadow signals.
+  shadow_started: obj({}),
+  shadow_disagree: obj({ point: str, old: str, new: str, member: str, id: opt(num), gen: opt(str), wt: opt(str), transient: bool, ticks: num, first_at: num }),
+  shadow_explained: obj({ event: num, why: str, by: opt(str) }),
+  shadow_crash: obj({ member: str, id: num, gen: str, next: str }),
   builder_wish_settled: obj({ id: num, unit: str, was: opt(str) }),
   builder_wish_withdrawn: obj({ id: num, unit: str, why: str, by: str, reason: opt(str) }),
   member_drift_cleared: obj({ id: opt(num), path: opt(str), status: opt(str) }),
