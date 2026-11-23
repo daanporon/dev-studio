@@ -110,7 +110,7 @@ export function payloadOf<K extends ActionKind>(a: { kind: string; payload?: unk
   return (a.payload ?? {}) as ActionPayload<K>;
 }
 
-// ---------------------------------------------------------------- feedback (migration 0054)
+// ---------------------------------------------------------------- feedback (migration 0055)
 // A ds-feedback note's states (feedback_notes.state) and a draft's (feedback_drafts.state); the
 // tables' CHECKs list the same words.
 export const FEEDBACK_NOTE_STATES = ["new", "drafted", "project-only", "already-fixed", "filed", "fixed", "closed", "dismissed"] as const;
