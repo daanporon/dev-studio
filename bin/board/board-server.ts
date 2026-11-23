@@ -564,6 +564,9 @@ async function limitsPost(req: Request) {
     } else if (key === "focus_squad") {
       // squad-priority U2: the squad menu's Make focus sends a squad name; the loop's settings write checks it is a live feature squad.
       if (!/^[A-Za-z0-9._-]{1,100}$/.test(v)) return json(400, { error: `${key} must be a squad name, or - for none` });
+    } else if (key === "feedback_repo") {
+      // Same rule as limitValueProblem (bin/lib/operator.ts): - or owner/name.
+      if (!/^(-|[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})$/.test(v)) return json(400, { error: `${key} must be owner/name, or - for none` });
     } else if (key === "briefing_time") {
       if (!/^(off|([01][0-9]|2[0-3]):[0-5][0-9])$/.test(v)) return json(400, { error: `${key} must be off or HH:MM, 24h (00:00-23:59)` });
     } else if (key === "briefing_days") {

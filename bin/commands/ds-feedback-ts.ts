@@ -32,7 +32,7 @@ export async function run(argv: string[]): Promise<number> {
   // loop.db could not be opened or written: the old file, in the old line form.
   mkdirSync(dirname(LOG), { recursive: true });
   appendFileSync(LOG, fileLine(stamp(at), text));
-  writeErr(`ds-feedback: loop.db could not be opened (${why.split("\n")[0]}): the note went to the file instead\n`);
+  writeErr(`ds-feedback: loop.db could not be opened or written (${why.split("\n")[0]}): the note went to the file instead\n`);
   writeOut(`ds-feedback: noted → ${LOG} ${TAIL}\n`);
   return 0;
 }

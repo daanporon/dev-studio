@@ -135,6 +135,17 @@ describe("the commands", () => {
     expect(readFileSync(join(root, "dev-studio-feedback"), "utf8")).toMatch(/^- \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ — fallback note\n$/);
   });
 
+  test("loop.db opens but the write fails: the note still goes to the old file", () => {
+    const t = temp(), root = join(t, "state");
+    const s = open(root);
+    s.db.run("DROP TABLE feedback_notes"); // the insert now throws after a good open
+    s.close();
+    const r = sh([FEEDBACK, "write-failed note"], { cwd: t, env: env(root) });
+    expect(r.rc).toBe(0);
+    expect(r.err).toContain("loop.db could not be opened");
+    expect(readFileSync(join(root, "dev-studio-feedback"), "utf8")).toMatch(/ — write-failed note\n$/);
+  });
+
   test("ds feedback import renames the file and reports", () => {
     const t = temp(), root = join(t, "state");
     mkdirSync(root, { recursive: true });

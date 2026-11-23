@@ -401,6 +401,12 @@ ff
 eq "limits: Clear focus is 202"      "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"focus_squad\",\"value\":null}" "$LU")" "202"
 LF2="$(rid)"
 eq "limits: Clear focus row"         "$(reqrow "$LF2" | jq -c '[.kind, .payload.key, .payload.value]')" '["limits","focus_squad",null]'
+# ds-feedback-github-issues U1: feedback_repo takes owner/name or -, never a number check
+eq "limits: feedback_repo owner/name is 202" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"feedback_repo\",\"value\":\"acme/tools\"}" "$LU")" "202"
+LFR="$(rid)"
+eq "limits: feedback_repo row"       "$(reqrow "$LFR" | jq -c '[.kind, .payload]')" '["limits",{"key":"feedback_repo","value":"acme/tools"}]'
+eq "limits: feedback_repo - is 202"  "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"feedback_repo\",\"value\":\"-\"}" "$LU")" "202"
+eq "limits: feedback_repo bad is 400" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"feedback_repo\",\"value\":\"no slash\"}" "$LU")" "400"
 eq "limits: enum set is 202"         "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"compact_mode_lead\",\"value\":\"off\"}" "$LU")" "202"
 ff
 eq "limits: the loop set it"         "$(lim context_compact)" "120000 override"
