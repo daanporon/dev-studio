@@ -463,7 +463,7 @@ jt "no dispatch on record keeps done"           "$TMP/u96.json" "$U96 | (.member
 rm -f "$SD/u96.json"
 
 # U100: the board degrades on a loop.db from before migration 0017 (no dispatch_seen_at):
-# a done Thinker keeps `done` instead of rendering the squad broken. Such a loop.db has none of 0055's
+# a done Thinker keeps `done` instead of rendering the squad broken. Such a loop.db has none of 0056's
 # triggers either, so they go first.
 printf '{"run_id":"r17","status":"running","members":[{"role":"thinker","wt":"wT"}],"units":[]}' > "$SD/u17.json"
 cat > "$TMP/seed17.json" <<'JSON'
@@ -778,7 +778,7 @@ chat_fn=$(sed -n '/^function ChatPanel(/,/^}/p' "$BP")
 eq "U3 page: a crew member with a worktree has chat in its actions menu" "$(sed -n '/^function MemberActions(/,/^}/p' "$BP" | grep -cF '${m.wt && onChat && html`<button class="btn sm chat-btn"')$(grep -cF 'onChat=${() => setChatWith(m)}' "$BP")$(grep -cF '<${ChatPanel} project=${s.label} topic=${s.topic} wt=${chatWith.wt}' "$BP")" "111"
 eq "U3 page: a squad question card chats with the member its answer goes to" "$(printf '%s' "$ask_fn" | grep -c 'n.squad !== "_studio" && n.chat_wt')$(printf '%s' "$ask_fn" | grep -c 'wt: n.chat_wt, label: n.chat_label')$(printf '%s' "$ask_fn" | grep -cF '<${ChatPanel} ...${chat}')" "111"
 eq "U3 page: the panel reads api/chat every 3 s and stops on close" "$(printf '%s' "$chat_fn" | grep -c 'setInterval(load, 3000)')$(printf '%s' "$chat_fn" | grep -c 'clearInterval(t)')" "11"
-eq "U3/U5 page: a wrapping input capped at 2000, sent as one line to api/chat" "$(printf '%s' "$chat_fn" | grep -c '<textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX}')$(grep -c '^const CHAT_MAX = 2000;' "$BP")$(printf '%s' "$chat_fn" | grep -c 'post("api/chat", { project, topic, wt, text: t })')$(printf '%s' "$chat_fn" | grep -c 'const t = chatOneLine(text);')" "1111"
+eq "U3/U5 page: a wrapping input capped at 2000, sent as one line to api/chat" "$(printf '%s' "$chat_fn" | grep -c '<textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX}')$(grep -c '^const CHAT_MAX = 2000;' "$BP")$(printf '%s' "$chat_fn" | grep -c 'post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t })')$(printf '%s' "$chat_fn" | grep -c 'const t = chatOneLine(text);')" "1111"
 # crew-terminal-access U5: the panel reads as a conversation.
 chat_row_fn=$(sed -n '/^function chatTurn(/,/^}/p' "$BP")
 eq "U5 page: only a reply is HTML, and only through mdToHtml (it escapes first)" "$(printf '%s%s' "$chat_fn" "$chat_row_fn" | grep -ci 'innerHTML')$(printf '%s' "$chat_row_fn" | grep -cF 'dangerouslySetInnerHTML=${{ __html: mdToHtml(text) }}')" "11"

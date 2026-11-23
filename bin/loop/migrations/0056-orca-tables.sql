@@ -1,4 +1,4 @@
--- 0055 Orca-only data in its own tables (orca-backend-alternatives U6). Each Orca-only value the core
+-- 0056 Orca-only data in its own tables (orca-backend-alternatives U6). Each Orca-only value the core
 -- tables hold gets a copy in an `orca_*` table, so the clean-up can move readers there and drop the
 -- old columns, and a squad on another backend leaves these tables alone:
 --   orca_runs          squads.run_id, squads.task_id                       (one row per squad)

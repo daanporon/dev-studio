@@ -80,7 +80,9 @@ export async function scanCleanup(store: Store, at: number, o: CleanupOpts = {})
     const p = r?.home_repo?.replace(/^path:/, "");
     if (p && p.startsWith("/") && !repos.has(p)) repos.set(p, l);
   }
-  const wts = store.db.query("SELECT project, wt, path, gone_at FROM observed_worktrees WHERE path IS NOT NULL").all() as Wt[];
+  // Live rows last, so a path or id with a gone row under another project (a worktree that project
+  // once claimed by name) maps to the live row of the project that owns it.
+  const wts = store.db.query("SELECT project, wt, path, gone_at FROM observed_worktrees WHERE path IS NOT NULL ORDER BY (gone_at IS NULL), observed_at").all() as Wt[];
   const byPath = new Map(wts.map((w) => [w.path, w])), byId = new Map(wts.map((w) => [w.wt, w]));
   const agents = liveAgents(store), keep = keepSet(store);
   const sessions = new Map<string, string>(); // wt -> the session id of its newest transcript

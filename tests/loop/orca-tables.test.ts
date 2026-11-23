@@ -1,4 +1,4 @@
-// orca-tables.test.ts — 0055-orca-tables.sql (orca-backend-alternatives U6): every Orca-only value the
+// orca-tables.test.ts — 0056-orca-tables.sql (orca-backend-alternatives U6): every Orca-only value the
 // loop holds also sits in an `orca_*` table. On a made-up database at the migration before it the
 // backfill copies today's rows; after it the triggers copy every write, so a fake-Orca squad's start,
 // dispatch and coordinator land in both places and agree, and the core tables gain no Orca column.
@@ -18,7 +18,7 @@ import { orcaObserver } from "../../bin/loop/observers/orca.ts";
 const ROOT = join(import.meta.dir, "..", "..");
 const MIGRATIONS = join(ROOT, "bin", "loop", "migrations");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
-const FILE = "0055-orca-tables.sql";
+const FILE = "0056-orca-tables.sql";
 const T = 1_800_000_000;
 const R = "0b5e0c1a-repo";
 const id = (p: string) => `${R}::/w/${p}`;
@@ -77,7 +77,7 @@ function before(): Store {
 }
 const after = (s: Store) => { migrate(s.db); return s; };
 
-describe("0055 orca tables", () => {
+describe("0056 orca tables", () => {
   test("the migration copies every Orca-only value already held, and nothing more", () => {
     const s = after(before());
     agree(s);
