@@ -593,7 +593,7 @@ jt "U5: archived squad with a debrief" "$TMP/g2.json" '.archived[] | select(.top
 jt "U5: archived squad without one: null" "$TMP/g2.json" '.archived[] | select(.topic=="old-feature") | .debrief==null'
 jt "U5: a done live squad carries its debrief" "$TMP/g2.json" '.squads[] | select(.topic=="dd-sq") | .debrief=="live debrief"'
 rm -f "$SD/dd-sq.json"
-eq "U5: page shows the Debrief group in Docs and the muted label" "$(grep -cF 'const DebriefChip' "$ROOT/web/board.html")$(grep -cF 'id: "debrief", label: "Debrief"' "$ROOT/web/board.html")$(grep -cF '>no debrief<' "$ROOT/web/board.html")$(grep -cF '<${Docs} s=${a} onPlan=${setPlan} closed=${true}' "$ROOT/web/board.html")$(grep -cF 'closed=${s.status === "done"}' "$ROOT/web/board.html")" "01111"
+eq "U5: page shows the Debrief group in Docs and the muted label" "$(grep -cF 'const DebriefChip' "$ROOT/web/board.html")$(grep -cF 'id: "debrief", label: "Debrief"' "$ROOT/web/board.html")$(grep -cF 'class="mut nodebrief">${i.name}<' "$ROOT/web/board.html")$(grep -cF '<${Docs} s=${a} onPlan=${setPlan} closed=${true}' "$ROOT/web/board.html")$(grep -cF 'closed=${s.status === "done"}' "$ROOT/web/board.html")" "01111"
 rm -rf "$AD"
 
 # U5: briefs. No files -> empty list; ten files over two weeks -> newest first, only the first has markdown.
