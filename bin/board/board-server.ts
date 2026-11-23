@@ -48,6 +48,7 @@
 //   /api/pause, /api/resume {scope, project, topic?, wt?, role?, suffix?, prerequisites?}
 //                 shared activity state, answered 200; the loop owns checkpoint/close/start
 //   /api/poke     {project, topic}  `poke`: a wake-up line typed into a quiet Lead's terminal
+//   GET /api/feedback, POST /api/feedback {action: post|add-to|edit|dismiss|restore, draft|note, …}  the Feedback panel (U4)
 //   /api/chat-cancel, /api/chat-now  {project, id}  `chat-cancel`/`chat-now` of an open chat request (409: already typed)
 //   /api/chat     {project, topic, wt, text, files?}  `chat`: one line (no newline or control character, at most
 //                 2000 characters) the loop types into that live, unpaused member's terminal once it is ready;
@@ -75,7 +76,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { briefingJson, buildBoard, chatJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
+import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { BACKEND_NAMES } from "../backend/registry.ts";
 import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
@@ -340,6 +341,54 @@ async function chatPost(req: Request) {
     const m = chatMember(s, t.project, t.topic, t.wt) ?? no(404, noMember(t));
     if (t.topic !== "_studio" && paused(s, m as { project: string })) no(409, "this member is paused or resuming; use Resume before chatting");
     return board(s, "chat", { text, via: "board", ...(files.length ? { files } : {}) }, { project: t.project, squad: t.topic, member: t.wt });
+  });
+}
+
+// GET /api/feedback: the Feedback panel's drafts, notes and filed issues (board-data.ts feedbackJson).
+function feedbackGet() {
+  const r = feedbackJson();
+  return r ? json(200, r) : json(503, NO_DB);
+}
+
+// POST /api/feedback {action, draft|note, target?, title?, body?, why?} (ds-feedback-github-issues U4): one
+// request of U3's kinds (fulfil/feedback.ts) per press. Drafts act only while in review (409 once posted,
+// dismissed or posting), a note is dismissed only while not filed, and a second press on the same open
+// request is 409.
+const FB_ACTIONS: Record<string, string> = { post: "feedback-post", "add-to": "feedback-add-to", edit: "feedback-edit", dismiss: "feedback-dismiss", restore: "feedback-restore" };
+async function feedbackPost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const b = pr.b, action = String(b.action ?? ""), kind = FB_ACTIONS[action];
+  if (!Object.hasOwn(FB_ACTIONS, action)) return json(400, { error: "action is one of post, add-to, edit, dismiss, restore" });
+  const id = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null);
+  const draft = id(b.draft), note = id(b.note);
+  const opt = (k: string, max: number) => (b[k] == null ? undefined : typeof b[k] === "string" && b[k].length <= max ? (b[k] as string) : null);
+  if (b.draft != null && draft == null || b.note != null && note == null) return json(400, { error: "draft and note are whole numbers" });
+  const needDraft = action !== "restore" && !(action === "dismiss" && note != null);
+  if (needDraft && draft == null) return json(400, { error: "name the draft" });
+  if (!needDraft && note == null) return json(400, { error: "name the note" });
+  if (action === "dismiss" && draft != null && note != null) return json(400, { error: "name a draft or a note, not both" });
+  const why = opt("why", 500), title = opt("title", 300), body = opt("body", 60000);
+  if (why === null || title === null || body === null) return json(400, { error: "why, title or body is too long or not text" });
+  const target = id(b.target);
+  if (action === "add-to" && target == null) return json(400, { error: "name the issue number to add to" });
+  if (action === "edit" && title === undefined && body === undefined) return json(400, { error: "send a new title or body" });
+  const project = typeof b.project === "string" && NAME.test(b.project) ? b.project : "";
+  return write((s) => {
+    const d = draft != null ? one(s, "SELECT id, state FROM feedback_drafts WHERE id = ?", draft) ?? no(404, `no feedback draft ${draft}`) : null;
+    if (d && d.state !== "review") no(409, `draft ${draft} is ${d.state}, not in review`);
+    if (note != null) {
+      const n = one(s, "SELECT id, state FROM feedback_notes WHERE id = ?", note) ?? no(404, `no feedback note ${note}`);
+      if (action === "restore" && n.state !== "dismissed") no(409, `note ${note} is ${n.state}, not dismissed`);
+      if (action === "dismiss" && ["filed", "fixed", "closed", "dismissed"].includes(String(n.state))) no(409, `note ${note} is ${n.state}`);
+    }
+    const field = draft != null ? "draft" : "note", val = String(draft ?? note);
+    if (one(s, `SELECT id FROM requests WHERE kind LIKE 'feedback-%' AND done_at IS NULL AND json_extract(payload, '$.' || ?) = ?`, field, Number(val))) no(409, `a request for ${field} ${val} is already open`);
+    const payload: Record<string, unknown> = draft != null ? { draft } : { note };
+    if (action === "add-to") payload.target = target;
+    if (action === "edit") { if (title !== undefined) payload.title = title; if (body !== undefined) payload.body = body; }
+    if (action === "dismiss" && why?.trim()) payload.why = why.trim();
+    return board(s, kind, payload, { project });
   });
 }
 
@@ -1122,6 +1171,7 @@ async function get(req: Request, url: URL) {
   if (path === "/api/events") return eventsGet(url);
   if (path === "/api/events/lists") return eventsListsGet(url);
   if (path === "/api/chat") return chatGet(url);
+  if (path === "/api/feedback") return feedbackGet();
   if (path === "/api/chat-file") return chatFileGet(url);
   if (path === "/api/messages") return messagesGet(url);
   if (path === "/api/questions") return questionsGet(url);
@@ -1159,6 +1209,7 @@ async function handle(req: Request) {
   if (path === "/api/skills" && req.method === "POST") return skillsPost(req);
   if (path === "/api/settings-import" && req.method === "POST") return settingsImportPost(req);
   if (path === "/api/chat" && req.method === "POST") return chatPost(req);
+  if (path === "/api/feedback" && req.method === "POST") return feedbackPost(req);
   if (path === "/api/chat-cancel" && req.method === "POST") return chatControl(req, "chat-cancel");
   if (path === "/api/chat-now" && req.method === "POST") return chatControl(req, "chat-now");
   if (req.method !== "GET" && req.method !== "HEAD") return text(405, "GET only\n");

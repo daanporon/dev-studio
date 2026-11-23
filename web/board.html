@@ -197,6 +197,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .arch button{background:none;border:0;color:var(--fg);text-decoration:underline;cursor:pointer;padding:0;margin-left:8px}
 .arch .item,.detail .item{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:6px 0;font:12px var(--mono)}
 .arch .item>*{white-space:nowrap}
+.fb-draft{border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:10px}.fb-body{white-space:pre-wrap;margin:6px 0}.fb-note,.fb-note-row{margin:4px 0}.fb-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}.fb-edit input,.fb-edit textarea{width:100%;box-sizing:border-box}.fb-leak.bad{color:var(--bad,#e5534b)}.fb-filters{display:flex;gap:6px;margin-bottom:8px}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50}
 /* a fixed overlay chains the scroll it does not use to the page: :has() freezes the page while any popup (stacked or not) is open, the gutter keeps the width, contain keeps each popup's scroll to itself */
 html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavior:none}
@@ -3187,6 +3188,83 @@ function ChangeNote({ c, busy, onUndo }) {
   return html`<div class="set-note chg">${changeText(c)}${c.undo && html` <button class="btn sm" disabled=${busy} title=${c.from == null ? "drop this override" : "put back: " + c.from} onClick=${onUndo}>undo</button>`}</div>`;
 }
 
+// Feedback (ds-feedback-github-issues U4): the header button's panel. GET api/feedback -> drafts to review (each
+// with the notes it came from, local text marked "not sent"), every note with its state, and the filed issues.
+// Each button files one request through POST api/feedback; nothing reaches GitHub until Post is pressed.
+const FB_TABS = [["review", "To review"], ["notes", "Notes"], ["filed", "Filed"]];
+const FB_FILTERS = [["all", "All"], ["open", "Not filed"], ["dismissed", "Dismissed"]];
+function fbNoteState(n) {
+  if (n.state === "filed") return "filed" + (n.issue != null ? " #" + n.issue : "");
+  if (n.state === "fixed") return "fixed" + (n.fix_pr != null ? " in #" + n.fix_pr : "") + (n.fix_here ? " · in your version" : "");
+  return n.state === "already-fixed" ? "already fixed" : n.state;
+}
+const fbLeak = (d) => d.leak === "blocked" ? "leak check: blocked" + (d.leak_why ? " (" + d.leak_why + ")" : "") : d.leak === "ok" ? "leak check: passed" : "leak check: not run yet";
+function FeedbackPanel({ summary, project, toast, onClose }) {
+  const on = !!(summary && summary.on);
+  const [tab, setTab] = useState(on ? "review" : "notes");
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [edit, setEdit] = useState(null);         // {id, title, body}: the draft being edited
+  const [target, setTarget] = useState({});       // draft id -> the issue number typed for Add to #N
+  const [why, setWhy] = useState({});             // note id -> the optional dismiss reason
+  const [filter, setFilter] = useState("all");
+  const [busy, setBusy] = useState("");
+  const load = () => fetch("api/feedback").then((r) => r.json().then((b) => { if (!r.ok) throw new Error(b.error || "HTTP " + r.status); setData(b); setErr(""); })).catch((e) => setErr(String(e.message || e)));
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, []);
+  useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k); }, []);
+  const act = async (key, body, said) => {
+    setBusy(key);
+    try { await post("api/feedback", { ...(project ? { project } : {}), ...body }); toast(said); await load(); return true; }
+    catch (e) { toast(String(e.message || e)); return false; }
+    finally { setBusy(""); }
+  };
+  const saveEdit = async () => { if (await act("edit" + edit.id, { action: "edit", draft: edit.id, title: edit.title, body: edit.body }, "saved the new text; the leak check runs again")) setEdit(null); };
+  const draftCard = (d, filed) => html`<div class="fb-draft" key=${d.id}>
+    <div class="fb-title"><b>${d.kind === "add-to" ? "Comment on #" + d.target : d.title}</b> <span class="mut">${d.area ? d.area + " · " : ""}${d.label || ""}</span></div>
+    ${edit && edit.id === d.id ? html`<div class="fb-edit">
+      ${d.kind === "issue" && html`<input class="fb-edit-title" value=${edit.title} onInput=${(e) => setEdit({ ...edit, title: e.target.value })} />`}
+      <textarea class="fb-edit-body" rows="10" value=${edit.body} onInput=${(e) => setEdit({ ...edit, body: e.target.value })}></textarea>
+      <div class="fb-actions"><button class="btn sm pri fb-save" disabled=${!!busy} onClick=${saveEdit}>Save</button><button class="btn sm fb-cancel" onClick=${() => setEdit(null)}>Cancel</button></div></div>`
+      : html`<div class="fb-body">${d.body}</div>`}
+    ${d.evidence && html`<div class="fb-evidence mut">Drafter's evidence: ${d.evidence}${d.checked_at ? " (main at " + String(d.checked_at).slice(0, 8) + ")" : ""}</div>`}
+    <div class=${"fb-leak" + (d.leak === "blocked" ? " bad" : " mut")}>${fbLeak(d)}</div>
+    <div class="fb-notes">${d.notes.map((n) => html`<div class="fb-note" key=${n.id}><span class="mut">note #${n.id} · ${n.project} · </span>${n.text} <span class="mut">(local text, not sent)</span></div>`)}</div>
+    ${filed ? html`<div class="fb-filed">${d.url ? html`<a href=${d.url} target="_blank" rel="noopener">#${d.issue}</a>` : d.issue != null ? "#" + d.issue : d.state} <span class="mut">${d.state}${d.fix_pr != null ? " · fixed in #" + d.fix_pr : ""}</span></div>`
+      : html`<div class="fb-actions">
+        <button class="btn sm pri fb-post" disabled=${!!busy || !on || d.leak === "blocked" || d.state === "posting"}
+          title=${!on ? "feedback_repo is not set: name the repo in Settings first" : d.leak === "blocked" ? "the leak check blocked this draft: edit it first" : "Send this to " + summary.repo}
+          onClick=${() => act("post" + d.id, { action: "post", draft: d.id }, "posting draft " + d.id)}>Post</button>
+        <button class="btn sm fb-edit-btn" disabled=${!!busy} onClick=${() => setEdit({ id: d.id, title: d.title || "", body: d.body })}>Edit</button>
+        <button class="btn sm fb-dismiss-draft" disabled=${!!busy} onClick=${() => act("dismiss" + d.id, { action: "dismiss", draft: d.id }, "dismissed draft " + d.id)}>Dismiss</button>
+        <input class="fb-target" placeholder="#N" size="5" value=${target[d.id] || ""} onInput=${(e) => setTarget({ ...target, [d.id]: e.target.value })} />
+        <button class="btn sm fb-addto" disabled=${!!busy || !on || !/^#?\d+$/.test(target[d.id] || "")} title="Post this as a comment on that open issue instead"
+          onClick=${() => act("add" + d.id, { action: "add-to", draft: d.id, target: Number(String(target[d.id]).replace("#", "")) }, "adding draft " + d.id + " to #" + String(target[d.id]).replace("#", ""))}>Add to #N</button></div>`}
+  </div>`;
+  const notes = (data && data.notes || []).filter((n) => filter === "all" || (filter === "dismissed" ? n.state === "dismissed" : !["filed", "fixed", "closed", "dismissed"].includes(n.state)));
+  const noteRow = (n) => html`<div class="fb-note-row" key=${n.id}>
+    <span class="fb-state mut">${fbNoteState(n)}</span> <span class="mut">#${n.id} · ${n.project}</span> <span class="fb-note-text">${n.text}</span>
+    ${n.state === "dismissed" ? html`<span class="fb-actions"><button class="btn sm fb-restore" disabled=${!!busy} onClick=${() => act("restore" + n.id, { action: "restore", note: n.id }, "restoring note " + n.id)}>Restore</button></span>`
+      : !["filed", "fixed", "closed"].includes(n.state) && html`<span class="fb-actions">
+        <input class="fb-why" placeholder="reason (optional)" value=${why[n.id] || ""} onInput=${(e) => setWhy({ ...why, [n.id]: e.target.value })} />
+        <button class="btn sm fb-dismiss-note" disabled=${!!busy} onClick=${() => act("dismissn" + n.id, { action: "dismiss", note: n.id, ...(why[n.id] && why[n.id].trim() ? { why: why[n.id].trim() } : {}) }, "dismissed note " + n.id)}>Dismiss</button></span>`}
+    ${n.reason && html`<div class="mut fb-reason">${n.reason}</div>`}
+  </div>`;
+  const counts = { review: data ? data.review.length : (summary && summary.review) || 0, notes: data ? data.notes.length : (summary && summary.notes) || 0, filed: data ? data.filed.length : 0 };
+  return html`<div class="modal" id="feedback" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="mbox set-box" role="dialog" aria-label="Feedback"><div class="mhd"><span>Feedback${on ? " · " + summary.repo : " · off"}</span><span class="sp"></span>
+      <button class="btn sm mclose" title="Close (Esc)" onClick=${onClose}>✕</button></div>
+      <div class="set-tabs">${FB_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab fb-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l} ${counts[k] > 0 ? "(" + counts[k] + ")" : ""}</button>`)}</div>
+      <div class="set-body fb-body-wrap">
+        ${err && html`<div class="bad fb-err">${err}</div>`}
+        ${!on && html`<div class="mut fb-off">Posting is off: set <code>feedback_repo</code> to owner/name in Settings → Limits to get drafts. Notes are still kept on this host.</div>`}
+        ${!data && !err && html`<div class="mut">loading…</div>`}
+        ${data && tab === "review" && (data.review.length ? data.review.map((d) => draftCard(d, false)) : html`<div class="mut fb-none">no drafts to review</div>`)}
+        ${data && tab === "filed" && (data.filed.length ? data.filed.map((d) => draftCard(d, true)) : html`<div class="mut fb-none">nothing filed yet</div>`)}
+        ${data && tab === "notes" && html`<div class="fb-filters">${FB_FILTERS.map(([k, l]) => html`<button key=${k} class=${"btn sm fb-filter" + (filter === k ? " pri" : "")} onClick=${() => setFilter(k)}>${l}</button>`)}</div>`}
+        ${data && tab === "notes" && (notes.length ? notes.map(noteRow) : html`<div class="mut fb-none">no notes here</div>`)}
+      </div></div></div>`;
+}
+
 // Settings: the project's limits (GET/POST api/limits -> limits.sh). Changes apply on the next
 // sweep minute / board refresh; auto_compact_* apply when an agent is next (re)started.
 const SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"]];
@@ -3767,6 +3845,7 @@ function App() {
   };
 
   // The Flow card's unit details window: the squad and unit are looked up in the live board on every render.
+  const [feedbackOpen, setFeedbackOpen] = useState(false);   // the header Feedback panel
   const [studioChat, setStudioChat] = useState(null), [, bumpSeen] = useState(0);   // the header Studio chat; bumpSeen re-renders its dot
   const [flowUnit, setFlowUnit] = useState(null);   // { label, topic, slug, ask }
   const openFlowUnit = (c) => setFlowUnit({ label: c.project, topic: c.squad, slug: c.slug, ask: c.needs_you && c.ask ? c.ask : null, card: c });
@@ -3826,6 +3905,8 @@ function App() {
         !data.gh.ok && html`<span class="stale-dot" title="the loop's GitHub observer has no PR rows yet">no PR status yet</span>`].filter(Boolean).map((x, k) => html`<${React.Fragment} key=${k}>${k ? " · " : ""}${x}</${React.Fragment}>`)}</span>
       <span class="sp"></span>
       ${studioBtns}
+      ${(() => { const F = data.feedback || {}; return html`<button class="btn sm fb-btn" title=${F.on ? "Review the drafted GitHub issues for dev-studio (" + F.repo + ")" : "feedback_repo is not set: posting is off; the notes are still kept"}
+        onClick=${() => setFeedbackOpen(true)}>Feedback${F.on ? (F.review > 0 ? html`<span class="msg-badge" title=${F.review + " drafts to review"}>${F.review}</span>` : "") : " off"}</button>`; })()}
       ${data.project && html`<button class="btn sm" title="Limits and roles for ${data.project}" onClick=${() => setSettings(true)}>⚙ Settings</button>`}
     </div>
 
@@ -4000,6 +4081,7 @@ function App() {
     <${EventLog} tick=${data.generated_at} toast=${setToast} />
 
     ${studioChat && html`<${ChatPanel} ...${studioChat} onSeen=${() => bumpSeen((n) => n + 1)} onClose=${() => { setStudioChat(null); bumpSeen((n) => n + 1); }} />`}
+    ${feedbackOpen && html`<${FeedbackPanel} summary=${data.feedback} project=${data.project} toast=${setToast} onClose=${() => setFeedbackOpen(false)} />`}
     ${settingsOpen && data.project && html`<${Settings} project=${data.project} toast=${setToast} onClose=${() => setSettings(false)} />`}
 
     ${ask && html`<${AskOverlay} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}
