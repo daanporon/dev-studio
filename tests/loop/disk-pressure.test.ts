@@ -2,7 +2,7 @@
 // low spell, the 5-point margin, consumer order, the limit off), the disk-usage observer (docker df parse, no
 // docker binary, a docker timeout, du over disk_watch_paths) and the alert's clearing through alerts.ts.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
@@ -12,7 +12,7 @@ import { Loop } from "../../bin/loop/core/tick.ts";
 import diskPressure from "../../bin/loop/reconcilers/disk-pressure.ts";
 import alerts from "../../bin/loop/reconcilers/alerts.ts";
 import { diskUsageObserver, type Run } from "../../bin/loop/observers/disk-usage.ts";
-import { consumers, parseDockerDf, sizeKb } from "../../bin/loop/squad/disk-pressure.ts";
+import { consumers, parseDockerDf, sizeKb, watchPaths } from "../../bin/loop/squad/disk-pressure.ts";
 
 const T = 1_800_000_000, GB = 1024 * 1024; // kb per GB
 const PROJECTS = ["pa", "pb"];
@@ -156,6 +156,27 @@ describe("the disk-usage observer", () => {
     expect(s.get("observed_disk_usage", { key: "du:/srv/cache" })?.size_kb).toBe(2048);
     expect(s.db.query("SELECT key FROM observed_disk_usage WHERE key LIKE 'du:%'").all().length).toBe(1);
     expect(s.get("observed_disk_usage", { key: "meta:docker" })?.error).toBeNull();
+  });
+  test("disk_watch_paths set on a project through ds config import is sized and named on another project's card", async () => {
+    const s = root();
+    const imp = (project: string, line: string) => {
+      const f = join(s.root, `${project}.export`);
+      writeFileSync(f, `#== limits.conf\ndisk_watch_paths ${line}\n`);
+      const r = Bun.spawnSync([join(import.meta.dir, "..", "..", "bin", "ds"), "--state", s.root, "config", "import", "--project", project, f], { stdout: "pipe", stderr: "pipe" });
+      expect(r.exitCode).toBe(0);
+    };
+    mkdirSync(join(s.root, "zzskip", "squads"), { recursive: true });
+    imp("pa", "/srv/a,/srv/../etc,/srv/b");
+    imp("pb", "/srv/b /srv/c");
+    imp("zzskip", "/srv/skipped");
+    expect(watchPaths(s)).toEqual(["/srv/a", "/srv/b", "/srv/c"]); // bad path dropped, b once, zz… row unread
+    const calls: string[] = [];
+    await diskUsageObserver({ run: async (c, t) => { calls.push(c[c.length - 1]); return ok(c, t); }, hasDocker: () => false }).run(ctx(s, T));
+    expect(calls).toEqual(["/srv/a", "/srv/b", "/srv/c"]);
+    disk(s, 15);
+    expect(consumers(s).map((c) => c.label)).toEqual(expect.arrayContaining(["/srv/c"]));
+    process.env.DS_LIMIT_DISK_WATCH_PATHS = "/srv/env"; // the env value wins alone
+    expect(watchPaths(s)).toEqual(["/srv/env"]);
   });
   test("no docker binary: no docker rows, the meta row says so, du still runs", async () => {
     const s = root();

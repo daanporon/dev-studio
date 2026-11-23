@@ -2084,11 +2084,11 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     // The inbox: every question and proposed fix from squads that aren't on hold: blocking first,
     // then approvals, then questions, oldest first; each carries the command to copy.
     needs_you: [...studioAlerts.map((a) => ({
-      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true,
+      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: String(a.id ?? "").match(/^sweep-debrief-(.+)-[0-9]+$/)?.[1] ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true,
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
-        squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
+        squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, since: q.since ?? null, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
         text: q.question, title: q.title, titled: q.titled, choices: q.choices,
         suggestion: q.suggestion, why: q.why, options: q.options, age_min: q.age_min, command: null,
         source: q.source ?? null, picker_answerable: q.picker_answerable ?? null,
@@ -2883,6 +2883,33 @@ function chatSend(db: Db, r: Row, topic: string) {
   return { ...base, state, why: state === "not taken" ? "typed, but no turn started" : null };
 }
 
+// The chat panel's member switcher (chat-role-switcher U1): the squad's live members `chatMember` accepts, in the
+// Crew box's order (member rows by id, one per worktree), each with the box's mail counts (`msgCounts`) and
+// `reply_at`, the time of the newest assistant text turn in its observed_chat row (null: none, gone or a screen
+// tail). One members read and one observed_chat read for the squad. `[]` for the Studio.
+function chatCrew(db: Db, project: string, topic: string) {
+  if (topic === "_studio") return [];
+  const seen = new Set<string>(), live: Row[] = [];
+  for (const m of db.all(`SELECT * FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone'
+    AND COALESCE(status, '') != 'gone' ORDER BY id`, project, topic)) {
+    const wt = String(m.wt);
+    if (seen.has(wt)) continue;
+    seen.add(wt); live.push(m);
+  }
+  const chats = new Map<string, Row>();
+  try { for (const c of db.all("SELECT wt, source, turns, gone_at FROM observed_chat WHERE project = ?", project)) chats.set(String(c.wt), c); }
+  catch { /* loop.db before migration 0044 */ }
+  const counts = msgCounts(db, project, topic);
+  return live.map((m) => {
+    const c = chats.get(String(m.wt)), n = counts.get(`${m.role ?? ""}\0${m.suffix ?? ""}`);
+    let reply_at: number | null = null;
+    if (c && c.gone_at == null && c.source !== "screen")
+      for (const t of arr(parse(String(c.turns ?? "[]"))))
+        if (t?.role === "assistant" && !t.tool && t.at != null && Number.isFinite(Number(t.at)) && (reply_at == null || Number(t.at) > reply_at)) reply_at = Number(t.at);
+    return { wt: String(m.wt), label: (m.role ?? "") + (m.suffix ? "-" + m.suffix : ""), role: m.role ?? null, unread: n?.unread ?? 0, reply_due: n?.reply_due ?? 0, reply_at };
+  });
+}
+
 // GET /api/chat: one member's recent turns (observed_chat, redacted and capped by the loop) and its last
 // 10 chat requests, newest last. Nothing else: no transcript, file or screen is read here. null: no
 // loop.db; {missing: true}: no such live member.
@@ -2898,6 +2925,7 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     // Mid-turn, as the board's crew row reads it (observed_workers.state), for the panel's "Working…" line.
     const w = db.one("SELECT state, gone_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
     return {
+      crew: chatCrew(db, o.project, o.topic),
       agent: (c?.agent as string | null) ?? (m.agent as string | null) ?? null, source: (c?.source as string | null) ?? null,
       turns: c && c.gone_at == null ? (parse(String(c.turns ?? "[]")) ?? []) : [], updated_at: c?.updated_at == null ? null : Number(c.updated_at),
       working: w?.gone_at == null && w?.state === "working", sends,
