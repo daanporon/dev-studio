@@ -318,6 +318,20 @@ function observedPrState(b: StoreBackend, doc: Doc, slug: string, pr: string): s
   return row?.state ? String(row.state) : null;
 }
 
+// debrief-in-needs-you pages U1: a feature squad's manual test steps live in `<squads dir>/<topic>-try-it.md`, which the
+// Thinker keeps current. `set-status done` refuses when it is missing, or (on the store) older than the squad's newest
+// unit_done event. Returns the refusal line, or null. A file outside a `squads/` folder (a scratch file) is not checked.
+function tryItRefusal(b: Backend, file: string, units: J[]): string | null {
+  if (basename(dirname(file)) !== "squads" || !units.some((u) => u?.status === "done")) return null;
+  const page = join(dirname(file), `${basename(file, ".json")}-try-it.md`);
+  const fix = `the Thinker writes it (roles/thinker.md, "After the build"): ask it, then run set-status done again`;
+  let mt: number;
+  try { mt = Math.floor(statSync(page).mtimeMs / 1000); } catch { return `no Try it page — ${page} is missing; ${fix}`; }
+  if (!(b instanceof StoreBackend)) return null;
+  const last = (b.store.db.query("SELECT MAX(at) AS at FROM events WHERE project = ? AND squad = ? AND kind = 'unit_done'").get(b.project, b.topic) as { at: number | null } | null)?.at;
+  return last != null && mt < last ? `the Try it page is out of date — ${page} is older than the last unit done; ${fix}` : null;
+}
+
 // satisfied(s, self): dep slug s counts for dependent self. A dep on a CANCELLED unit counts when its
 // work landed elsewhere: folded into this unit itself, into a unit that is done (cancelled->cancelled
 // chains followed, 10 hops), or into a PR that merged (into_merged). The board (U3) mirrors this.
@@ -1049,6 +1063,7 @@ function main(argv: string[]): void {
               else lines.push(`unit ${slug} is a held follow-up — promote it with add-role.sh <project> <topic> builder ${slug}, or cancel-unit ${slug} --why "<why>"`);
             }
           }
+          if (feature) { const t = tryItRefusal(b, file, us); if (t) lines.push(t); }
           if (lines.length) die(1, `squad-state: refusing done: ${lines.join("\n  ")}\n  or leave the squad parked; it is not done`);
         }
         const was = raw(alt(d.status, ""));
