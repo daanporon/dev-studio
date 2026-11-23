@@ -124,7 +124,9 @@ case "$sub" in
     else
       printf '%s' "${ORCA_PS_PRIMARY:-$EMPTY_PS}"
     fi ;;
-  "worktree create")  echo '{"result":{"worktree":{"id":"wt_new"}}}' ;;
+  "worktree create")  if [ -n "${ORCA_WT_OUT:-}" ]; then echo "$ORCA_WT_OUT"; else echo '{"result":{"worktree":{"id":"wt_new"}}}'; fi ;;
+  # ORCA_WT_OUT / ORCA_WT_RC: what worktree show / list (and create, when set) answer (U8b's wt-* verbs).
+  "worktree show"|"worktree list") echo "${ORCA_WT_OUT:-{\"result\":{\}\}}"; exit "${ORCA_WT_RC:-0}" ;;
   "worktree current") echo '{"result":{"worktree":{"id":"wt_self"}}}' ;;
   "worktree rm")      echo '{"result":{}}' ;;
   "repo add")         echo '{"result":{}}' ;;
@@ -2252,6 +2254,22 @@ unset ORCA_PS_PRIMARY_FILE
 
 unset ORCA_PAUSE_WORKERS_FILE ORCA_PAUSE_WORKERS_PAGE2
 unset ORCA_PAUSE_TABS_FILE
+
+# U8b: the `orca` worktree provider's verbs print a slim JSON line per worktree.
+W='{"id":"R::/w/a1","path":"/w/a1","branch":"refs/heads/feat/a1","head":"abc","parentWorktreeId":"R::/w/lead","displayName":"a1"}'
+out=$(ORCA_WT_OUT="{\"result\":{\"worktree\":$W}}" run wt-make /repo a1 feat/a1 main /w/lead)
+eq "wt-make prints the slim worktree" "$out" '{"id":"R::/w/a1","path":"/w/a1","branch":"refs/heads/feat/a1","head":"abc","parentWorktreeId":"R::/w/lead"}'
+has "wt-make: no agent, nested, setup skipped" "$(cat "$ORCA_LOG")" "worktree create --repo path:/repo --name a1 --branch feat/a1 --base-branch main --parent-worktree path:/w/lead --setup skip --json"
+ORCA_WT_OUT="{\"result\":{\"worktree\":$W}}" run wt-make /repo a1 feat/a1 main "" >/dev/null
+has "wt-make with no parent is top-level" "$(cat "$ORCA_LOG")" "--no-parent --setup skip"
+rc=0; ORCA_WT_OUT='{"result":{"worktree":{}}}' run wt-make /repo a1 feat/a1 main 2>/dev/null || rc=$?; eq "wt-make: an answer with no worktree fails" "$rc" "1"
+eq "wt-show by path" "$(ORCA_WT_OUT="{\"result\":{\"worktree\":$W}}" run wt-show path:/w/a1 | jq -r .id)" "R::/w/a1"
+rc=0; ORCA_WT_OUT='{"ok":false,"error":{"code":"selector_not_found"}}' ORCA_WT_RC=1 run wt-show path:/w/x 2>/dev/null || rc=$?; eq "wt-show: none is exit 3" "$rc" "3"
+rc=0; ORCA_WT_OUT='{"ok":false,"error":{"code":"runtime_busy"}}' ORCA_WT_RC=1 run wt-show path:/w/x 2>/dev/null || rc=$?; eq "wt-show: another failure is exit 1" "$rc" "1"
+M='{"id":"R::/repo","path":"/repo","branch":"refs/heads/main","isMainWorktree":true}'
+eq "wt-list leaves the main checkout out" "$(ORCA_WT_OUT="{\"result\":{\"worktrees\":[$M,$W],\"truncated\":false}}" run wt-list /repo | jq -r .path)" "/w/a1"
+has "wt-list asks for the repo's whole list" "$(cat "$ORCA_LOG")" "worktree list --repo path:/repo --limit 10000 --json"
+rc=0; ORCA_WT_OUT="{\"result\":{\"worktrees\":[$W],\"truncated\":true}}" run wt-list /repo >/dev/null 2>&1 || rc=$?; eq "wt-list: a truncated list fails" "$rc" "1"
 
 echo "orca-adapter: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
