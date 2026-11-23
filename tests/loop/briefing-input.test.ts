@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, openReadOnly, type Store } from "../../bin/loop/core/store.ts";
-import { collect, MAX_LINES, planTryIt, render, tryItOf, windowOf } from "../../bin/commands/briefing-input.ts";
+import { collect, MAX_LINES, planTryIt, render, tryItOf, tryItPage, windowOf } from "../../bin/commands/briefing-input.ts";
 
 process.env.TZ = "Europe/Berlin";
 const ROOT = join(import.meta.dir, "..", "..");
@@ -450,6 +450,25 @@ describe("Elsewhere and try it", () => {
       expect(md).toMatch(/- bare \(done [^)]+\): debrief:\n(?: {2}> .*\n)* {2}try it: missing/);
     } finally { rmSync(w.d, { recursive: true, force: true }); }
   });
+
+  // debrief-in-needs-you pages U1: the Try it page (live in squads/, after archive in archive/) is read before the debrief and the plan.
+  test("a finished squad's Try it page wins over its debrief; a squad without one keeps the fallback", () => {
+    const w = world((s) => {
+      const page = (path: string, body: string) => insert(s, "documents", { project: ELS, path, mtime: T, body, observed_at: T });
+      const sq = (topic: string, debrief: string) => {
+        insert(s, "squads", { project: ELS, topic, status: "done", doc: { topic, debrief }, observed_at: T, updated_at: T });
+        insert(s, "events", { at: MON + 9 * H, project: ELS, squad: topic, kind: "squad_state", payload: { cmd: "set-status", args: ["done"] } });
+      };
+      sq("paged", "Shipped: x.\nTry it: nothing to try by hand — old");
+      sq("plain", "Shipped: x.\nTry it:\n1. one");
+      page(`${ELS}/squads/paged-try-it.md`, "# Try it — paged\n\n## 2026-11-23 — b\n\n1. one\n2. two\n\n## 2026-11-20 — a\n\n1. old\n");
+    });
+    try {
+      const f = w.json().finished as { squad: string; try_it: unknown }[];
+      expect(f.find((x) => x.squad === "paged")!.try_it).toEqual({ kind: "steps", steps: 3 });
+      expect(f.find((x) => x.squad === "plain")!.try_it).toEqual({ kind: "steps", steps: 1 });
+    } finally { rmSync(w.d, { recursive: true, force: true }); }
+  });
 });
 
 // debrief-in-needs-you U2: a done squad has no debrief; its Try it is the approved plan's `## Try it`.
@@ -464,6 +483,19 @@ describe("a done squad's Try it comes from its approved plan", () => {
       expect(tryItOf(planTryIt({ approved_plans: [] }))).toEqual({ kind: "missing" });
       expect(planTryIt(null)).toBeNull();
     } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+});
+
+// debrief-in-needs-you pages U1: the squad's Try it page is read first.
+describe("a squad's Try it page", () => {
+  test("every numbered step across its dated sections counts", () => {
+    const page = "# Try it — x\n\n## 2026-11-23 — u2\n\n1. one\n2. two\n\n## 2026-11-20 — u1\n\n1. old one\n2. old two\n3. old three\n";
+    expect(tryItPage(page)).toEqual({ kind: "steps", steps: 5 });
+  });
+  test("the nothing line is `nothing`; no page or no step falls back", () => {
+    expect(tryItPage("# Try it — x\n\nTry it: nothing to try by hand — docs only\n")).toEqual({ kind: "nothing", why: "docs only" });
+    expect(tryItPage(null)).toBeNull();
+    expect(tryItPage("# Try it — x\n\nno steps yet\n")).toBeNull();
   });
 });
 

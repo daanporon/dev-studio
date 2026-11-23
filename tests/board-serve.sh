@@ -1233,6 +1233,31 @@ eq "lavish: the loop started it once" "$(wc -l < "$TMP/lvstart.log" | tr -d ' ')
 eq "lavish: up -> redirect"           "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$L/$LK")" "302 http://127.0.0.1:$LP/session/$LK"
 if [ -s "$TMP/lvfake.pid" ]; then kill "$(cat "$TMP/lvfake.pid")" 2>/dev/null || true; fi
 
+# GET /page/<label>/pages/<topic>/<path> (debrief-in-needs-you pages U2): a review page saved when its worktree
+# closed, read-only from `<label>/pages/<topic>/` only, sandboxed so its scripts cannot call the board's API.
+PG="http://127.0.0.1:$PORT/page"; PD="$DBR/$LBL/pages/pgt"
+mkdir -p "$PD/rescued/b/.lavish" "$DBR/$LBL/pages/pgother"
+printf '<html><link rel="stylesheet" href="s.css"><body>saved</body></html>' > "$PD/rescued/b/.lavish/plan.html"
+printf 'body{color:red}' > "$PD/rescued/b/.lavish/s.css"; printf 'x' > "$PD/rescued/b/.lavish/notes.txt"
+printf 'other' > "$DBR/$LBL/pages/pgother/o.html"; printf 'secret' > "$TMP/outside.html"
+ln -sf "$TMP/outside.html" "$PD/link.html"; ln -sfn "$DBR/$LBL/pages/pgother" "$PD/dir"
+pg(){ curl -s -o "$TMP/pg.out" -w '%{http_code}' "$@"; }
+eq "page: a saved page is 200"          "$(pg "$PG/$LBL/pages/pgt/rescued/b/.lavish/plan.html")" "200"
+has "page: its body"                    "$(cat "$TMP/pg.out")" "saved"
+eq "page: its relative css is 200"      "$(pg "$PG/$LBL/pages/pgt/rescued/b/.lavish/s.css")" "200"
+H="$(curl -s -D - -o /dev/null "$PG/$LBL/pages/pgt/rescued/b/.lavish/plan.html" | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
+has "page: sandboxed, scripts only"     "$H" "content-security-policy: sandbox allow-scripts"
+has "page: nosniff"                     "$H" "x-content-type-options: nosniff"
+has "page: html content type"           "$H" "content-type: text/html"
+eq "page: a .txt is 404"                "$(pg "$PG/$LBL/pages/pgt/rescued/b/.lavish/notes.txt")" "404"
+eq "page: .. is resolved by the URL, never out of the folder" "$(pg --path-as-is "$PG/$LBL/pages/pgt/../../../../../../$TMP/outside.html")" "404"
+eq "page: an encoded slash in a name is 404" "$(pg "$PG/$LBL/pages/pgt/..%2fpgother%2fo.html")" "404"
+eq "page: a symlink out is 404"         "$(pg "$PG/$LBL/pages/pgt/link.html")" "404"
+eq "page: through a symlinked folder is 404" "$(pg "$PG/$LBL/pages/pgt/dir/o.html")" "404"
+eq "page: a folder is 404"              "$(pg "$PG/$LBL/pages/pgt/rescued")" "404"
+eq "page: not under pages/ is 404"      "$(pg "$PG/$LBL/chat-files/pgt/plan.html")" "404"
+eq "page: a bad label is 404"           "$(pg "$PG/../pages/pgt/rescued/b/.lavish/plan.html")" "404"
+
 # The stream carried what the loop did: each request_done, a failed one with its reason. The page
 # toasts those, and refetches the board on every event.
 sleep 1.5; kill "$SSE" 2>/dev/null || true; wait "$SSE" 2>/dev/null || true

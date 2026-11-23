@@ -41,3 +41,10 @@ test("running squad with plans has no debrief group", () => {
 test("archived-shaped entry: Debrief and Plans, no Review pages", () => {
   expect(groups(render({ topic: "t", debrief: "x", plans }, true))).toEqual(["debrief", "plans"]);
 });
+
+test("review pages: a saved copy links to /page/<path> (saved copy), a live session to /lavish/<key>", () => {
+  const lavish = [{ key: "aaaaaaaaaaaaaaaa", name: "plan.html", dir: ".lavish", mtime: 3, saved: "p/pages/t/rescued/b-u1/.lavish/plan.html" }, { key: null, name: "my idea.html", dir: "c", mtime: 2, saved: "p/pages/t/my idea.html" }, { key: "bbbbbbbbbbbbbbbb", name: "live.html", dir: "x", mtime: 1 }];
+  const links = nodes(render({ topic: "t", plans: [], lavish }, true)).filter((n) => n.str.includes('class="plan" style=')).map((n) => ({ href: n.values[2], title: n.values[3] }));
+  expect(links.map((l) => l.href)).toEqual(["/page/p/pages/t/rescued/b-u1/.lavish/plan.html", "/page/p/pages/t/my%20idea.html", "/lavish/bbbbbbbbbbbbbbbb"]);
+  expect(links.map((l) => l.title.endsWith("saved copy"))).toEqual([true, true, false]);
+});
