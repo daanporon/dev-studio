@@ -3,6 +3,7 @@
 // code's own where the code exposes them (lock() is run with a spy on the db) and listed here otherwise.
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { Glob } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { lock } from "../../bin/loop/squad/member-state.ts";
@@ -84,4 +85,54 @@ test("the tick's episodes, observed_prs and requests lookups use their new index
     expect({ sql: h.sql, lines }).toEqual({ sql: h.sql, lines: expect.stringContaining(idx) });
     expect(lines).not.toContain("AUTOMATIC");
   }
+});
+
+// loop-tick-8s U2: every static SQL string of bin/loop is EXPLAINed on a freshly migrated db. A plan with an
+// AUTOMATIC index, or a SCAN of a growing table that uses no index (a partial index shows as `SCAN … USING
+// INDEX` and passes), fails and names the file, line and plan. A string built at run time cannot be
+// EXPLAINed: it is skipped and counted.
+const GROWING = ["events", "episodes", "orca_calls", "requests", "messages", "observed_prs"];
+const norm = (q: string) => q.replace(/\s+/g, " ").trim();
+// Statements that may scan, by file and the start of their text (a line number drifts), each with its reason.
+const ALLOW: { file: string; sql: string; why: string }[] = [
+  { file: "bin/loop/messages/messages.ts", sql: "SELECT * FROM messages WHERE reply_to = ? AND kind = 'reply' ORDER BY id LIMIT 1", why: "one lookup per answered message, on a table of role mail (small, no reply_to index)" },
+];
+
+type Found = { file: string; line: number; sql: string };
+function staticSql(): { found: Found[]; skipped: number } {
+  const found: Found[] = []; let skipped = 0;
+  for (const file of new Glob("bin/loop/**/*.ts").scanSync(ROOT)) {
+    const src = readFileSync(join(ROOT, file), "utf8");
+    const re = /\.(?:query|prepare)(?:<[^>]*>)?\(\s*(["'`])/g;
+    for (let m = re.exec(src); m; m = re.exec(src)) {
+      const quote = m[1]; let out = "", dynamic = false;
+      for (let i = re.lastIndex; i < src.length; i++) {
+        const c = src[i];
+        if (c === "\\") { out += src[i + 1]; i++; continue; }
+        if (c === quote) break;
+        if (quote === "`" && c === "$" && src[i + 1] === "{") { dynamic = true; break; }
+        out += c;
+      }
+      if (dynamic) { skipped++; continue; }
+      found.push({ file, line: src.slice(0, m.index).split("\n").length, sql: out });
+    }
+  }
+  return { found, skipped };
+}
+
+test("no static statement in bin/loop uses an automatic index or scans a growing table", () => {
+  const s = fresh(), { found, skipped } = staticSql();
+  expect(found.length).toBeGreaterThan(300); // the scan still finds the code's statements
+  const bad: string[] = [], used = new Set<number>();
+  for (const f of found) {
+    let lines: string[];
+    try { lines = plan(s, f.sql, []); } catch { continue; } // not one statement on its own (a fragment, a pragma)
+    const hit = lines.filter((l) => /AUTOMATIC/.test(l) || GROWING.some((t) => new RegExp(`^SCAN (TABLE )?${t}\\b(?! USING)`).test(l.trim())));
+    if (!hit.length) continue;
+    const a = ALLOW.findIndex((x) => x.file === f.file && norm(f.sql).startsWith(x.sql));
+    if (a >= 0) used.add(a); else bad.push(`${f.file}:${f.line}: ${hit.join(" | ")}\n    ${norm(f.sql).slice(0, 160)}`);
+  }
+  expect(bad).toEqual([]);
+  expect(ALLOW.filter((_, i) => !used.has(i)).map((x) => x.sql)).toEqual([]); // a stale allow entry fails too
+  console.log(`hot-queries: ${found.length} static statements checked, ${skipped} built at run time skipped`);
 });

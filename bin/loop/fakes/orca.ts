@@ -38,8 +38,14 @@
 //   - shells: the plain terminals (no agent) terminal-shells lists, busy or idle; terminal-close
 //     closes one (closeFails holds handles whose close fails)
 //   - studio-start opens an agent tab in its worktree (agents) and prints its handle
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+//   - worktrees (U8b): wt-make makes a real git worktree under `wtRoot`/<repo folder>/<name> as Orca does
+//     (an existing branch or taken folder gets `-2`, the parent is recorded), wt-show finds one by
+//     `path:` or `id:` (exit 3 when none), wt-list lists the repo's worktrees but those in `unlisted`
+//     (Orca lost them), and worktree-rm of a known one removes its folder and keeps its branch (an unknown
+//     one is selector_not_found once `wtRoot` is set; before, any worktree-rm is ok)
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
+import { git } from "../io/worktrees.ts";
 import { parseAgentAccounts, parseUnread, type DirMember, type LiveAccount, type LiveTerminal, type OrcaAdapter, type PsWorktree, type RunDispatch, type Unread } from "../observers/orca.ts";
 import type { Orca, Out, Via } from "../io/orca.ts";
 
@@ -100,6 +106,7 @@ export type FakeMsg = { id: string; run: string; to: string; term?: string; from
 // A Run's dispatch of a task to a terminal (run-workers groups them by worktree, newest first).
 export type FakeDispatch = { id: string; run: string; wt: string; handle: string; task: string; status: "dispatched" | "completed" | "failed"; provenance?: string };
 export type FakeTask = { run: string; spec: string; title: string; parent: string | null; startable: boolean };
+export type FakeWt = { id: string; path: string; repo: string; branch: string; parent: string | null };
 const ok = (out = ""): Out => ({ code: 0, out, err: "" });
 const no = (err: string, code = 1): Out => ({ code, out: "", err });
 
@@ -128,6 +135,9 @@ export class FakeBackend implements Orca {
   closeFails = new Set<string>();                                  // terminal-close fails for these
   dispatches: FakeDispatch[] = [];
   tasks = new Map<string, FakeTask>();
+  wtRoot = "";                                                     // where wt-make puts worktrees (Orca's workspaces)
+  wts = new Map<string, FakeWt>();                                 // path -> a worktree Orca made (wt-make)
+  unlisted = new Set<string>();                                    // paths wt-list leaves out; wt-show still finds them
   onCall?: (c: Call) => void;
   after?: (c: Call, out: Out) => void;
   answer?: (c: Call) => Out | undefined | Promise<Out | undefined>;
@@ -187,6 +197,15 @@ export class FakeBackend implements Orca {
     let release!: () => void;
     this.gate = new Promise((r) => { release = r; });
     return () => { this.gate = null; release(); };
+  }
+
+  /** The worktree a `path:<p>` or `id:<id>` selector names. */
+  private wtAt(sel: string): FakeWt | undefined {
+    return sel.startsWith("path:") ? this.wts.get(sel.slice(5)) : [...this.wts.values()].find((w) => `id:${w.id}` === sel);
+  }
+
+  private wtLine(w: FakeWt): string {
+    return JSON.stringify({ id: w.id, path: w.path, branch: `refs/heads/${w.branch}`, head: null, parentWorktreeId: w.parent });
   }
 
   async run(op: string, args: string[], via: Via = {}): Promise<Out> {
@@ -267,7 +286,35 @@ export class FakeBackend implements Orca {
       }
       case "worker-reclaim": return ok("0\n");
       case "run-coordinator": return ok(`${this.bound.get(args[0]) ?? ""}\n`);
-      case "keys": case "worktree-rm": return ok();
+      case "keys": return ok();
+      case "wt-make": {   // <repo> <name> <branch> <base> [parent_path]
+        const [repo, name, branch, base, parent] = args;
+        const taken = async (b: string) => (await git(["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${b}`])).code === 0;
+        const dir = join(this.wtRoot, basename(resolve(repo)));
+        let path = join(dir, name), br = branch;
+        if (existsSync(path) || await taken(br)) { path = `${path}-2`; br = `${br}-2`; }
+        mkdirSync(dir, { recursive: true });
+        const add = await git(["-C", repo, "worktree", "add", "--no-track", "-b", br, path, base]);
+        if (add.code !== 0) return no(add.err);
+        const w: FakeWt = { id: `R::${path}`, path, repo, branch: br, parent: parent ? `R::${parent}` : null };
+        this.wts.set(path, w);
+        return ok(`${this.wtLine(w)}\n`);
+      }
+      case "wt-show": {
+        const w = this.wtAt(args[0]);
+        return w ? ok(`${this.wtLine(w)}\n`) : no(`{"error":{"code":"selector_not_found"}}`, 3);
+      }
+      case "wt-list":
+        return ok([...this.wts.values()].filter((w) => w.repo === args[0] && !this.unlisted.has(w.path)).map((w) => `${this.wtLine(w)}\n`).join(""));
+      case "worktree-rm": {   // <selector> [force]
+        const w = this.wtAt(args[0]);
+        if (!w) return this.wtRoot ? no(`{"ok":false,"error":{"code":"selector_not_found"}}`) : ok();   // as Orca, once worktrees are modelled
+        const rm = await git(["-C", w.repo, "worktree", "remove", "--force", w.path]);
+        if (rm.code !== 0 && existsSync(w.path)) return no(rm.err);
+        await git(["-C", w.repo, "worktree", "prune"]);
+        this.wts.delete(w.path);
+        return ok();
+      }
       case "terminal-close-worktree": {
         // id:<wt> [keep]: close that worktree's agent + shell terminals but the kept handle (U97's guard, restart-role).
         const wt = args[0].replace(/^id:/, ""), keep = args[1];
