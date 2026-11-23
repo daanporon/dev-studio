@@ -351,7 +351,7 @@ Orca brief says — you stay running between turns and report through `ds` and `
      board for the observed PR status. **`state unknown` is not a state.** It means the
      status could not be read — never treat it as open, merge-ready, or
      merged. Run `gh pr view` on the PR to see where it is (`set-unit-status … done` refuses it). `★ finished`
-     means the feature squad is settled: do the testability handoff, `set-status done` (no debrief:
+     means the feature squad is settled: do the testability handoff, check the Thinker's Try it page is current, `set-status done` (a feature squad without a current `<topic>-try-it.md` is refused with its path: ask the Thinker to write it, then run done again; no debrief:
      the loop asks for it at archive, "Final debrief at archive" below), and tell the operator `/ds-close-squad <topic>`. The board's loop-down banner
      means the watchdog must restore the loop before coordination can proceed.
      **Waking an idle Builder.** Every worker is armed with rewake, so you just **poke** a
@@ -528,7 +528,7 @@ the unit rows:
 3. **Learned:** what surprised you, or an approach that failed.
 4. **Still open:** follow-ups, or "nothing". A held unit is listed only once it is cancelled or the operator chose to keep it parked.
 5. **Cost:** the squad's spend from the board's SPENT column, or "unknown" when it shows none.
-6. **Try it:** (feature squads) the 1–5 steps from the approved plan's `## Try it` section, or the line `Try it: nothing to try by hand — <why>`.
+6. **Try it:** (feature squads) one line pointing at the squad's Try it page (`<topic>-try-it.md`, shown under Documents → Try it, kept in the archive); do not copy its steps.
 
 Save it with `~/.dev-studio/bin/role/squad-state.sh <state> set-debrief "<text>"` (or `set-debrief --file
 <path>`; the message names the exact command) and run nothing else: no unit, status or plan change, no
