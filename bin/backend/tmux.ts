@@ -81,7 +81,7 @@ export function tmuxBackend(o: TmuxOptions): TmuxBackend {
       p = Bun.spawn(argv, { stdin: input === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe", env: clientEnv }) as typeof p;
     } catch (e) { return { code: 127, out: "", err: (e as Error).message }; }
     if (input !== undefined && p.stdin && typeof p.stdin !== "number") {
-      try { p.stdin.write(input); await p.stdin.end(); } catch { /* tmux already exited (no server): its stderr says why */ }
+      try { await p.stdin.write(input); await p.stdin.end(); } catch { /* tmux already exited (no server): its stderr says why */ }
     }
     const timer = setTimeout(() => p.kill("SIGKILL"), timeoutMs);
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
