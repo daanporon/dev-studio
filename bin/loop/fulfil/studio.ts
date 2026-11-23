@@ -25,8 +25,9 @@
 // The file is named by the request, so a crash between the write and the claim's settle writes it
 // again in place, never twice. Its requests row (the one the state observer would import, key
 // file:<label>/_studio/<name>) is written at once, so the board refuses a second click meanwhile.
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { closeSync, constants as fsc, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { basename, join, relative, resolve } from "node:path";
+import { CHAT_FILE_NAME, chatFileDir, START_TOPIC } from "../chat/files.ts";
 import { alert, failRequest, finishRequest, requestActions, type Exec, type Fulfiller } from "../core/actuator.ts";
 import type { Action } from "../core/plugins.ts";
 import { errOf, spawn } from "../io/orca.ts";
@@ -37,7 +38,40 @@ import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
 import { MOVE, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
 import { memberLabel, startIdentity } from "../core/whoami.ts";
 
-type P = { action?: string; topic?: string; line?: string; framing?: string; id?: string; answer?: string; request?: number };
+type P = { action?: string; topic?: string; line?: string; framing?: string; files?: string[]; id?: string; answer?: string; request?: number };
+
+// chat-image-upload U4: the images a board start carries, uploaded to `chat-files/_start/`, are copied (never
+// moved) into `framings/board-start-<request>/` so they last as long as the brief, and listed at the brief's
+// end. Plain files in plain folders only, never through a symlink; copies are 0600. A copy already there
+// with the upload's size, or whose upload is gone, is kept, so a replay copies nothing twice. Returns the
+// section to append ("" when no name is an image name: the board files none, a forged row names no path).
+const isDir = (p: string) => lstatSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+function attachImages(root: string, label: string, fdir: string, request: number, names: string[]): string {
+  const src = chatFileDir(root, label, START_TOPIC), dst = join(fdir, `board-start-${request}`);
+  const srcOk = isDir(join(root, label, "chat-files")) && isDir(src);
+  const lines: string[] = [];
+  for (const n of names) {
+    if (!CHAT_FILE_NAME.test(n)) continue;
+    const to = join(dst, n), have = lstatSync(to, { throwIfNoEntry: false });
+    const from = srcOk ? lstatSync(join(src, n), { throwIfNoEntry: false }) : undefined;
+    const up = from?.isFile() ? from : undefined;
+    if (have?.isFile() && (!up || up.size === have.size)) { lines.push(`- ${resolve(to)}`); continue; }
+    if (!up) { lines.push(`- ${n} (removed before the squad started)`); continue; }
+    let fd = -1, bytes: Buffer;
+    try { fd = openSync(join(src, n), fsc.O_RDONLY | fsc.O_NOFOLLOW); bytes = readFileSync(fd); }
+    catch { lines.push(`- ${n} (removed before the squad started)`); continue; }
+    finally { if (fd >= 0) closeSync(fd); }
+    mkdirSync(dst, { recursive: true, mode: 0o700 });
+    if (!isDir(dst)) throw new Error(`${dst} is not a plain folder`);
+    const tmp = join(dst, `.${n}.${process.pid}.tmp`);
+    writeFileSync(tmp, bytes, { mode: 0o600 });
+    renameSync(tmp, to);
+    lines.push(`- ${resolve(to)}`);
+  }
+  return lines.length
+    ? `\n## Attached images\n\nThe operator attached these images to the brief. Open each with your file-reading tool:\n${lines.join("\n")}\n`
+    : "";
+}
 type Move = { handle?: string; agent?: string; account?: string; model?: string; effort?: string; from?: string; why?: string };
 
 // How long a replay that finds the "starting" step waits for that start's terminal before starting again:
@@ -171,7 +205,8 @@ const studio: Fulfiller = {
     if (p.action === "start" && typeof p.framing === "string") {
       const fdir = join(store.root, a.project, "framings"), ff = join(fdir, `board-start-${p.request}.md`);
       mkdirSync(fdir, { recursive: true });
-      writeFileSync(`${ff}.tmp`, p.framing);
+      const images = p.files?.length ? attachImages(store.root, a.project, fdir, p.request, p.files) : "";
+      writeFileSync(`${ff}.tmp`, images ? `${p.framing}${p.framing.endsWith("\n") ? "" : "\n"}${images}` : p.framing);
       renameSync(`${ff}.tmp`, ff);
       line = `${line} --framing-file ${ff}`;
     }
