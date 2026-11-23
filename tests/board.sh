@@ -400,9 +400,9 @@ jt "parked: a squad with no held unit has held 0 and its own key" "$TMP/rc.json"
 eq "text board: a parked squad's header" "$(grep -cF 'ready-held-sq  [parked · 1 held]' "$TMP/rc.txt" || true)" "1"
 rm -f "$SD"/{held-plan,held-reason,ready-cancel,openpr,mergedpr}-sq.json "$SD/ready-sq.json" "$SD/ready-held-sq.json" "$SD/notready-disp-sq.json" "$SD/notready-plan-sq.json" "$SD/notready-testing-sq.json" "$SD/notready-empty-sq.json" "$SD/already-done-sq.json" "$SD/still-testing-sq.json" "$SD/tester-gone-sq.json"
 
-# A running squad meeting the finished condition sorts below every active squad and
-# just above done/failed, deterministically — needs-you still ranks first, and both
-# views share the order (the text board walks the same sorted squad array).
+# Squad order (squad-table-ordering U1): needs-you, running by share done (name order differs from share
+# order here), wrapping up, parked, paused, done; the same list in the JSON and the text board (it walks the
+# same sorted squad array), and a paused running squad (a squad-scope pause row) sorts below parked.
 RD="$DS_STATE_ROOT/zzrdy_$$/squads"; mkdir -p "$RD"
 printf '{"run_id":"a","status":"running","type":"feature","members":[],"units":[],"waiting_on_you":[{"id":"q","asker":"lead","blocking":true,"question":"x","since":"2026-10-08T09:00:00Z"}]}' > "$RD/aaa-needy.json"
 printf '{"run_id":"b","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"dispatched"}]}' > "$RD/mmm-active.json"
@@ -412,13 +412,18 @@ printf '{"run_id":"e","status":"running","type":"feature","members":[],"units":[
 printf '{"run_id":"f","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"dispatched"},{"slug":"u2","status":"planned","hold":true},{"slug":"u3","status":"planned","hold":true}]}' > "$RD/ddd-running-held.json"
 printf '{"run_id":"g","status":"done","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"planned","hold":true}]}' > "$RD/zzy-done-held.json"
 printf '{"run_id":"h","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"planned","hold":true}],"waiting_on_you":[{"id":"q","asker":"lead","blocking":false,"question":"x","since":"2026-10-08T09:00:00Z"}]}' > "$RD/eee-parked-asking.json"
-board "zzrdy_$$" > "$TMP/rdy.json"
-eq "wrapping up sorts below active and parked, above done" "$(jq -r '[.squads[].topic] | join(" ")' "$TMP/rdy.json")" "aaa-needy eee-parked-asking ddd-running-held mmm-active ccc-parked bbb-ready zzy-done-held zzz-done"
-eq "text board: same squad order" "$(tb "zzrdy_$$" 2>/dev/null | grep -o '^▣ [^ ]*' | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//')" "aaa-needy eee-parked-asking ddd-running-held mmm-active ccc-parked bbb-ready zzy-done-held zzz-done"
-jt "parked sorts below running, above wrapping up; keeps status running" "$TMP/rdy.json" '.squads[] | select(.topic=="ccc-parked") | .display_status=="parked · 1 held" and .status=="running" and .pause.state=="active"'
+printf '{"run_id":"i","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"done"},{"slug":"u3","status":"done"},{"slug":"u4","status":"dispatched"}]}' > "$RD/yyy-threeq.json"
+printf '{"run_id":"j","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"dispatched"},{"slug":"u3","status":"dispatched"},{"slug":"u4","status":"dispatched"}]}' > "$RD/qqq-quarter.json"
+printf '{"run_id":"k","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"dispatched"}]}' > "$RD/kkk-paused.json"
+mkdb "zzrdy_$$"
+dbw "INSERT INTO pause_intents (scope, project, squad, role, suffix, source, generation, requested_by, requested_at) VALUES ('squad', 'zzrdy_$$', 'kkk-paused', '', '', 'manual', 'g1', 'you', $(date +%s))"
+render "zzrdy_$$" --json > "$TMP/rdy.json"
+eq "squad order: needs-you, running by share, wrapping up, parked, paused, done" "$(jq -r '[.squads[].topic] | join(" ")' "$TMP/rdy.json")" "eee-parked-asking aaa-needy yyy-threeq mmm-active qqq-quarter ddd-running-held bbb-ready ccc-parked kkk-paused zzy-done-held zzz-done"
+eq "text board: same squad order" "$(render "zzrdy_$$" 2>/dev/null | grep -o '^▣ [^ ]*' | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//')" "eee-parked-asking aaa-needy yyy-threeq mmm-active qqq-quarter ddd-running-held bbb-ready ccc-parked kkk-paused zzy-done-held zzz-done"
+jt "parked keeps status running and is not paused" "$TMP/rdy.json" '.squads[] | select(.topic=="ccc-parked") | .display_status=="parked · 1 held" and .status=="running" and .pause.state=="active"'
 jt "a running squad with held units shows the badge count, not parked" "$TMP/rdy.json" '.squads[] | select(.topic=="ddd-running-held") | .held==2 and .display_key!="held-only"'
 jt "a stored done squad with held units shows the badge count" "$TMP/rdy.json" '.squads[] | select(.topic=="zzy-done-held") | .held==1 and .display_status=="done"'
-jt "a parked squad with a question sorts into needs-you first" "$TMP/rdy.json" '.squads[] | select(.topic=="eee-parked-asking") | .display_key=="held-only" and (.questions|length)==1'
+jt "a parked squad with a question sorts into needs-you" "$TMP/rdy.json" '.squads[] | select(.topic=="eee-parked-asking") | .display_key=="held-only" and (.questions|length)==1'
 eq "text board: a running squad's held badge" "$(tb "zzrdy_$$" 2>/dev/null | grep -cF 'ddd-running-held  [implementing] 2 held' || true)" "1"
 # squad-done-definition U4: every state explains itself; a stored done squad is a Needs-you row.
 jt "explain: wrapping up has means, set_by, you_can" "$TMP/rdy.json" '.squads[] | select(.topic=="bbb-ready") | .display_key=="wrapping-up" and .display_status=="wrapping up" and (.explain.means|length)>0 and (.explain.set_by|length)>0 and (.explain.you_can|length)>0'
