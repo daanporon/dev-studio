@@ -412,6 +412,12 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
     const ep = store.get("episodes", { project, subject: `disk-pressure.${disk[1]}`, kind: "disk-pressure" });
     return ep && ep.ended_at == null ? false : "the disk has free space again";
   }
+  // studio-chat-queued-busy U2: a send-fail card goes once the member's streak ended (a send worked).
+  const sf = id.match(/^sweep-send-fail\.(.+)-[0-9]+$/);
+  if (sf) {
+    const ep = store.get("episodes", { project, subject: `send-fail:${project}/${sf[1]}`, kind: "send-fail" });
+    return ep && ep.ended_at == null ? false : "typing into the member works again";
+  }
   const studio = (store.get("projects", { label: project })?.studio_wt as string | null) ?? null;
   if (/^(sweep|loop)-studio\.limit-/.test(id)) {
     const episode = studio ? store.get("episodes", { project, subject: studio, kind: "limited" }) : null;
