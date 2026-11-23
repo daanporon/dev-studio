@@ -322,6 +322,8 @@ mq su-sq running '' '[{"slug":"u1","status":"dispatched"}]'
 mq st-sq running '' '[{"slug":"u1","status":"dispatched"}]'
 mq rs-sq suspended '' '[{"slug":"u1","status":"planned"}]'
 mq ok-sq suspended '' '[{"slug":"u1","status":"planned"}]'
+mq db-sq running '' '[{"slug":"u1","status":"done"}]'
+mq dw-sq running '' '[{"slug":"u1","status":"done"}]'
 mq ul-sq running '' '[{"slug":"leaf","status":"planned"},{"slug":"root","status":"planned"},{"slug":"d1","status":"planned","deps":["root"]},{"slug":"d2","status":"planned","deps":["d1"]},{"slug":"d3","status":"planned","deps":["root"]}]'
 board "$LBL" > /dev/null
 NOWS=$(date +%s)
@@ -332,6 +334,12 @@ dbw "UPDATE squads SET want='suspended', want_by='operator', want_at=$NOWS-60 WH
 dbw "UPDATE squads SET want='suspended', want_by='operator', want_at=$NOWS-1200 WHERE project='$LBL' AND topic='st-sq'"
 dbw "UPDATE squads SET want='running', want_by='operator', want_at=$NOWS-60 WHERE project='$LBL' AND topic='rs-sq'"
 dbw "UPDATE squads SET want='suspended', want_by='operator', want_at=$NOWS-60, want_result='done: suspended' WHERE project='$LBL' AND topic='ok-sq'"
+# debrief-on-archive U2: an open archive-debrief step (wish 12 min old, step 4 min) reads archiving with its hover and is not stuck;
+# a step that settled 1 min ago on a 20-minute wish times its stuck clock from the step's end.
+dbw "UPDATE squads SET want='gone', want_by='operator', want_at=$NOWS-720 WHERE project='$LBL' AND topic='db-sq'"
+dbw "UPDATE squads SET want='gone', want_by='operator', want_at=$NOWS-1200 WHERE project='$LBL' AND topic='dw-sq'"
+dbw "INSERT INTO episodes (project, subject, kind, squad, started_at, ended_at, episode_key, state, result, source, observed_at) SELECT project, 'squad:' || id, 'archive-debrief', topic, $NOWS-240, NULL, CAST(want_at AS TEXT), 'open', '{\"asked_at\":'||($NOWS-240)||',\"limit_s\":600}', 'loop', $NOWS FROM squads WHERE project='$LBL' AND topic='db-sq'"
+dbw "INSERT INTO episodes (project, subject, kind, squad, started_at, ended_at, episode_key, state, result, source, observed_at) SELECT project, 'squad:' || id, 'archive-debrief', topic, $NOWS-660, $NOWS-60, CAST(want_at AS TEXT), 'written', '{\"asked_at\":'||($NOWS-660)||',\"limit_s\":600}', 'loop', $NOWS FROM squads WHERE project='$LBL' AND topic='dw-sq'"
 dbw "INSERT INTO events (at, project, squad, kind, payload) VALUES ($NOWS-600, '$LBL', 'st-sq', 'wish_given_up', '{\"error\":\"stop timed out\"}')"
 render "$LBL" --json > "$TMP/q.json"
 ds_of(){ echo ".squads[] | select(.topic==\"$1\") | $2"; }
@@ -341,17 +349,20 @@ jt "queued: a unit blocked by a dep does not queue (dispatched dep -> implementi
 jt "queued: a held unit with a planned dependent is parked (U8)" "$TMP/q.json" "$(ds_of qh-sq '.display_status=="parked · 1 held"')"
 jt "queued: no units is planning"                         "$TMP/q.json" "$(ds_of qn-sq '.display_status=="planning"')"
 jt "want gone on a running squad shows archiving"         "$TMP/q.json" "$(ds_of ar-sq '.display_status=="archiving" and (.phase_note|contains("operator")) and .phase_stuck==false')"
+jt "archive-debrief open: archiving, hover names the step, not stuck at 12 min" "$TMP/q.json" "$(ds_of db-sq '.display_status=="archiving" and (.phase_note|contains("Lead writing the final debrief (4 of 10 min)")) and .phase_stuck==false')"
+jt "archive-debrief written: hover names it, stuck clock runs from the step's end" "$TMP/q.json" "$(ds_of dw-sq '.display_status=="archiving" and (.phase_note|contains("debrief written")) and .phase_stuck==false')"
 jt "want suspended on a running squad shows suspending"   "$TMP/q.json" "$(ds_of su-sq '.display_status=="suspending"')"
 jt "a 20-minute wish is stuck, with the wish_given_up reason" "$TMP/q.json" "$(ds_of st-sq '.display_status=="suspending" and .phase_stuck==true and (.phase_note|contains("stop timed out"))')"
 jt "want running on a suspended squad shows resuming"     "$TMP/q.json" "$(ds_of rs-sq '.display_status=="resuming"')"
 jt "a granted wish shows the stored status"               "$TMP/q.json" "$(ds_of ok-sq '.display_status=="suspended"')"
 TXT="$(render "$LBL")"
+grep -qF -- "archiving: asked" <<<"$TXT" && grep -qF -- "Lead writing the final debrief (4 of 10 min)" <<<"$TXT" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board debrief hover" >&2; }
 grep -qF -- "queued: waiting for a Builder" <<<"$TXT" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board queued note" >&2; }
 # picker-prefers-unblocking-units U2: a unit others wait on prints unlocks:N (its whole chain), a leaf prints none.
 grep -E -- "root.*unlocks:3" <<<"$TXT" >/dev/null && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board unlocks:3 on the root" >&2; }
 grep -E -- "leaf.*unlocks:" <<<"$TXT" >/dev/null && { fail=$((fail+1)); echo "  FAIL: text board leaf has no unlocks" >&2; } || pass=$((pass+1))
 grep -qF -- "⚠stuck" <<<"$TXT" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board stuck flag" >&2; }
-rm -f "$SD"/{q,qd,qb,qh,qn,ar,su,st,rs,ok,ul}-sq.json
+rm -f "$SD"/{q,qd,qb,qh,qn,ar,su,st,rs,ok,ul,db,dw}-sq.json
 
 # Wrapping up (U2; squad-done-definition U1): a running feature squad with >=1 unit, every
 # unit done or cancelled and no done unit's PR open (squad-finish.ts) shows it; dispatched,

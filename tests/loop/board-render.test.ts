@@ -469,3 +469,33 @@ test("the ★ and ⚡ come before the unit name, outside the part that is cut (U
   expect(ell(un.querySelector(".umark"))).not.toBe("ellipsis");
   expect(doc.querySelector('.fcard[data-key="fixture/gone/m1"] .umark')).toBeNull();
 });
+
+// ---- debrief-on-archive U2: a `sweep-debrief-<topic>-<n>` card opens the archived squad's debrief; Mark read answers the _studio card.
+test("a Debrief card shows 'Debrief · <topic>', opens the archived debrief and Mark read posts the _studio answer", async () => {
+  const card = { squad: "_studio", label: "fixture", kind: "studio", card_squad: null, id: "sweep-debrief-wrap-1", from: "loop", title: "Debrief: wrap", titled: true,
+    text: "Wrapped up cleanly — written at archive by the Lead.", choices: [], options: ["Mark read"], act: null, age_min: 1, about: null };
+  const archived = { topic: "wrap", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [],
+    debrief: "Wrapped up cleanly.\n\nUNIQUE-DEBRIEF-BODY" };
+  const r = await mount({ ...board, needs_you: [card], archived: [archived] }, false);
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) === "api/answer") posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && !doc.querySelector(".qnote"); k++) await wait(25);
+    const note = doc.querySelector(".qnote");
+    expect(note.textContent).toContain("Debrief · wrap");
+    note.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("UNIQUE-DEBRIEF-BODY");
+    expect(posts).toEqual([]); // opening it is not reading it
+    const mark = [...doc.querySelectorAll(".qnote button")].find((b: any) => b.textContent.trim() === "Mark read") as any;
+    mark.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(posts.length).toBe(1);
+    expect(posts[0]).toMatchObject({ project: "fixture", topic: "_studio", id: "sweep-debrief-wrap-1", answer: "Mark read" });
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
