@@ -3,6 +3,7 @@
 // beat file and exit codes as the shell body.
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { contractStates, squadContract } from "../lib/contract-roles.ts";
 import { ROOT, backendPath, chomp, dsLabel, dsLoopOn, readJson, run as runCmd, stateRoot, writeErr, writeOut } from "../lib/shared";
 import { repoSlug } from "../lib/lib";
 import { cksum } from "./rewake-hook-ts";
@@ -201,10 +202,13 @@ export async function run(argv: string[]): Promise<number> {
       try { r = jget(st, "run_id"); } catch { /* jq error: empty */ }
       RUN = truthy(r) ? interp(r) : "";
     }
-    if (!RUN) { writeErr("watch: no run_id\n"); return 1; }
+    // A squad off Orca has no Run (U11b): its Lead's mail is only ever loop.db rows.
+    const OFF = MODE === "lead" ? squadContract(SR, LABEL, TOPIC) : null;
+    if (!RUN && !(ROWS && OFF)) { writeErr("watch: no run_id\n"); return 1; }
     let holder = "";
     if (MODE === "lead" && !ROWS) holder = chomp((await runCmd([BACKEND, "run-coordinator", RUN])).out);
-    if (ROWS) { own = true; LOOPRUN = true; hdr = `lead messages (loop.db; the loop holds run=${RUN} and writes its mail here)`; }
+    if (ROWS && !RUN) { own = true; LOOPRUN = true; hdr = `lead messages (loop.db; no Run: the squad runs on ${OFF})`; }
+    else if (ROWS) { own = true; LOOPRUN = true; hdr = `lead messages (loop.db; the loop holds run=${RUN} and writes its mail here)`; }
     else if (holder && holder !== (whoAmI().handle ?? "")) { own = true; LOOPRUN = true; hdr = `worktree inbox (the loop holds run=${RUN} and relays its mail here)`; }
     else { own = false; hdr = `run=${RUN}`; }
   }
@@ -316,7 +320,10 @@ export async function run(argv: string[]): Promise<number> {
   try { writeFileSync(BEAT, ""); } catch { /* best effort */ }
 
   // --- team check-in + work items ---
-  const sr = await runCmd([BACKEND, "worker-states"]);
+  // A squad off Orca: its members' states from its own backend, through the contract (U11b), never Orca.
+  const sr = squadContract(SR, LABEL, TOPIC)
+    ? await contractStates(SR, LABEL).then((c) => ({ out: c.lines.join("\n"), err: c.blind.join("; "), rc: c.blind.length && !c.lines.length ? 1 : 0 }))
+    : await runCmd([BACKEND, "worker-states"]);
   const states = chomp(sr.out);
   const STATES_UNKNOWN = readRc !== 0 && (sr.rc !== 0 || states === "");
   const stateOf = (id: string): string => {
