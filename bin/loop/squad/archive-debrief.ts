@@ -54,13 +54,18 @@ export function debriefHold(store: Store, m: Row, sq: Row | null): boolean {
 
 // The archived doc's debrief: the Lead's own text when the step settled `written`, else the
 // done-time text under one line that says what it misses.
-export type Final = { debrief: string; source: "archive" | "done"; late: number | null; first: string };
+export type Final = { debrief: string; source: "archive" | "done"; late: number | null; first: string; none?: string };
 const unitLine = (u: Row) => `${u.slug}${prNumber(u.pr) ? ` #${prNumber(u.pr)}` : ""} (${u.status ?? "planned"})`;
 const firstLine = (t: string) => t.split("\n").map((l) => l.trim()).find((l) => l !== "") ?? "";
 
-export function finalDebrief(doc: Row, units: Row[], written: boolean): Final {
+export function finalDebrief(doc: Row, units: Row[], step: Step | null): Final {
   const text = typeof doc.debrief === "string" ? doc.debrief.trim() : "";
-  if (!text) return { debrief: "No debrief was written.", source: "done", late: null, first: "No debrief was written." };
+  const written = step?.state === "written";
+  if (!text) {
+    const none = step && step.state !== "open" ? `${step.state}${step.why ? `: ${step.why}` : ""}` : "";
+    const line = none ? `No debrief was written (${none}).` : "No debrief was written.";
+    return { debrief: line, source: "done", late: null, first: line, ...(none ? { none } : {}) };
+  }
   if (written) return { debrief: text, source: "archive", late: 0, first: firstLine(text) };
   if (!Array.isArray(doc.debrief_units)) {
     return { debrief: `Written before the archive; units added after it are not known.\n\n${text}`, source: "done", late: null, first: firstLine(text) };
@@ -77,7 +82,7 @@ export function finalDebrief(doc: Row, units: Row[], written: boolean): Final {
 // The card's line on where the debrief came from.
 export function provenance(f: Final): string {
   if (f.source === "archive") return "written at archive by the Lead";
-  if (f.late == null) return f.first === "No debrief was written." ? "no debrief was written" : "written before the archive; units added after it are not known";
+  if (f.late == null) return f.none ? `no debrief (${f.none})` : f.first === "No debrief was written." ? "no debrief was written" : "written before the archive; units added after it are not known";
   return `written at done; ${f.late} unit${f.late === 1 ? "" : "s"} added after it`;
 }
 

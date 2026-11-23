@@ -56,9 +56,9 @@ const isoS = (v: unknown): number => { const t = Date.parse(String(v ?? "")); re
 export function askText(store: Store, sq: Row, limitMin: number): string {
   const project = String(sq.project), topic = String(sq.topic);
   const state = join(store.root, project, "squads", `${topic}.json`);
-  return `dev-studio loop: the operator archives squad ${topic}. Before it closes, write the final debrief: rewrite all six parts so they cover every unit, ` +
-    `each named with its PR, and mark the units added after your done-time debrief. Save it with ${ROOT}/bin/role/squad-state.sh ${state} set-debrief --file <path> ` +
-    `and change nothing else (no units, no status, no messages to your team). The archive waits up to ${limitMin} min, then closes with the old debrief.`;
+  return `dev-studio loop: the operator archives squad ${topic}. Before it closes, write the squad's debrief over every unit, ` +
+    `each with its PR, with the six parts (Try it from the approved plan's ## Try it). Save it with ${ROOT}/bin/role/squad-state.sh ${state} set-debrief --file <path> ` +
+    `and change nothing else (no units, no status, no messages to your team). The archive waits up to ${limitMin} min, then closes without it.`;
 }
 
 function step(ctx: TickCtx, sq: Row): Action[] {
@@ -80,7 +80,7 @@ function step(ctx: TickCtx, sq: Row): Action[] {
   }
   if (now >= s.asked_at + s.limit_s) { save(store, sq, now, "timeout", { why: `no debrief within ${Math.round(s.limit_s / 60)} min` }); return []; }
   if (s.poked_at != null) return [];
-  const w = wake({ ...ctx, project: String(sq.project) }, String(s.lead_wt), askText(store, sq, Math.round(s.limit_s / 60)), REASON, String(sq.want_at));
+  const w = wake({ ...ctx, project: String(sq.project) }, String(s.lead_wt), askText(store, sq, Math.round(s.limit_s / 60)), REASON, String(sq.want_at), { allowWorking: true });
   if (w.status === "sent") save(store, sq, now, "open", { poked_at: now });
   return w.actions;
 }
@@ -91,10 +91,10 @@ function card(ctx: TickCtx, sq: Row, step: Step): Action[] {
   const { store, now } = ctx, project = String(sq.project), topic = String(sq.topic);
   // The squad closed with the step still open (its Lead's worktree went some other way): settle it first.
   if (s.state === "open") { save(store, sq, now, "lead-gone", { why: "the squad closed before the step settled" }); s = stepOf(store, sq)!; }
-  const final = finalDebrief(parseJson(sq.doc), unitsOf(store, project, topic), s.state === "written");
+  const final = finalDebrief(parseJson(sq.doc), unitsOf(store, project, topic), s);
   const out = alertAction(store, { project, squad: null, key: `debrief-${topic}`, episode: String(sq.want_at), title: `Debrief: ${topic}`,
     text: `${final.first} — ${provenance(final)}.`, option: "Mark read",
-    why: s.state === "written" ? "the Lead wrote the final debrief at archive" : `the archive closed with the done-time debrief (${s.state}${s.why ? `: ${s.why}` : ""})` });
+    why: s.state === "written" ? "the Lead wrote the final debrief at archive" : `the Lead did not write it at archive (${s.state}${s.why ? `: ${s.why}` : ""})` });
   save(store, sq, now, s.state, { carded_at: now });
   return out;
 }
