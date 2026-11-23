@@ -51,6 +51,7 @@ import { envInt } from "../core/tick.ts";
 import { accountDisabled, DISABLED } from "./accounts.ts";
 import { creditsHolds, OUT_OF_CREDITS } from "./credits.ts";
 import { newBuilderStart, slot, type Asker } from "./slot.ts";
+import { memo } from "./walk-memo.ts";
 import { hostCrit, hostCritHit, sampleState, type CritHit, type SampleState } from "./machine-level.ts";
 import { loopProjects } from "../settings/projects.ts";
 import { effectiveRoster } from "../settings/roster.ts";
@@ -89,6 +90,9 @@ export const loadKey = (agent: string, account: string | null) => `${agent}\t${a
 export function limit(store: Store, project: string, key: string): string | null {
   const ev = process.env[ENV[key] ?? `DS_LIMIT_${key.toUpperCase()}`];
   if (ev) return ev;
+  return memo(store, null, "limit", `${project}\0${key}`, () => limitRow(store, project, key));
+}
+function limitRow(store: Store, project: string, key: string): string | null {
   for (const p of [project, ""]) {
     const r = store.get("config", { project: p, file: "limits.conf", key });
     const v = r ? String(r.value ?? "").split(/\s+/)[0] : "";
@@ -103,6 +107,9 @@ export const limitNum = (store: Store, project: string, key: string) => Number(l
 function wholeLimit(store: Store, project: string, key: string): number | null {
   const ev = process.env[ENV[key] ?? `DS_LIMIT_${key.toUpperCase()}`];
   if (ev && /^[0-9]+$/.test(ev)) return Number(ev);
+  return memo(store, null, "whole-limit", `${project}\0${key}`, () => wholeRow(store, project, key));
+}
+function wholeRow(store: Store, project: string, key: string): number | null {
   for (const p of [project, ""]) {
     const v = String(store.get("config", { project: p, file: "limits.conf", key })?.value ?? "").trim().split(/\s+/)[0];
     if (/^[0-9]+$/.test(v)) return Number(v);
@@ -114,7 +121,7 @@ function wholeLimit(store: Store, project: string, key: string): number | null {
 // start that needs a new Builder agent; null = go ahead.
 export function hostBrake(store: Store, project: string, who: Asker, now: number, role: string): string | null {
   if (limit(store, project, "builder_host_brake") !== "on") return null;
-  const r = store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null;
+  const r = memo(store, null, "machine", "", () => store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null);
   const crit = hostCrit(r, (k) => wholeLimit(store, project, k), now);
   return crit && newBuilderStart(store, project, who, now, role) ? crit : null;
 }
@@ -319,6 +326,9 @@ export function planLoad(store: Store, project: string, tier: unknown, agent: st
 export const RESERVE = "fallback-reserve";
 export type Reservation = { member: number; project: string; role: string; tier: string | null; agent: string; model: string; account: string | null };
 export function reservations(store: Store, now: number): Reservation[] {
+  return memo(store, now, "reservations", "", () => reservationsRead(store, now));
+}
+function reservationsRead(store: Store, now: number): Reservation[] {
   const out: Reservation[] = [];
   for (const e of store.db.query(`SELECT e.*, m.id AS mid, m.role, m.tier FROM episodes e JOIN members m ON 'member:' || m.id = e.subject
       WHERE e.kind = ? AND e.state = 'reserved' AND e.ended_at > ? AND COALESCE(m.placed_at, 0) <= e.started_at
