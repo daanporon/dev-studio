@@ -317,7 +317,7 @@ export function actionTargets(store: Store, a: Action): Target[] {
     const from = String(q?.from_handle ?? "");
     const recipient = from.startsWith("dispatch:")
       ? store.db.query("SELECT project, wt FROM observed_workers WHERE dispatch_id = ?").get(from.slice(9)) as Row | null
-      : store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ?").get(from) as Row | null;
+      : store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ? ORDER BY (project = ?) DESC, (gone_at IS NULL) DESC, observed_at DESC").get(from, project) as Row | null;
     if (recipient) return [targetOf(store, { project: String(recipient.project), member: String(recipient.wt) })];
   }
   if (a.kind === "answer" && a.squad && p.id) {
