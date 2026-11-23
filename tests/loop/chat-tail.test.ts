@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { capTurns, chatLine, MAX_BYTES, MAX_RUN_LIST, remark, toolTurn, type Turn } from "../../bin/loop/chat/turns.ts";
 import { redact } from "../../bin/loop/chat/redact.ts";
 import { screenTurns } from "../../bin/loop/chat/screen.ts";
+import { parse as claudeParse } from "../../bin/loop/chat/claude.ts";
 import { chatObserver, READ_WINDOW } from "../../bin/loop/observers/chat.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
@@ -374,4 +375,13 @@ describe("ended members", () => {
     expect(t20).toHaveLength(20);
     expect(t20.some((t) => t.from === "operator")).toBe(false);
   });
+});
+
+test("chat-image-upload U2: a board line's images suffix becomes `images`, in the path, native and image-only forms", () => {
+  const turns = claudeParse(readFileSync(join(FIX, "claude-images.jsonl"), "utf8"));
+  expect(turns.map((t) => ({ text: t.text, from: t.from, images: t.images }))).toEqual([
+    { text: "look", from: "operator", images: ["0123456789abcdef.png", "fedcba9876543210.jpg"] },
+    { text: "look", from: "operator", images: [null] },
+    { text: "", from: "operator", images: ["0123456789abcdef.png"] },
+  ]);
 });

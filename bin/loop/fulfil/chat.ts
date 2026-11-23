@@ -1,7 +1,9 @@
 // fulfil/chat.ts — kind `chat` (KTD5, board chat): a one-line message from the operator, typed into a
 // member's own agent terminal as `dev-studio board, the operator says: <text>`, only once the member
 // is ready (memberReady, member-ready.ts; for the Studio studioReady on its adopted handle). Payload
-// {text, via?}; member and squad sit on the row. The loop types it; the board only files the row.
+// {text, via?, files?}; `files` are stored image names (chat/files.ts, at most 4, text may then be empty):
+// each is resolved inside the squad's chat-files folder and the line ends with ` [images attached; open each
+// with your file-reading tool: <abs path>, …]`; a missing file or a bad name fails and types nothing. Member and squad sit on the row. The loop types it; the board only files the row.
 //
 // The request's `result` (JSON) says where the message is, for the board's chat panel:
 //   {"state":"queued","why":…,"since"?:…}     not typed yet, and why; rewritten only when the why changes
@@ -26,6 +28,8 @@ import { STUDIO_SQUAD, studioReady, studioView } from "../squad/studio.ts";
 import { payloadOf } from "../core/kinds.ts";
 import { deliver } from "./poke.ts";
 import { chatLine } from "../chat/turns.ts";
+import { CHAT_FILES_MAX, IMAGES_MARK, chatFilePath } from "../chat/files.ts";
+import { existsSync } from "node:fs";
 import { redact } from "../chat/redact.ts";
 
 export const CHAT_MAX = 2000;
@@ -45,10 +49,10 @@ function queue(store: Store, id: number, why: string, since?: number): void {
 }
 
 // The crew-chat.md line: `- <iso> operator → <topic>/<role[-suffix]>: <text, first 200 chars>`.
-function crewLog(store: Store, project: string, topic: string, role: string, suffix: string, text: string, at: number): void {
+function crewLog(store: Store, project: string, topic: string, role: string, suffix: string, text: string, at: number, images = 0): void {
   const iso = new Date(at * 1000).toISOString().replace(/\.\d+Z$/, "Z");
   const who = `${topic}/${role}${suffix ? `-${suffix}` : ""}`;
-  appendFileSync(join(store.root, project, "crew-chat.md"), `- ${iso} operator → ${who}: ${Array.from(text).slice(0, 200).join("")}\n`);
+  appendFileSync(join(store.root, project, "crew-chat.md"), `- ${iso} operator → ${who}: ${Array.from(text).slice(0, 200).join("")}${images ? ` (+${images} image${images === 1 ? "" : "s"})` : ""}\n`);
 }
 
 const chat: Fulfiller = {
@@ -72,9 +76,19 @@ const chat: Fulfiller = {
 
   async exec(a, x) {
     const p = payloadOf<"chat">(a), wt = a.member, { store, now } = x, id = p.request ?? null;
-    const text = String(parse(id == null ? null : store.get("requests", { id })?.payload).text ?? p.text ?? "");
-    if (!wt || !text || id == null) return { failed: "a chat needs a member, text and its request" };
+    const row = parse(id == null ? null : store.get("requests", { id })?.payload);
+    const text = String(row.text ?? p.text ?? "").trim();
+    const names: unknown[] = Array.isArray(row.files) ? row.files : Array.isArray(p.files) ? p.files : [];
+    if (!wt || (!text && !names.length) || id == null) return { failed: "a chat needs a member, text or images, and its request" };
     if (/[\u0000-\u001f\u007f]/.test(text) || Array.from(text).length > CHAT_MAX) return { failed: `a chat is one line of at most ${CHAT_MAX} characters` };
+    if (names.length > CHAT_FILES_MAX) return { failed: `a chat carries at most ${CHAT_FILES_MAX} images` };
+    const paths: string[] = [];
+    for (const n of names) {
+      const f = typeof n === "string" ? chatFilePath(store.root, a.project, a.squad ?? "", n) : null;
+      if (!f) return { failed: `image name ${JSON.stringify(n)} is not a stored chat image` };
+      if (!existsSync(f)) return { failed: `image ${n} was removed before it was sent` };
+      paths.push(f);
+    }
     const studio = a.squad === STUDIO_SQUAD;
     const m = studio ? null : memberAt(store, a, wt);
     const ready = studio ? studioReady(store, a.project, now, 120, id)
@@ -85,7 +99,7 @@ const chat: Fulfiller = {
       queue(store, id, ready.why, since);
       return { wait: `queued: ${ready.why}` };
     }
-    const line = chatLine(text);
+    const line = chatLine(`${text}${text && paths.length ? " " : ""}${paths.length ? `${IMAGES_MARK}${paths.join(", ")}]` : ""}`);
     const seat = x.act.seat(store, a.project, a.squad ?? m?.squad ?? null, `${a.subject}:${a.episode}`, wt, now);
     if (studio) {
       // The Studio's adopted handle only, as poke.ts does: its worktree also holds ds-loop panes and shells.
@@ -101,7 +115,7 @@ const chat: Fulfiller = {
     const delivery = r === "accepted" ? deliver(store, { project: a.project, squad: a.squad ?? m!.squad, member: wt, kind: "chat", text: line, request: id }, now) : null;
     finishRequest(store, a, { ok: true, state: r === "started" ? "turn started" : "sent", delivered: r, delivery }, now);
     if (m!.role && !HUB.has(m!.role)) {
-      try { crewLog(store, a.project, a.squad ?? m!.squad, m!.role, m!.suffix, text, now); }
+      try { crewLog(store, a.project, a.squad ?? m!.squad, m!.role, m!.suffix, text, now, paths.length); }
       catch (e) { store.event("plugin_error", { project: a.project, payload: { plugin: "chat", error: `crew-chat.md: ${e instanceof Error ? e.message : String(e)}` } }); }
     }
     return { done: true, result: r };
