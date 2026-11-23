@@ -70,10 +70,14 @@ function menuOn(agent: string | null | undefined, tail: string): boolean {
 // agree: the newest screen read, taken since its last output, shows an empty prompt and no working
 // marker, and its transcript's last turn ended or was interrupted (liveness.ts turnEnded). Cheap checks
 // first, the transcript parse last. No transcript, or a screen older than the output: still working.
+// turnEnded reads the worktree's newest transcript; when that is a headless run's (sdk-cli, e.g. a review
+// in the same worktree) it says nothing about the member's own turn, so the member stays working.
 function stoppedAtPrompt(store: Store, wt: string, agent: string | null | undefined, out: number, tail: string, tailAt: number | null): boolean {
   if ((agent || "claude") !== "claude") return false;
   if (tailAt == null || tailAt < out) return false;
   if (promptDraft(tail) !== "" || workingOnScreen(tail)) return false;
+  const newest = store.db.query("SELECT entrypoint FROM observed_transcripts WHERE wt = ? ORDER BY mtime DESC").get(wt) as { entrypoint: string | null } | null;
+  if (!newest || newest.entrypoint === "sdk-cli") return false;
   return turnEnded(store, wt);
 }
 

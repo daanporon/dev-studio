@@ -159,6 +159,12 @@ describe("memberReady", () => {
       expect(ready(none)).toEqual(busy);
     });
 
+    test("a headless run's transcript newer than the member's own says nothing about its turn", () => {
+      const s = escaped("open");
+      s.upsert("observed_transcripts", { path: TRANSCRIPT("interrupted") }, { project: "fx", wt: B, mtime: T - 100, entrypoint: "sdk-cli", observed_at: T });
+      expect(ready(s)).toEqual(busy);
+    });
+
     test("a transcript last written before the member's process started is not its own", () => {
       const s = escaped("interrupted");
       set(s, { started_at: T - 200 });
