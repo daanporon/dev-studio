@@ -7,8 +7,9 @@
 // below wraps bin/backend/orca.sh, bin/loop/fakes/orca.ts replays recorded outputs.
 //
 // A project's worktrees: its directory rows, its members rows, its Studio worktree, and any worktree
-// named <prefix><label>-… . A row whose worktree or terminal left gets gone_at (kept, not deleted);
-// seen again, gone_at clears. An empty `ps` while rows are live is an Orca hiccup, not a mass exit:
+// named <prefix><label>-… that no longer label claims (`ds-dev-studio-public-…` is not dev-studio's).
+// A row whose worktree or terminal left, or whose worktree is no longer the project's, gets gone_at
+// (kept, not deleted); seen again, gone_at clears. An empty `ps` while rows are live is an Orca hiccup, not a mass exit:
 // the tick throws (plugin_error) and nothing is marked gone.
 import { join } from "node:path";
 import type { Observer, TickCtx } from "../core/plugins.ts";
@@ -22,6 +23,7 @@ import { HEADLESS } from "./codex.ts";
 import { backendOp, backendPath, inProcess } from "../io/orca.ts";
 import { redact } from "../core/redact.ts";
 import { adoptStudio, STUDIO_SQUAD, studioAgent } from "../squad/studio.ts";
+import { loopProjects } from "../settings/projects.ts";
 
 export type PsAgent = { state?: string; stateStartedAt?: number; lastAssistantMessage?: string };
 export type PsWorktree = { worktreeId: string; path?: string; branch?: string; displayName?: string; lastOutputAt?: number;
@@ -298,13 +300,20 @@ const TAILS = 8; // screen reads in flight at once
 const STUDIO_SETTLE_S = 5; // the Studio's screen is re-read once its output has rested this long
 
 // The project's worktree ids besides its directory rows: members, the Studio, and the name prefix.
-function knownWts(store: Store, project: string, ps: PsWorktree[]): Set<string> {
+// A worktree belongs to one project: a name that also starts with a longer label's prefix
+// (`ds-dev-studio-public-` beside `ds-dev-studio-`) is that project's, not this one's.
+export function knownWts(store: Store, project: string, ps: PsWorktree[]): Set<string> {
   const ids = new Set((store.db.query("SELECT wt FROM members WHERE project = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone' UNION SELECT builder_wt AS wt FROM units WHERE project = ? AND status = 'cancelled' AND COALESCE(builder_wt, '') != ''")
     .all(project, project) as { wt: string }[]).map((r) => r.wt));
   const studio = (store.get("projects", { label: project })?.studio_wt as string | null) ?? null;
   if (studio) ids.add(studio);
   const named = `${prefix()}${project}-`;
-  for (const w of ps) if ((w.displayName ?? "").startsWith(named)) ids.add(w.worktreeId);
+  const labels = new Set([...loopProjects(store.root), ...(store.db.query("SELECT label FROM projects").all() as { label: string }[]).map((r) => r.label)]);
+  const longer = [...labels].filter((l) => l.startsWith(`${project}-`)).map((l) => `${prefix()}${l}-`);
+  for (const w of ps) {
+    const name = w.displayName ?? "";
+    if (name.startsWith(named) && !longer.some((p) => name.startsWith(p))) ids.add(w.worktreeId);
+  }
   return ids;
 }
 
@@ -422,6 +431,10 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
         }
         if (terminals || !adapter.terminals) store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND handle NOT IN (SELECT value FROM json_each(?))",
           [now, project, JSON.stringify(terminals ? terminals.filter((t) => t.connected === true && t.writable !== false && t.orphaned !== true).map((t) => t.handle) : dir.flatMap((d) => d.terminals ?? []))]);
+        // A terminal row whose worktree is no longer the project's (an over-wide name match before) is
+        // gone too, though its handle is still live under the project that owns it.
+        store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt IS NOT NULL AND wt NOT IN (SELECT value FROM json_each(?))",
+          [now, project, JSON.stringify([...ids])]);
         // U261: only a listing that succeeded can adopt, keep or release the Studio's terminal.
         if (terminals) adoptStudio(store, project, now);
       });
