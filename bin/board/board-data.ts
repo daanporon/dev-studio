@@ -24,6 +24,7 @@ import { spentOf } from "../loop/reconcilers/tokens.ts";
 import { dispatchVerdict, leadVerdict } from "../loop/reconcilers/liveness.ts";
 import { planPlain, planRevisions, approvedCopyPath } from "../lib/plan-plain.ts";
 import { planChanges } from "./plan-changes.ts";
+import { compareSquads } from "./squad-order.ts";
 import { redact } from "../loop/chat/redact.ts";
 import { planUnitFacts } from "../loop/squad/plan-lines.ts";
 import { blockingForUnit, entryOf, list, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
@@ -595,20 +596,6 @@ const progress = (u: any[]) => ({
   cancelled: u.filter((x) => x?.status === "cancelled").length,
   total: u.filter((x) => x?.status !== "cancelled").length,
 });
-
-// Sort group: needs-you first (an unanswered question, or blocked), then running, other, suspended
-// (never floated up), parked, wrapping up, done/failed. Shared by both views so they order
-// identically. Wrapping up keeps the running predicate (allUnitsDone) but sorts below every
-// active squad, just above done/failed — all its work is settled, only the Lead's wrap-up is pending.
-function group(st: any, fin: Finish | null): number {
-  const s = st?.status ?? "?";
-  if (s === "suspended" || s === "on-hold") return 3;   // on-hold: legacy, parked before suspend replaced hold
-  if (s === "done" || s === "failed") return 5;
-  if (arr(st?.waiting_on_you).length > 0 || s === "blocked") return 0;
-  if (s === "running" && allUnitsDone(fin)) return 4;
-  if (s === "running" && heldOnly(fin)) return 3.5;     // parked: below running and other, above wrapping up
-  return s === "running" ? 1 : 2;
-}
 
 // The finished condition (squad-done-definition U1): squad-finish.ts' settle() over the squad JSON, with
 // the done units whose PR the loop sees open (the same freshness as the loop's all-done rule). A held
@@ -1885,14 +1872,13 @@ function fromDb(db: Db, label: string, topic: string) {
     let st: any = null;
     try { st = squadDoc(db.s, l, t); } catch { /* a doc that won't parse */ }
     const ok = st && typeof st === "object" && !Array.isArray(st) ? st : null;
-    return { l, t, st: ok, fin: ok ? finishOf(db, l, t, ok) : null };
+    return { l, t, st: ok };
   });
-  read.sort((a, b) => group(a.st, a.fin) - group(b.st, b.fin));
   const toks = tokenSpend(db), accts = accounts(db);
   const squads = read.map(({ l, t, st }) => {
     if (!st) return broken(l, t);
     try { return squad(db, l, t, st, live, toks, accts); } catch { return broken(l, t); }
-  });
+  }).sort(compareSquads);
   accountUsers(db, accts, label, squads);
   const labels = label ? [label] : db.all("SELECT label FROM projects UNION SELECT project AS label FROM squads ORDER BY label").map((r) => String(r.label));
   return { ...board(db, label, labels, squads, accts, live), project_controls: !topic };

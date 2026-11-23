@@ -280,3 +280,16 @@ test("the squads table row fits the narrowest wide layout (935px)", () => {
   expect(cols.length).toBe(9);
   expect(total).toBeLessThanOrEqual(935);
 });
+
+test("squad order: a starred squad sorting last by name renders above running squads, below one with a question", () => {
+  const f = fixture({ a: { queued: [{ slug: "a1" }] }, b: { queued: [{ slug: "b1" }] }, limits: { max_builders: "3", focus_squad: "b" } });
+  expect(f.board().squads.map((s: any) => s.topic)).toEqual(["b", "a"]);
+  const s = open(f.root);
+  const doc: any = JSON.parse(readFileSync(join(f.root, "p", "squads", "a.json"), "utf8"));
+  doc.waiting_on_you = [{ id: "q", asker: "lead", blocking: true, question: "x", since: "2026-10-08T09:00:00Z" }];
+  writeFileSync(join(f.root, "p", "squads", "a.json"), JSON.stringify(doc));
+  s.close();
+  const r = spawnSync(join(REPO, "bin/ds"), ["import"], { env: { ...process.env, DS_STATE_ROOT: f.root }, encoding: "utf8" });
+  expect(r.status).toBe(0);
+  expect(f.board().squads.map((x: any) => x.topic)).toEqual(["a", "b"]);
+});
