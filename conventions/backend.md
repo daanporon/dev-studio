@@ -78,7 +78,7 @@ Script-callable (implemented by the adapter, used by the loop's observers and fu
 | `wt-terminals` | — | `<worktree_id>` per worktree with a live terminal, host-wide (the phone book's liveness source; exit 1 when the terminal list can't be read, so liveness reports unknown instead of guessing) |
 | `worker-resume` | `<run> <worktree_id> <spec> <model> [account] [agent] [window] [role]` | — (restart in place keeping the conversation; missing agent = claude; exit 1 when the agent can't resume, so the caller starts fresh; the U97 fresh-start guard above runs first, with the same `agent_busy` exit 3) |
 | `ps` | — | merged `worktree ps` JSON across the default host and omitted hosts |
-| `worker-done` | `<subject> <body>` | — (complete THIS terminal's active dispatch with outcome succeeded; discovers task/dispatch/sender ids itself — `bin/role/finish-unit.sh`) |
+| `worker-done` | `[--outcome succeeded\|failed] <subject> <body>` | — (complete THIS terminal's active dispatch with that outcome, default succeeded; discovers task/dispatch/sender ids itself — `bin/role/finish-unit.sh`) |
 
 **Accounts.** `account` is the last optional argument of the start ops; a backend with one login
 ignores it. A caller that passes `account` but skips an earlier optional positional (`host`,
