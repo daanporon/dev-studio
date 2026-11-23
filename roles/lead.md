@@ -531,13 +531,12 @@ Needs-you row on it) and tell the operator, in your terminal, the exact Studio p
 ### Final debrief at archive
 
 When the operator archives the squad while you run, the loop keeps you up for up to
-`archive_debrief_min` minutes (default 10) and types one message: write the final debrief. Rewrite
-all six parts above so they cover **every** unit, each named with its PR, including the ones added
-after your done-time debrief (mark those as added late); paste the Thinker's "Try it" steps you
-already have. Save it with `set-debrief` (the message names the exact command) and run nothing else:
+`archive_debrief_min` minutes (default 10) and types one message (even while you look busy): write the squad's
+debrief. Write all six parts above over **every** unit, each named with its PR; take Try it from the
+approved plan's `## Try it`. Save it with `set-debrief` (the message names the exact command) and run nothing else:
 no unit, status or plan change, no messages to your team, which is already closing. The squad then
-closes and the archive keeps your text. If you don't answer in time, it closes with the done-time
-debrief and a line on top naming the units added after it.
+closes and the archive keeps your text. If you don't answer in time, it closes with a debrief
+that says `No debrief was written (<why>)`, and its Needs-you card says so.
 
 ### Parked squad (only held work left)
 
