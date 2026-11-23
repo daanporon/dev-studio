@@ -472,6 +472,13 @@ function plans(db: Db, label: string, stem: string, st?: any, topic = "") {
     });
 }
 
+// debrief-in-needs-you pages U1: the squad's Try it page (`<stem>-try-it.md`, the Thinker keeps it current), or null.
+// A live squad's stem is "<label>/squads/<topic>", an archived one's "<label>/archive/<topic>".
+function tryIt(db: Db, label: string, stem: string) {
+  const r = db.one("SELECT path, body, mtime FROM documents WHERE project = ? AND path = ?", label, `${stem}-try-it.md`);
+  return r ? { name: basename(String(r.path)), markdown: String(r.body ?? ""), mtime: Number(r.mtime) || 0 } : null;
+}
+
 // plan-revisions U2 (R7): the plan's newest revision note and, when the approved copy has a documents row, what
 // changed against it. Each is null when there is nothing to show or it cannot be made, never an error.
 function revisionOf(db: Db, label: string, path: string, markdown: string, units: any[]) {
@@ -1796,6 +1803,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
       ...cls("mplan", (s) => s !== "done" && s !== "dispatched" && s !== "cancelled"),
     ].join("\n"),
     plans: plans(db, label, `${label}/squads/${topic}`, st, topic),
+    try_it: tryIt(db, label, `${label}/squads/${topic}`),
     lavish: lavish(db, st, label, topic),
     proposals: arr(st.proposed_squads).filter((p) => p?.status !== "spawned").map((p) => ({
       id: p.id ?? null, topic: p.topic ?? null,
@@ -2031,6 +2039,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       framing: String(st.framing ?? "").slice(0, 160), progress: progress(arr(st.units)),
       debrief: typeof st.debrief === "string" && st.debrief.trim() ? st.debrief : null,
       prs: squadPrs(db, l, st, repoSlug(db, l, String(st.repo ?? ""))), plans: plans(db, l, `${l}/archive/${t}`),
+      try_it: tryIt(db, l, `${l}/archive/${t}`),
       lavish: lavish(db, null, l, t),
     };
   })) : [];
