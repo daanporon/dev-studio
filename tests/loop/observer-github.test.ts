@@ -10,6 +10,7 @@ import { importJson } from "../../bin/loop/db/import-json.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import { DIRS, load, type Observer, type TickCtx } from "../../bin/loop/core/plugins.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
+import { listNotes, noteLine } from "../../bin/loop/feedback/notes.ts";
 import { repoOf } from "../../bin/loop/settings/projects.ts";
 import * as timers from "../../bin/loop/core/timers.ts";
 import { since } from "../../bin/loop/core/events.ts";
@@ -945,5 +946,94 @@ describe("the merge read", () => {
     // Due again: the search rides on the same POST.
     await observer(f.run).run(ctx(s, T + 100));
     expect(f.calls[1]).toContain('m_r_acme_app: search(type: ISSUE, first: 100, after: null, query: "repo:acme/app is:pr is:merged merged:');
+  });
+});
+
+// ds-feedback-github-issues U5: the issues this host filed ride on the poll and flow back to the notes.
+describe("feedback issues", () => {
+  const issue = (n: number, state: string, stateReason: string | null, prs: any[] = []) =>
+    ({ number: n, state, stateReason, closedByPullRequestsReferences: { nodes: prs } });
+  const merged = (number: number, oid: string, at = "2026-11-20T10:00:00Z") => ({ number, merged: true, mergedAt: at, mergeCommit: { oid } });
+  // The fake's answer with each asked `fi<N>` alias filled from `issues`.
+  function withIssues(issues: Map<number, any>) {
+    const f = fake(), queries: string[] = [];
+    const run: Gh = async (query) => {
+      queries.push(query);
+      const r = await f.run(query), body = JSON.parse(r.stdout);
+      for (const m of query.matchAll(/ fi(\d+): issue\(/g)) {
+        const node = issues.get(Number(m[1]));
+        if (node && body.data.r_acme_app) body.data.r_acme_app[`fi${m[1]}`] = node;
+      }
+      return { ...r, stdout: JSON.stringify(body) };
+    };
+    return { run, queries };
+  }
+  function seed(s: Store, nums: number[], repo: string | null = "acme/app") {
+    if (repo) s.upsert("config", { project: "", file: "limits.conf", key: "feedback_repo" }, { value: repo, observed_at: T });
+    for (const n of nums) {
+      s.upsert("feedback_drafts", { key: `fd:${n}` }, { kind: "issue", title: `t${n}`, body: "b", state: "filed", repo: "acme/app", issue: n, created_at: T, updated_at: T });
+      const id = Number((s.get("feedback_drafts", { key: `fd:${n}` }) as Row).id);
+      s.upsert("feedback_notes", { key: `fb:${n}` }, { project: "fx", text: `note ${n}`, source: "cli", state: "filed", draft_id: id, at: T, updated_at: T });
+    }
+  }
+  const draft = (s: Store, n: number) => s.get("feedback_drafts", { key: `fd:${n}` }) as Row;
+  const note = (s: Store, n: number) => s.get("feedback_notes", { key: `fb:${n}` }) as Row;
+  const obs = (run: Gh, held: string[] = []) => githubObserver({ gh: run, resolve: () => APP, budgetMs: 1000, holds: async (oids) => new Set(oids.filter((o) => held.includes(o))) });
+
+  test("closed as completed with a PR → fixed with the PR; not planned → closed; open → unchanged", async () => {
+    const s = imported();
+    seed(s, [41, 42, 43]);
+    const g = withIssues(new Map([[41, issue(41, "CLOSED", "COMPLETED", [merged(77, "abc1234")])], [42, issue(42, "CLOSED", "NOT_PLANNED")], [43, issue(43, "OPEN", null)]]));
+    await obs(g.run).run(ctx(s, T));
+    expect(draft(s, 41)).toMatchObject({ state: "fixed", fix_pr: 77, fix_here: 0 });
+    expect(note(s, 41).state).toBe("fixed");
+    expect(draft(s, 42)).toMatchObject({ state: "closed", fix_pr: null });
+    expect(note(s, 42).state).toBe("closed");
+    expect(draft(s, 43).state).toBe("filed");
+    expect(note(s, 43).state).toBe("filed");
+    expect(noteLine(listNotes(s).find((r) => r.key === "fb:41")!)).toContain("fixed in #77");
+  });
+
+  test("in your version once the checkout holds the PR's merge commit, picked up on a later poll", async () => {
+    const s = imported();
+    seed(s, [41]);
+    const g = withIssues(new Map([[41, issue(41, "CLOSED", "COMPLETED", [merged(77, "abc1234")])]]));
+    await obs(g.run).run(ctx(s, T));
+    expect(draft(s, 41).fix_here).toBe(0);
+    const o = obs(g.run, ["abc1234"]);
+    await o.run(ctx(s, T + 100_000));
+    expect(draft(s, 41)).toMatchObject({ state: "fixed", fix_pr: 77, fix_here: 1 });
+    expect(noteLine(listNotes(s).find((r) => r.key === "fb:41")!)).toContain("(in your version)");
+    // Done: the issue is not asked again.
+    const n = g.queries.length;
+    await o.run(ctx(s, T + 200_000));
+    expect(g.queries.slice(n).join("")).not.toContain("fi41");
+  });
+
+  test("completed with no PR named: fixed with no PR", async () => {
+    const s = imported();
+    seed(s, [41]);
+    await obs(withIssues(new Map([[41, issue(41, "CLOSED", "COMPLETED")]])).run).run(ctx(s, T));
+    expect(draft(s, 41)).toMatchObject({ state: "fixed", fix_pr: null });
+    expect(noteLine(listNotes(s).find((r) => r.key === "fb:41")!)).toContain("fixed  ");
+  });
+
+  test("no repo set → no issue field in the query and nothing changes", async () => {
+    const s = imported();
+    seed(s, [41], null);
+    const g = withIssues(new Map([[41, issue(41, "CLOSED", "COMPLETED")]]));
+    await obs(g.run).run(ctx(s, T));
+    expect(g.queries.join("")).not.toContain("issue(number");
+    expect(draft(s, 41).state).toBe("filed");
+  });
+
+  test("one POST: the issue fields ride on the repo's existing query, one per filed issue", async () => {
+    const s = imported();
+    seed(s, [41, 42]);
+    const g = withIssues(new Map());
+    await obs(g.run).run(ctx(s, T));
+    expect(g.queries.filter((q) => q.includes("issue(number")).length).toBe(1);
+    expect(g.queries[0]).toContain("fi41: issue(number: 41)");
+    expect(g.queries[0]).toContain("fi42: issue(number: 42)");
   });
 });
