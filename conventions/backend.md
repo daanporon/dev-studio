@@ -1,8 +1,8 @@
 # Backend interface
 
 All backend access goes through a defined interface so the system is not
-hardwired to Orca (R19, KTD9). Orca is the only backend shipped now; another is
-a sibling adapter under `bin/backend/`.
+hardwired to Orca (R19, KTD9). Orca is the only backend the loop runs on now; another is
+a sibling adapter under `bin/backend/` (herdr, contract v2, below).
 
 There are two contracts:
 
@@ -164,6 +164,45 @@ and as a server that outlives its caller. It also shows the checks catch an answ
 4. Pass the conformance suite in a test of its own.
 5. Anything it needs from the agents' host beyond these ops is a local read: list it in
    `docs/backends/local-reads.md`.
+
+### The herdr backend (`bin/backend/herdr.ts`)
+
+The first v2 backend (orca-backend-alternatives U15). [herdr](https://github.com/herdrdev/herdr) is a
+terminal multiplexer for agents: a server owns workspaces, tabs and panes, and sees which agent runs in a
+pane and whether it is working. The adapter speaks herdr's socket API (newline-delimited JSON). The loop
+does not use it yet.
+
+- **Pinned.** `HERDR_VERSION` 0.9.5, protocol 22. A server that answers another protocol fails every op.
+  `fetchHerdr(dir)` downloads that release's Linux binary and checks its sha256. `DS_HERDR_BIN` names a
+  local binary instead, and `DS_HERDR_FETCH=0` downloads nothing.
+- **Its server.** `startHerdr({bin, dir, name})` writes `<dir>/config.toml`, starts `herdr server` through
+  `server-unit.ts` and waits for an answer on `<dir>/herdr.sock`. The server runs in its own session
+  (`HERDR_SESSION=ds-<name>`, `HERDR_SOCKET_PATH`, `HERDR_CONFIG_PATH`), apart from any herdr the
+  operator runs. The config sets `resume_agents_on_restore = false` (the loop restarts its members
+  itself), turns off herdr's update and agent-manifest checks, and turns off sound. `herdr integration
+  install` is never run.
+- **Layout B.** There is one workspace per group (a squad) and one tab per terminal (a member), each
+  started with its own cwd and env. The group's first terminal makes the workspace and takes its first
+  tab. A later one adds a tab. Closing the last tab closes the workspace. A terminal made without a
+  group goes to one shared workspace.
+- **Facts live in herdr.** Any client reads the same answers, so a new loop process, or a client after
+  its caller is killed, sees the same terminals. The terminal id is the adapter's own (`h-<random>`),
+  kept as the pane token `ds_id`, because herdr's pane ids (`w1:p2`) are positions that are not stable
+  over a server's life. cwd, label, group, gen and created_at are base64url JSON cut into 80-character
+  tokens (`ds_n`, `ds_m0`…). Facts too long for 13 pieces answer `bad_request`. A group's workspace
+  carries `ds_g`. Only panes with a `ds_id` are listed. Tokens are not restored after a herdr server
+  restart, so the restored panes are not listed.
+- **Capabilities.** `parents: groups`, `state: native` (herdr's `agent_status`: `working` → working,
+  `blocked` → waiting, `idle` and `done` → idle, else unknown), `keys: native`, `turn_confirm: none`. A
+  send answers once herdr has taken the bytes. herdr's turn signal, `agent prompt --wait`, only works
+  for an agent herdr already recognises.
+- **`last_output`** hashes the visible screen and keeps the hash and the time it changed in pane tokens
+  (`ds_oh`, `ds_oa`). The time is when a read first saw the change.
+- `bun bin/backend/herdr.ts caller <bin> <dir> <name> [home]` is the conformance suite's survive caller.
+- `tests/loop/backend-herdr.test.ts` runs the conformance suite (the server outliving its caller
+  included) and layout B against the pinned binary in a temp HOME. When the binary can't be fetched,
+  it skips those cases and prints why. The mappings and the protocol pin always run. How well herdr
+  reads agent state is a trial of its own (U16c).
 
 ## The Orca adapter (contract v1)
 

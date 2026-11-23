@@ -39,7 +39,7 @@ let s0: Store | null = null;
 const make = () => (s0 = root());
 
 describe("a card is stored under the id its reconciler gave it", () => {
-  for (const [key, place] of [["disk-pressure./", "needs"], ["account-skills.acct", "needs"], ["debrief-wrap", "needs"], ["studio.adopt", "note"], ["studio.ctx", "needs"]] as const) {
+  for (const [key, place] of [["disk-pressure./", "needs"], ["account-skills.acct", "needs"], ["debrief-wrap", "needs"], ["studio.adopt", "needs"], ["studio.ctx", "needs"]] as const) {
     test(`${key}: stored id = payload id, place ${place}`, async () => {
       const s = make();
       const a = act(key, "e1");
