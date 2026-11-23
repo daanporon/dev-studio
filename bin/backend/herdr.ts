@@ -42,7 +42,7 @@ import {
   type AgentState, type Answer, type Backend, type Capabilities, type ErrorCode, type Key, type Op, type Request, type Terminal,
   fail, okAnswer,
 } from "./contract.ts";
-import { type ServerHandle, defaultEnv, startServer } from "./server-unit.ts";
+import { type ServerHandle, defaultEnv, startServer, stopServer } from "./server-unit.ts";
 
 export const HERDR_VERSION = "0.9.5";
 export const HERDR_PROTOCOL = 22;
@@ -296,7 +296,8 @@ export async function herdrUp(sock: string): Promise<boolean> {
 }
 
 // Start a herdr server for the loop in `dir` (config.toml, herdr.sock, server.log), through
-// server-unit.ts, and wait until it answers. Its own session (`ds-<name>`) and socket keep it apart
+// server-unit.ts, and wait until it answers (a server already on the socket is refused; one that never
+// answers is stopped). Its own session (`ds-<name>`) and socket keep it apart
 // from any herdr the operator runs. `home` replaces HOME (and drops XDG_*) for the server and every
 // pane in it: tests only. `shell` sets the panes' shell.
 export async function startHerdr(o: { bin: string; dir: string; name: string; home?: string; shell?: string; waitMs?: number }): Promise<HerdrServer> {
@@ -313,12 +314,14 @@ export async function startHerdr(o: { bin: string; dir: string; name: string; ho
   }
   if (o.home) { mkdirSync(o.home, { recursive: true }); env.HOME = o.home; }
   Object.assign(env, { HERDR_CONFIG_PATH: config, HERDR_SOCKET_PATH: socket, HERDR_SESSION: session });
+  if (await herdrUp(socket)) throw new Error(`herdr: a server already answers on ${socket}`);
   const handle = await startServer({ name: o.name, argv: [o.bin, "server"], log, cwd: o.dir, env });
   const wait = o.waitMs ?? 15_000;
   for (let t = 0; t < wait; t += 100) {
     if (await herdrUp(socket)) return { handle, socket, session, config };
     await Bun.sleep(100);
   }
+  await stopServer(handle);
   throw new Error(`herdr: the server never answered on ${socket} (log ${log})`);
 }
 
