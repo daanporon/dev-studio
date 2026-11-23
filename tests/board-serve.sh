@@ -260,6 +260,17 @@ jt "answer: the request is done"     <(reqrow "$A7") '.done_at != null and .resu
 eq "answer: unknown id is 409"       "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"nope\",\"answer\":\"x\"}" "$U")" "409"
 eq "answer: path in topic is 400"    "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"../ans\",\"id\":\"q9\",\"answer\":\"x\"}" "$U")" "400"
 eq "answer: empty answer is 400"     "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"  \"}" "$U")" "400"
+# reasked-question-shows-answered U1: two askings share an id (q9: the first answered from the board, the second
+# open); the answer names the asking it saw by `since` and answers that row only.
+bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.argv[1]);
+  d.run("INSERT INTO questions (project, squad, id, asker, blocking, question, asked_at, status, answer, answered_via, answered_at, doc) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
+    [process.argv[2], "ans", "q9", "lead", "notes?", Date.parse("2026-10-08T08:00:00Z") / 1000, "answered", "first", "board", 1, "{}"]);' "$DBR/loop.db" "$LBL"
+eq "answer since: the first asking's since is 409" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"x\",\"since\":\"2026-10-08T08:00:00Z\"}" "$U")" "409"
+has "answer since: 409 says asked again" "$(cat "$TMP/post.out")" "answered or asked again"
+eq "answer since: nothing answered by the 409" "$(dbq "SELECT COUNT(*) AS n FROM questions WHERE squad = 'ans' AND id = 'q9' AND status = 'open'" | jq '.[0].n')" "1"
+eq "answer since: the open asking's since is 202" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"second\",\"since\":\"2026-10-08T09:00:00Z\"}" "$U")" "202"
+eq "answer since: only the open row was answered" "$(dbq "SELECT status, answer FROM questions WHERE squad = 'ans' AND id = 'q9' ORDER BY seq" | jq -c '[.[] | [.status, .answer]] | sort')" '[["answered","first"],["answered","second"]]'
+eq "answer since: the first asking's answer is untouched" "$(dbq "SELECT COUNT(*) AS n FROM questions WHERE squad = 'ans' AND id = 'q9' AND answer = 'first'" | jq '.[0].n')" "1"
 # A terminal-picker mirror is answered by keystroke, never prose + Enter (that selects the
 # highlighted option): an option is its digit with no Enter; free text is the "Type
 # something." digit, then the text + Enter.
@@ -996,6 +1007,14 @@ eq "chat: an idle member is not working" "$(cq ans wTh)$(jq -c '.working' "$TMP/
 dbw "UPDATE observed_workers SET state = 'working' WHERE project = '$LBL' AND wt = 'wTh'"
 eq "chat: a member mid-turn is working" "$(cq ans wTh)$(jq -c '.working' "$TMP/chat.out")" "200true"
 dbw "UPDATE observed_workers SET state = 'idle' WHERE project = '$LBL' AND wt = 'wTh'"
+# chat-role-switcher U1: `crew` is the squad's live members in the Crew box's order, each with its mail counts and the
+# time of its newest assistant text turn (null without one or on a screen tail); `[]` for the Studio.
+jt "chat: crew lists the live members with counts" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '(.crew | length) >= 1 and ([.crew[] | has("wt","label","role","unread","reply_due","reply_at")] | all) and ((.crew[] | select(.wt == "wTh") | .reply_at) == 2)'
+jt "chat: a screen-tail member's reply_at is null" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '([.crew[] | select(.wt == "wTester") | .reply_at] | all(. == null))'
+jt "chat: the Studio has no crew" <(cq _studio wStudio >/dev/null; cat "$TMP/chat.out") '.crew == []'
+dbw "UPDATE members SET status = 'gone' WHERE project = '$LBL' AND squad = 'ans' AND wt = 'wTester'"
+jt "chat: a gone member is left out of crew" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '([.crew[] | select(.wt == "wTester")] | length) == 0'
+dbw "UPDATE members SET status = 'running' WHERE project = '$LBL' AND squad = 'ans' AND wt = 'wTester'"
 eq "chat: GET an unknown member is 404" "$(cq ans nope)" "404"
 eq "chat: GET a member of another squad is 404" "$(cq board-builders wTh)" "404"
 eq "chat: GET without wt is 400"       "$(curl -s -o /dev/null -w '%{http_code}' "$C?project=$LBL&topic=ans")" "400"

@@ -1472,5 +1472,18 @@ render "$LBL" --json > "$TMP/disk.json"
 jt "disk U3: a closed spell leaves no disk field"         "$TMP/disk.json" 'has("disk") | not'
 dbw "DELETE FROM observed_alerts WHERE id LIKE 'sweep-disk-pressure%'"
 
+# reasked-question-shows-answered U1: an answered earlier asking of a re-asked question (same id, status answered)
+# changes nothing on the text board: the open asking is printed once, as before.
+RQ="$(bun -e 'const {Database}=require("bun:sqlite");const d=new Database(process.argv[1],{readonly:true});const r=d.query("SELECT squad, id, question FROM questions WHERE project = ? AND status = \x27open\x27 AND question IS NOT NULL ORDER BY seq LIMIT 1").get(process.argv[2]);console.log(r?JSON.stringify(r):"")' "$DBR/loop.db" "$LBL")"
+if [ -n "$RQ" ]; then
+  RQ_Q="$(printf '%s' "$RQ" | jq -r .question)"; RQ_ID="$(printf '%s' "$RQ" | jq -r .id)"; RQ_SQ="$(printf '%s' "$RQ" | jq -r .squad)"
+  RQ_BEFORE="$(render "$LBL" | grep -cF -- "$RQ_Q" || true)"
+  dbw "INSERT INTO questions (project, squad, id, asker, blocking, question, asked_at, status, answer, answered_via, answered_at, doc) VALUES ('$LBL', '$RQ_SQ', '$RQ_ID', 'lead', 1, '$(printf '%s' "$RQ_Q" | sed "s/'/''/g")', 1, 'answered', 'earlier', 'board', 2, '{}')"
+  eq "reask U1: an answered earlier asking leaves the text board's question line count" "$(render "$LBL" | grep -cF -- "$RQ_Q" || true)" "$RQ_BEFORE"
+  eq "reask U1: the question is printed once" "$RQ_BEFORE" "1"
+else
+  eq "reask U1: the fixture has an open question" "none" "one"
+fi
+
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

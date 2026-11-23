@@ -39,7 +39,7 @@
 //   /api/request  {project, action, topic?, role?, text?}  `studio`: the loop files the one-line
 //                 request for the Studio ("board: the operator asks you to run: /ds-…"); a start may add
 //                 `files`, up to 8 images uploaded to topic `_start` (a gone one is 409)
-//   /api/answer   {project, topic, id, answer}  the questions row answered via `board` and an
+//   /api/answer   {project, topic, id, answer, since?}  the questions row answered via `board` and an
 //                 `answer` row: the loop types it into the asker's terminal (the card's worktree,
 //                 else the Lead; a picker by keystroke). A Studio alert (topic _studio): `dismiss`,
 //                 even with an empty answer (one click); agent questions still need one.
@@ -877,6 +877,12 @@ async function answer(req: Request) {
     const st = squadRow(s, project, topic);
     const q = one(s, "SELECT * FROM questions WHERE project = ? AND squad = ? AND id = ? AND status = 'open' ORDER BY seq DESC LIMIT 1", project, topic, id)
       ?? no(409, `question ${id} is not open (already answered?)`);
+    // The asking the operator saw: its `since` (epoch seconds or the entry's ISO time) must be the open row's `asked_at`.
+    if (pr.b.since !== undefined && pr.b.since !== null) {
+      const want = typeof pr.b.since === "number" ? Math.floor(pr.b.since) : Math.floor(Date.parse(String(pr.b.since)) / 1000);
+      if (!Number.isFinite(want) || want !== (q.asked_at === null || q.asked_at === undefined ? null : Number(q.asked_at)))
+        no(409, `question ${id} was answered or asked again; the board has updated`);
+    }
     let e: any = {};
     try { e = JSON.parse(String(q.doc ?? "{}")) ?? {}; } catch { /* a bare row */ }
     const picker = e.source === "picker";
@@ -892,7 +898,7 @@ async function answer(req: Request) {
     // A picker lives only in its asker's terminal.
     const wt = String((picker ? q.card_wt : q.card_wt || st.lead_wt) ?? "") || no(409, "no agent to send it to (no card or Lead worktree)");
     // Answered here and now: the question leaves the board at once, and a second send finds it closed.
-    answerQuestion(s, project, topic, id, ans, "board");
+    answerQuestion(s, project, topic, id, ans, "board", q.seq as number);
     const choices = picker ? (() => { try { return JSON.parse(String(q.choices ?? "[]")); } catch { return []; } })() : undefined;
     const pick = picker ? { choices, transcript: e.transcript_path, tool_use_id: e.tool_use_id } : {};
     return board(s, "answer", { id, answer: ans, seq: q.seq, card_wt: q.card_wt ?? undefined, via: "board", ...pick }, { project, squad: topic, member: wt });
