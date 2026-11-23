@@ -207,7 +207,7 @@ async function archive(a: Action, x: Exec, r: Row): Promise<Result> {
     doc.waiting_on_you = [];
     if (dropped.length) doc.dropped_questions = [...(Array.isArray(doc.dropped_questions) ? doc.dropped_questions : []), ...dropped];
     // debrief-on-archive U1: the Lead's final debrief, else the done-time one under a line naming what it misses.
-    const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r)?.state === "written");
+    const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r));
     doc.debrief = final.debrief; doc.debrief_source = final.source;
     const arch = join(store.root, project, "archive");
     mkdirSync(arch, { recursive: true });
