@@ -94,6 +94,8 @@ describe("migration 0054: path columns", () => {
     // A writer that sets the path itself keeps it (a later non-Orca provider, U11).
     s.db.run("INSERT INTO members (id, project, squad, role, wt, wt_path, observed_at, updated_at) VALUES (10, 'realp', 'alpha', 'builder', 'local::/x', '/x', 1, 1)");
     expect(s.db.query("SELECT wt_path FROM members WHERE id = 10").get()).toEqual({ wt_path: "/x" });
+    s.db.run("UPDATE members SET wt = 'tree_2', wt_path = '/srv/b' WHERE id = 10");
+    expect(s.db.query("SELECT wt_path FROM members WHERE id = 10").get()).toEqual({ wt_path: "/srv/b" });
     // Every pair has both triggers.
     const trig = new Set((s.db.query("SELECT name FROM sqlite_master WHERE type = 'trigger'").all() as Row[]).map((r) => String(r.name)));
     for (const [t, , p] of PATH_COLUMNS) for (const k of ["ins", "upd"]) expect(trig.has(`${t}_${p}_${k}`)).toBe(true);

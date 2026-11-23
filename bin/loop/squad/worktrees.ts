@@ -22,8 +22,8 @@ export const pathSql = (col: string) =>
   `CASE WHEN instr(${col}, '::') > 0 THEN substr(${col}, instr(${col}, '::') + 2) WHEN substr(${col}, 1, 1) = '/' THEN ${col} END`;
 
 // Each worktree-id column and the folder-path column beside it (migration 0054). Triggers there fill
-// the path whenever a row is added or its id column changes, so every writer fills both; readers still
-// read the id column until the clean-up moves them.
+// the path whenever a row is added or its id column changes, so every writer fills both; a write that
+// sets the path itself keeps it. Readers still read the id column until the clean-up moves them.
 export const PATH_COLUMNS: readonly (readonly [table: string, id: string, path: string])[] = [
   ["coordinators", "wt", "wt_path"], ["dispatches", "wt", "wt_path"], ["exposed", "owner_wt", "owner_path"],
   ["finishes", "wt", "wt_path"], ["members", "wt", "wt_path"], ["observed_chat", "wt", "wt_path"],

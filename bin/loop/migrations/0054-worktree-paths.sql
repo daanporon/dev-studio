@@ -1,17 +1,18 @@
 -- 0054 worktree paths (orca-backend-alternatives U5). Each worktree-id column gets the folder path beside
 -- it, backfilled from the id (`<repo id>::<path>`, or a plain absolute path; anything else stays NULL),
 -- and two triggers per column fill it whenever a row is added or its id changes, so every writer fills
--- both while readers stay on the id column. The `worktrees` table is the loop's own record of each
--- worktree by host + path; this backfills it from members, projects and observed_worktrees with the
--- statement bin/loop/squad/worktrees.ts syncSql() runs each tick. Generated from that module's
--- PATH_COLUMNS, pathSql and syncSql; tests/loop/migrate-paths.test.ts checks they still agree.
+-- both while readers stay on the id column; a write that sets the path itself keeps it. The
+-- `worktrees` table is the loop's own record of each worktree by host + path; this backfills it from
+-- members, projects and observed_worktrees with the statement bin/loop/squad/worktrees.ts syncSql()
+-- runs every 30 s. Generated from that module's PATH_COLUMNS, pathSql and syncSql;
+-- tests/loop/migrate-paths.test.ts checks they still agree.
 
 ALTER TABLE coordinators ADD COLUMN wt_path TEXT;
 UPDATE coordinators SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(wt, instr(wt, '::') + 2) WHEN substr(wt, 1, 1) = '/' THEN wt END WHERE wt IS NOT NULL;
 CREATE TRIGGER coordinators_wt_path_ins AFTER INSERT ON coordinators WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE coordinators SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER coordinators_wt_path_upd AFTER UPDATE OF wt ON coordinators WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER coordinators_wt_path_upd AFTER UPDATE OF wt ON coordinators WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE coordinators SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -20,7 +21,7 @@ UPDATE dispatches SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(wt, in
 CREATE TRIGGER dispatches_wt_path_ins AFTER INSERT ON dispatches WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE dispatches SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER dispatches_wt_path_upd AFTER UPDATE OF wt ON dispatches WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER dispatches_wt_path_upd AFTER UPDATE OF wt ON dispatches WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE dispatches SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -29,7 +30,7 @@ UPDATE exposed SET owner_path = CASE WHEN instr(owner_wt, '::') > 0 THEN substr(
 CREATE TRIGGER exposed_owner_path_ins AFTER INSERT ON exposed WHEN NEW.owner_path IS NULL AND NEW.owner_wt IS NOT NULL BEGIN
   UPDATE exposed SET owner_path = CASE WHEN instr(NEW.owner_wt, '::') > 0 THEN substr(NEW.owner_wt, instr(NEW.owner_wt, '::') + 2) WHEN substr(NEW.owner_wt, 1, 1) = '/' THEN NEW.owner_wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER exposed_owner_path_upd AFTER UPDATE OF owner_wt ON exposed WHEN NEW.owner_wt IS NOT OLD.owner_wt BEGIN
+CREATE TRIGGER exposed_owner_path_upd AFTER UPDATE OF owner_wt ON exposed WHEN NEW.owner_wt IS NOT OLD.owner_wt AND NEW.owner_path IS OLD.owner_path BEGIN
   UPDATE exposed SET owner_path = CASE WHEN instr(NEW.owner_wt, '::') > 0 THEN substr(NEW.owner_wt, instr(NEW.owner_wt, '::') + 2) WHEN substr(NEW.owner_wt, 1, 1) = '/' THEN NEW.owner_wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -38,7 +39,7 @@ UPDATE finishes SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(wt, inst
 CREATE TRIGGER finishes_wt_path_ins AFTER INSERT ON finishes WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE finishes SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER finishes_wt_path_upd AFTER UPDATE OF wt ON finishes WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER finishes_wt_path_upd AFTER UPDATE OF wt ON finishes WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE finishes SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -47,7 +48,7 @@ UPDATE members SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(wt, instr
 CREATE TRIGGER members_wt_path_ins AFTER INSERT ON members WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE members SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER members_wt_path_upd AFTER UPDATE OF wt ON members WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER members_wt_path_upd AFTER UPDATE OF wt ON members WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE members SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -56,7 +57,7 @@ UPDATE observed_chat SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(wt,
 CREATE TRIGGER observed_chat_wt_path_ins AFTER INSERT ON observed_chat WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE observed_chat SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_chat_wt_path_upd AFTER UPDATE OF wt ON observed_chat WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER observed_chat_wt_path_upd AFTER UPDATE OF wt ON observed_chat WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE observed_chat SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -65,7 +66,7 @@ UPDATE observed_compacted SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN subst
 CREATE TRIGGER observed_compacted_wt_path_ins AFTER INSERT ON observed_compacted WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE observed_compacted SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_compacted_wt_path_upd AFTER UPDATE OF wt ON observed_compacted WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER observed_compacted_wt_path_upd AFTER UPDATE OF wt ON observed_compacted WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE observed_compacted SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -74,7 +75,7 @@ UPDATE observed_limited SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(
 CREATE TRIGGER observed_limited_wt_path_ins AFTER INSERT ON observed_limited WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE observed_limited SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_limited_wt_path_upd AFTER UPDATE OF wt ON observed_limited WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER observed_limited_wt_path_upd AFTER UPDATE OF wt ON observed_limited WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE observed_limited SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -83,7 +84,7 @@ UPDATE observed_procs SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(wt
 CREATE TRIGGER observed_procs_wt_path_ins AFTER INSERT ON observed_procs WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE observed_procs SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_procs_wt_path_upd AFTER UPDATE OF wt ON observed_procs WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER observed_procs_wt_path_upd AFTER UPDATE OF wt ON observed_procs WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE observed_procs SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -92,7 +93,7 @@ UPDATE observed_reviews SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(
 CREATE TRIGGER observed_reviews_wt_path_ins AFTER INSERT ON observed_reviews WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE observed_reviews SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_reviews_wt_path_upd AFTER UPDATE OF wt ON observed_reviews WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER observed_reviews_wt_path_upd AFTER UPDATE OF wt ON observed_reviews WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE observed_reviews SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -101,7 +102,7 @@ UPDATE observed_terminals SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN subst
 CREATE TRIGGER observed_terminals_wt_path_ins AFTER INSERT ON observed_terminals WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE observed_terminals SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_terminals_wt_path_upd AFTER UPDATE OF wt ON observed_terminals WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER observed_terminals_wt_path_upd AFTER UPDATE OF wt ON observed_terminals WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE observed_terminals SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -110,7 +111,7 @@ UPDATE observed_transcripts SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN sub
 CREATE TRIGGER observed_transcripts_wt_path_ins AFTER INSERT ON observed_transcripts WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE observed_transcripts SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_transcripts_wt_path_upd AFTER UPDATE OF wt ON observed_transcripts WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER observed_transcripts_wt_path_upd AFTER UPDATE OF wt ON observed_transcripts WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE observed_transcripts SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -119,7 +120,7 @@ UPDATE observed_workers SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(
 CREATE TRIGGER observed_workers_wt_path_ins AFTER INSERT ON observed_workers WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE observed_workers SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_workers_wt_path_upd AFTER UPDATE OF wt ON observed_workers WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER observed_workers_wt_path_upd AFTER UPDATE OF wt ON observed_workers WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE observed_workers SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -128,7 +129,7 @@ UPDATE observed_worktrees SET parent_path = CASE WHEN instr(parent, '::') > 0 TH
 CREATE TRIGGER observed_worktrees_parent_path_ins AFTER INSERT ON observed_worktrees WHEN NEW.parent_path IS NULL AND NEW.parent IS NOT NULL BEGIN
   UPDATE observed_worktrees SET parent_path = CASE WHEN instr(NEW.parent, '::') > 0 THEN substr(NEW.parent, instr(NEW.parent, '::') + 2) WHEN substr(NEW.parent, 1, 1) = '/' THEN NEW.parent END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER observed_worktrees_parent_path_upd AFTER UPDATE OF parent ON observed_worktrees WHEN NEW.parent IS NOT OLD.parent BEGIN
+CREATE TRIGGER observed_worktrees_parent_path_upd AFTER UPDATE OF parent ON observed_worktrees WHEN NEW.parent IS NOT OLD.parent AND NEW.parent_path IS OLD.parent_path BEGIN
   UPDATE observed_worktrees SET parent_path = CASE WHEN instr(NEW.parent, '::') > 0 THEN substr(NEW.parent, instr(NEW.parent, '::') + 2) WHEN substr(NEW.parent, 1, 1) = '/' THEN NEW.parent END WHERE rowid = NEW.rowid;
 END;
 
@@ -137,7 +138,7 @@ UPDATE projects SET studio_path = CASE WHEN instr(studio_wt, '::') > 0 THEN subs
 CREATE TRIGGER projects_studio_path_ins AFTER INSERT ON projects WHEN NEW.studio_path IS NULL AND NEW.studio_wt IS NOT NULL BEGIN
   UPDATE projects SET studio_path = CASE WHEN instr(NEW.studio_wt, '::') > 0 THEN substr(NEW.studio_wt, instr(NEW.studio_wt, '::') + 2) WHEN substr(NEW.studio_wt, 1, 1) = '/' THEN NEW.studio_wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER projects_studio_path_upd AFTER UPDATE OF studio_wt ON projects WHEN NEW.studio_wt IS NOT OLD.studio_wt BEGIN
+CREATE TRIGGER projects_studio_path_upd AFTER UPDATE OF studio_wt ON projects WHEN NEW.studio_wt IS NOT OLD.studio_wt AND NEW.studio_path IS OLD.studio_path BEGIN
   UPDATE projects SET studio_path = CASE WHEN instr(NEW.studio_wt, '::') > 0 THEN substr(NEW.studio_wt, instr(NEW.studio_wt, '::') + 2) WHEN substr(NEW.studio_wt, 1, 1) = '/' THEN NEW.studio_wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -146,7 +147,7 @@ UPDATE questions SET card_path = CASE WHEN instr(card_wt, '::') > 0 THEN substr(
 CREATE TRIGGER questions_card_path_ins AFTER INSERT ON questions WHEN NEW.card_path IS NULL AND NEW.card_wt IS NOT NULL BEGIN
   UPDATE questions SET card_path = CASE WHEN instr(NEW.card_wt, '::') > 0 THEN substr(NEW.card_wt, instr(NEW.card_wt, '::') + 2) WHEN substr(NEW.card_wt, 1, 1) = '/' THEN NEW.card_wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER questions_card_path_upd AFTER UPDATE OF card_wt ON questions WHEN NEW.card_wt IS NOT OLD.card_wt BEGIN
+CREATE TRIGGER questions_card_path_upd AFTER UPDATE OF card_wt ON questions WHEN NEW.card_wt IS NOT OLD.card_wt AND NEW.card_path IS OLD.card_path BEGIN
   UPDATE questions SET card_path = CASE WHEN instr(NEW.card_wt, '::') > 0 THEN substr(NEW.card_wt, instr(NEW.card_wt, '::') + 2) WHEN substr(NEW.card_wt, 1, 1) = '/' THEN NEW.card_wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -155,7 +156,7 @@ UPDATE squads SET lead_path = CASE WHEN instr(lead_wt, '::') > 0 THEN substr(lea
 CREATE TRIGGER squads_lead_path_ins AFTER INSERT ON squads WHEN NEW.lead_path IS NULL AND NEW.lead_wt IS NOT NULL BEGIN
   UPDATE squads SET lead_path = CASE WHEN instr(NEW.lead_wt, '::') > 0 THEN substr(NEW.lead_wt, instr(NEW.lead_wt, '::') + 2) WHEN substr(NEW.lead_wt, 1, 1) = '/' THEN NEW.lead_wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER squads_lead_path_upd AFTER UPDATE OF lead_wt ON squads WHEN NEW.lead_wt IS NOT OLD.lead_wt BEGIN
+CREATE TRIGGER squads_lead_path_upd AFTER UPDATE OF lead_wt ON squads WHEN NEW.lead_wt IS NOT OLD.lead_wt AND NEW.lead_path IS OLD.lead_path BEGIN
   UPDATE squads SET lead_path = CASE WHEN instr(NEW.lead_wt, '::') > 0 THEN substr(NEW.lead_wt, instr(NEW.lead_wt, '::') + 2) WHEN substr(NEW.lead_wt, 1, 1) = '/' THEN NEW.lead_wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -164,7 +165,7 @@ UPDATE unit_cpu SET wt_path = CASE WHEN instr(wt, '::') > 0 THEN substr(wt, inst
 CREATE TRIGGER unit_cpu_wt_path_ins AFTER INSERT ON unit_cpu WHEN NEW.wt_path IS NULL AND NEW.wt IS NOT NULL BEGIN
   UPDATE unit_cpu SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER unit_cpu_wt_path_upd AFTER UPDATE OF wt ON unit_cpu WHEN NEW.wt IS NOT OLD.wt BEGIN
+CREATE TRIGGER unit_cpu_wt_path_upd AFTER UPDATE OF wt ON unit_cpu WHEN NEW.wt IS NOT OLD.wt AND NEW.wt_path IS OLD.wt_path BEGIN
   UPDATE unit_cpu SET wt_path = CASE WHEN instr(NEW.wt, '::') > 0 THEN substr(NEW.wt, instr(NEW.wt, '::') + 2) WHEN substr(NEW.wt, 1, 1) = '/' THEN NEW.wt END WHERE rowid = NEW.rowid;
 END;
 
@@ -173,7 +174,7 @@ UPDATE units SET builder_path = CASE WHEN instr(builder_wt, '::') > 0 THEN subst
 CREATE TRIGGER units_builder_path_ins AFTER INSERT ON units WHEN NEW.builder_path IS NULL AND NEW.builder_wt IS NOT NULL BEGIN
   UPDATE units SET builder_path = CASE WHEN instr(NEW.builder_wt, '::') > 0 THEN substr(NEW.builder_wt, instr(NEW.builder_wt, '::') + 2) WHEN substr(NEW.builder_wt, 1, 1) = '/' THEN NEW.builder_wt END WHERE rowid = NEW.rowid;
 END;
-CREATE TRIGGER units_builder_path_upd AFTER UPDATE OF builder_wt ON units WHEN NEW.builder_wt IS NOT OLD.builder_wt BEGIN
+CREATE TRIGGER units_builder_path_upd AFTER UPDATE OF builder_wt ON units WHEN NEW.builder_wt IS NOT OLD.builder_wt AND NEW.builder_path IS OLD.builder_path BEGIN
   UPDATE units SET builder_path = CASE WHEN instr(NEW.builder_wt, '::') > 0 THEN substr(NEW.builder_wt, instr(NEW.builder_wt, '::') + 2) WHEN substr(NEW.builder_wt, 1, 1) = '/' THEN NEW.builder_wt END WHERE rowid = NEW.rowid;
 END;
 
