@@ -492,8 +492,7 @@ export class LoopActuator implements Actuator {
     if (out.code === 0) {
       store.db.run("UPDATE orca_calls SET state = 'completed', result = ?, settled_at = ? WHERE retry_id = ?", [out.out, o.at, retry]);
       if (ident) o.gen?.(retry);
-    }
-    else {
+    } else {
       // A non-zero exit may still have landed (a timeout, a killed backend): ask before a retry gets a new id.
       store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [errOf(out, op), retry]);
       if (!inDoubt(out)) await this.ask(store, store.db.query("SELECT * FROM orca_calls WHERE retry_id = ?").get(retry) as Row, o.at, errOf(out, op));
