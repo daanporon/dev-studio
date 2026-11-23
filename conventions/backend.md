@@ -209,9 +209,10 @@ does not use it yet.
 Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
 lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
 `herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
-others, the first being its default). Only `orca` is one the loop can start a squad on today (herdr's v2
-adapter, above, is not wired to squad starts yet); the rest are listed so a project can name them, and a
-start on one is refused with a line that says it is not built yet.
+others, the first being its default). Only `orca` is one a spawn can pick today (herdr's v2 adapter,
+above, is not wired to squad starts yet); the rest are listed so a project can name them, and a spawn on
+one is refused with a line that says it is not built yet. The loop itself can run a squad on any contract
+backend (U11, "Started" below).
 
 - **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
   pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
@@ -228,8 +229,34 @@ start on one is refused with a line that says it is not built yet.
 - **Shown.** The board's squad row and box carry a chip with the backend (and the tool, when it is not the
   backend's default) for a squad off `orca`; the text board adds ` · on:<backend>[/<tool>]` to its line.
   Settings → Agents & nudges lists both keys.
-- **Started.** The loop's squad fulfiller (`bin/loop/fulfil/squad.ts`) starts only `orca` squads; a wish
-  for another fails with `squad <topic> is on backend <name>, which the loop cannot start yet`.
+- **Started (U11).** A squad on another backend is run through the contract (`bin/backend/contract.ts`),
+  not Orca: `fulfil/squad.ts` makes no Run, task, dispatch, coordinator pane or sender for it, and wishes
+  its roles; the actuator's contract seat (`core/actuator.ts` `contractSeat`) starts, pokes, stops and
+  closes them with the contract driver (`drivers/contract.ts`). The actuator reaches `tmux` through
+  `bin/backend/tmux.ts` and has no adapter for `orca-lite` or `herdr`; the registry still marks all three
+  not built (their `adapter` is null until the observer and removal land, U12 and U11c), so a spawn on
+  one is still refused. A test reaches this path through `LoopActuator`'s `backends` option and the
+  contract fake.
+  - **Start.** The member's worktree comes from the squad's recorded `worktree_provider` through
+    `io/worktrees.ts`, its parent the Lead's (the Lead's own is none while the Studio is on Orca); its `wt`
+    is `local::<path>`. The folder is marked trusted in the account's `.claude.json` first
+    (`drivers/claude-launch.ts` `markTrusted`), then one `terminal.create` (cwd, label `<role>[-suffix]`,
+    `group` = the squad on `parents: groups`, `parent` = the Lead's path on `parents: native`) with env
+    `DS_GEN` (the call's retry id), `DS_BACKEND`, `DS_MEMBER` and `DS_WT`, and the Claude launch line
+    (`claudeLine`, the same one Orca's adapter types) sent once with `submit`. Only Claude has a launch
+    line: `spawn-squad` refuses a non-Orca squad whose roster names Codex or Muse (primary or fallback).
+  - **Ledger.** Starts and closes are `orca_calls` rows with the contract verb as `op` (`terminal.create`,
+    `terminal.close`), in `LOCK_OPS`, `stopOpen()` and `startInFlight()`. A start lists the terminals
+    first: one carrying this row's `DS_GEN` is this start's own (its answer was lost; no second create),
+    and any other in the folder is an old agent's, closed before the new one is made (a crashed member's
+    restart). The line's send is noted (`typed`) before it goes, so a replay never types it twice. A
+    second start under the same key while one runs is answered busy. Pokes are not ledgered:
+    `terminal.send` with `submit`, `turn_started` read as started, `accepted` as accepted.
+  - **Finish.** `finish-unit` and `ds finish` know the squad's backend (`DS_BACKEND`, else its loop.db
+    row): off Orca there is no Run, so the finish row is the whole finish and no `worker_done` is sent.
+  - **Not yet.** Removal (close, cancel, leftovers, tidy) is U11c's; the observer that reads these
+    members' state is U12's; the role scripts' own backend calls are U11b's. `nesting.ts` skips such a
+    squad (only Orca moves a worktree under a parent).
 
 ## The Orca adapter (contract v1)
 

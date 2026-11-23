@@ -116,10 +116,9 @@ function holdForRevalidation(store: Store, r: Row, at: number): void {
 
 async function create(a: Action, x: Exec, r: Row): Promise<Result> {
   const { store, now: at } = x, project = String(r.project), topic = String(r.topic), id = Number(r.id);
-  // U9: the loop drives only Orca with Runs so far; spawn-squad refuses any backend not built, so a row on
-  // another one is a hand-written wish. Fail it, never start it on orca instead.
-  const backend = String(r.backend ?? "orca");
-  if (backend !== "orca") return { failed: `squad ${topic} is on backend ${backend}, which the loop cannot start yet` };
+  // U11: a squad on a contract backend (not `orca`) has no Run, task or coordinator pane: create writes its
+  // doc and wishes its always-on roles, which start through the contract (core/actuator.ts contractSeat).
+  const contract = String(r.backend ?? "orca") !== "orca";
   // Re-spawning an archived topic: the closed row starts over — a new Run, task, doc and
   // coordinator, and create keys scoped to this wish so no old call replays.
   if (["closed", "gone"].includes(String(r.status ?? ""))) {
@@ -133,11 +132,11 @@ async function create(a: Action, x: Exec, r: Row): Promise<Result> {
   // the Run's first coordinator, as the Studio's did. It holds the Run only until the Lead has a
   // worktree: then seats() opens the squad's own pane and takes the Run over (U210) — a project with no Studio worktree
   // (a loop-proof root) creates its squad this way. Else the project's outside pane.
-  const from = String(payloadOf(r).from ?? "");
-  let sender: string;
+  const from = contract ? "" : String(payloadOf(r).from ?? "");
+  let sender = "";
   if (from) sender = from;
-  else try { sender = await x.act.outside(store, project, at); } catch (e) { return { retry: (e as Error).message }; }
-  if (!r.run_id) {
+  else if (!contract) try { sender = await x.act.outside(store, project, at); } catch (e) { return { retry: (e as Error).message }; }
+  if (!r.run_id && !contract) {
     const o = await x.act.call(store, "run-create", [`squad: ${topic}`], { key: `squad:${id}:${r.want_at}:run-create`, project, squad: topic, member: null, sender, at });
     const run = o.out.trim().split("\n").pop() ?? "";
     if (o.code !== 0) return { retry: (o.err || o.out).trim() || "run-create failed" };
@@ -145,7 +144,7 @@ async function create(a: Action, x: Exec, r: Row): Promise<Result> {
     store.fact("squad_run", [{ table: "squads", key: { id }, set: { run_id: run, updated_at: at } }], { project, squad: topic, payload: { id, run_id: run } });
     r = { ...r, run_id: run };
   }
-  if (!r.task_id) {
+  if (!r.task_id && !contract) {
     const o = await x.act.call(store, "task-create", [String(r.run_id), leadPrompt(store, r), topic, ""], { key: `squad:${id}:${r.want_at}:task-create`, project, squad: topic, member: null, sender, at });
     const task = o.out.trim().split("\n").pop() ?? "";
     if (o.code !== 0) return { retry: (o.err || o.out).trim() || "task-create failed" };
@@ -165,8 +164,9 @@ async function create(a: Action, x: Exec, r: Row): Promise<Result> {
   });
   r = store.get("squads", { id })!;
   wishAlways(store, r, roles, "squad create");
-  store.fact("wish_done", [{ table: "squads", key: { id }, set: { status: "running", want_result: `done: run ${String(r.run_id)} created; ${roles.join(", ")} wished running`, updated_at: at } }],
-    { project, squad: topic, payload: { subject: "squad", id, want: "running", result: `run ${String(r.run_id)}` } });
+  const made = contract ? `on ${String(r.backend)}` : `run ${String(r.run_id)}`;
+  store.fact("wish_done", [{ table: "squads", key: { id }, set: { status: "running", want_result: `done: ${made} created; ${roles.join(", ")} wished running`, updated_at: at } }],
+    { project, squad: topic, payload: { subject: "squad", id, want: "running", result: made } });
   return { done: true, result: { run: r.run_id, task: r.task_id, roles } };
 }
 

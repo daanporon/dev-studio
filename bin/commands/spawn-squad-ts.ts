@@ -57,6 +57,9 @@ export async function run(raw: string[]): Promise<number> {
     const c = chooseSquadBackend({ flag: backend, projectBackend: word("default_backend"), providerSetting: word("worktree_provider") });
     if (!c.ok) { writeErr(`spawn-squad: ${c.error}\n`); return 1; }
     on = { backend: c.backend, backend_host: c.host, worktree_provider: c.provider };
+    // U11: on a contract backend only an agent with a driver launch line can start (bin/loop/drivers/contract.ts).
+    const missing = c.backend === "orca" ? [] : noLaunchLine(roster);
+    if (missing.length) { writeErr(`spawn-squad: backend ${c.backend} can start only claude; the roster names ${missing.join(", ")} (conventions/roles.conf)\n`); return 1; }
   }
   const keep = (o: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== ""));
   const fill = keep({ repo, type, autonomy, host, framing, ...on });
@@ -66,6 +69,20 @@ export async function run(raw: string[]): Promise<number> {
 }
 
 /** The backend of a squad that has started (its doc is written) and is not closed; null for a new one. */
+// The roster's terminal roles (not `elevate`, a one-shot call) whose agent or a fallback's has no launch
+// line on a contract backend, as `<role>: <agent>`. Columns: agent model spawn [effort] [fallbacks] …
+const LAUNCH_LINES = new Set(["claude"]);
+export function noLaunchLine(roster: Map<string, string>): string[] {
+  const out: string[] = [];
+  for (const [role, v] of roster) {
+    const f = v.trim().split(/\s+/);
+    if (f[2] === "elevate") continue;
+    const agents = [f[0], ...(f[4] ?? "").split(",").filter((x) => x.includes(":")).map((x) => x.split(":")[0])];
+    for (const a of new Set(agents)) if (a && !LAUNCH_LINES.has(a)) out.push(`${role}: ${a}`);
+  }
+  return out;
+}
+
 function squadBackend(label: string, topic: string): string | null {
   if (!existsSync(dbPath())) return null;
   const s = openReadOnly();
