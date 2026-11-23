@@ -300,7 +300,7 @@ export async function herdrUp(sock: string): Promise<boolean> {
 // answers is stopped). Its own session (`ds-<name>`) and socket keep it apart
 // from any herdr the operator runs. `home` replaces HOME (and drops XDG_*) for the server and every
 // pane in it: tests only. `shell` sets the panes' shell.
-export async function startHerdr(o: { bin: string; dir: string; name: string; home?: string; shell?: string; waitMs?: number }): Promise<HerdrServer> {
+export async function startHerdr(o: { bin: string; dir: string; name: string; home?: string; shell?: string; waitMs?: number; maxRuntimeS?: number }): Promise<HerdrServer> {
   mkdirSync(o.dir, { recursive: true });
   const socket = join(o.dir, "herdr.sock"), config = join(o.dir, "config.toml"), log = join(o.dir, "server.log");
   if (Buffer.byteLength(socket) > 100) throw new Error(`herdr: socket path too long for a unix socket: ${socket}`);
@@ -315,7 +315,7 @@ export async function startHerdr(o: { bin: string; dir: string; name: string; ho
   if (o.home) { mkdirSync(o.home, { recursive: true }); env.HOME = o.home; }
   Object.assign(env, { HERDR_CONFIG_PATH: config, HERDR_SOCKET_PATH: socket, HERDR_SESSION: session });
   if (await herdrUp(socket)) throw new Error(`herdr: a server already answers on ${socket}`);
-  const handle = await startServer({ name: o.name, argv: [o.bin, "server"], log, cwd: o.dir, env });
+  const handle = await startServer({ name: o.name, argv: [o.bin, "server"], log, cwd: o.dir, env, maxRuntimeS: o.maxRuntimeS });
   const wait = o.waitMs ?? 15_000;
   for (let t = 0; t < wait; t += 100) {
     if (await herdrUp(socket)) return { handle, socket, session, config };
@@ -353,7 +353,7 @@ export async function fetchHerdr(dir: string, timeoutMs = 120_000): Promise<{ bi
 if (import.meta.main) {
   const [cmd, bin, dir, name, home] = process.argv.slice(2);
   if (cmd === "caller" && bin && dir && name) {
-    const s = await startHerdr({ bin, dir, name, home, shell: "/bin/bash" });
+    const s = await startHerdr({ bin, dir, name, home, shell: "/bin/bash", maxRuntimeS: Number(process.env.DS_HERDR_MAX_RUNTIME_S) || undefined });
     const a = await herdrBackend(s.socket).call("terminal.create", { cwd: dir, env: { DS_GEN: "survivor" }, label: "survivor", group: "survive" });
     if (!a.ok) { console.error(`caller: ${a.error.message}`); process.exit(1); }
     console.log(`ready ${s.handle.pid} ${s.handle.via} ${a.terminal.id}`);

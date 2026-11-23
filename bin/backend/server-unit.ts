@@ -23,6 +23,7 @@ export type ServerSpec = {
   log: string;                  // stdout and stderr append here; <log>.pid and <log>.exit sit beside it
   cwd?: string;
   env?: Record<string, string>;
+  maxRuntimeS?: number;         // a unit ends itself after this many seconds (RuntimeMaxSec): a backstop for a caller that dies
 };
 export type ServerHandle = { pid: number; via: "systemd" | "detached"; unit: string | null; log: string };
 
@@ -64,7 +65,8 @@ async function viaUnit(spec: ServerSpec, env: Record<string, string>): Promise<S
   let r: Bun.SyncSubprocess;
   try {
     r = Bun.spawnSync([which("systemd-run") ?? "systemd-run", "--user", "--collect", "--quiet", "--unit", unit,
-      ...(spec.cwd ? ["-p", `WorkingDirectory=${spec.cwd}`] : []), "-p", `StandardOutput=append:${spec.log}`, "-p", `StandardError=append:${spec.log}`,
+      ...(spec.cwd ? ["-p", `WorkingDirectory=${spec.cwd}`] : []),
+      ...(spec.maxRuntimeS && spec.maxRuntimeS > 0 ? ["-p", `RuntimeMaxSec=${Math.ceil(spec.maxRuntimeS)}`] : []), "-p", `StandardOutput=append:${spec.log}`, "-p", `StandardError=append:${spec.log}`,
       ...setenv, "--", "sh", "-c", script, "sh", pidFile, exitFile, ...spec.argv], { timeout: 15_000, stdout: "ignore", stderr: "ignore" });
   } catch { return null; }
   if (r.exitCode !== 0) return null;
@@ -110,4 +112,13 @@ export async function stopServer(h: ServerHandle): Promise<void> {
   for (let t = 0; t < 2000 && serverAlive(h.pid); t += 50) await Bun.sleep(50);
   if (serverAlive(h.pid)) sig("SIGKILL");
   for (let t = 0; t < 2000 && serverAlive(h.pid); t += 50) await Bun.sleep(50);
+}
+
+// Stop a server without awaiting: for a process `exit` handler, where only synchronous work runs.
+export function stopServerSync(h: ServerHandle): void {
+  if (h.unit) {
+    const ctl = which("systemctl");
+    if (ctl) Bun.spawnSync([ctl, "--user", "stop", h.unit], { timeout: 15_000, stdout: "ignore", stderr: "ignore" });
+  }
+  try { process.kill(h.via === "detached" ? -h.pid : h.pid, "SIGKILL"); } catch { /* gone */ }
 }
