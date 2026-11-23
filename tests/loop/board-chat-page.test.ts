@@ -36,15 +36,17 @@ const mdToHtml = new Function(`${cut("esc")} ${cut("mdToHtml")} return mdToHtml;
 function panel(reply: any = { agent: "claude", source: "transcript", turns: [], updated_at: 1, sends: [] }) {
   const h = hooks(), posts: any[] = [], fetches: string[] = [], timers: any[] = [], cleared: any[] = [], listeners = new Map<string, any>();
   let closed = 0;
+  const marks = new Map<string, any>(), lstoreStub = { get: (k: string, d: any) => marks.has(k) ? marks.get(k) : d, set: (k: string, v: any) => { marks.set(k, v); } };
   const fetchStub = async (url: string) => { fetches.push(url); return { ok: true, status: 200, json: async () => reply }; };
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
-  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document",
-    `${chatSrc} return { ChatPanel, chatTone, chatTools, chatRows, CHAT_MAX };`);
+  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore",
+    `${chatSrc} return { ChatPanel, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey };`);
   const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); return { ok: true, id: 7 }; }, fetchStub,
-    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc);
-  const props = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; } };
+    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub);
+  let seen = 0;
+  const props: any = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; }, onSeen: () => { seen++; } };
   const render = () => { h.reset(); return mod.ChatPanel(props); };
-  return { h, mod, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
+  return { h, mod, marks, props, seen: () => seen, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
 }
 
 // The class of a rendered row (`class="…"` written out, or `class=${…}` as the second value after key).
@@ -286,4 +288,22 @@ test("crew-terminal-access U8: each send claims its own turn, the earlier of two
   rows = p.mod.chatRows([{ role: "assistant", text: "x", at: T + 90 }, op("a", T + 105)], [send(1, "a", T), send(2, "a", T + 100)]);
   expect(turnsIn(rows).filter((r) => r.turn.from === "operator")).toHaveLength(1);
   expect(sendsIn(rows)).toHaveLength(0);
+});
+
+test("chat-with-studio U1: the Studio chat titles itself, marks the newest reply seen once loaded, and a squad chat marks nothing", () => {
+  const p = panel();
+  p.props.topic = "_studio"; p.props.wt = "/w/studio"; p.props.label = "Studio";
+  const title = (root: any) => nodes(root).find((n) => n.strings.includes('class="mhd"'))!;
+  const root = p.render();
+  expect(JSON.stringify(title(root))).toContain("Chat · Studio · p");
+  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [
+    { role: "assistant", text: "old", at: T }, { role: "assistant", text: "new", at: T + 50 },
+    { role: "assistant", tool: "2 tools", text: "x", at: T + 90 }, { role: "user", text: "q", at: T + 99 }] });
+  p.render(); p.h.effects[2]();
+  expect(p.marks.get("b:chat-seen:p//w/studio")).toBe(T + 50);
+  expect(p.seen()).toBe(1);
+  const q = panel();
+  q.render(); q.setData({ agent: "claude", source: "transcript", sends: [], turns: [{ role: "assistant", text: "a", at: T }] });
+  q.render(); q.h.effects[2]();
+  expect(q.marks.size).toBe(0);
 });

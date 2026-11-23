@@ -46,6 +46,7 @@ import { retestDue, openPrUnits, type Retest } from "../loop/squad/retest.ts";
 import { settle, type Finish } from "../loop/squad/squad-finish.ts";
 import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
+import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
 
@@ -1397,7 +1398,9 @@ function crewFacts(db: Db, project: string, m: any, accts: any[]) {
 
 // The project's Studio (U261): the loop's `_studio` member, the terminal it adopted, and what that
 // Studio really runs (its walk is the Studio's agent only, so a ds-loop pane beside it never reads
-// as it). null when the project has no Studio worktree.
+// as it). null when the project has no Studio worktree. The header's Studio button (chat-with-studio U1)
+// reads `unread` / `reply_due` (the Crew box's counts for role studio), `working` (mid-turn) and `reply_at`
+// (the newest assistant text turn's time, null when none, gone or a screen tail).
 function studioOf(db: Db, label: string, accts: any[]) {
   const wt = studioWts(db).get(label);
   if (!wt) return null;
@@ -1408,7 +1411,20 @@ function studioOf(db: Db, label: string, accts: any[]) {
   const c = db.one("SELECT ctx FROM observed_tokens WHERE worker = ? AND ctx IS NOT NULL AND model != '<synthetic>' ORDER BY rowid LIMIT 1", wtKey(wt));
   const ctx = c?.ctx == null ? null : Number(c.ctx);
   const handle = (m?.handle as string | null) ?? null;
-  return { label, wt, handle, adopted: !!handle, agent, walk: (w?.walk as string | null) ?? null, model_label: f.model_label,
+  const mc = msgCounts(db, label, "_studio").get("studio\0");
+  let replyAt: number | null = null;
+  try {
+    const oc = db.one("SELECT source, turns, gone_at FROM observed_chat WHERE project = ? AND wt = ?", label, wt);
+    if (oc && oc.gone_at == null && oc.source !== "screen") {
+      const turns = JSON.parse(String(oc.turns ?? "[]"));
+      for (let i = turns.length - 1; i >= 0; i--) {
+        const t = turns[i];
+        if (t && t.role === "assistant" && !t.tool && t.at != null) { replyAt = Number(t.at); break; }
+      }
+    }
+  } catch { /* loop.db before migration 0044, or unreadable turns: no reply time */ }
+  return { label, wt, handle, adopted: !!handle, unread: mc?.unread ?? 0, reply_due: mc?.reply_due ?? 0,
+    working: w?.state === "working", reply_at: Number.isFinite(replyAt as number) ? replyAt : null, agent, walk: (w?.walk as string | null) ?? null, model_label: f.model_label,
     account: f.account_real ?? f.account_cfg, account_label: f.account_real_label ?? f.account_cfg_label, ctx, ctx_level: ctxLevel(db, ctx, label) };
 }
 
@@ -2259,7 +2275,7 @@ export function renderText(b: Board): string {
   for (const st of b.studio) {
     o.push(`studio ${st.label}: ` + (st.adopted
       ? [`${st.agent}${st.model_label ? " " + st.model_label : ""}`, st.account_label ? `@${st.account_label}` : null, st.ctx == null ? null : `ctx ${compact(st.ctx)}`, st.handle].filter(Boolean).join(" · ")
-      : "no Studio terminal adopted — see the studio.adopt card"));
+      : "no Studio terminal adopted — see the studio.adopt card") + (st.adopted && st.unread + st.reply_due > 0 ? ` · mail:${st.unread + st.reply_due}` : ""));
   }
   if (b.studio.length) o.push(RULE);
   if (b.squads.some((s) => ["held-only", "paused", "suspended", "on-hold"].includes(s.display_key))) o.push(`not working: ${STATE_LEGEND.join(" · ")}`);
@@ -2856,9 +2872,11 @@ export function chatMember(store: Store | Db, project: string, topic: string, wt
 // Where one `chat` request is, for the panel: queued (with why), sent, turn started, not taken or failed.
 // A send the agent only accepted is "sent" until poke.ts's verify settles its deliveries row.
 // A send's text is redacted as its transcript turn is, so the two match and no secret is shown back.
-function chatSend(db: Db, r: Row) {
+function chatSend(db: Db, r: Row, topic: string) {
   const p = parse(String(r.payload ?? "")) ?? {}, res = parse(String(r.result ?? "")) ?? {};
-  const base = { id: Number(r.id), text: redact(String(p.text ?? "")), at: Number(r.created_at), done_at: r.done_at == null ? null : Number(r.done_at) };
+  const files = (Array.isArray(p.files) ? p.files : []).filter((n: unknown): n is string => typeof n === "string" && CHAT_FILE_NAME.test(n))
+    .map((name: string) => ({ name, url: chatFileUrl(String(r.project ?? ""), topic, name) }));
+  const base = { id: Number(r.id), text: redact(String(p.text ?? "")), files, at: Number(r.created_at), done_at: r.done_at == null ? null : Number(r.done_at) };
   if (r.done_at == null) return { ...base, state: "queued", why: res.state === "queued" ? String(res.why ?? "") : "waiting for the loop" };
   if (res.ok === false) return { ...base, state: "failed", why: String(res.error ?? "the loop refused it") };
   if (res.state === "turn started") return { ...base, state: "turn started", why: null };
@@ -2877,8 +2895,8 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     let c: Row | null = null;
     try { c = db.one("SELECT agent, source, turns, updated_at, gone_at FROM observed_chat WHERE project = ? AND wt = ?", o.project, o.wt) ?? null; }
     catch { /* loop.db before migration 0044: no turns yet */ }
-    const sends = db.all("SELECT id, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? ORDER BY id DESC LIMIT 10",
-      o.project, o.wt).reverse().map((r) => chatSend(db, r));
+    const sends = db.all("SELECT id, project, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? ORDER BY id DESC LIMIT 10",
+      o.project, o.wt).reverse().map((r) => chatSend(db, r, o.topic));
     // Mid-turn, as the board's crew row reads it (observed_workers.state), for the panel's "Working…" line.
     const w = db.one("SELECT state, gone_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
     return {

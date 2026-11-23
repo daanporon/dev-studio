@@ -13,6 +13,7 @@ import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { pause, resume } from "../../bin/loop/pause/pause.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -244,5 +245,60 @@ describe("chat fulfiller", () => {
     await tick(T);
     expect(orca.of("poke").length).toBe(0);
     expect(result(s, id)).toMatchObject({ ok: false });
+  });
+});
+
+describe("chat with images", () => {
+  const N1 = "0123456789abcdef.png", N2 = "fedcba9876543210.jpg";
+  const put = (s: Store, ...names: string[]) => {
+    const dir = join(s.root, "fx", "chat-files", "demo");
+    mkdirSync(dir, { recursive: true });
+    for (const n of names) writeFileSync(join(dir, n), "x");
+    return (n: string) => join(dir, n);
+  };
+  const withFiles = (s: Store, text: string, files: string[]) => {
+    const id = Number(s.request("chat", { text, via: "board", files }, { project: "fx", squad: "demo", member: B }).row.id);
+    s.db.run("UPDATE requests SET created_at = ? WHERE id = ?", [T, id]);
+    return id;
+  };
+  const MARK = "[images attached; open each with your file-reading tool: ";
+
+  test("one and two files end the line with their absolute paths", async () => {
+    const s = imported(), { orca, tick } = rig(s), p = put(s, N1, N2);
+    idleAt(s, B, T);
+    withFiles(s, "look", [N1]);
+    await tick(T);
+    expect(typed(orca)).toEqual([`${SAYS}look ${MARK}${p(N1)}]`]);
+    const id2 = withFiles(s, "both", [N1, N2]);
+    idleAt(s, B, T + 60);
+    await tick(T + 60);
+    expect(typed(orca)[1]).toBe(`${SAYS}both ${MARK}${p(N1)}, ${p(N2)}]`);
+    expect(req(s, id2).done_at).not.toBeNull();
+    expect(crewLog(s)).toContain("(+2 images)");
+  });
+
+  test("an image-only request types the line with no text", async () => {
+    const s = imported(), { orca, tick } = rig(s), p = put(s, N1);
+    idleAt(s, B, T);
+    withFiles(s, "", [N1]);
+    await tick(T);
+    expect(typed(orca)).toEqual([`${SAYS}${MARK}${p(N1)}]`]);
+  });
+
+  test("a file gone, a bad name and more than 4 fail with the reason and type nothing", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    put(s, N1);
+    idleAt(s, B, T);
+    const gone = withFiles(s, "x", [N2]);
+    await tick(T);
+    expect(result(s, gone)).toMatchObject({ ok: false });
+    expect(String(result(s, gone).error)).toContain(`image ${N2} was removed before it was sent`);
+    const bad = withFiles(s, "x", ["../../x.png"]);
+    await tick(T + 1);
+    expect(result(s, bad).ok).toBe(false);
+    const many = withFiles(s, "x", [N1, N1, N1, N1, N1]);
+    await tick(T + 2);
+    expect(String(result(s, many).error)).toContain("at most 4");
+    expect(typed(orca)).toEqual([]);
   });
 });
