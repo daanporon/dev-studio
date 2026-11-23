@@ -72,6 +72,8 @@ if (!TMUX) {
       expect(await none.call("terminal.list", {})).toEqual({ ok: true, terminals: [] });
       const r = await none.call("terminal.read", { id: "%1" });
       expect(r.ok ? "ok" : r.error.code).toBe("not_found");
+      const s = await none.call("terminal.send", { id: "%1", text: "x".repeat(2_000_000) });
+      expect(s.ok ? "ok" : s.error.code).toBe("not_found");
       expect(await none.call("terminal.close", { id: "%1" })).toEqual({ ok: true, closed: false });
       const c = await none.call("terminal.create", { cwd: dir, label: "x" });
       expect(c.ok ? "ok" : c.error.code).toBe("failed");
