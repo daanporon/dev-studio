@@ -16,10 +16,10 @@ function render(n: any) {
     const str = (y: any): string => Array.isArray(y) ? y.map(str).join("") : typeof y === "function" ? `[fn:${fns.push(y) - 1}]` : y === false || y == null ? "" : String(y);
     return o + t + str(x);
   }, "");
-  const make = new Function("useState", "useEffect", "html", "nkey", "sentQ", "sendAnswer", "sqName", "fmtAge", "linkedQ", "docLabel", "copy", "QPr", "ActBtn", "ChatPanel",
+  const make = new Function("useState", "useEffect", "html", "nkey", "sentQ", "sendAnswer", "sqName", "fmtAge", "linkedQ", "docLabel", "copy", "QPr", "ActBtn", "ChatPanel", "useRef", "akey", "hhmmss",
     `${src} return AskOverlay;`);
   const Ask = make((init: any) => [init, () => {}], () => {}, html, (m: any) => `${m.label}/${m.id}`, new Map(),
-    async (...a: any[]) => { sent.push(a); }, () => "sq", () => "1m", (t: string) => t, () => "doc", () => {}, null, null, null);
+    async (...a: any[]) => { sent.push(a); }, () => "sq", () => "1m", (t: string) => t, () => "doc", () => {}, null, null, null, (v: any) => ({ current: v }), (m: any) => `${m.label}/${m.id}`, () => "00:00:00");
   const out = Ask({ items: [n], at: `${n.label}/${n.id}`, setAt() {}, onClose() {}, onShow() {}, toast() {}, onPlan() {}, planOpen: false });
   const press = (label: string) => {
     const m = new RegExp(`<button[^>]*\\[fn:(\\d+)\\][^>]*>[^<]*${label}[^<]*</button>`, "s").exec(out);

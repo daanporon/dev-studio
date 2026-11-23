@@ -1864,14 +1864,21 @@ function UpdateBanner({ data, toast }) {
     <div class="ubtns">${u.behind > 0 && !u.pending && u.state === "ok" && !u.stale && html`<button class="btn sm" onClick=${() => setShow(!show)}>${show ? "Hide commits" : "Show commits"}</button>`}${btn}</div></div>`;
 }
 
-// Answers already sent, by "<label>/<topic>/<id>" -> "HH:MM": kept until the question leaves the
-// board (the agent resolved it), so a re-render or the other copy of the form doesn't offer Send again.
+// Answers already sent, by the asking: "<label>/<topic>/<id>@<since>" -> "HH:MM" (`akey`; an item with no
+// `since`, a Studio alert or a brief, has the id-only key). An asking is the question's id plus the time it was
+// asked: a question asked again under the same id is a new asking and starts unmarked. A key is kept until its
+// item leaves the board data (`pruneSent`), so a re-render or the other copy of the form doesn't offer Send again.
 const sentQ = new Map();
+const askingKey = (k, since) => (k && since ? k + "@" + since : k);
+const pruneSent = (data) => { // drop the marks of askings no longer on the board (Needs-you items and loop notes)
+  const live = new Set([...(data.needs_you || []).map(akey), ...(data.loop_notes || []).map((n) => n.project + "/_studio/" + n.id)]);
+  for (const k of [...sentQ.keys()]) if (!live.has(k)) sentQ.delete(k);
+};
 // POST /api/answer: the question is answered at once and the loop types it into the asking agent's
 // terminal; records it in sentQ.
-async function sendAnswer(label, topic, id, answer) {
-  await post("api/answer", { project: label, topic, id, answer });
-  const at = hhmmss(new Date()).slice(0, 5); sentQ.set(label + "/" + topic + "/" + id, at); return at;
+async function sendAnswer(label, topic, id, answer, since) {
+  await post("api/answer", { project: label, topic, id, answer, ...(since ? { since } : {}) });
+  const at = hhmmss(new Date()).slice(0, 5); sentQ.set(askingKey(label + "/" + topic + "/" + id, since), at); return at;
 }
 // U6: Dismiss all handles each note on its own. A 409 (the note is not open, or already dismissed) counts as
 // dismissed: it is marked in sentQ so it hides, and the rest go on. Any other error is counted for one toast.
@@ -1941,7 +1948,10 @@ function LoopNotes({ notes, open, setOpen, sq, setSq, toast, onShow }) {
 }
 
 const sqName = (n) => n.squad === "_studio" ? "Studio" : n.squad;
+// nkey names a question (id only): where the overlay is, what opens it. akey names one asking of it (id + since):
+// what a sent mark, a draft and the Send guards belong to.
 const nkey = (n) => n.id ? n.label + "/" + n.squad + "/" + n.id : "appr:" + n.label + "/" + n.squad + "/" + n.text;
+const akey = (n) => n.id ? askingKey(nkey(n), n.since) : nkey(n);
 
 // AskOverlay: one question at a time, tabs for the rest of the inbox. Numbered options (the
 // recommended one pre-selected) plus free text; 1-9 picks, ←/→ switch tabs, Esc closes.
@@ -2142,8 +2152,12 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
   const [chat, setChat] = useState(null);         // the asker's chat panel, open over this card
   const isPicker = !!n && n.source === "picker"; // a terminal-picker mirror: no recommendation, nothing pre-selected
   const termOnly = isPicker && n.picker_answerable !== true; // multi-question / multiSelect: the board can't answer it
-  const val = n ? (pick[nkey(n)] ?? (isPicker ? "" : n.suggestion) ?? "") : "";
-  const set = (v) => setPick((p) => ({ ...p, [nkey(n)]: v }));
+  const val = n ? (pick[akey(n)] ?? (isPicker ? "" : n.suggestion) ?? "") : "";
+  const set = (v) => setPick((p) => ({ ...p, [akey(n)]: v }));
+  // The asking first seen on each question while this overlay is open: a different `since` is the question asked again.
+  const seen = useRef({});
+  if (n && n.id && n.since && !seen.current[nkey(n)]) seen.current[nkey(n)] = n.since;
+  const askedAgain = n && n.id && n.since && seen.current[nkey(n)] !== n.since ? hhmmss(new Date(n.since)).slice(0, 5) : null;
   const go = (d) => { const j = i + d; if (j >= 0 && j < items.length) setAt(nkey(items[j])); };
   const studioCard = !!n && n.squad === "_studio"; // a Studio card: no text box; answers only when the answer acts
   const one = studioCard && n.choices.length === 1 ? n.choices[0].label : null; // the lone acting answer is the primary button
@@ -2151,8 +2165,8 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
     if (!n || termOnly) return; // the server also refuses these (409)
     const k = nkey(n); setSt({ busy: true });
     try {
-      await sendAnswer(n.label, n.squad, n.id, answer); setSt({}); bump((x) => x + 1);
-      const next = items.find((m, j) => j > i && m.id && !sentQ.has(nkey(m))) || items.find((m) => m.id && !sentQ.has(nkey(m)) && nkey(m) !== k);
+      await sendAnswer(n.label, n.squad, n.id, answer, ...(n.since ? [n.since] : [])); setSt({}); bump((x) => x + 1);
+      const next = items.find((m, j) => j > i && m.id && !sentQ.has(akey(m))) || items.find((m) => m.id && !sentQ.has(akey(m)) && nkey(m) !== k);
       if (next) setAt(nkey(next));
     } catch (e) { setSt({ err: String(e.message || e) }); }
   };
@@ -2164,27 +2178,28 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
       // At phone width Enter sends (the key reads "send", enterkeyhint; a phone has no Ctrl+Enter).
       if (e.target.tagName === "TEXTAREA") {
         const phone = typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches;
-        if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (phone && !e.shiftKey && !e.isComposing))) { if (phone) e.preventDefault(); if (val.trim() && n.id && !st.busy && !sentQ.has(nkey(n))) send(); }
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (phone && !e.shiftKey && !e.isComposing))) { if (phone) e.preventDefault(); if (val.trim() && n.id && !st.busy && !sentQ.has(akey(n))) send(); }
         return;
       }
       if (e.key === "ArrowRight") go(1); else if (e.key === "ArrowLeft") go(-1);
       else if (/^[1-9]$/.test(e.key) && n && !termOnly && n.choices[+e.key - 1]) set(n.choices[+e.key - 1].label);
-      else if (e.key === "Enter" && n && !termOnly && n.id && !sentQ.has(nkey(n))) { if (studioCard && n.choices.length === 0) send(""); else if (val.trim() || one !== null) send(); }
+      else if (e.key === "Enter" && n && !termOnly && n.id && !sentQ.has(akey(n))) { if (studioCard && n.choices.length === 0) send(""); else if (val.trim() || one !== null) send(); }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   });
   if (!n) return null;
-  const sent = n.id && sentQ.get(nkey(n));
+  const sent = n.id && sentQ.get(akey(n));
   const isChoice = n.choices.some((c) => c.label === val);
   const rec = isPicker ? null : n.suggestion; // a picker's option 1 is only first, not recommended
   return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox">
       <div class="tabs">${items.map((m, j) => html`<button key=${nkey(m)} title=${m.title}
-        class=${"tab" + (j === i ? " on" : "") + (m.id && sentQ.has(nkey(m)) ? " done" : m.kind === "blocking" ? " blk" : "")}
-        onClick=${() => setAt(nkey(m))}>${m.id && sentQ.has(nkey(m)) ? "✓" : "□"} ${sqName(m)}: ${m.title}</button>`)}
+        class=${"tab" + (j === i ? " on" : "") + (m.id && sentQ.has(akey(m)) ? " done" : m.kind === "blocking" ? " blk" : "")}
+        onClick=${() => setAt(nkey(m))}>${m.id && sentQ.has(akey(m)) ? "✓" : "□"} ${sqName(m)}: ${m.title}</button>`)}
         <span class="sp" style=${{ flex: 1 }}></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       <div class="qbody">
         <div class="top"><span class=${"kind " + n.kind}>${n.kind}</span><span>${sqName(n)}${n.about ? " · " + n.about : ""}</span>${n.from && html`<span>· from ${n.from}</span>`}<span>· ${fmtAge(n.age_min)}</span><span class="sp" style=${{ flex: 1 }}></span><span>${i + 1} / ${items.length}</span></div>
+        ${askedAgain && html`<div class="qline warn" data-ev="asked-again">asked again ${askedAgain} — read it before sending</div>`}
         ${n.pr && html`<div class="prline"><${QPr} pr=${n.pr} /><span class="mut"> — opens the PR on GitHub</span></div>`}
         ${n.titled && html`<h3>${linkedQ(n.title, n.repo_slug)}</h3>`}
         ${n.doc && !n.revision && html`<div><button class="btn sm" data-ev="open-doc" onClick=${() => onPlan(n.doc)}>${docLabel(n)}</button></div>`}
@@ -2698,10 +2713,11 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
         // shared answer overlay; parked squads aren't in the inbox so their rows stay inert.
         const k = q.id ? s.label + "/" + s.topic + "/" + q.id : null;
         const openable = k && askKeys.has(k);
-        return html`<div key=${q.id || q.question} class=${"qrow" + (k && sentQ.has(k) ? " sent" : "")} onClick=${openable ? () => setAsk(k) : undefined}>
+        const ak = askingKey(k, q.since);
+        return html`<div key=${q.id || q.question} class=${"qrow" + (ak && sentQ.has(ak) ? " sent" : "")} onClick=${openable ? () => setAsk(k) : undefined}>
           <span><span class=${"kind " + (q.blocking ? "blocking" : "question")}>${q.blocking ? "blocking" : "question"}</span></span>
           <span class="t" title=${q.question}>${linkedQ(q.title, s.repo_slug)}<${QPr} pr=${q.pr} /></span>
-          <span class="fr">${k && sentQ.has(k) ? html`<span class="ok">✓ sent</span>` : "from " + q.asker}</span>
+          <span class="fr">${ak && sentQ.has(ak) ? html`<span class="ok">✓ sent</span>` : "from " + q.asker}</span>
           <span class=${"ag" + ((q.age_min || 0) > 24 * 60 ? " old" : "")}>${fmtAge(q.age_min)}</span></div>`; })}</div>`}
       ${s.override && html`<div class="box sqpin"><h3>Pinned for the squad <span>until cleared or the squad closes</span></h3><div><span class="badge pin">⚑ ${[[s.override.model, s.override.effort].filter(Boolean).join(" "), s.override.account ? "@" + acctEmail(s.override.account) : s.override.plan].filter(Boolean).join(" · ")}</span> <button class="btn sm ovr-clear" title="Clear the squad's pin: its next picks are automatic again" onClick=${() => override(s, { wt: null }, { scope: "squad", clear: true }, toast)}>Clear</button></div></div>`}
       ${(s.members || []).length > 0 && html`<div class=${"box crew" + (s.members.some((m) => m.override) ? " pinned" : "")}><h3 title=${s.limits ? "context amber from " + fmtTok(s.limits.context_warn) + ", red from " + fmtTok(s.limits.context_compact) + " (/ds-limits)" : ""}>Crew <span>context now</span></h3>
@@ -3433,6 +3449,7 @@ function App() {
   const st = useMemo(() => new Map(squads.map((s) => [s.label + "/" + s.topic, stats(s, data.flow)])), [data]);
   const key = (s) => s.label + "/" + s.topic;
   const askKeys = useMemo(() => new Set(((data && data.needs_you) || []).map(nkey)), [data]);
+  useMemo(() => { if (data) pruneSent(data); }, [data]); // a mark goes once its asking left the board
   const toggle = (k) => setOpen((o) => { const n = new Set(o); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const show = (label, topic) => {
     const k = label + "/" + topic; setFilter("all");
@@ -3544,17 +3561,17 @@ function App() {
       const debrief = !!n.debrief; // debrief-on-archive U2: the archived squad's final debrief
       const studioCard = n.squad === "_studio" && !brief && !debrief;
       const doneRow = n.kind === "done";
-      const sent = n.id && sentQ.has(nkey(n));
+      const sent = n.id && sentQ.has(akey(n));
       const say = (t) => { setToast(t); clearTimeout(toastTimer); toastTimer = setTimeout(() => setToast(null), 4000); };
       const read = async () => { // the brief row: open Briefs, scroll there, dismiss as read
         openBriefs();
-        if (sentQ.has(nkey(n))) return;
+        if (sentQ.has(akey(n))) return;
         try { await sendAnswer(n.label, "_studio", n.id, "Mark read"); say("marked the brief read"); }
         catch (e) { say("not read: " + (e.message || e)); }
         qbump((x) => x + 1);
       };
       const dismiss = async () => { // a Studio card: Dismiss like a note's, without opening the overlay
-        if (sentQ.has(nkey(n))) return;
+        if (sentQ.has(akey(n))) return;
         try { await sendAnswer(n.label, "_studio", n.id, ""); }
         catch (e) { say("not dismissed: " + (e.message || e)); return; }
         qbump((x) => x + 1);
@@ -3565,7 +3582,7 @@ function App() {
         setPlan({ name: dTopic + " — debrief", markdown: a && a.debrief ? a.debrief : "No debrief was written." });
       };
       const markRead = async () => {
-        if (sentQ.has(nkey(n))) return;
+        if (sentQ.has(akey(n))) return;
         try { await sendAnswer(n.label, "_studio", n.id, (n.options || [])[0] || "Mark read"); say("marked the debrief read"); }
         catch (e) { say("not read: " + (e.message || e)); }
         qbump((x) => x + 1);
