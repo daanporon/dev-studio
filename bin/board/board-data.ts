@@ -2088,7 +2088,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
-        squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
+        squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, since: q.since ?? null, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
         text: q.question, title: q.title, titled: q.titled, choices: q.choices,
         suggestion: q.suggestion, why: q.why, options: q.options, age_min: q.age_min, command: null,
         source: q.source ?? null, picker_answerable: q.picker_answerable ?? null,
