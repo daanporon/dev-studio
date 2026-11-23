@@ -45,6 +45,7 @@ import { contract as contractDriver, localPath } from "../drivers/contract.ts";
 import { claudeSettings } from "../drivers/claude-launch.ts";
 import { checked, type Backend, type Capabilities, type Terminal } from "../../backend/contract.ts";
 import { projectTmux, TMUX_CAPS } from "../../backend/tmux.ts";
+import { ORCA_LITE_CAPS, orcaLite } from "../../backend/orca-lite.ts";
 import { createWorktree } from "../io/worktrees.ts";
 import { allSkills, deniedMcpServers, disabledPlugins, isProjectSkill, mcpLevels, pluginLevels, projectRules, shippedRules, skillOverrides } from "../settings/skills.ts";
 import { errOf, inDoubt, shell, spawn, type Orca, type Out } from "../io/orca.ts";
@@ -699,14 +700,17 @@ export class LoopActuator implements Actuator {
 
   driver(seat: Seat, agent: string | null): Driver { return (seat.contract ? contractDriver : driverModule(agent)).make(seat); }
 
-  // U11: the contract backend `name` for a project's squads (made once): tmux by default; a test passes
-  // its fake through `backends`. orca-lite and herdr have no adapter yet (bin/backend/registry.ts).
+  // U11: the contract backend `name` for a project's squads (made once): tmux, or orca-lite (U13) on this
+  // actuator's Orca runner with its facts in <root>/<project>/loop/orca-lite-terminals.json; a test passes
+  // its fake through `backends`. herdr has no adapter here yet, and the registry (bin/backend/registry.ts)
+  // still refuses a spawn on orca-lite or herdr.
   private contracted(store: Store, name: string, project: string): Contracted {
     const k = `${name}/${project}`;
     let c = this.contracts.get(k);
     if (!c) {
       c = this.opts.backends?.(name, project, store)
         ?? (name === "tmux" ? { backend: checked(projectTmux(project, { stateRoot: store.root })), caps: TMUX_CAPS } : null)
+        ?? (name === "orca-lite" ? { backend: checked(orcaLite({ orca: this.orca, keep: join(store.root, project, "loop", "orca-lite-terminals.json") })), caps: ORCA_LITE_CAPS } : null)
         ?? (() => { throw new Error(`backend ${name}: the loop has no adapter for it`); })();
       this.contracts.set(k, c);
     }
