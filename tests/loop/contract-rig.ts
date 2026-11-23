@@ -4,7 +4,7 @@
 // the fake Orca. The host's process walk is the test's: an agent runs in each fake terminal its launch
 // line was typed into, until the test kills it (`kill`) or closes the terminal (`fake.exit`).
 // Hermetic: a copy of the fixture state, a temp HOME, DS_WORKTREE_ROOT under the temp dir.
-import { afterEach, expect } from "bun:test";
+import { expect } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,11 +30,13 @@ const ENV = ["DS_LOOP_RETRY_S", "DS_WORKTREE_ROOT", "DS_CLAUDE_SYSTEM_JSON_DIR",
 
 const temps: string[] = [], stores: Store[] = [];
 const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
-afterEach(() => {
+// Each test file registers this with its own afterEach: bun loads this module once for every file of a
+// run, so a hook registered here would run only for the file that imported it first.
+export function cleanRigs(): void {
   for (const s of stores.splice(0)) { try { s.close(); } catch { /* closed */ } }
   for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
   for (const k of ENV) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
-});
+}
 
 const fulfillers = await load<Fulfiller & Reconciler>(DIRS.fulfil);
 const reconcilers = await load<Reconciler>(DIRS.reconcilers);

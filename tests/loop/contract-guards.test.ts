@@ -3,13 +3,15 @@
 // a member pauses (the checkpoint typed with `terminal.send`, its terminal closed with `terminal.close`) and
 // resumes; a Lead idle with unread `messages` rows is restarted as "not responding", as on Orca; a plain
 // shell and a second agent in a member's folder (`terminal.list`) are found and closed, or carded.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { acknowledge, journalPath } from "../../bin/loop/pause/pause.ts";
 import { sendMessage } from "../../bin/loop/messages/messages.ts";
 import type { Row } from "../../bin/loop/core/store.ts";
-import { live, LONG, pathOf, rig, sends, SQ, startLead, startMember, term, unit, type Rig } from "./contract-rig.ts";
+import { cleanRigs, live, LONG, pathOf, rig, sends, SQ, startLead, startMember, term, unit, type Rig } from "./contract-rig.ts";
+
+afterEach(cleanRigs);
 
 // A backend that says each agent's state (the test sets it) and never confirms a turn, so a typed line
 // leaves the state alone.

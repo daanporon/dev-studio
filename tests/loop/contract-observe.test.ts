@@ -1,14 +1,16 @@
 // contract-observe.test.ts — orca-backend-alternatives U12: the loop decides for a squad off Orca from
 // the contract observer (bin/loop/observers/contract.ts) and the finish rows (bin/loop/squad/finish-read.ts),
 // never from Orca, on the rig of contract-rig.ts.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { walkReality } from "../../bin/loop/core/decide.ts";
 import { view } from "../../bin/loop/squad/member-state.ts";
 import { readState } from "../../bin/loop/observers/contract.ts";
 import { wake, type Wake } from "../../bin/loop/pause/wake.ts";
 import type { Row } from "../../bin/loop/core/store.ts";
 import type { Reconciler } from "../../bin/loop/core/plugins.ts";
-import { add, creates, finish, lead, live, LONG, member, members, pathOf, rig, sends, SQ, startLead, startMember, started, T, term, unit, worker, type Rig } from "./contract-rig.ts";
+import { cleanRigs, add, creates, finish, lead, live, LONG, member, members, pathOf, rig, sends, SQ, startLead, startMember, started, T, term, unit, worker, type Rig } from "./contract-rig.ts";
+
+afterEach(cleanRigs);
 
 describe("readState: what the loop reads for a terminal on a backend with no native state", () => {
   const base = { native: null, out: null, transcript: null, tail: "❯ ", walk: "running", now: 100, quiet: 10 };
