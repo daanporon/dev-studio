@@ -16,7 +16,8 @@
 // prompt and the agent process is alive; otherwise unknown. A shell left open after
 // its agent died is never the agent: presence and the decider read the walk alone (decide.ts walkReality).
 // A member whose terminal is not listed is gone (a stamp, not a delete); a failed list stamps nothing.
-// Only rows of members of these squads are written or marked gone here.
+// Only rows of members of these squads are written or marked gone here. A member wanted gone is still read
+// until its status is gone: its close needs the closed terminal seen gone (decide.ts walkReality none).
 import type { Observer, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
@@ -78,7 +79,7 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
       for (const sq of squads) {
         const topic = String(sq.topic);
         const members = (store.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND wt LIKE 'local::%'
-            AND COALESCE(status, '') != 'gone' AND COALESCE(want, '') != 'gone' ORDER BY id`).all(project, topic) as Row[])
+            AND COALESCE(status, '') != 'gone' ORDER BY id`).all(project, topic) as Row[])
           .filter((m) => localPath(String(m.wt)));
         if (!members.length) continue;
         let c: Contracted;

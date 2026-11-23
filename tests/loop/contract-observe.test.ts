@@ -15,7 +15,7 @@ import { fakeContract, type FakeContract } from "../../bin/loop/fakes/contract.t
 import type { Capabilities } from "../../bin/backend/contract.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { DIRS, load, type Action, type Reconciler, type TickCtx } from "../../bin/loop/core/plugins.ts";
-import decider from "../../bin/loop/core/decide.ts";
+import decider, { walkReality } from "../../bin/loop/core/decide.ts";
 import { view } from "../../bin/loop/squad/member-state.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
@@ -199,7 +199,7 @@ describe("the loop decides for a squad off Orca (U12)", () => {
   test("a finished Builder is retired once its unit is done", async () => {
     const r = await rig();
     await startLead(r);
-    const b = await startMember(r, "builder", "u3"), bp = pathOf(b);
+    const b = await startMember(r, "builder", "u3"), bp = pathOf(b), firstTerm = term(r, b).t.id;
     unit(r, b, "u3", "done", 31);
     r.s.upsert("observed_prs", { project: "fx", ref: `${SQ}/u3` }, { pr: 31, state: "MERGED", observed_at: r.now() });
     // Its output still moves (a tmux pane reads working): the finish row says its work ended.
@@ -211,6 +211,11 @@ describe("the loop decides for a squad off Orca (U12)", () => {
     expect(member(r.s, Number(b.id)).want).toBe("gone");
     expect(live(r.fake, bp)).toHaveLength(0);
     expect(creates(r.fake, bp)).toHaveLength(1);
+    // The observer still reads it after the wish: its closed terminal is seen gone, so the close stops once.
+    await r.tick(3);
+    expect(worker(r.s, b)?.gone_at).not.toBeNull();
+    expect(walkReality(r.s, member(r.s, Number(b.id)), r.now())).toBe("none");
+    expect(r.fake.calls.filter((c) => c.op === "terminal.close" && (c.req as { id: string }).id === firstTerm)).toHaveLength(1);
   }, LONG);
 
   test("a Tester that finished and exited is not started again and is retired", async () => {
