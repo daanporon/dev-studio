@@ -657,16 +657,18 @@ eq "text board: not-responding markers" "$(SEED="$TMP/seed-st.json" tb "zzstall_
 # .beat, the Lead worktree's last_output_at and the last relayed Run mail; .beat counts only
 # when it is newer. A Lead whose relay keeps failing after its last output shows unreachable.
 QD="$DS_STATE_ROOT/zzquiet_$$/squads"; mkdir -p "$QD"
-for t in q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11; do printf '{"run_id":"%s","status":"running","members":[{"role":"lead","wt":"wtQ%s"}],"units":[]}' "$t" "${t#q}" > "$QD/$t.json"; done
+for t in q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12; do printf '{"run_id":"%s","status":"running","members":[{"role":"lead","wt":"wtQ%s"}],"units":[]}' "$t" "${t#q}" > "$QD/$t.json"; done
 touch -t "$(date -v-12H +%Y%m%d%H%M 2>/dev/null || date -d '-12 hours' +%Y%m%d%H%M)" "$QD/q1.beat"
 touch -t "$(date -v-61M +%Y%m%d%H%M 2>/dev/null || date -d '-61 min' +%Y%m%d%H%M)" "$QD/q5.beat"
 touch -t "$(date -v-60M +%Y%m%d%H%M 2>/dev/null || date -d '-60 min' +%Y%m%d%H%M)" "$QD/q6.beat"
 cat > "$TMP/seed-q.json" <<JSON
 {"workers":[["wtQ1","working",null,null,120],["wtQ2","working"],["wtQ3","working",null,null,3660],["wtQ4","working",null,null,120],["wtQ5","working"],["wtQ6","working"],
-  ["wtQ7","done",null,null,4800],["wtQ8","idle",null,null,4800],["wtQ9","idle",null,null,4800],["wtQ10","working",null,null,2100],["wtQ11","done",null,null,4800]],
+  ["wtQ7","done",null,null,4800],["wtQ8","idle",null,null,4800],["wtQ9","idle",null,null,4800],["wtQ10","working",null,null,2100],["wtQ11","done",null,null,4800],
+  ["wtQ12","working",null,null,2100]],
  "unread":[["wtQ8",1,900],["wtQ9",1,300],["wtQ11",0,3600]],
  "terminals":[["tq1","wtQ1","q1"]],
- "worktrees":[["wtQ1",null],["wtQ2",null],["wtQ3",null],["wtQ4",null],["wtQ5",null],["wtQ6",null],["wtQ7",null],["wtQ8",null],["wtQ9",null],["wtQ10",null],["wtQ11",null]],
+ "transcripts":[["wtQ12","claude-x",null,null,"$ROOT/tests/fixtures/liveness/interrupted.jsonl"]],
+ "worktrees":[["wtQ12",null],["wtQ1",null],["wtQ2",null],["wtQ3",null],["wtQ4",null],["wtQ5",null],["wtQ6",null],["wtQ7",null],["wtQ8",null],["wtQ9",null],["wtQ10",null],["wtQ11",null]],
  "events":[]}
 JSON
 QN="$NOW"
@@ -687,6 +689,7 @@ jt "idle Lead, 80 min, nothing unread: no verdict (the screenshot case)" "$TMP/q
 jt "idle Lead, unread 15 min: not responding"        "$TMP/q.json" '.squads[] | select(.topic=="q8") | .lead | .silent==true and .verdict=="not responding" and (.since_s|floor) >= 899 and .since_s < 960'
 jt "idle Lead, unread 5 min: no verdict yet"          "$TMP/q.json" '.squads[] | select(.topic=="q9") | .lead | .silent==false and .verdict==null'
 jt "working Lead, no output 35 min: hung"             "$TMP/q.json" '.squads[] | select(.topic=="q10") | .lead | .verdict=="hung" and (.since_s|floor) >= 2099'
+jt "working Lead, no output 35 min, last turn stopped with Esc: not hung" "$TMP/q.json" '.squads[] | select(.topic=="q12") | .lead | .verdict != "hung"'
 jt "old unread episode but the count is 0: no verdict" "$TMP/q.json" '.squads[] | select(.topic=="q11") | .lead | .verdict==null'
 jt "an unreachable relay wins over another verdict"   "$TMP/q.json" '.squads[] | select(.topic=="q3") | .lead | .verdict=="unreachable"'
 jt "one not-responding Lead is no stall"              "$TMP/q.json" '.stall == null'

@@ -398,7 +398,7 @@ yet). The two warning states are the dropped-handoff failures made impossible to
 miss. The LEAD column shows a Lead only when the loop's own liveness check says it is stuck, never
 for being idle: `⚠LEAD-NOT-RESPONDING(Nm)` (idle with Run mail unread for `DS_SWEEP_SILENT_MIN`, 10 minutes; the loop pokes it
 twice and then asks for a restart), `⚠LEAD-HUNG(Nm)` (working with no output for `DS_SWEEP_HUNG_MIN`, 30 minutes, no long
-step open) and `⚠LEAD-UNREACHABLE` (Run mail the loop cannot deliver to it). The web board shows the
+step open, and its last turn neither ended nor stopped with Esc) and `⚠LEAD-UNREACHABLE` (Run mail the loop cannot deliver to it). The web board shows the
 same words in red. A Lead that is idle with nothing waiting shows nothing however long it has been idle.
 
 On the web board each squad has two dropdowns: **work units** (the list above, with

@@ -3,14 +3,14 @@
 // U2) and parked re-evaluation (U7). Each runs the real tick on a copy of tests/fixtures/loop/state
 // with a world observer standing in for Orca and the clock injected per tick (DS_NOW-style).
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import type { Action, Actuator, TickCtx } from "../../bin/loop/core/plugins.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
-import liveness, { QUIET_POKE_TEXT, builderHead, dispatchVerdict, foregroundOpen, leadVerdict, openCalls, stepOpen } from "../../bin/loop/reconcilers/liveness.ts";
+import liveness, { QUIET_POKE_TEXT, builderHead, dispatchVerdict, foregroundOpen, leadVerdict, linesEnded, openCalls, stepOpen, turnEnded } from "../../bin/loop/reconcilers/liveness.ts";
 import { pick } from "../../bin/loop/capacity/pick.ts";
 import ready from "../../bin/loop/reconcilers/ready.ts";
 import { FakeOrca } from "../../bin/loop/fakes/orca.ts";
@@ -308,6 +308,78 @@ describe("U82: no quiet poke during a long step", () => {
     await t.tick(T + MIN);
     expect(t.pokes().map((a) => (a.payload as Row).text)).toEqual([QUIET_POKE_TEXT]);
     expect(t.reqs("demo")).toEqual([]);
+  });
+});
+
+describe("studio-hung-agent-broken U1: an agent at its prompt after Esc is not hung", () => {
+  const FX = join(import.meta.dir, "..", "fixtures", "liveness");
+  const MEMBERS = [LEAD, B2, STUDIO];
+  // The Lead, u2's Builder and the Studio: Orca reads each `working` with no output for 40 min, and each one's
+  // newest transcript is a copy of `fixture`, last written when its output stopped.
+  function quiet40(fixture: string) {
+    const t = setup();
+    for (const [i, wt] of MEMBERS.entries()) {
+      const path = join(temps[temps.length - 1], `t${i}-${fixture}`);
+      copyFileSync(join(FX, fixture), path);
+      t.s.upsert("observed_transcripts", { path }, { project: "fx", wt, mtime: T - 40 * MIN, size: 1, observed_at: T });
+      t.world.set(wt, { state: "working", out: T - 40 * MIN });
+    }
+    return t;
+  }
+  // The `req` markers liveness leaves for the decider's hung stop (U153), by member key.
+  const hungMarks = (t: ReturnType<typeof setup>) => (t.s.db.query("SELECT subject, episode_key FROM episodes WHERE project = 'fx' AND kind = 'req'").all() as Row[])
+    .filter((r) => String(r.episode_key).startsWith("hung|")).map((r) => r.subject).sort();
+
+  for (const fixture of ["interrupted.jsonl", "ended.jsonl"]) {
+    test(`${fixture}: no hung verdict, no restart marker, no request and no card for the Lead, a Builder or the Studio`, async () => {
+      const t = quiet40(fixture);
+      for (const wt of MEMBERS) expect(turnEnded(t.s, wt)).toBe(true);
+      await t.tick(T);
+      await t.tick(T + MIN);
+      expect(leadVerdict(t.s, "fx", LEAD, T + MIN)).toBeNull();
+      expect(hungMarks(t)).toEqual([]);
+      expect(t.alerts()).toEqual([]);
+      expect(t.acted.filter((a) => a.kind === "request.file")).toEqual([]);
+    });
+  }
+
+  test("open.jsonl (a new prompt after an ended turn, no end record since): hung for all three, as today", async () => {
+    const t = quiet40("open.jsonl");
+    for (const wt of MEMBERS) expect(turnEnded(t.s, wt)).toBe(false);
+    await t.tick(T);
+    expect(leadVerdict(t.s, "fx", LEAD, T)).toEqual({ verdict: "hung", since: T - 40 * MIN });
+    expect(hungMarks(t)).toEqual([`demo.${B2NAME}`, "demo.lead"]);
+    expect(t.alerts().map(t.text)).toEqual([expect.stringMatching(/^studio \(hung since .*\) — nobody above it can restart it$/)]);
+  });
+
+  test("turnEnded: no transcript, or one last written before this process started, keeps today's rule", async () => {
+    const t = quiet40("interrupted.jsonl");
+    await t.tick(T);
+    expect(turnEnded(t.s, THINKER)).toBe(false);
+    t.s.db.run("UPDATE observed_workers SET started_at = ? WHERE project = 'fx' AND wt = ?", [T - 30 * MIN, LEAD]);
+    expect(turnEnded(t.s, LEAD)).toBe(false);
+    expect(turnEnded(t.s, B2)).toBe(true);
+  });
+
+  test("linesEnded: the newest record that speaks for the turn decides", () => {
+    const rec = (r: Row) => JSON.stringify(r);
+    const user = (content: unknown, extra: Row = {}) => rec({ type: "user", message: { content }, ...extra });
+    const end = rec({ type: "system", subtype: "turn_duration" });
+    const asst = rec({ type: "assistant", message: { content: [{ type: "text", text: "working" }] } });
+    expect(linesEnded([])).toBe(false);
+    expect(linesEnded([asst, end])).toBe(true);
+    expect(linesEnded([asst, rec({ type: "system", subtype: "stop_hook_summary" })])).toBe(true);
+    expect(linesEnded([asst, user("[Request interrupted by user]")])).toBe(true);
+    expect(linesEnded([asst, user([{ type: "text", text: "[Request interrupted by user for tool use]" }])])).toBe(true);
+    // skipped: bookkeeping, meta, compaction summary, a local command's output, other system records, a torn line
+    expect(linesEnded([end, rec({ type: "file-history-snapshot" }), user("<system-reminder>x</system-reminder>", { isMeta: true }),
+      user("This session is being continued", { isCompactSummary: true }), user("<local-command-stdout>done</local-command-stdout>"),
+      rec({ type: "system", subtype: "away_summary" }), '{"type":"assistant","message":{"con'])).toBe(true);
+    // open: a later prompt, Stop hook feedback, a task notification, a tool result, assistant output
+    for (const open of [user("go on"), user("Stop hook feedback: keep going"), user("<task-notification><status>completed</status></task-notification>"),
+      user([{ type: "tool_result", tool_use_id: "x", content: "ok" }]), asst]) expect(linesEnded([end, open])).toBe(false);
+    // a tool result carrying the interrupt text ends it
+    expect(linesEnded([asst, user([{ type: "tool_result", tool_use_id: "x", content: "no" }, { type: "text", text: "[Request interrupted by user for tool use]" }])])).toBe(true);
   });
 });
 
@@ -1504,7 +1576,7 @@ describe("U1: a Builder at its prompt with only a background command", () => {
 
   test("openCalls: one parse gives the foreground call and the open background tasks; stepOpen and foregroundOpen keep their answers", () => {
     const t = prompt();
-    expect(openCalls(t.s, B2)).toEqual({ foreground: false, background: [{ id: "btp4sj13h", command: CMD }] });
+    expect(openCalls(t.s, B2)).toEqual({ foreground: false, background: [{ id: "btp4sj13h", command: CMD }], ended: false });
     expect(stepOpen(t.s, B2)).toBe(true);
     expect(foregroundOpen(t.s, B2)).toBe(false);
     writeFileSync(t.path, [...U4, use("c")].join("\n") + "\n");

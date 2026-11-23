@@ -16,8 +16,9 @@
 //              episode first saw it that many seconds ago (liveness.leadVerdict's "not responding" clock)
 //   gone_members [wt]                              members.status = gone (a retired member)
 //   phases     {wt: phase|null}                   members.phase (U105)
-//   transcripts [[wt, model, entrypoint?, effort?]]        observed_transcripts (a later one is newer;
-//                                                entrypoint e.g. "sdk-cli" for a reviewer's `claude -p` (U98))
+//   transcripts [[wt, model, entrypoint?, effort?, path?]]  observed_transcripts (a later one is newer;
+//                                                entrypoint e.g. "sdk-cli" for a reviewer's `claude -p` (U98);
+//                                                path names a real file, e.g. a tests/fixtures/liveness/ transcript)
 //   terminals  [[handle, wt, squad, agent?]]              observed_terminals (live)
 //   worktrees  [[wt, branch|null, gone?]]         observed_worktrees (gone = gone_at set)
 //   prs        [{repo, pr, url?, state, draft?, ci?, review?, head?, unit?, verdict?, reasons?, stale?, gone?}]  observed_prs (GitHub rows)
@@ -71,8 +72,8 @@ s.tx(() => {
       if (epAge != null) s.upsert("episodes", { project, subject: wt, kind: "unread" }, { started_at: at - epAge, ended_at: null, count, state: "unread", source: "loop", observed_at: at });
     }
     for (const wt of seed.gone_members ?? []) s.db.run("UPDATE members SET status = 'gone' WHERE project = ? AND wt = ?", [project, wt]);
-    (seed.transcripts ?? []).forEach(([wt, model, entrypoint, effort]: [string, string | null, string?, string?], i: number) =>
-      s.upsert("observed_transcripts", { path: `/fx/${project}/${wt}/${i}.jsonl` }, { project, wt, mtime: at - 1000 + i, size: 1, last_model: model, last_effort: effort ?? null, entrypoint: entrypoint ?? null, observed_at: at }));
+    (seed.transcripts ?? []).forEach(([wt, model, entrypoint, effort, path]: [string, string | null, string?, string?, string?], i: number) =>
+      s.upsert("observed_transcripts", { path: path ?? `/fx/${project}/${wt}/${i}.jsonl` }, { project, wt, mtime: at - 1000 + i, size: 1, last_model: model, last_effort: effort ?? null, entrypoint: entrypoint ?? null, observed_at: at }));
     for (const [wt, phase] of Object.entries(seed.phases ?? {})) s.db.run("UPDATE members SET phase = ? WHERE project = ? AND wt = ?", [phase as string | null, project, wt]);
     for (const [handle, wt, squad, agent] of seed.terminals ?? []) {
       s.upsert("observed_terminals", { project, handle }, { wt, title: `${squad}/x`, doc: JSON.stringify({ squad, agent: agent ?? true }), observed_at: orcaAt, gone_at: null });
