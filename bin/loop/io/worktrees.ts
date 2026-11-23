@@ -35,8 +35,9 @@ export type Made = { path: string; branch: string; adopted: boolean; lease?: str
 export type RemoveOpts = { force?: boolean; deleteBranch?: boolean; base?: string };
 /** removed: the folder went (or was already gone); branch: what became of its branch. */
 export type Gone = { removed: boolean; already: boolean; branch: "kept" | "deleted" | "none"; why?: string };
-/** lease: the lease holding it, when the provider leases (a row on another lease is gone). */
-export type Listed = { path: string; branch: string | null; head: string | null; prunable: boolean; lease?: string | null };
+/** lease: the lease holding it, when the provider leases (a row on another lease is gone). orca_id: the
+ *  provider's own id when it reports one; a live row takes it (an `orca` worktree re-linked by path). */
+export type Listed = { path: string; branch: string | null; head: string | null; prunable: boolean; lease?: string | null; orca_id?: string | null };
 
 export interface Provider {
   name: string;
@@ -197,7 +198,7 @@ export type ListOpts = { project?: string; provider?: string; repo?: string; all
 
 // Check the live rows of each (provider, repo) against the provider's own list: a row whose worktree the
 // provider no longer has is marked gone (a crash after `git worktree remove`, a folder removed by hand, a
-// create that died before git ran), and a branch the provider reports differently is updated. Returns the
+// create that died before git ran), and a branch or provider id the provider reports differently is updated. Returns the
 // paths it marked gone.
 async function reconcile(s: Store, o: ListOpts, at: number): Promise<string[]> {
   const where = ["host = ?", "gone_at IS NULL", "repo IS NOT NULL"], args: string[] = [HOST];
@@ -219,7 +220,10 @@ async function reconcile(s: Store, o: ListOpts, at: number): Promise<string[]> {
       const l = by.get(String(r.path));
       const moved = l && l.lease !== undefined && r.lease != null && l.lease !== r.lease;
       if (l && !l.prunable && !moved && existsSync(String(r.path))) {
-        if (l.branch && l.branch !== r.branch) s.upsert("worktrees", { host: HOST, path: r.path }, { branch: l.branch });
+        const set: Record<string, string> = {};
+        if (l.branch && l.branch !== r.branch) set.branch = l.branch;
+        if (l.orca_id && l.orca_id !== r.orca_id) set.orca_id = l.orca_id;
+        if (Object.keys(set).length) s.upsert("worktrees", { host: HOST, path: r.path }, set);
         continue;
       }
       s.fact("worktree_gone", [{ table: "worktrees", key: { host: HOST, path: r.path }, set: { gone_at: at } }],
