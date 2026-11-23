@@ -729,19 +729,19 @@ eq "U1: the FLOW line has flow.counts' numbers" "$(grep '^FLOW ' "$TMP/flow.txt"
 
 
 # U7: Needs-you holds the cards only the operator can clear: the morning brief (Read) and a finished squad (Show squad, Close squad, Dismiss).
-eq "U7 page: brief and finished rows are non-blocking qnote rows" "$(grep -cF 'class=${"qnote" + (sent ? " sent" : "")}' "$ROOT/web/board.html")" "1"
-eq "U7 page: Read opens Briefs and answers Mark read" "$(grep -cF 'sendAnswer(n.label, "_studio", n.id, "Mark read")' "$ROOT/web/board.html")" "1"
+eq "U7 page: brief and finished rows are non-blocking qnote rows" "$(grep -cF 'class="qnote" onClick=' "$ROOT/web/board.html")" "1"
+eq "U7 page: Read opens Briefs and answers Mark read" "$(grep -cF 'k === "read" ? "Mark read" : a.answer' "$ROOT/web/board.html")" "1"
 eq "U7 page: Read keeps the b:briefs store open" "$(grep -cF 'lstore.set("b:briefs", true)' "$ROOT/web/board.html")" "1"
-eq "U7 page: a Studio card has its act button and Dismiss" "$(grep -cF '(studioCard || doneRow) && n.act && html' "$ROOT/web/board.html")$(grep -cF 'studioCard && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); dismiss(); }}>Dismiss' "$ROOT/web/board.html")" "11"
+eq "U7 page: a Studio card has its act button and Dismiss" "$(grep -cF 'if (n.act) out.push({ key: "act", label: n.act.label' "$ROOT/web/board.html")$(grep -cF 'out.push({ key: "dismiss", label: "Dismiss"' "$ROOT/web/board.html")" "31"
 # U10: one row shape for every Needs-you item; no "from sweep".
 eq "U10 page: the Needs-you list has no qrow grid branch" "$(sed -n '/U10: every Needs-you item/,/<${LoopNotes}/p' "$ROOT/web/board.html" | grep -c qrow)" "0"
-eq "U10 page: asks get an Answer button" "$(grep -cF '!brief && !studioCard && !doneRow && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); setAsk(nkey(n)); }}>Answer' "$ROOT/web/board.html")" "1"
+eq "U10 page: asks get an Answer button" "$(grep -cF 'out.push({ key: "answer", label: "Answer"' "$ROOT/web/board.html")" "1"
 # squad-done-definition U4: the done row, the explanation and the close confirm are in the page.
-eq "U4 page: a done row has Close squad and Open" "$(grep -cF 'doneRow && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); show(n.label, n.card_squad); }}>Open' "$ROOT/web/board.html")" "1"
+eq "U4 page: a done row has Close squad and Open" "$(grep -cF 'out.push({ key: "show", label: "Open"' "$ROOT/web/board.html")" "1"
 eq "U4 page: the pill hover and the squad panel carry the explanation" "$(grep -cF 'explainText(s)' "$ROOT/web/board.html" | awk '{print ($1>=2)}')" "1"
 eq "U4 page: the close confirm names open units" "$(grep -cF 'are still held or planned and will be archived with them' "$ROOT/web/board.html")$(grep -cF '1 unit is still held and will be archived with it' "$ROOT/web/board.html")" "11"
 eq "U4 page: the legend and wrapping-up pill colour" "$(grep -cF '.pill.wrapping-up{' "$ROOT/web/board.html")$(grep -cF 'STATE_LEGEND.join' "$ROOT/web/board.html")" "11"
-eq "U10 page: Studio card has Show squad" "$(grep -cF 'studioCard && n.card_squad && html' "$ROOT/web/board.html")" "1"
+eq "U10 page: Studio card has Show squad" "$(grep -cF 'if (n.card_squad) out.push({ key: "show", label: "Show squad"' "$ROOT/web/board.html")" "1"
 eq "U10 page: from shown only for an asker not already in the who line" "$(grep -cF 'n.from && !who.includes(n.from)' "$ROOT/web/board.html")" "1"
 eq "U10 page: the overlay shows from only when set" "$(grep -cF '${n.from && html`<span>· from ${n.from}</span>`}' "$ROOT/web/board.html")" "1"
 eq "U10 page: no from-sweep text on the page" "$(grep -ci 'from sweep' "$ROOT/web/board.html")" "0"
@@ -769,7 +769,7 @@ eq "polish U1 page: the changes view names the unit and the plan view keeps inde
 eq "U2 page: the question text and Why fold under Details for the record" "$(printf '%s' "$ask_fn" | grep -cF '<details class="qdetails"><summary>Details for the record</summary>')" "1"
 eq "U2 page: no plain summary keeps today's question text" "$(printf '%s' "$ask_fn" | grep -cF '${!n.plain && n.text !== n.title')" "1"
 eq "U2 page: the button reads Open plan on plan-* and Open doc otherwise" "$(grep -cF '/^plan-/.test(n.id || "") ? "Open plan" : "Open doc"' "$BP")" "1"
-eq "U2 page: the Needs-you row gets the doc button and the What you get detail line" "$(grep -cF 'n.doc && html`<button class="btn sm" data-ev="open-doc"' "$BP")$(grep -cF 'l.label === "What you get"' "$BP")" "11"
+eq "U2 page: the Needs-you row gets the doc button and the What you get detail line" "$(grep -cF 'if (n.doc) out.push({ key: "open-doc"' "$BP")$(grep -cF 'l.label === "What you get"' "$BP")" "11"
 eq "U2 page: while a plan is open the overlay ignores every key" "$(printf '%s' "$ask_fn" | grep -c 'if (planOpen || chat) return;')$(grep -cF 'planOpen=${!!plan}' "$BP")" "11"
 eq "U2 page: the plan modal is rendered after the overlay so it paints on top" "$(awk '/<\$\{AskOverlay\}/{a=NR} /\$\{plan && html`<div class="modal"/{p=NR} END{print (a && p > a) ? "after" : "before"}' "$BP")" "after"
 
