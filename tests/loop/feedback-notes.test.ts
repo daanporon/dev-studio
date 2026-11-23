@@ -1,5 +1,5 @@
 // feedback-notes.test.ts — ds-feedback-github-issues U1: a ds-feedback note is one `feedback_notes` row
-// (migration 0056) with the writer's member from DS_MEMBER, else its worktree, else project `-`;
+// (migration 0057) with the writer's member from DS_MEMBER, else its worktree, else project `-`;
 // `ds feedback import` reads the old file once (idempotent) and renames it; with loop.db unopenable the
 // note goes to the old file as before.
 import { afterEach, describe, expect, test } from "bun:test";
