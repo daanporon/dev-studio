@@ -157,6 +157,52 @@ test("a failed stop settles failed with its exit code and raises one Studio aler
   expect(alerts(f.run(1_002))).toHaveLength(0);
 });
 
+// A late stop on a stack the probe saw down (U1 of loop-notes-review): no card unless something still listens.
+async function downThenFailed(f: ReturnType<typeof fixture>, more: Row = {}, owner = "squad" as "squad" | "member") {
+  const id = f.entry(f.w.tester, owner, "exit 1", { url: "http://localhost:4321", ...more });
+  f.s.upsert("observed_exposed", { exposed_id: id }, { status: "down", reach: "down", probed_at: 1, down_since: 10 });
+  f.run(10 + 15 * 60);
+  expect(f.row(id).gone_why).toBe("down");
+  f.s.db.run("UPDATE squads SET status = 'closed'");
+  await f.exec(stops(f.run(2_000))[0]);
+  expect(f.row(id).stop_state).toBe("failed");
+  return id;
+}
+
+test("a failed late stop of a down group with nothing listening raises no card, and stays recorded", async () => {
+  const f = fixture();
+  const id = await downThenFailed(f);
+  expect(alerts(f.run(2_001))).toHaveLength(0);
+  expect(f.row(id).stop_state).toBe("failed");
+  expect(events(f.s, "expose_stop").length).toBeGreaterThan(0);
+});
+
+test("the same down group with its port in a live observed_procs listen row raises one card", async () => {
+  const f = fixture();
+  await downThenFailed(f, { ports: "[5555]" });
+  f.s.upsert("observed_procs", { project: "p", wt: f.w.tester }, { observed_at: 1, listen: JSON.stringify([{ port: 5555, since: 1, comm: "x", addr: "any", src: "proc" }]) });
+  expect(alerts(f.run(2_001))).toHaveLength(1);
+});
+
+test("an owner-gone group with a failed stop still raises one card", async () => {
+  const f = fixture();
+  const id = f.entry(f.w.tester, "member", "exit 1");
+  f.s.db.run("UPDATE members SET status = 'gone' WHERE wt = ?", [f.w.tester]);
+  f.run(1_000);
+  expect(f.row(id).gone_why).toBe("owner-gone");
+  await f.exec(stops(f.run(1_001))[0]);
+  expect(f.row(id).stop_state).toBe("failed");
+  expect(alerts(f.run(1_002))).toHaveLength(1);
+});
+
+test("a mixed group (one down, one owner-gone) raises one card", async () => {
+  const f = fixture();
+  const a = f.entry(f.w.tester, "squad", "exit 1", { url: "http://localhost:4321" }), b = f.entry(f.w.tester, "squad", "exit 1", { url: "http://localhost:4322" });
+  f.s.db.run("UPDATE exposed SET gone_at = 5, gone_why = 'down', stop_state = 'failed', stop_result = ? WHERE id = ?", [JSON.stringify({ ids: [a, b], code: 1 }), a]);
+  f.s.db.run("UPDATE exposed SET gone_at = 5, gone_why = 'owner-gone', stop_state = 'failed', stop_result = ? WHERE id = ?", [JSON.stringify({ ids: [a, b], code: 1 }), b]);
+  expect(alerts(f.run(2_001))).toHaveLength(1);
+});
+
 test("the alert shows a secret in the stop command redacted", async () => {
   const f = fixture();
   f.entry(f.w.tester, "squad", "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456' http://localhost:1/stop; exit 1");
