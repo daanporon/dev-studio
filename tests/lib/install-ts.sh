@@ -7,8 +7,9 @@
 install_ts_copy() {
   local dest="$1" src
   src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-  mkdir -p "$dest/bin/commands" "$dest/bin/lib"
+  mkdir -p "$dest/bin/commands" "$dest/bin/lib" "$dest/bin/loop/core"
   cp "$src/bin/ds" "$src/bin/ds.ts" "$dest/bin/"
   cp "$src/bin/commands/install-ts.ts" "$src/bin/commands/install-skills-ts.ts" "$src/bin/commands/wrap-hooks-ts.ts" "$dest/bin/commands/"
   cp "$src/bin/lib/shared.ts" "$src/bin/lib/install.ts" "$src/bin/lib/account-skills.ts" "$dest/bin/lib/"
+  cp "$src/bin/loop/core/whoami.ts" "$dest/bin/loop/core/"   # shared.ts imports it
 }

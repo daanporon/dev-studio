@@ -75,6 +75,8 @@ export function adoptStudio(store: Store, project: string, now: number): string 
   const ran = ow?.walk === "running" && ow.agent === v.agent;
   const want: Row = { agent: v.agent, handle, status: ow && ow.gone_at == null ? "running" : "gone",
     account: (ran && ow!.account) || m?.account || null, model: (ran && ow!.live_model) || m?.model || null };
+  // U4: another terminal than the recorded one is not the start whose generation the row holds.
+  if (m && handle !== ((m.handle as string | null) ?? null)) want.gen = null;
   const ctx = { project, squad: STUDIO_SQUAD, member: v.wt };
   if (!m) {
     store.fact("studio_adopted", [{ table: "members", key: { project, squad: STUDIO_SQUAD, wt: v.wt },

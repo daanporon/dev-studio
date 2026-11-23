@@ -472,7 +472,7 @@ test("the ★ and ⚡ come before the unit name, outside the part that is cut (U
 
 // ---- debrief-on-archive U2: a `sweep-debrief-<topic>-<n>` card opens the archived squad's debrief; Mark read answers the _studio card.
 test("a Debrief card shows 'Debrief · <topic>', opens the archived debrief and Mark read posts the _studio answer", async () => {
-  const card = { squad: "_studio", label: "fixture", kind: "studio", card_squad: null, id: "sweep-debrief-wrap-1", from: "loop", title: "Debrief: wrap", titled: true,
+  const card = { squad: "_studio", label: "fixture", kind: "studio", card_squad: null, id: "sweep-debrief-wrap-1", debrief: "wrap", from: "loop", title: "Debrief: wrap", titled: true,
     text: "Wrapped up cleanly — written at archive by the Lead.", choices: [], options: ["Mark read"], act: null, age_min: 1, about: null };
   const archived = { topic: "wrap", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [],
     debrief: "Wrapped up cleanly.\n\nUNIQUE-DEBRIEF-BODY" };

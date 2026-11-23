@@ -31,7 +31,7 @@ export const WISH_PAYLOADS = {
 export type WishPayload<S extends keyof typeof WISH_PAYLOADS> = Val<(typeof WISH_PAYLOADS)[S]>;
 
 // ---------------------------------------------------------------- requests
-const replay = obj({ argv: arr(str), kind: opt(str), key: opt(str), cwd: opt(str), from: opt(str) });
+const replay = obj({ argv: arr(str), kind: opt(str), key: opt(str), cwd: opt(str), from: opt(str), member: opt(str), gen: opt(str), wt: opt(str) });
 const MERGE = obj({ n: opt(num), repo: opt(str), method: opt(str), unit: opt(str), topic: opt(str), base: opt(str), ref: opt(str), head: opt(str), ep: opt(str) });
 const THROUGH = { request: opt(num) };
 
@@ -39,7 +39,7 @@ export const REQUESTS = {
   account: obj({ agent: str, account: str, enabled: opt(bool) }),
   // account-free-resets U4: one press of a grant's Use button; `key` is the idempotency key every try reuses.
   "account-reset": obj({ agent: str, account: str, grant: str, key: str, ...THROUGH }),
-  alert: obj({ title: opt(str), text: opt(str), option: opt(str), why: opt(str), unit: opt(str), card: opt(str), reason: opt(str), fields: opt(rec) }),
+  alert: obj({ id: opt(str), title: opt(str), text: opt(str), option: opt(str), why: opt(str), unit: opt(str), card: opt(str), reason: opt(str), fields: opt(rec) }),
   "alert-clear": obj({ prefix: opt(str), id: opt(str) }),
   answer: obj({ id: str, answer: str, seq: opt(num), card_wt: opt(str), choices: opt(arr(any)), transcript: opt(str), tool_use_id: opt(str), via: opt(str) }),
   board: obj({ file: str, text: str }),
