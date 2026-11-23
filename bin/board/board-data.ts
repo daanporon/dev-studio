@@ -832,13 +832,16 @@ function memberState(db: Db, label: string, topic: string, m: any, base: string)
 }
 
 // U267: the loop filed a failed report for this unit (its Builder's own worker_done, no PR) and the
-// Builder's current dispatch is still the one it named: the unit waits on its Lead.
+// Builder's current dispatch is still the one it named: the unit waits on its Lead. Off Orca (U12b) there is
+// no dispatch: the report names the Builder's generation (`gen:<gen>`, liveness.ts idleBuilder) instead.
 function failedReport(db: Db, label: string, squad: string, slug: string, wt: unknown): boolean {
   if (!wt) return false;
   try {
     return !!db.one(`SELECT 1 FROM episodes e JOIN observed_workers w ON w.project = e.project AND w.wt = ? AND w.gone_at IS NULL
       WHERE e.project = ? AND e.squad = ? AND e.kind = 'idle' AND e.state = 'failed_report' AND e.ended_at IS NULL
-        AND e.episode_key = 'failed|' || ? || '|' || w.dispatch_id`, String(wt), label, squad, slug);
+        AND (e.episode_key = 'failed|' || ? || '|' || w.dispatch_id
+          OR e.episode_key = 'failed|' || ? || '|gen:' || (SELECT m.gen FROM members m WHERE m.project = w.project AND m.wt = w.wt ORDER BY m.id DESC LIMIT 1))`,
+      String(wt), label, squad, slug, slug);
   } catch { return false; }
 }
 

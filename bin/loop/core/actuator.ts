@@ -721,9 +721,9 @@ export class LoopActuator implements Actuator {
         return this.contractStart(store, c().backend, { ...req, env: { ...req.env, DS_BACKEND: name, DS_WT: req.cwd, ...(ident ? { DS_MEMBER: ident } : {}) } }, meta,
           { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen);
       },
-      close: (cwd) => {
+      close: (cwd, id) => {
         const b = blocked();
-        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` });
+        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` }, id);
       },
       ask: (op, req) => c().backend.call(op, req),
       worktree: async (m) => {
@@ -816,19 +816,20 @@ export class LoopActuator implements Actuator {
     } finally { this.inFlight.delete(retry); }
   }
 
-  // U11: close every terminal in a folder, one orca_calls row (op terminal.close) under the seat's key.
+  // U11: close every terminal in a folder (U12b: only `id`, a pause's agent terminal), one orca_calls row
+  // (op terminal.close) under the seat's key.
   // A gone terminal answers closed:false (or not_found between the list and the close): a replay is safe.
-  private async contractClose(store: Store, b: Backend, cwd: string, o: CallAt): Promise<{ ok: boolean; error?: string }> {
+  private async contractClose(store: Store, b: Backend, cwd: string, o: CallAt, id?: string): Promise<{ ok: boolean; error?: string }> {
     const last = this.lastCall(store, o);
     if (last?.op === "terminal.close" && last.state === "completed") return { ok: true };
     if (last?.op === "terminal.close" && last.settled_at == null && this.inFlight.has(String(last.retry_id))) return { ok: false, error: "close still in flight" };
-    const retry = this.writeCall(store, last, "terminal.close", [JSON.stringify({ cwd })], o);
+    const retry = this.writeCall(store, last, "terminal.close", [JSON.stringify(id ? { cwd, id } : { cwd })], o);
     this.inFlight.add(retry);
     try {
       const l = await b.call("terminal.list", {});
       if (!l.ok) { this.settleCall(store, retry, "absent", l.error.message, o.at); return { ok: false, error: `terminal.list: ${l.error.message}` }; }
       const closed: string[] = [];
-      for (const t of l.terminals.filter((x) => x.cwd === cwd)) {
+      for (const t of l.terminals.filter((x) => x.cwd.replace(/\/+$/, "") === cwd.replace(/\/+$/, "") && (!id || x.id === id))) {
         const c = await b.call("terminal.close", { id: t.id });
         if (!c.ok && c.error.code !== "not_found") { this.settleCall(store, retry, "failed", c.error.message, o.at); return { ok: false, error: `terminal.close ${t.id}: ${c.error.message}` }; }
         closed.push(t.id);
