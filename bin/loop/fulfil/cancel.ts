@@ -25,11 +25,15 @@ async function cleanup(a: Action, x: Exec): Promise<Result> {
   const path = String(p.path ?? ""), tidy = a.kind === "cancel.remove" && path && existsSync(path) ? await closeTidy.before(a, x, path) : null;
   if (tidy && cancel.stale!(a, x)) return { dropped: "cancellation target changed" };
   // U11c: a squad on a contract backend: its terminals close through the contract and its worktree goes
-  // through its provider (forced, as worktree-rm here), both by path; its PR is closed as on Orca.
+  // through its provider (forced, as worktree-rm here), both by path; its PR is closed as on Orca. The remove
+  // closes the folder's terminals first too: no observer fills observed_terminals for these members yet (U12),
+  // so a live Builder can read not live and its cancel skip the stop.
   const w = { project: a.project, squad: a.squad, wt, path };
   if (a.kind !== "cancel.pr" && byContract(x.store, w)) {
-    const o = a.kind === "cancel.stop" ? await contractCloseTerminals(a, x, w) : await contractRemoveTree(a, x, w, true);
-    if (o.code !== 0) return { retry: errOf(o, a.kind === "cancel.stop" ? "terminal.close" : "worktree remove") };
+    const c = await contractCloseTerminals(a, x, w);
+    if (c.code !== 0) return { retry: errOf(c, "terminal.close") };
+    const o = a.kind === "cancel.stop" ? c : await contractRemoveTree(a, x, w, true);
+    if (o.code !== 0) return { retry: errOf(o, "worktree remove") };
     if (tidy) await closeTidy.after(a, x, path, tidy);
     return { done: true };
   }

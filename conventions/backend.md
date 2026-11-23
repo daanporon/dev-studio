@@ -259,7 +259,8 @@ backend (U11, "Started" below).
     folder path, through the contract seat, one `orca_calls` row per step key so a replay closes nothing
     twice) and removes its worktree through the squad's recorded provider (`io/worktrees.ts`
     `removeWorktree`, by path), all in `squad/removal.ts`: a close (`fulfil/close.ts`), a cancel
-    (`fulfil/cancel.ts`: the stop closes, the remove is forced as `worktree-rm force` is on Orca), a
+    (`fulfil/cancel.ts`: the stop closes, the remove closes again and is forced as `worktree-rm force` is on Orca;
+    until U12 no observer sees these terminals, so a live Builder can skip the stop), a
     leftover pass (`fulfil/worktree.ts`) and a host tidy of a class `d` tree (`fulfil/cleanup-act.ts`,
     found by its live `worktrees` row; no `worktree ps` read, and the tree is probed again before the
     removal). The provider keeps the branch (an unmerged one always); a dirty or unpushed tree is kept as

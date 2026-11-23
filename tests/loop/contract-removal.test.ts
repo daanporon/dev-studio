@@ -166,6 +166,16 @@ describe("a squad on a contract backend removes through its provider (U11c)", ()
     expect(member(r.s, Number(b.id))).toMatchObject({ status: "gone", want_result: "done: cancelled Builder removed" });
   });
 
+  test("cancel: a Builder the observer has not seen live still has its terminals closed before the removal", async () => {
+    const r = await rig();
+    const { b, path, branch } = await startBuilder(r);
+    expect(live(r.contract, path).length).toBeGreaterThan(0);
+    r.s.upsert("units", { project: "fx", squad: SQ, slug: "u1" }, { status: "cancelled", builder_wt: String(b.wt), observed_at: r.now(), updated_at: r.now() });
+    for (let i = 0; i < 10 && tree(r.s, path)?.gone_at == null; i++) await r.tick();
+    expect(live(r.contract, path)).toEqual([]);
+    await removedByProvider(r, path, branch);
+  });
+
   test("a leftover pass closes a stray terminal and removes the worktree by path", async () => {
     const r = await rig();
     const { b, path, branch } = await startBuilder(r);
