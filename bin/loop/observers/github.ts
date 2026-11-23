@@ -57,6 +57,8 @@ import { repoOf, prUrl } from "../settings/projects.ts";
 export { prUrl } from "../settings/projects.ts";
 import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
+import { ROOT } from "../core/store.ts";
+import { feedbackRepo } from "../feedback/draft.ts";
 import { budgetBackAt, budgetOf, budgetShare, hasBudget, isRateLimit, pace, RESET_GRACE_S, rateLimitedBody, restRateLimit, type Rest, type RestLimit } from "../io/github-budget.ts";
 
 export type GhResult = { code: number; stdout: string; stderr: string };
@@ -217,6 +219,9 @@ const full = (n: number) => `${LIGHT} files(first: 100) { nodes { path } } headR
   + `... on CheckRun { name databaseId status conclusion isRequired(pullRequestNumber: ${n}) } `
   + `... on StatusContext { context state createdAt isRequired(pullRequestNumber: ${n}) } } } } } } }`;
 const q = (s: string) => JSON.stringify(s);
+// A feedback issue this host filed (ds-feedback-github-issues U5): how it ended and the PR that closed it.
+const ISSUE_PREFIX = "fi";
+const ISSUE_NODE = "number state stateReason closedByPullRequestsReferences(first: 5, includeClosedPrs: false) { nodes { number merged mergedAt mergeCommit { oid } } }";
 const MERGE_NODE = "... on PullRequest { number title baseRefName mergedAt author { __typename login ... on User { name } } }";
 // GitHub search's time form: 2026-11-17T10:00:00+00:00.
 const searchTime = (sec: number) => new Date(sec * 1000).toISOString().replace(/\.\d{3}Z$/, "+00:00");
@@ -226,7 +231,7 @@ export const alias = (nwo: Nwo) => `r_${nwo.replace(/[^A-Za-z0-9]/g, "_")}`;
 
 // One POST: per repo its next open page (`page`: a cursor, null = the first, absent = none left)
 // with unit PRs in full, or only thread pages of single PRs; and a page of its merge read (`merges`).
-type Ask = { nwo: Nwo; page?: string | null; tracked?: number[]; threads?: Map<number, string>; merges?: { from: number; to: number; after: string | null } };
+type Ask = { nwo: Nwo; page?: string | null; tracked?: number[]; issues?: number[]; threads?: Map<number, string>; merges?: { from: number; to: number; after: string | null } };
 export function buildQuery(asks: Ask[]): string {
   let s = "query { rateLimit { limit cost remaining resetAt }";
   for (const a of asks) {
@@ -236,6 +241,7 @@ export function buildQuery(asks: Ask[]): string {
       b += `nameWithOwner defaultBranchRef { name } pullRequests(states: OPEN, first: ${PAGE}, after: ${a.page === null ? "null" : q(a.page)}, `
         + `orderBy: {field: CREATED_AT, direction: ASC}) { totalCount pageInfo { hasNextPage endCursor } nodes { ${LIGHT} ${threadsSel(50, THREAD_LIGHT)} } }`;
     }
+    for (const n of a.issues ?? []) b += ` ${ISSUE_PREFIX}${n}: issue(number: ${n}) { ${ISSUE_NODE} }`;
     for (const n of a.tracked ?? []) b += ` pr${n}: pullRequest(number: ${n}) { ${full(n)} }`;
     for (const [n, after] of a.threads ?? []) b += ` t${n}: pullRequest(number: ${n}) { reviewThreads(first: 100, after: ${q(after)}) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_NODE} } } }`;
     if (b) s += ` ${alias(a.nwo)}: repository(owner: ${q(owner)}, name: ${q(name)}) { ${b.trim()} }`;
@@ -249,7 +255,7 @@ export function buildQuery(asks: Ask[]): string {
 // --- one poll ----------------------------------------------------------------------------------
 
 export class RateLimited extends Error {}
-type RepoResult = { ok: boolean; error: string | null; open: Map<number, any>; tracked: Map<number, any | null>; failed: Map<number, string>; total: number | null; defaultBranch: string | null };
+type RepoResult = { issues: Map<number, any>; ok: boolean; error: string | null; open: Map<number, any>; tracked: Map<number, any | null>; failed: Map<number, string>; total: number | null; defaultBranch: string | null };
 // A merge read's outcome: the range it covered and its PR nodes, or why not. `skipped`: more merges
 // than search returns even in one hour, so the range is passed over (error says which).
 export type MergeResult = { from: number; to: number; nodes: any[]; error: string | null; skipped: boolean };
@@ -279,9 +285,9 @@ export const FULL_PER_POST = 20;
 // Every page of every repo, then the threads of any PR whose first page showed none unresolved
 // but has more. A thread page that cannot be read fails that PR's read, as an error on its node does.
 // Throws RateLimited, or Error for any answer without data: nothing is applied then.
-export async function poll(gh: Gh, repos: Nwo[], tracked: Map<Nwo, number[]>, merges: Map<Nwo, MergeAsk> = new Map()): Promise<Poll> {
+export async function poll(gh: Gh, repos: Nwo[], tracked: Map<Nwo, number[]>, merges: Map<Nwo, MergeAsk> = new Map(), issues: Map<Nwo, number[]> = new Map()): Promise<Poll> {
   const out = emptyPoll();
-  for (const nwo of repos) out.repos.set(nwo, { ok: true, error: null, open: new Map(), tracked: new Map(), failed: new Map(), total: null, defaultBranch: null });
+  for (const nwo of repos) out.repos.set(nwo, { issues: new Map(), ok: true, error: null, open: new Map(), tracked: new Map(), failed: new Map(), total: null, defaultBranch: null });
   const send = async (asks: Ask[]) => {
     const r = await gh(buildQuery(asks));
     out.posts++;
@@ -319,6 +325,8 @@ export async function poll(gh: Gh, repos: Nwo[], tracked: Map<Nwo, number[]>, me
   // The merge reads in flight: each walks its range's pages, shrinking the range when it is over the cap.
   type Reading = { from: number; to: number; now: number; span: number; after: string | null; nodes: any[] };
   const reading = new Map<Nwo, Reading>();
+  // The feedback issues ride on the repo's first POST only (one aliased field each, no call of their own).
+  const issueQueue = new Map<Nwo, number[]>(repos.map((nwo) => [nwo, [...(issues.get(nwo) ?? [])]]));
   for (const nwo of repos) {
     const m = merges.get(nwo);
     if (m) reading.set(nwo, { from: m.from, to: Math.min(m.now, m.from + MERGE_SPANS[0]), now: m.now, span: MERGE_SPANS[0], after: null, nodes: [] });
@@ -348,12 +356,19 @@ export async function poll(gh: Gh, repos: Nwo[], tracked: Map<Nwo, number[]>, me
         budget -= take.length;
         if (cursor.has(nwo) || take.length) Object.assign(ask, { page: cursor.get(nwo), tracked: take });
       }
-      if (ask.tracked || ask.merges) asks.push(ask);
+      const iss = issueQueue.get(nwo) ?? [];
+      if (iss.length) { ask.issues = iss.splice(0); }
+      if (ask.tracked || ask.merges || ask.issues) asks.push(ask);
     }
     if (!asks.length) break;
     const { data, errOf, errsOf } = await send(asks);
     for (const a of asks) {
       if (a.merges) readMerges(a.nwo, reading.get(a.nwo)!, data[mergeAlias(a.nwo)], errsOf([mergeAlias(a.nwo)]));
+      // An issue that did not come back (an error on its path, or gone) says nothing: its draft stays as it was.
+      for (const n of a.issues ?? []) {
+        const node = data[alias(a.nwo)]?.[`${ISSUE_PREFIX}${n}`];
+        if (node && !errsOf([alias(a.nwo), `${ISSUE_PREFIX}${n}`]).length) out.repos.get(a.nwo)!.issues.set(n, node);
+      }
       if (!a.tracked) continue;
       const res = out.repos.get(a.nwo)!, d = data[alias(a.nwo)];
       if (!d) {
@@ -418,7 +433,7 @@ export async function poll(gh: Gh, repos: Nwo[], tracked: Map<Nwo, number[]>, me
 
 // `lookup`: the refs (project|ref) asked once for how they ended (U58), not watched.
 // `merges`: the repos whose merge read is due, with its range.
-type Target = { repos: Map<Nwo, Set<string>>; tracked: Map<Nwo, number[]>; units: Map<string, string>; lookup: Set<string>; merges: Map<Nwo, MergeAsk> };
+type Target = { repos: Map<Nwo, Set<string>>; tracked: Map<Nwo, number[]>; units: Map<string, string>; lookup: Set<string>; merges: Map<Nwo, MergeAsk>; issues: Map<Nwo, number[]> };
 const CFG = "github";
 const RETRY_UNRESOLVED_S = 3600;
 const READ_FAILING = "pr-read-failing";
@@ -436,7 +451,7 @@ function repoFor(store: Store, project: string, selector: string, at: number, re
 }
 
 export function targets(store: Store, at: number, resolve = repoOf): Target {
-  const t: Target = { repos: new Map(), tracked: new Map(), units: new Map(), lookup: new Set(), merges: new Map() };
+  const t: Target = { repos: new Map(), tracked: new Map(), units: new Map(), lookup: new Set(), merges: new Map(), issues: new Map() };
   const add = (nwo: Nwo, project: string) => { if (!t.repos.has(nwo)) t.repos.set(nwo, new Set()); t.repos.get(nwo)!.add(project); };
   const squads = store.db.query("SELECT project, topic, repo FROM squads WHERE COALESCE(status, '') != 'closed' ORDER BY project, topic").all() as { project: string; topic: string; repo: string | null }[];
   const repoOfSquad = new Map<string, Nwo | null>();
@@ -500,8 +515,82 @@ export function targets(store: Store, at: number, resolve = repoOf): Target {
       if (!t.tracked.get(nwo)?.includes(n)) { if (!t.tracked.has(nwo)) t.tracked.set(nwo, []); t.tracked.get(nwo)!.push(n); }
     }
   }
+  const fb = feedbackIssues(store);
+  if (fb) {
+    // The feedback repo is read like any watched repo; with no squad on it, no project owns its PR rows.
+    if (!t.repos.has(fb.repo)) t.repos.set(fb.repo, new Set());
+    t.issues.set(fb.repo, fb.issues);
+  }
   t.merges = mergeAsks(store, [...t.repos.keys()], at);
   return t;
+}
+
+// The issues this host filed that can still change: filed, or fixed in a PR the checkout does not hold yet.
+// None while `feedback_repo` is unset, so the query then carries no issue field.
+export function feedbackIssues(store: Store): { repo: Nwo; issues: number[] } | null {
+  const repo = feedbackRepo(store) as Nwo | null;
+  if (!repo) return null;
+  const rows = store.db.query(`SELECT DISTINCT issue FROM feedback_drafts WHERE repo = ? AND issue IS NOT NULL
+    AND (state = 'filed' OR (state = 'fixed' AND fix_pr IS NOT NULL AND COALESCE(fix_here, 0) = 0)) ORDER BY issue LIMIT 100`).all(repo) as { issue: number }[];
+  return rows.length ? { repo, issues: rows.map((r) => Number(r.issue)) } : null;
+}
+
+// What a closed issue says: `fixed` (closed as completed, with the merged PR GitHub names and its merge commit)
+// or `closed` (not planned, duplicate); an open issue, or a close with no reason, null.
+export function issueOutcome(node: any): { state: "fixed" | "closed"; pr: number | null; oid: string | null } | null {
+  if (node?.state !== "CLOSED") return null;
+  const why = String(node.stateReason ?? "");
+  if (why === "NOT_PLANNED" || why === "DUPLICATE") return { state: "closed", pr: null, oid: null };
+  if (why !== "COMPLETED") return null;
+  const prs = ((node.closedByPullRequestsReferences?.nodes ?? []) as any[]).filter((n) => n?.merged && n.number != null);
+  prs.sort((a, b) => String(b.mergedAt ?? "").localeCompare(String(a.mergedAt ?? "")));
+  return { state: "fixed", pr: prs[0] ? Number(prs[0].number) : null, oid: prs[0]?.mergeCommit?.oid ?? null };
+}
+
+// The merge commits of closed-as-completed feedback issues in a poll, to ask the checkout about.
+export function fixCommits(p: Poll): string[] {
+  const out = new Set<string>();
+  for (const res of p.repos.values()) for (const node of res.issues.values()) { const o = issueOutcome(node); if (o?.oid) out.add(o.oid); }
+  return [...out];
+}
+
+// Does the host checkout hold these commits (an ancestor of HEAD)? One async git call each, never a fetch.
+export async function checkoutHolds(oids: string[], root = ROOT): Promise<Set<string>> {
+  const held = new Set<string>();
+  for (const oid of oids) {
+    if (!/^[0-9a-f]{7,64}$/.test(oid)) continue;
+    try {
+      const pr = Bun.spawn(["git", "merge-base", "--is-ancestor", oid, "HEAD"], { cwd: root, stdin: "ignore", stdout: "ignore", stderr: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+      const timer = setTimeout(() => pr.kill(), 10_000);
+      try { if ((await pr.exited) === 0) held.add(oid); } finally { clearTimeout(timer); }
+    } catch { /* no git: not here */ }
+  }
+  return held;
+}
+
+// The poll's feedback issues onto their drafts and notes. A draft moves only while it is `filed` (or, for
+// fix_here, `fixed`); an open issue changes nothing.
+function applyFeedback(store: Store, p: Poll, held: Set<string>, at: number): void {
+  const repo = feedbackRepo(store);
+  if (!repo) return;
+  for (const [nwo, res] of p.repos) {
+    if (nwo !== repo) continue;
+    for (const [n, node] of res.issues) {
+      const o = issueOutcome(node);
+      if (!o) continue;
+      const here = o.oid && held.has(o.oid) ? 1 : 0;
+      const drafts = store.db.query("SELECT id, state, fix_pr, fix_here FROM feedback_drafts WHERE repo = ? AND issue = ? AND state IN ('filed', 'fixed')").all(repo, n) as Row[];
+      for (const d of drafts) {
+        if (d.state === "fixed") {
+          if (o.state === "fixed" && here && !d.fix_here) store.db.run("UPDATE feedback_drafts SET fix_here = 1, updated_at = ? WHERE id = ?", [at, d.id]);
+          continue;
+        }
+        store.db.run("UPDATE feedback_drafts SET state = ?, fix_pr = ?, fix_here = ?, updated_at = ? WHERE id = ?", [o.state, o.pr, o.state === "fixed" ? here : null, at, d.id]);
+        store.db.run("UPDATE feedback_notes SET state = ?, updated_at = ? WHERE draft_id = ? AND state IN ('drafted', 'filed')", [o.state, at, d.id]);
+        store.event(o.state === "fixed" ? "feedback_fixed" : "feedback_closed", { payload: { draft: d.id, repo, issue: n, pr: o.pr, in_your_version: !!here } });
+      }
+    }
+  }
 }
 
 // The merge reads due at `at`: per repo, from 30 minutes before its cursor (the first read: 4 days back).
@@ -582,9 +671,10 @@ function applyMerges(store: Store, t: Target, p: Poll, at: number): void {
   }
 }
 
-export function apply(store: Store, t: Target, p: Poll, at: number): void {
+export function apply(store: Store, t: Target, p: Poll, at: number, held: Set<string> = new Set()): void {
   store.tx(() => {
     noteReadFailures(store, t, p, at);
+    applyFeedback(store, p, held, at);
     applyMerges(store, t, p, at);
     for (const [nwo, res] of p.repos) {
       store.upsert("observed_github", { repo: nwo }, res.ok
@@ -664,7 +754,7 @@ async function reportReadFailures(store: Store, t: Target, p: Poll, at: number):
 
 // --- the plugin --------------------------------------------------------------------------------
 
-type Opts = { gh?: Gh; resolve?: typeof repoOf; budgetMs?: number; rest?: Rest };
+type Opts = { holds?: (oids: string[]) => Promise<Set<string>>; gh?: Gh; resolve?: typeof repoOf; budgetMs?: number; rest?: Rest };
 
 // The schedule row (repo ''): next_at and the current interval.
 function schedule(store: Store): Row { return store.get("observed_github", { repo: "" }) ?? { next_at: 0, interval_s: baseInterval() }; }
@@ -682,7 +772,7 @@ export function githubObserver(opts: Opts = {}): Observer {
     flight = null;
     if (f.poll) {
       const p = f.poll;
-      apply(store, f.t, p, at);
+      apply(store, f.t, p, at, await (opts.holds ?? checkoutHolds)(fixCommits(p)));
       // U286: reads spend at most github_budget_share of the hour's budget; with no room left for two
       // more, the next one waits for GitHub's reset.
       const interval = pace(base, p.cost, p.limit, budgetShare(store));
@@ -727,7 +817,7 @@ export function githubObserver(opts: Opts = {}): Observer {
       }
       const f: Flight = { t, done: false };
       flight = f;
-      const p = poll(gh, [...t.repos.keys()].sort(), t.tracked, t.merges)
+      const p = poll(gh, [...t.repos.keys()].sort(), t.tracked, t.merges, t.issues)
         .then((r) => { f.poll = r; }, async (e) => { f.err = e; if (e instanceof RateLimited) f.rest = await rest().catch(() => null); })
         .finally(() => { f.done = true; });
       await Promise.race([p, Bun.sleep(budget)]);

@@ -100,6 +100,7 @@ Builders don't collide.
    **Prove your unit's Done:** run its **Check** from the plan (`conventions/plan-shape.md`,
    move e) and paste the real output in the PR description. A unit whose Check you couldn't
    run, or that failed, is not merge-ready — say why in the PR and tell your Lead.
+   **A PR that fixes a ds-feedback issue** (one the operator filed from a note, named in your unit) writes `Fixes #N` in its body, so GitHub names the PR on the issue and the note flows back as `fixed in #<pr>`.
    **Tests before the PR are targeted** (`AGENTS.md`, "Verify"): the shellcheck line plus every `tests/*.sh` whose script or code under test your change touches, and `tests/loop.sh` for a change under `bin/loop/`; name those commands and their summary lines in the PR's Tests section. GitHub's `tests` check is the full suite and the gate: after each push, fix a red run when the loop pokes you. A change to `tests/ci.sh`, `tests/lib/` or `.github/workflows/`, or one touching more than about 30 files, runs `CI_JOBS=4 tests/ci.sh` locally first.
    **A commit or push the leak hooks refuse** is fixed as `.github/CONTRIBUTING.md` ("Leak hooks") says.
    You never merge — stop at a merge-ready green PR via the finish sequence below; the
