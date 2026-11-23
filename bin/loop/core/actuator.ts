@@ -106,9 +106,12 @@ const startSlots = () => envInt("DS_LOOP_START_SLOTS", 4);
 // U239: these kinds run in the background like a start: the tick claims, the call runs on its own and
 // its result settles the episode. Their own slots; one at a time per subject and per member worktree;
 // a call that has not ended after DS_LOOP_BG_TIMEOUT_S (120) settles as a retry and frees its subject.
-export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "finish-unit", "studio-move", "expose.stop"]);
+export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "finish-unit", "studio-move", "expose.stop", "feedback.draft"]);
 const bgSlots = () => envInt("DS_LOOP_BG_SLOTS", 6);
-const bgTimeoutMs = () => envInt("DS_LOOP_BG_TIMEOUT_S", 120) * 1000;
+// A kind whose call runs longer than the default gets its own limit (the drafter's headless call ends
+// itself at DS_FEEDBACK_DRAFT_S; this is that plus a minute, so the loop never frees its subject first).
+const BG_TIMEOUT_S: Record<string, () => number> = { "feedback.draft": () => envInt("DS_FEEDBACK_DRAFT_S", 900) + 60 };
+const bgTimeoutMs = (kind: string) => (BG_TIMEOUT_S[kind]?.() ?? envInt("DS_LOOP_BG_TIMEOUT_S", 120)) * 1000;
 
 const claimKey = (a: Action) => ({ project: a.project, subject: a.subject, kind: `action:${a.kind}` });
 const errText = (e: unknown) => (e as Error)?.message ?? String(e);
@@ -286,7 +289,7 @@ export class LoopActuator implements Actuator {
         this.bgCount++; keys.forEach((k) => this.bgBusy.add(k));
         const run = this.activity.run(a, () => Promise.resolve().then(() => f.exec(a, x)).then((res) => ("background" in res ? res.background : res)));
         let timer: ReturnType<typeof setTimeout>;
-        const limit = new Promise<Result>((ok) => { const ms = this.opts.bgTimeoutMs ?? bgTimeoutMs(); timer = setTimeout(() => ok({ retry: `timed out after ${ms / 1000}s` }), ms); timer.unref?.(); });
+        const limit = new Promise<Result>((ok) => { const ms = this.opts.bgTimeoutMs ?? bgTimeoutMs(a.kind); timer = setTimeout(() => ok({ retry: `timed out after ${ms / 1000}s` }), ms); timer.unref?.(); });
         const free = () => { clearTimeout(timer); this.bgCount--; keys.forEach((k) => this.bgBusy.delete(k)); this.timed(a.kind, t0, true); };
         r = { background: Promise.race([run, limit]).finally(free) };
       } else r = await this.activity.run(a, () => f.exec(a, x));
