@@ -1,0 +1,11 @@
+{"type":"user","message":{"role":"user","content":"dev-studio loop: your unit is still open: carry on, or say what you are waiting on with `ask`."},"timestamp":"2026-11-23T10:00:00.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Running the tests."},{"type":"tool_use","id":"toolu_fx01","name":"Bash","input":{"command":"bun test tests/loop/example.test.ts"}}]},"timestamp":"2026-11-23T10:00:05.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_fx01","content":"3 pass, 0 fail"}]},"timestamp":"2026-11-23T10:00:00.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"All three pass; the unit is ready for review."}]},"timestamp":"2026-11-23T10:00:05.000Z"}
+{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-11-23T10:00:09.000Z","hookCount":1,"hookErrors":[],"preventedContinuation":false}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-11-23T10:00:09.000Z","durationMs":9000}
+{"type":"user","message":{"role":"user","content":"dev-studio board, the operator says: run the full suite before the PR"},"timestamp":"2026-11-23T10:00:00.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Starting the full suite."}]},"timestamp":"2026-11-23T10:00:05.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_fx03","name":"Bash","input":{"command":"CI_JOBS=4 tests/ci.sh"}}]},"timestamp":"2026-11-23T10:00:05.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_fx03","content":"ci: 412s, 0 failed"}]},"timestamp":"2026-11-23T10:00:00.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The suite is green; writing the PR body."}]},"timestamp":"2026-11-23T10:00:05.000Z"}
