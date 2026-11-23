@@ -156,6 +156,38 @@ and as a server that outlives its caller. It also shows the checks catch an answ
 `tests/loop/backend-tmux.test.ts` runs the conformance suite, including `survive`, on a private socket
 (`tmux.ts caller` is its caller). When no `tmux` binary is on `PATH` it skips with the reason printed.
 
+### The orca-lite backend (`bin/backend/orca-lite.ts`)
+
+Orca's terminals with no Run, task, dispatch or coordinator (orca-backend-alternatives U13), in worktrees
+the `orca` worktree provider makes (`bin/loop/io/providers/orca.ts`, its only provider). Every Orca call is
+an adapter verb of the Operations table below, through the loop's Orca runner (`bin/loop/io/orca.ts`), so
+the tick's shared reads, the in-process verbs and the fake Orca all apply. The actuator makes one per
+project on its own runner (`core/actuator.ts` `contracted`); the registry still refuses a spawn on it.
+
+- **create.** `wt-show path:<cwd>` gives the worktree's Orca id; a folder Orca has no worktree at is
+  `failed`. A `parent` other than the cwd is set with `wt-set-parent` when `wt-show` reads another
+  parent. Then `terminal-create <id> <label> <command>`: Orca types the command into the new shell, and
+  the command is `export K='v' …` of the request's env, so a launch line typed later runs with it. An env
+  value holding a control character is `bad_request`.
+- **Facts kept by the backend.** Orca keeps no env and no facts of ours on a tab, and Claude rewrites a
+  tab's title, so cwd, label, parent, gen and created_at are kept in one JSON file per project
+  (`<state root>/<project>/loop/orca-lite-terminals.json`, written whole through a rename). The terminal id
+  is the handle Orca gave at create. A restarted Orca hands out new handles for the same tabs: the entry
+  keeps the tab's pane key (`tabId:leafId`) and follows it to the new handle. `terminal.list` lists only
+  the tabs of the file that `terminal-panes` still shows, and drops the others' entries; every other op on
+  such an id is `not_found` (a closed handle still reads `ok` in Orca, so liveness is the list).
+- **send** is `terminal-type`: text as is, keys as their bytes (Enter `\r`, Escape `\x1b`, Backspace
+  `\x7f`, arrows `\x1b[A`…, `C-c` `\x03`, `C-d` `\x04`), and with `submit` Enter through
+  `--enter --wait-submit 10`. **read** is `terminal-read` (`--screen` for `screen`), **last_output** the
+  tab's `lastOutputAt`, **close** `terminal-close`.
+- **Capabilities.** `parents: native` (`wt-set-parent`, read back with `wt-show`), `state: native`
+  (`pane-state`: `worktree ps` reports the agent of a plain tab in an Orca-made worktree, `working` →
+  working, `waiting`/`blocked` → waiting, `done`/`idle` → idle, else unknown), `turn_confirm: native`
+  (`turn_started` when Orca's send receipt has that stage; a plain shell answers `accepted`), `keys: native`.
+- `tests/loop/backend-orca-lite.test.ts` runs the conformance suite on the fake Orca (`bin/loop/fakes/orca.ts`,
+  whose `terminal-create` tabs are small shells) and the cases it does not reach: parents, an unknown
+  folder, a restarted Orca's handles, the agent state and a confirmed turn.
+
 ### Adding a v2 backend
 
 1. Implement `Backend` (`call(op, req)`) under `bin/backend/<name>.ts`.
@@ -233,7 +265,8 @@ backend (U11, "Started" below).
   not Orca: `fulfil/squad.ts` makes no Run, task, dispatch, coordinator pane or sender for it, and wishes
   its roles; the actuator's contract seat (`core/actuator.ts` `contractSeat`) starts, pokes, stops and
   closes them with the contract driver (`drivers/contract.ts`). The actuator reaches `tmux` through
-  `bin/backend/tmux.ts` and has no adapter for `orca-lite` or `herdr`; the registry still marks all three
+  `bin/backend/tmux.ts` and `orca-lite` through `bin/backend/orca-lite.ts` (U13), and has no adapter for
+  `herdr`; the registry still marks all three
   not built (their `adapter` is null until the observer and removal land, U12 and U11c), so a spawn on
   one is still refused. A test reaches this path through `LoopActuator`'s `backends` option and the
   contract fake.
@@ -343,6 +376,11 @@ Script-callable (implemented by the adapter, used by the loop's observers and fu
 | `agent-handles` | — | `<worktree_id>\t<handle>\t<title>` per live AGENT terminal (agent identity, connected, writable, not orphaned), host-wide, newest output first within a worktree (U71: the terminal a member is rebound to; exit 1 when the terminal list can't be read or parsed) |
 | `terminal-shells` | — | `<worktree_id>\t<handle>\t<idle\|busy\|unknown>\t<last output, epoch s\|->\t<title>` per live PLAIN terminal in a worktree (no agent identity, connected, not orphaned), host-wide; idle = its shell is the foreground process group of its tty (from `$DS_PROC`, default /proc, by `ORCA_TERMINAL_HANDLE`), unknown = no readable session leader (U79: members.ts closes idle strays; exit 1 when the list can't be read or parsed) |
 | `terminal-close` | `<handle>` | `terminal-close: closed <handle>` (close one terminal; exit 1 when Orca refuses) |
+| `terminal-create` | `<worktree_id> <title> [command]` | `<handle>\t<tabId:leafId>` of a new plain shell tab in that worktree (the pane key empty when Orca does not list it yet); `[command]` is typed into the new shell (orca-lite's env line) |
+| `terminal-panes` | — | `<handle>\t<worktreeId>\t<tabId:leafId>\t<last output, epoch s\|->` per terminal Orca lists that is not orphaned, agent or shell (orca-lite's list); exit 1 when the list can't be read |
+| `terminal-type` | `<handle> <text> [enter]` | `turn_started` when Orca's receipt saw the agent start a turn (it waits up to 10 s), else `accepted`; `<text>` is written as is (control bytes pass), any terminal, Enter after it with `enter`; exit 1 = not sent |
+| `terminal-read` | `<handle> [screen\|stream] [limit]` | the terminal's output lines: the rendered screen with `screen`, else the accumulated output, at most `[limit]` lines; exit 3 when Orca has no such terminal |
+| `pane-state` | `<worktree_id> <tabId:leafId>` | the state `worktree ps` gives the agent in that pane (`working`, `done`, …), or nothing when it lists none there (only an Orca-made worktree is listed, `docs/backends/orca-probe.md` Q5) |
 | `task-spec` | `<run_id> <task_id>` | that task's spec (exit 1 when the task isn't in the Run) |
 | `dispatch` | `<task_id> <handle> <run_id>` | the dispatch id: hand an existing task to a live terminal with `--inject`, from the coordinator (`DS_ORCA_FROM`); exit 1 when refused (U71's rebind; never the squad's umbrella task, which Orca refuses `task_not_startable`) |
 | `dispatch-abandon` | `<dispatch_id>` | — (fence one dispatch: a rebound member's old one, or a Run worker that is no longer a member; exit 1 when refused) |

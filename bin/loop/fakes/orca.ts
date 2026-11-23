@@ -37,6 +37,12 @@
 //     into `other` instead, and the receipt check exit 3 "misdelivered" as the adapter does
 //   - shells: the plain terminals (no agent) terminal-shells lists, busy or idle; terminal-close
 //     closes one (closeFails holds handles whose close fails)
+//   - screens (U13, orca-lite): terminal-create [command] gives the tab a small shell: an `export K='v' …`
+//     command sets its env, the cwd is its worktree's folder; terminal-type types text (Backspace bytes
+//     erase, other escape bytes are dropped) and, with `enter` or a typed CR, runs the line (`echo …` with
+//     `$NAME` expanded, `pwd`), terminal-read prints the screen (`screen`: its last 24 lines) or the whole
+//     output, terminal-panes lists those tabs (agents and shells too, with no pane), terminal-close ends the
+//     tab's screen, and pane-state prints paneStates.get(<pane>) (none = Orca lists no agent there)
 //   - studio-start opens an agent tab in its worktree (agents) and prints its handle
 //   - worktrees (U8b): wt-make makes a real git worktree under `wtRoot`/<repo folder>/<name> as Orca does
 //     (an existing branch or taken folder gets `-2`, the parent is recorded), wt-show finds one by
@@ -106,6 +112,7 @@ export type FakeMsg = { id: string; run: string; to: string; term?: string; from
 // A Run's dispatch of a task to a terminal (run-workers groups them by worktree, newest first).
 export type FakeDispatch = { id: string; run: string; wt: string; handle: string; task: string; status: "dispatched" | "completed" | "failed"; provenance?: string };
 export type FakeTask = { run: string; spec: string; title: string; parent: string | null; startable: boolean };
+export type FakeScreen = { pane: string; wt: string; cwd: string; env: Record<string, string>; lines: string[]; line: string; out: number | null };
 export type FakeWt = { id: string; path: string; repo: string; branch: string; parent: string | null };
 const ok = (out = ""): Out => ({ code: 0, out, err: "" });
 const no = (err: string, code = 1): Out => ({ code, out: "", err });
@@ -133,6 +140,9 @@ export class FakeBackend implements Orca {
   misroute = new Map<string, string>();                            // --to handle -> the terminal Orca files it under
   parents = new Map<string, string>();                             // wt -> the parent wt-set-parent gave it (the observer reports it)
   closeFails = new Set<string>();                                  // terminal-close fails for these
+  screens = new Map<string, FakeScreen>();                         // handle -> a terminal-create tab's shell (U13)
+  paneStates = new Map<string, string>();                          // pane key -> the agent state pane-state prints
+  now = (): number => Math.floor(Date.now() / 1000);
   dispatches: FakeDispatch[] = [];
   tasks = new Map<string, FakeTask>();
   wtRoot = "";                                                     // where wt-make puts worktrees (Orca's workspaces)
@@ -199,6 +209,28 @@ export class FakeBackend implements Orca {
     return () => { this.gate = null; release(); };
   }
 
+  /** Bytes typed into a fake tab's shell: a CR runs the line, DEL erases, other control bytes are dropped. */
+  private typed(sc: FakeScreen, text: string): void {
+    // eslint-disable-next-line no-control-regex
+    for (const ch of text.replace(/\x1b\[[0-9;]*[A-Za-z]|\x1b/g, "")) {
+      if (ch === "\r" || ch === "\n") this.runLine(sc);
+      else if (ch === "\x7f") sc.line = sc.line.slice(0, -1);
+      else if (ch >= " ") sc.line += ch;
+    }
+    sc.out = this.now();
+  }
+  private runLine(sc: FakeScreen): void {
+    const line = sc.line.trim();
+    sc.lines.push(`$ ${sc.line}`);
+    sc.line = "";
+    const expand = (t: string) => t.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, k: string) => sc.env[k] ?? "");
+    if (line === "pwd") sc.lines.push(sc.cwd);
+    else if (line.startsWith("echo ")) sc.lines.push(expand(line.slice(5)));
+    else if (/^export /.test(line)) {
+      for (const m of line.slice(7).matchAll(/([A-Za-z_][A-Za-z0-9_]*)='((?:[^']|'\\'')*)'/g)) sc.env[m[1]!] = m[2]!.replace(/'\\''/g, "'");
+    }
+  }
+
   /** The worktree a `path:<p>` or `id:<id>` selector names. */
   private wtAt(sel: string): FakeWt | undefined {
     return sel.startsWith("path:") ? this.wts.get(sel.slice(5)) : [...this.wts.values()].find((w) => `id:${w.id}` === sel);
@@ -227,6 +259,10 @@ export class FakeBackend implements Orca {
       case "terminal-create": {
         const n = ++this.t, h = `term_${n}`, pane = `tab${n}:leaf${n}`;
         this.terminals.set(h, { pane, wt: args[0] });
+        const cwd = [...this.wts.values()].find((w) => w.id === args[0])?.path ?? args[0].replace(/^.*?::/, "");
+        const sc: FakeScreen = { pane, wt: args[0], cwd, env: {}, lines: [], line: "", out: null };
+        this.screens.set(h, sc);
+        if (args[2]) this.typed(sc, `${args[2]}\r`);
         return ok(`${h}\t${pane}\n`);
       }
       case "studio-start": {   // <wt> <account> <model> <effort> <window> <prompt>: a new agent tab, its handle
@@ -246,7 +282,12 @@ export class FakeBackend implements Orca {
         const q = this.pokes.get(args[0]) ?? [], code = q.length ? q.shift()! : 0;
         return code === 0 || code === 3 ? { code, out: "", err: "" } : no(`orca adapter: poke: terminal send failed for ${args[0]}`, code);
       }
-      case "wt-set-parent": this.parents.set(args[0], args[1]); return ok();
+      case "wt-set-parent": {
+        this.parents.set(args[0], args[1]);
+        const w = [...this.wts.values()].find((x) => x.id === args[0]);
+        if (w) w.parent = args[1];
+        return ok();
+      }
       case "poke-terminal": return ok();
       case "pause-deliver": {
         const seen = via.retry ? this.receipts.get(via.retry) : undefined;
@@ -362,8 +403,29 @@ export class FakeBackend implements Orca {
         if (this.closeFails.has(args[0])) return no(`orca adapter: terminal-close ${args[0]} failed: terminal_busy`);
         this.shells = this.shells.filter((t) => t.handle !== args[0]);
         this.agents = this.agents.filter((a) => a.handle !== args[0]);
+        this.screens.delete(args[0]);
         return ok(`terminal-close: closed ${args[0]}\n`);
       }
+      case "terminal-panes": return ok([
+        ...[...this.screens].map(([h, sc]) => `${h}\t${sc.wt}\t${sc.pane}\t${sc.out ?? "-"}\n`),
+        ...this.agents.map((a) => `${a.handle}\t${a.wt}\t\t-\n`),
+        ...this.shells.map((t) => `${t.handle}\t${t.wt}\t\t${t.out ?? "-"}\n`),
+      ].join(""));
+      case "terminal-type": {   // <handle> <text> [enter]
+        const sc = this.screens.get(args[0]);
+        if (!sc) return no(`orca adapter: terminal-type: terminal send failed for ${args[0]}: terminal_not_found`);
+        this.typed(sc, args[1] + (args[2] === "enter" ? "\r" : ""));
+        return ok("accepted\n");
+      }
+      case "terminal-read": {   // <handle> [screen|stream] [limit]
+        const sc = this.screens.get(args[0]);
+        if (!sc) return no(`{"ok":false,"error":{"code":"terminal_not_found"}}`, 3);
+        let lines = [...sc.lines, `$ ${sc.line}`];
+        if (args[1] === "screen") lines = lines.slice(-24);
+        if (/^[1-9][0-9]*$/.test(args[2] ?? "")) lines = lines.slice(-Number(args[2]));
+        return ok(`${lines.join("\n")}\n`);
+      }
+      case "pane-state": { const st = this.paneStates.get(args[1]); return ok(st ? `${st}\n` : ""); }
       case "reply": {
         const [id, run, body] = args;
         if (!via.from || this.bound.get(run) !== via.from) return no(`error: consumer_fenced: This caller is not bound to Run ${run}.`);

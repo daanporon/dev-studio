@@ -1942,9 +1942,10 @@ async function liveAgent(ctx: Ctx, verb: string, wt: string): Promise<string> {
 
 /** The terminal verbs (U225). */
 const TERMINALS: Record<string, Verb> = {
-  /** <worktree_id> <title> -> "<handle>\t<pane key>" of a new plain shell terminal: the loop's sender terminal
-   *  for one Run (docs/spikes/loop-coordinator.md). The pane key (tabId:leafId) is what Orca matches the Run's
-   *  coordinator by; it is read back from `terminal list` (empty when not listed yet). */
+  /** <worktree_id> <title> [command] -> "<handle>\t<pane key>" of a new plain shell terminal: the loop's sender
+   *  terminal for one Run (docs/spikes/loop-coordinator.md), or an orca-lite member's tab (bin/backend/orca-lite.ts,
+   *  whose env rides on [command], typed into the new shell). The pane key (tabId:leafId) is what Orca matches the
+   *  Run's coordinator by; it is read back from `terminal list` (empty when not listed yet). */
   async "terminal-create"(ctx, a) {
     // A missing argument fails the create's subshell, then the failure line (whose own $1 may be unbound).
     if (!need(ctx, a, 2)) {
@@ -1952,7 +1953,8 @@ const TERMINALS: Record<string, Verb> = {
       ctx.err(`orca adapter: terminal-create failed in ${a[0]}\n`);
       return 1;
     }
-    const c = await orca(ctx, ["terminal", "create", "--worktree", `id:${a[0]}`, "--title", a[1], "--json"]);
+    const cmd = blank(a[2]);
+    const c = await orca(ctx, ["terminal", "create", "--worktree", `id:${a[0]}`, "--title", a[1], ...(cmd ? ["--command", cmd] : []), "--json"]);
     const j = jq(c.out, (d, emit) => some(emit, idx(idx(idx(d, "result"), "terminal"), "handle")));
     jqErrs(ctx, j);
     if (pipe(c.code, jqE(j)) !== 0) { ctx.err(`orca adapter: terminal-create failed in ${a[0]}\n`); return 1; }
@@ -2061,6 +2063,72 @@ const TERMINALS: Record<string, Verb> = {
     if (r.code !== 0) { say("failed"); return 1; }
     if (jqr(out, (d, emit) => { if (idx(d, "ok") === false) emit("false"); }) === "false") { say("refused"); return 1; }
     ctx.out(`terminal-close: closed ${a[0]}\n`);
+    return 0;
+  },
+  /** -> "<handle>\t<worktreeId>\t<tabId:leafId>\t<last output, epoch s|->" per terminal Orca lists that is not
+   *  orphaned, agent or plain shell alike (the orca-lite backend's list, bin/backend/orca-lite.ts); an empty pane key
+   *  or worktree when Orca gives none. Exit 1 when the list can't be read or parsed. */
+  async "terminal-panes"(ctx) {
+    const l = await orca(ctx, LIST, "drop");
+    let ts: unknown;
+    try { ts = l.code === 0 ? (JSON.parse(l.out) as { result?: { terminals?: unknown } }).result?.terminals : null; } catch { ts = null; }
+    if (!Array.isArray(ts)) { ctx.err("orca adapter: terminal-panes could not read the terminal list\n"); return 1; }
+    const flat = (v: unknown) => (typeof v === "string" ? v.replace(/[\t\n]/g, " ") : "");
+    for (const t of ts as Record<string, unknown>[]) {
+      if (!t || typeof t.handle !== "string" || t.orphaned === true) continue;
+      const pane = t.tabId && t.leafId ? `${flat(t.tabId)}:${flat(t.leafId)}` : "";
+      const out = typeof t.lastOutputAt === "number" ? String(Math.floor(t.lastOutputAt / 1000)) : "-";
+      ctx.out(`${flat(t.handle)}\t${flat(t.worktreeId)}\t${pane}\t${out}\n`);
+    }
+    return 0;
+  },
+  /** <handle> <text> [enter] -> write <text> to that terminal as is (control bytes pass through), plain shell or
+   *  agent, with Enter after it when `enter` is given; prints `turn_started` when Orca's receipt saw the agent start
+   *  a turn (it waits up to 10 s for one), else `accepted` (orca-lite's terminal.send). Exit 1 = the send failed. */
+  async "terminal-type"(ctx, a) {
+    if (!need(ctx, a, 2)) return 1;
+    const enter = a[2] === "enter";
+    const r = await orca(ctx, ["terminal", "send", "--terminal", a[0], "--text", a[1], ...(enter ? ["--enter", "--wait-submit", "10"] : []), "--json"], "keep");
+    let d: { ok?: unknown; result?: { send?: { prompt?: { stages?: unknown } } } } | null = null;
+    try { d = JSON.parse(chomp(r.out)); } catch { d = null; }
+    if (r.code !== 0 || d?.ok === false) { ctx.err(`orca adapter: terminal-type: terminal send failed for ${a[0]}: ${chomp(r.out + r.err).slice(0, 300)}\n`); return 1; }
+    const stages = d?.result?.send?.prompt?.stages;
+    ctx.out(`${enter && Array.isArray(stages) && stages.includes("turn_started") ? "turn_started" : "accepted"}\n`);
+    return 0;
+  },
+  /** <handle> [screen|stream] [limit] -> that terminal's output, one line each: the rendered screen with `screen`,
+   *  else the accumulated output (escape sequences stripped), at most [limit] lines (orca-lite's terminal.read).
+   *  Exit 3 when Orca has no such terminal, 1 when the read failed. */
+  async "terminal-read"(ctx, a) {
+    if (!need(ctx, a, 1)) return 1;
+    const limit = /^[1-9][0-9]*$/.test(a[2] ?? "") ? a[2] : "";
+    const r = await orca(ctx, ["terminal", "read", "--terminal", a[0], ...(a[1] === "screen" ? ["--screen"] : []), ...(limit ? ["--limit", limit] : []), "--json"], "keep");
+    let d: { ok?: unknown; result?: { terminal?: { tail?: unknown } } } | null = null;
+    try { d = JSON.parse(chomp(r.out)); } catch { d = null; }
+    const tail = d?.result?.terminal?.tail;
+    if (r.code === 0 && Array.isArray(tail)) {
+      const lines = tail.map((x) => (typeof x === "string" ? x : ""));
+      ctx.out(lines.length ? `${lines.join("\n")}\n` : "");
+      return 0;
+    }
+    if (/not_found/.test(r.out + r.err)) return 3;
+    ctx.err(`orca adapter: terminal-read failed for ${a[0]}: ${chomp(r.out + r.err).slice(0, 300)}\n`);
+    return 1;
+  },
+  /** <worktree_id> <tabId:leafId> -> the state `worktree ps` gives the agent in that pane (`working`, `waiting`,
+   *  `done`, …), or nothing when ps lists no agent there: Orca reports a plain tab's agent only in a worktree
+   *  `orca worktree create` made (docs/backends/orca-probe.md Q5). orca-lite's agent.state. */
+  async "pane-state"(ctx, a) {
+    if (!need(ctx, a, 2)) return 1;
+    for (const d of await psIns(ctx)) {
+      const wts = (d as { result?: { worktrees?: unknown } })?.result?.worktrees;
+      if (!Array.isArray(wts)) continue;
+      for (const w of wts as { worktreeId?: unknown; agents?: unknown }[]) {
+        if (w?.worktreeId !== a[0] || !Array.isArray(w.agents)) continue;
+        const ag = (w.agents as { paneKey?: unknown; state?: unknown }[]).find((x) => x?.paneKey === a[1]);
+        if (ag && typeof ag.state === "string") { ctx.out(`${ag.state}\n`); return 0; }
+      }
+    }
     return 0;
   },
   /** <worktree-selector> [keep-handle|--strict] -> close EVERY terminal TAB on this worktree in ONE native call
