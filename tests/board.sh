@@ -1478,6 +1478,12 @@ render "$LBL" --json > "$TMP/disk.json"
 jt "disk U3: a closed spell leaves no disk field"         "$TMP/disk.json" 'has("disk") | not'
 dbw "DELETE FROM observed_alerts WHERE id LIKE 'sweep-disk-pressure%'"
 
+# loop-tick-8s U4: a slow-ticks card (sweep-tick-alarm.slow-<n>) is a Needs-you card, not a loop note.
+dbw "INSERT INTO observed_alerts (project, id, doc, observed_at) VALUES ('$LBL', 'sweep-tick-alarm.slow-1', '{\"id\":\"sweep-tick-alarm.slow-1\",\"asker\":\"sweep\",\"title\":\"Loop ticks slow: 9.0 s\",\"question\":\"Loop ticks slow: 9.0 s a tick over the last 3 windows (limit 6.0 s), slow for 20 min. Slowest steps a tick: observe:orca 4.5 s.\",\"since\":\"2026-11-20T09:00:00Z\"}', $DNOW)"
+render "$LBL" --json > "$TMP/tickalarm.json"
+jt "tick-alarm U4: the card is in Needs-you" "$TMP/tickalarm.json" '([.needs_you[] | select(.id=="sweep-tick-alarm.slow-1")] | length == 1) and ([.loop_notes[] | select(.id=="sweep-tick-alarm.slow-1")] | length == 0)'
+dbw "DELETE FROM observed_alerts WHERE id LIKE 'sweep-tick-alarm%'"
+
 # reasked-question-shows-answered U1: an answered earlier asking of a re-asked question (same id, status answered)
 # changes nothing on the text board: the open asking is printed once, as before.
 RQ="$(bun -e 'const {Database}=require("bun:sqlite");const d=new Database(process.argv[1],{readonly:true});const r=d.query("SELECT squad, id, question FROM questions WHERE project = ? AND status = \x27open\x27 AND question IS NOT NULL ORDER BY seq LIMIT 1").get(process.argv[2]);console.log(r?JSON.stringify(r):"")' "$DBR/loop.db" "$LBL")"
