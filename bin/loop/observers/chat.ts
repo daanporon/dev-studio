@@ -8,9 +8,11 @@
 // one `screen` turn from the observed screen tail. A new provider is a new reader file in READERS.
 //
 // Reads are incremental: one stat per member, and only the bytes appended since `read_to` when the
-// size moved (an idle squad's tick reads no content and writes no row). A first read, a new path or
-// more than READ_WINDOW appended starts at most READ_WINDOW before the end, never at byte 0, and drops
-// the cut first line; a half-written last line is held back until it completes. Text is redacted
+// size moved (an idle squad's tick reads no content and writes no row). An append to a followed path is
+// read whole, in chunks of READ_WINDOW with a half line carried across chunks (a compaction can write
+// 1 MB at once). A first read, a new path, a shrunk file or an append over FOLLOW_MAX starts at most
+// READ_WINDOW before the end, never at byte 0, and drops the cut first line; a half-written last line
+// is held back until it completes. Text is redacted
 // before it is written (chat/redact.ts) and capped to 20 turns / 16 KB (chat/turns.ts).
 // A member that ended keeps its row with gone_at set and turns emptied; no row is deleted.
 import { closeSync, openSync, readSync, statSync } from "node:fs";
@@ -25,6 +27,7 @@ export type Reader = { agent: string; pathFor(store: Store, project: string, wt:
 export const READERS: Reader[] = [claude, codex];
 
 export const READ_WINDOW = 256 * 1024;
+export const FOLLOW_MAX = 32 * 1024 * 1024;   // an append over this jumps to the end window, as before
 
 function chunk(p: string, from: number, len: number): Buffer {
   const fd = openSync(p, "r");
@@ -50,8 +53,10 @@ function liveMembers(store: Store, project: string): Live[] {
     .map((r) => ({ ...r, worker: store.get("observed_workers", { project, wt: r.wt }) as Row }));
 }
 
-export function chatObserver(opts: { log?: (line: string) => void } = {}): Observer {
+export function chatObserver(opts: { log?: (line: string) => void; followMax?: number } = {}): Observer {
   const log = opts.log ?? ((l: string) => console.error(l));
+  const followMax = opts.followMax ?? FOLLOW_MAX;
+  const jumped = new Set<string>();   // paths whose over-ceiling append was logged
   const failing = new Set<string>();   // paths whose last read failed: logged once until a read works
 
   function write(store: Store, project: string, wt: string, prev: Row | null, at: number, set: Row & { turns: Turn[] }) {
@@ -70,13 +75,34 @@ export function chatObserver(opts: { log?: (line: string) => void } = {}): Obser
       return;
     }
     const readTo = same ? Number(prev.read_to ?? 0) : 0;
-    const follow = same && readTo <= size && size - readTo <= READ_WINDOW;
-    const from = follow ? readTo : Math.max(0, size - READ_WINDOW);
+    const follow = same && readTo <= size && size - readTo <= followMax;
+    if (follow) {
+      jumped.delete(path);
+      let pos = readTo, pending = Buffer.alloc(0), turns = remark(parseTurns(prev!.turns));
+      try {
+        while (pos < size) {
+          const b = chunk(path, pos, Math.min(READ_WINDOW, size - pos));
+          if (b.length === 0) break;
+          pos += b.length;
+          pending = pending.length ? Buffer.concat([pending, b]) : b;
+          const e = pending.lastIndexOf(0x0a) + 1;       // a half line is carried to the next chunk
+          if (e > 0) { turns = capTurns([...turns, ...reader.parse(pending.subarray(0, e).toString("utf8"))]); pending = pending.subarray(e); }
+        }
+      } catch (e) { return fail(path, e); }
+      failing.delete(path);
+      write(store, project, m.wt, prev, at, { agent: m.agent, source: "transcript", path, size, read_to: pos - pending.length, turns });
+      return;
+    }
+    if (same && readTo <= size && !jumped.has(path)) {
+      jumped.add(path);
+      log(`chat: ${path} grew ${Math.round((size - readTo) / 1048576)} MB in one tick; read the last ${READ_WINDOW / 1024} KB`);
+    }
+    const from = Math.max(0, size - READ_WINDOW);
     let buf: Buffer;
     try { buf = chunk(path, from, size - from); } catch (e) { return fail(path, e); }
     failing.delete(path);
-    // A start inside the file (not where the last read ended) begins mid-line: skip to the next line.
-    const nl = buf.indexOf(0x0a), skip = !follow && from > 0 ? (nl < 0 ? buf.length : nl + 1) : 0;
+    // A start inside the file begins mid-line: skip to the next line.
+    const nl = buf.indexOf(0x0a), skip = from > 0 ? (nl < 0 ? buf.length : nl + 1) : 0;
     const end = buf.lastIndexOf(0x0a) + 1;           // a half-written last line waits for its newline
     const text = end > skip ? buf.subarray(skip, end).toString("utf8") : "";
     const base = same && size >= readTo ? remark(parseTurns(prev.turns)) : [];
