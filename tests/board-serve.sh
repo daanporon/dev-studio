@@ -1062,6 +1062,8 @@ eq "chat-file: the answer's url and bytes" "$(jq -c '[.url, .bytes]' "$TMP/up.ou
 eq "chat-file: stored 0600 in 0700 folders" "$(stat -c %a "$CF/ans/$AID") $(stat -c %a "$CF/ans") $(stat -c %a "$CF")" "600 700 700"
 eq "chat-file: the same bytes again, the same name" "$(up a.png image/png)$(jq -r '.id' "$TMP/up.out")" "200$AID"
 eq "chat-file: and one file" "$(nfiles)" "1"
+touch -d '10 days ago' "$CF/ans/$AID"; up a.png image/png >/dev/null
+eq "chat-file: a repeat upload resets the image's age" "$(( $(date +%s) - $(stat -c %Y "$CF/ans/$AID") < 60 ))" "1"
 for t in d.jpg:image/jpeg e.webp:image/webp f.gif:image/gif; do
   f=${t%%:*}; ty=${t#*:}
   eq "chat-file: a ${ty#image/} is 200 as .${f#*.}" "$(up "$f" "$ty")$(jq -r '.id | split(".")[1]' "$TMP/up.out")" "200${f#*.}"
@@ -1075,6 +1077,8 @@ eq "chat-file: an SVG labelled png is 415" "$(up s.svg image/png)" "415"
 eq "chat-file: a PNG labelled jpeg is 415" "$(up b.png image/jpeg)$(jq -r '.error' "$TMP/up.out")" "415not a png/jpeg/webp/gif"
 head -c $((6 * 1024 * 1024)) /dev/zero | cat "$TMP/b.png" - > "$TMP/big.png"
 eq "chat-file: a 6 MiB body is 413"     "$(up big.png image/png)" "413"
+head -c $((5 * 1024 * 1024 + 1 - $(wc -c < "$TMP/b.png"))) /dev/zero | cat "$TMP/b.png" - > "$TMP/over.png"
+eq "chat-file: 5 MiB + 1 byte is the handler's own 413" "$(up over.png image/png)$(jq -r '.error' "$TMP/up.out")" "413an image is at most 5 MiB"
 : > "$TMP/empty.png"
 eq "chat-file: an empty body is 400"    "$(up empty.png image/png)" "400"
 eq "chat-file: another project is 403"  "$(up b.png image/png ans wTh zzother)" "403"

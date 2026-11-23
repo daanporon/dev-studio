@@ -878,7 +878,7 @@ async function answer(req: Request) {
 // The page's fingerprint (U7): a hash of web/board.html, read per call (the file is small; a `git pull` that changes it
 // changes the fingerprint at once). It rides in the served page (<meta name="page-version">) and in /board.json
 // (`page_version`), so an open tab sees that the server's page code moved and offers a reload.
-const readPage = () => readFileSync(page).toString(); // the one file this server reads
+const readPage = () => readFileSync(page).toString(); // the one file this server reads, besides the chat images
 function pageVersion(): string {
   try { return createHash("sha1").update(readPage()).digest("hex").slice(0, 12); } catch { return ""; }
 }
