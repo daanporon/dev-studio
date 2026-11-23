@@ -14,7 +14,7 @@ import {
   HERDR_CAPS, HERDR_PROTOCOL, agentState, fetchHerdr, groupKey, herdrBackend, herdrConfig, herdrKey, metaTokens,
   rpc, startHerdr, tail, tokensMeta,
 } from "../../bin/backend/herdr.ts";
-import { stopServer, unitName } from "../../bin/backend/server-unit.ts";
+import { stopServer, stopServerSync, unitName } from "../../bin/backend/server-unit.ts";
 import { conformance } from "./backend-conformance.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "ds-hd-"));
@@ -113,9 +113,19 @@ if ("skip" in got) {
   describe("herdr server", () => { test.skip(`conformance and layout B (skipped: ${got.skip})`, () => {}); });
 } else {
   const bin = got.bin, home = join(dir, "home");
-  const srv = await startHerdr({ bin, dir: join(dir, "srv"), name: `test-herdr-${process.pid}-${Date.now()}`, home, shell: "/bin/bash" });
+  // A killed or timed-out run skips afterAll: an exit guard stops the units synchronously, and
+  // RuntimeMaxSec ends them even when the guard never ran (SIGKILL of the test process).
+  const MAX_RUNTIME_S = 1800;
+  process.env.DS_HERDR_MAX_RUNTIME_S = String(MAX_RUNTIME_S);
+  const srv = await startHerdr({ bin, dir: join(dir, "srv"), name: `test-herdr-${process.pid}-${Date.now()}`, home, shell: "/bin/bash", maxRuntimeS: MAX_RUNTIME_S });
   afterAll(() => stopServer(srv.handle));
   const svDir = join(dir, "sv"), svName = `test-herdr-sv-${process.pid}-${Date.now()}`, svLog = join(svDir, "server.log");
+  const guard = () => {
+    stopServerSync(srv.handle);
+    stopServerSync({ pid: 0, via: "systemd", unit: unitName(svName), log: svLog });
+  };
+  process.on("exit", guard);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { guard(); process.exit(1); });
 
   conformance({
     name: "herdr",
