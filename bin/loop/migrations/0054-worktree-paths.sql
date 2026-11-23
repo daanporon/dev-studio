@@ -220,10 +220,10 @@ SELECT 'local', b.path, b.project,
        NULLIF(b.parent_path, b.path), ob.branch, b.squad, b.role, 'orca', b.wt, unixepoch(), ob.gone_at
   FROM best b LEFT JOIN observed_worktrees ob ON ob.project = b.project AND ob.wt = b.wt
  WHERE b.rn = 1
-ON CONFLICT (host, path) DO UPDATE SET project = excluded.project, name = COALESCE(excluded.name, worktrees.name),
+ON CONFLICT (host, path) DO UPDATE SET project = excluded.project, name = excluded.name,
   parent_path = excluded.parent_path, branch = COALESCE(excluded.branch, worktrees.branch), squad = excluded.squad,
   role = excluded.role, orca_id = excluded.orca_id, gone_at = excluded.gone_at
- WHERE worktrees.provider = 'orca' AND (worktrees.project IS NOT excluded.project OR worktrees.name IS NOT COALESCE(excluded.name, worktrees.name)
+ WHERE worktrees.provider = 'orca' AND (worktrees.project IS NOT excluded.project OR worktrees.name IS NOT excluded.name
    OR worktrees.parent_path IS NOT excluded.parent_path OR worktrees.branch IS NOT COALESCE(excluded.branch, worktrees.branch)
    OR worktrees.squad IS NOT excluded.squad OR worktrees.role IS NOT excluded.role OR worktrees.orca_id IS NOT excluded.orca_id
    OR worktrees.gone_at IS NOT excluded.gone_at);
