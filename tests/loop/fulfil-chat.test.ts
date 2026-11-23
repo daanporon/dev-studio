@@ -389,4 +389,62 @@ describe("chat with images", () => {
     expect(String(result(s, many).error)).toContain("at most 4");
     expect(typed(orca)).toEqual([]);
   });
+
+  // studio-chat-queued-busy U4: Cancel and Send now.
+  const control = (s: Store, kind: "chat-cancel" | "chat-now", chatId: number) =>
+    Number(s.request(kind, { chat: chatId }, { project: "fx", squad: "demo", member: B }).row.id);
+
+  test("Cancel finishes a waiting chat as cancelled and types nothing; an already typed one is left", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    working(s, B, T);
+    const id = chat(s, "never mind");
+    await tick(T);
+    const c = control(s, "chat-cancel", id);
+    await tick(T + 1);
+    expect(req(s, id).done_at).not.toBeNull();
+    expect(result(s, id)).toEqual({ ok: false, state: "cancelled" });
+    expect(result(s, c)).toMatchObject({ ok: true, state: "cancelled" });
+    idleAt(s, B, T + 100);
+    await tick(T + 100);
+    expect(typed(orca)).toEqual([]);
+    // a typed chat: the control does nothing to it
+    const t = chat(s, "typed", B, T + 100);
+    await tick(T + 101);
+    expect(typed(orca)).toEqual([`${SAYS}typed`]);
+    const c2 = control(s, "chat-cancel", t);
+    await tick(T + 102);
+    expect(result(s, t)).toMatchObject({ ok: true, state: "turn started" });
+    expect(result(s, c2)).toMatchObject({ state: "already done" });
+  });
+
+  test("Send now skips the quiet window only: a transcript written 6 s ago holds a plain chat, not a `now` one", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    idleAt(s, B, T);
+    s.upsert("observed_transcripts", { path: "/x/b.jsonl" }, { project: "fx", wt: B, mtime: T - 6, observed_at: T });
+    const plain = chat(s, "plain");
+    await tick(T);
+    expect(result(s, plain)).toMatchObject({ state: "queued", why: "busy: transcript" });
+    expect(typed(orca)).toEqual([]);
+    control(s, "chat-now", plain);
+    await tick(T + 1);
+    await tick(T + 2);
+    expect(typed(orca)).toEqual([`${SAYS}plain`]);
+  });
+
+  test("Send now still waits for the screen read, the prompt and a working marker", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T - 6, tail: "│ ❯ half typed │\n", tail_at: T - 5, unread: 0, gone_at: null, observed_at: T });
+    const id = chat(s, "now please");
+    control(s, "chat-now", id);
+    await tick(T);
+    await tick(T + 1);
+    expect(result(s, id)).toMatchObject({ state: "queued", why: "text at the prompt" });
+    s.upsert("observed_workers", { project: "fx", wt: B }, { tail: "│ ❯ │\n", tail_at: T + 1 });
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "working", last_output_at: T + 2 });
+    await tick(T + 3);
+    expect(typed(orca)).toEqual([]);
+    idleAt(s, B, T + 10);
+    await tick(T + 10);
+    expect(typed(orca)).toEqual([`${SAYS}now please`]);
+  });
 });
