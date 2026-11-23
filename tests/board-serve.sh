@@ -996,6 +996,14 @@ eq "chat: an idle member is not working" "$(cq ans wTh)$(jq -c '.working' "$TMP/
 dbw "UPDATE observed_workers SET state = 'working' WHERE project = '$LBL' AND wt = 'wTh'"
 eq "chat: a member mid-turn is working" "$(cq ans wTh)$(jq -c '.working' "$TMP/chat.out")" "200true"
 dbw "UPDATE observed_workers SET state = 'idle' WHERE project = '$LBL' AND wt = 'wTh'"
+# chat-role-switcher U1: `crew` is the squad's live members in the Crew box's order, each with its mail counts and the
+# time of its newest assistant text turn (null without one or on a screen tail); `[]` for the Studio.
+jt "chat: crew lists the live members with counts" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '(.crew | length) >= 1 and ([.crew[] | has("wt","label","role","unread","reply_due","reply_at")] | all) and ((.crew[] | select(.wt == "wTh") | .reply_at) == 2)'
+jt "chat: a screen-tail member's reply_at is null" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '([.crew[] | select(.wt == "wTester") | .reply_at] | all(. == null))'
+jt "chat: the Studio has no crew" <(cq _studio wStudio >/dev/null; cat "$TMP/chat.out") '.crew == []'
+dbw "UPDATE members SET status = 'gone' WHERE project = '$LBL' AND squad = 'ans' AND wt = 'wTester'"
+jt "chat: a gone member is left out of crew" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '([.crew[] | select(.wt == "wTester")] | length) == 0'
+dbw "UPDATE members SET status = 'running' WHERE project = '$LBL' AND squad = 'ans' AND wt = 'wTester'"
 eq "chat: GET an unknown member is 404" "$(cq ans nope)" "404"
 eq "chat: GET a member of another squad is 404" "$(cq board-builders wTh)" "404"
 eq "chat: GET without wt is 400"       "$(curl -s -o /dev/null -w '%{http_code}' "$C?project=$LBL&topic=ans")" "400"

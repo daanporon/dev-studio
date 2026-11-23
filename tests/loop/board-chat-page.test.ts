@@ -37,12 +37,13 @@ function panel(reply: any = { agent: "claude", source: "transcript", turns: [], 
   const h = hooks(), posts: any[] = [], fetches: string[] = [], timers: any[] = [], cleared: any[] = [], listeners = new Map<string, any>();
   let closed = 0;
   const marks = new Map<string, any>(), lstoreStub = { get: (k: string, d: any) => marks.has(k) ? marks.get(k) : d, set: (k: string, v: any) => { marks.set(k, v); } };
+  const drafts = new Map<string, any>(), storeStub = { get: (k: string, d: any) => drafts.has(k) ? JSON.parse(drafts.get(k)) : d, set: (k: string, v: any) => { drafts.set(k, JSON.stringify(v)); }, del: (k: string) => { drafts.delete(k); } };
   const fetchStub = async (url: string) => { fetches.push(url); return { ok: true, status: 200, json: async () => reply }; };
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
-  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore",
-    `${chatSrc} return { ChatPanel, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey };`);
+  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store",
+    `${chatSrc} return { ChatPanel, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
   const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); return { ok: true, id: 7 }; }, fetchStub,
-    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub);
+    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub);
   let seen = 0;
   const props: any = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; }, onSeen: () => { seen++; } };
   const render = () => { h.reset(); return mod.ChatPanel(props); };

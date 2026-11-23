@@ -469,6 +469,13 @@ it is paused. A chat to a Builder, Tester, Reviewer or Researcher also lands in 
 squad's `crew-chat.md`, so its Lead sees it on its next tick. The panel reads
 `GET /api/chat` every 3 s while open; `board.json` carries no turns.
 
+**Switch members inside the Chat panel.** With two or more live members in the squad, the panel
+shows a tab per member under its title (lead, thinker, each builder, …) in the Crew box's order, each
+with the box's mail count and a dot when that member wrote a reply you have not seen in this browser;
+one click shows that member's chat without closing the panel. On a phone the title's name is a button
+(`<member> ▾`, with the other members' mail and a dot) that opens the same list. What you typed for
+each member stays with it (per browser tab, kept across a switch, a close and a reload) until you send it.
+
 **Chat with the Studio from the board.** The board's top bar has a **💬 Studio** button (one per
 project on a host-wide board) that opens the same Chat panel on the project's Studio, titled
 `Chat · Studio · <project>`. The loop types your line in once the Studio has been quiet for two

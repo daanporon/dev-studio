@@ -271,6 +271,9 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .chat-down{position:absolute;right:18px;bottom:10px;border-radius:50%;width:32px;height:32px;padding:0}
 .chat-in{flex:1 1 100%;min-width:0;resize:none;font:13px/1.45 var(--sans);padding:7px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;max-height:calc(6 * 1.45em + 16px);overflow-y:auto}
 .chat-left{font:11px var(--mono);color:var(--dim)} .chat-left.low{color:var(--amber)}
+.chat-tabs{flex:none;display:flex;gap:4px;padding:6px 12px 0;overflow-x:auto;white-space:nowrap;border-bottom:1px solid var(--line)} .chat-tab{flex:none;display:inline-flex;align-items:center;gap:2px;max-width:200px;padding:5px 10px;border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;background:transparent;color:var(--mut);font:600 12px var(--mono);cursor:pointer} .chat-tab.on{background:var(--panel2);color:var(--fg);border-color:var(--line)} .chat-tab:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+.chat-swlabel{min-width:0;overflow:hidden;text-overflow:ellipsis} .chat-new{display:inline-block;flex:none;width:8px;height:8px;margin-left:6px;border-radius:50%;background:var(--blue)} .chat-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .mhd .chat-sw{position:relative;display:inline-block;vertical-align:middle;max-width:60%}
+.chat-swbtn{display:inline-flex;align-items:center;max-width:100%;min-height:44px;padding:0 8px;font:600 13px var(--mono)} .chat-menu{position:absolute;z-index:60;top:100%;left:0;display:flex;flex-direction:column;gap:2px;min-width:220px;max-width:calc(100vw - 24px);padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4)} .chat-mi{display:flex;align-items:center;min-height:44px;text-align:left;border-color:transparent;background:transparent} .chat-mi[aria-checked="true"]{border-color:var(--line);background:var(--panel)}
 @media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px}}
 .qfoot .err{font-size:12px;color:var(--red)} .qfoot .ok{font-size:12px;color:var(--green)}
 /* Phone: every popup is a full-screen sheet (the box fills the viewport; only its body scrolls; header, tabs and footer stay put) and no input is under 16px, so a tap never zooms the page. */
@@ -405,6 +408,7 @@ const POLL_MS = 5000;
 const store = {
   get(k, d) { try { const v = sessionStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+  del(k) { try { sessionStorage.removeItem(k); } catch (e) {} },
 };
 const fmtAge = (min) => min == null ? "" : min >= 180 ? Math.floor(min / 60) + "h" : min + "m";
 const fmtTok = (v) => {
@@ -2069,25 +2073,56 @@ function chatTurn(r, source, i) {
 // One key and one meaning for every feature that shows a "new reply" dot.
 const chatSeenKey = (project, wt) => "b:chat-seen:" + project + "/" + wt;
 const chatReplyAt = (turns) => { for (let i = (turns || []).length - 1; i >= 0; i--) { const t = turns[i]; if (t && t.role === "assistant" && !t.tool && t.at != null) return t.at; } return null; };
+// The member switcher (chat-role-switcher U1): one tab per live member of the squad (`crew` of GET /api/chat), on a phone the
+// title's dropdown. The draft of each member lives in the tab's session storage, `{text}` (other keys, such as attachments,
+// stay as they are); the new-reply dot compares a member's `reply_at` with its seen mark (lstore, chatSeenKey).
+const chatDraftKey = (project, topic, wt) => "b:chat-draft:" + project + "/" + topic + "/" + wt;
+const chatDraft = (project, topic, wt) => { const d = store.get(chatDraftKey(project, topic, wt), null); return d && typeof d === "object" ? d : {}; };
+const chatDraftSet = (project, topic, wt, text) => {
+  const d = { ...chatDraft(project, topic, wt) };
+  if (text) d.text = text; else delete d.text;
+  if (Object.keys(d).length) store.set(chatDraftKey(project, topic, wt), d); else store.del(chatDraftKey(project, topic, wt));
+};
+const chatNewReply = (project, m) => m.reply_at != null && lstore.get(chatSeenKey(project, m.wt), m.reply_at) < m.reply_at;
+const chatMailTip = (m) => m.unread + " unread · " + m.reply_due + " waiting for a reply";
+const chatMemberAria = (m, mail, fresh) => m.label + (mail > 0 ? ", " + mail + " mail" : "") + (fresh ? ", new reply" : "");
 function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [text, setText] = useState(String(chatDraft(project, topic, wt).text || ""));
+  const [busy, setBusy] = useState("");          // the worktree a send is in flight for
   const [pinned, setPinned] = useState(true);   // the log follows the newest row until the operator scrolls up
-  const log = useRef(null), input = useRef(null);
-  const url = "api/chat?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(wt);
+  const [shown, setShown] = useState({ wt, label });   // the member this panel shows; the props are the one it opened on
+  const [crew, setCrew] = useState([]);
+  const [phone, setPhone] = useState(typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches);
+  const [menu, setMenu] = useState(false);
+  const log = useRef(null), input = useRef(null), cur = useRef(wt), tabs = useRef(null), menuOn = useRef(false), swBtn = useRef(null);
+  cur.current = shown.wt; menuOn.current = menu;
+  const url = "api/chat?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(shown.wt);
   const load = async () => {
+    const at = shown.wt;
     try {
       const r = await fetch(url, { cache: "no-store" });
       const b = await r.json().catch(() => ({}));
+      if (r.ok && Array.isArray(b.crew)) {
+        for (const m of b.crew) if (lstore.get(chatSeenKey(project, m.wt), null) == null) lstore.set(chatSeenKey(project, m.wt), m.reply_at == null ? 0 : m.reply_at);
+        setCrew(b.crew);
+      }
+      if (cur.current !== at) return;   // a slow answer for a member no longer shown
       if (!r.ok) return setErr(b.error || "HTTP " + r.status);
       setErr(""); setData(b);
-    } catch (e) { setErr(String(e.message || e)); }
+      const seenAt = topic === "_studio" ? null : chatReplyAt(b.turns);
+      if (seenAt != null) lstore.set(chatSeenKey(project, at), seenAt);
+    } catch (e) { if (cur.current === at) setErr(String(e.message || e)); }
   };
   useEffect(() => {
     load(); const t = setInterval(load, 3000);
-    const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };   // the card behind it keeps its own Esc for the next press
+    const key = (e) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (menuOn.current) { setMenu(false); if (swBtn.current && swBtn.current.focus) swBtn.current.focus(); return; }   // closes only the member list
+      onClose();   // the card behind it keeps its own Esc for the next press
+    };
     document.addEventListener("keydown", key);
     return () => { clearInterval(t); document.removeEventListener("keydown", key); };
   }, [url]);
@@ -2099,33 +2134,90 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
     const at = chatReplyAt(data.turns);
     if (at != null) { lstore.set(chatSeenKey(project, wt), at); if (onSeen) onSeen(); }
   }, [data]);
+  // The phone layout follows the screen width live (a rotate redraws).
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const mq = matchMedia("(max-width:600px)"), f = (e) => setPhone(!!e.matches);
+    mq.addEventListener ? mq.addEventListener("change", f) : mq.addListener && mq.addListener(f);
+    return () => { mq.removeEventListener ? mq.removeEventListener("change", f) : mq.removeListener && mq.removeListener(f); };
+  }, []);
+  // The member list closes on a tap outside it.
+  useEffect(() => {
+    if (!menu) return;
+    const f = (e) => { if (!(e.target && e.target.closest && e.target.closest(".chat-sw"))) setMenu(false); };
+    document.addEventListener("click", f);
+    return () => document.removeEventListener("click", f);
+  }, [menu]);
+  // The shown tab is scrolled into view on open and on switch.
+  useEffect(() => {
+    const el = tabs.current && tabs.current.querySelector && tabs.current.querySelector('[aria-selected="true"]');
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [shown.wt, crew.length > 1]);
   const onScroll = (e) => { const el = e.currentTarget, end = el.scrollHeight - el.scrollTop - el.clientHeight < 24; if (end !== pinned) setPinned(end); };
   const toEnd = () => { const el = log.current; if (el) el.scrollTop = el.scrollHeight; setPinned(true); };
   // The input grows with its text to about six lines (CSS max-height), then scrolls.
   const grow = (el) => { if (el && el.style) { el.style.height = "auto"; el.style.height = el.scrollHeight + 2 + "px"; } };
+  const switchTo = (m) => {
+    setMenu(false);
+    if (m.wt === shown.wt) return;
+    if (m.reply_at != null) lstore.set(chatSeenKey(project, m.wt), m.reply_at);
+    cur.current = m.wt; setShown({ wt: m.wt, label: m.label }); setData(null); setErr(""); setPinned(true);
+    setText(String(chatDraft(project, topic, m.wt).text || ""));
+    if (input.current && input.current.style) setTimeout(() => grow(input.current), 0);
+  };
   const send = async () => {
     const t = chatOneLine(text);
-    if (!t || busy) return;
-    setBusy(true); setErr("");
-    try { await post("api/chat", { project, topic, wt, text: t }); setText(""); grow(input.current); setPinned(true); load(); }
-    catch (e) { setErr("not sent: " + String(e.message || e)); }
-    finally { setBusy(false); }
+    const wt = shown.wt, to = wt;   // the member this line is for (shadows the opening member)
+    if (!t || busy === to) return;
+    setBusy(to); setErr("");
+    try {
+      await post("api/chat", { project, topic, wt, text: t });
+      store.del(chatDraftKey(project, topic, to));   // a send clears that member's whole draft
+      if (cur.current === to) { setText(""); grow(input.current); setPinned(true); load(); }
+    } catch (e) { if (cur.current === to) setErr("not sent: " + String(e.message || e)); }
+    finally { setBusy((v) => (v === to ? "" : v)); }
   };
   const turns = (data && data.turns) || [], sends = (data && data.sends) || [], rows = chatRows(turns, sends);
   const left = CHAT_MAX - text.length;
+  // The members to show: the live crew in the Crew box's order; the shown member always has a tab (first when it is not in `crew`).
+  const members = topic === "_studio" ? [] : crew.some((m) => m.wt === shown.wt) ? crew : [{ wt: shown.wt, label: shown.label, role: null, unread: 0, reply_due: 0, reply_at: null }, ...crew];
+  const multi = members.length >= 2;
+  const mail = (m) => m.unread + m.reply_due;
+  const others = members.filter((m) => m.wt !== shown.wt);
+  const othersMail = others.reduce((n, m) => n + mail(m), 0), othersNew = others.some((m) => chatNewReply(project, m));
+  const tabId = (i) => "chat-tab-" + i;
+  const shownAt = Math.max(0, members.findIndex((m) => m.wt === shown.wt));
+  const tabKey = (e) => {
+    const els = Array.from(e.currentTarget.querySelectorAll('[role="tab"]')), i = els.indexOf(e.target);
+    if (i < 0) return;
+    const j = e.key === "ArrowRight" ? (i + 1) % els.length : e.key === "ArrowLeft" ? (i + els.length - 1) % els.length : e.key === "Home" ? 0 : e.key === "End" ? els.length - 1 : -1;
+    if (j < 0) return;
+    e.preventDefault(); els[j].focus();
+  };
+  const dot = (m) => chatNewReply(project, m) && html`<span class="chat-new" title="New reply" aria-hidden="true"></span>`;
+  const badge = (n, tip) => n > 0 && html`<span class="msg-badge" title=${tip}>${n}</span>`;
   return html`<div class="modal chat-modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox chat">
-      <div class="mhd">${topic === "_studio" ? "Chat · Studio · " + project : "Chat · " + label}<span class="mut">${topic === "_studio" ? "" : " · " + topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
-      <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll}>${rows.length ? rows.map((r, i) => chatTurn(r, data.source, i))
+      <div class="mhd">${topic === "_studio" ? "Chat · Studio · " + project : html`Chat · ${phone && multi
+        ? html`<span class="chat-sw"><button class="btn chat-swbtn" ref=${swBtn} aria-haspopup="menu" aria-expanded=${menu ? "true" : "false"}
+            aria-label=${"Switch member, shown " + shown.label + (othersMail > 0 ? ", " + othersMail + " mail elsewhere" : "") + (othersNew ? ", new reply elsewhere" : "")}
+            onClick=${() => setMenu(!menu)}><span class="chat-swlabel">${shown.label}</span> ▾${badge(othersMail, "mail for the other members")}${othersNew && html`<span class="chat-new" title="New reply elsewhere" aria-hidden="true"></span>`}</button>
+          ${menu && html`<div class="chat-menu" role="menu">${members.map((m) => html`<button key=${m.wt} class="btn chat-mi" role="menuitemradio" aria-checked=${m.wt === shown.wt ? "true" : "false"}
+            aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))} onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label}</span>${badge(mail(m), chatMailTip(m))}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}</span>`
+        : shown.label}`}<span class="mut chat-sub">${topic === "_studio" ? "" : " · " + topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
+      ${multi && !phone && html`<div class="chat-tabs" role="tablist" aria-label="Members of this squad" ref=${tabs} onKeyDown=${tabKey}>${members.map((m, i) => html`<button key=${m.wt} id=${tabId(i)} class=${"chat-tab" + (m.wt === shown.wt ? " on" : "")} role="tab"
+        aria-selected=${m.wt === shown.wt ? "true" : "false"} tabindex=${m.wt === shown.wt ? 0 : -1} title=${m.label} aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))}
+        onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label.length > 14 ? m.label.slice(0, 13) + "…" : m.label}</span>${badge(mail(m), chatMailTip(m))}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}
+      <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${rows.length ? rows.map((r, i) => chatTurn(r, data.source, i))
         : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
         ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
         ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
       <div class="qfoot">
-        <textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX} enterkeyhint="send" value=${text} placeholder=${"Message " + label + " (typed into its terminal when it is idle; Enter sends)"}
-          onInput=${(e) => { setText(e.target.value); grow(e.target); }}
+        <textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX} enterkeyhint="send" value=${text} placeholder=${"Message " + shown.label + " (typed into its terminal when it is idle; Enter sends)"}
+          onInput=${(e) => { setText(e.target.value); grow(e.target); chatDraftSet(project, topic, shown.wt, e.target.value); }}
           onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (!e.shiftKey) send(); } }}></textarea>
         <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left} left</span><span class="sp"></span>
-        <button class="btn pri" disabled=${busy || !chatOneLine(text)} onClick=${send}>${busy ? "Sending…" : "Send"}</button>
+        <button class="btn pri" disabled=${busy === shown.wt || !chatOneLine(text)} onClick=${send}>${busy === shown.wt ? "Sending…" : "Send"}</button>
         ${err && html`<span class="err">${err}</span>`}
       </div>
     </div></div>`;
