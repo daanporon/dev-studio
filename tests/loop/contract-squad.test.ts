@@ -24,7 +24,7 @@ const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
 const T = 1_800_000_000;
 const SQ = "ontmux";
-const ENV = ["DS_LOOP_RETRY_S", "DS_WORKTREE_ROOT", "DS_CLAUDE_SYSTEM_JSON_DIR"] as const;
+const ENV = ["DS_LOOP_RETRY_S", "DS_WORKTREE_ROOT", "DS_CLAUDE_SYSTEM_JSON_DIR", "DS_TOKEN_CACHE"] as const;
 
 const temps: string[] = [], stores: Store[] = [];
 const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
@@ -52,6 +52,7 @@ async function rig(caps: Partial<Capabilities> = {}, o: { extra?: Reconciler[] }
   process.env.DS_LOOP_RETRY_S = "1";
   process.env.DS_WORKTREE_ROOT = join(d, "wts");
   process.env.DS_CLAUDE_SYSTEM_JSON_DIR = home;
+  process.env.DS_TOKEN_CACHE = "0";   // the tokens reconciler's background scan must not make state/loop after the rig is removed
   const s = open(state); stores.push(s);
   importJson(s);
   for (const [role, value] of [["lead", "claude sonnet always"], ["thinker", "claude opus ondemand"], ["builder", "claude opus ondemand"]] as const)
