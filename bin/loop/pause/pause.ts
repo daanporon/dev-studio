@@ -150,6 +150,15 @@ export function checkpointHash(file: string, generation: string): string {
   if (!line || !line.split(`checkpoint ${generation}: `)[1]?.trim()) throw new Error("pause: missing generation-bound journal checkpoint");
   return createHash("sha256").update(line).digest("hex");
 }
+// The terminal this process runs in, as a pause row names it: the Orca handle, else (a squad off Orca,
+// U12b: no handle) the live terminal of the contract observer whose generation is DS_GEN, in DS_WT's folder.
+export function sessionOf(store: Store, me: { handle: string | null; gen: string | null; wt: string | null }): string | null {
+  if (me.handle) return me.handle;
+  if (!me.gen || !me.wt) return null;
+  const rows = store.db.query("SELECT handle, doc FROM observed_terminals WHERE wt = ? AND gone_at IS NULL").all(`local::${me.wt.replace(/\/+$/, "")}`) as Row[];
+  const hit = rows.filter((r) => { try { return JSON.parse(String(r.doc ?? "{}")).gen === me.gen; } catch { return false; } });
+  return hit.length === 1 ? String(hit[0].handle) : null;
+}
 export function acknowledge(store: Store, t: Target, generation: string, session: string, dispatch: string, file: string, at: number): Row {
   return store.tx(() => {
     const row = store.get("pause_members", memberKey(t));

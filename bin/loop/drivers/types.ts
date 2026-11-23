@@ -32,7 +32,7 @@ export type ContractSeat = {
   // terminal.create, then the launch line typed in it. The call's retry id is its DS_GEN: a replay
   // first looks for a terminal of that generation (terminal.list) and makes none when it finds one.
   start(req: Omit<Request<"terminal.create">, "env"> & { env?: Record<string, string> }, meta: StartMeta): Promise<{ ok: true; terminal: Terminal } | { ok: false; error: string; busy?: boolean }>;
-  close(cwd: string): Promise<{ ok: boolean; error?: string }>;   // every terminal in that folder
+  close(cwd: string, id?: string): Promise<{ ok: boolean; error?: string }>;   // every terminal in that folder (only `id` when given)
   ask<O extends Op>(op: O, req: Request<O>): Promise<Answer<O>>;
   worktree(m: Member): Promise<{ ok: true; path: string } | { ok: false; error: string }>;   // made through the squad's provider
   settings(role: string, path: string): string[];   // the claude `--settings` args (claude-launch.ts claudeSettings)

@@ -310,6 +310,18 @@ backend (U11, "Started" below).
     failed list marks nothing. The decider reads the walk alone (`walkReality`), and the finish row
     (`ds finish`, of the member's generation) stands in for Orca's dispatch: it ends a one-shot role,
     retires a Tester, lets a done Builder retire and carries the Lead's failed / no-PR report.
+  - **Pause, Lead health, guards (U12b).** A pause snapshots the member from its member row and the
+    observer's rows (session = its terminal id, dispatch `-`, no dispatch refusal), types the checkpoint
+    with `terminal.send` and closes with `terminal.close` through the seat; the ack takes `-` for the
+    dispatch. Liveness reads a Lead's unread mail as its unread `messages` rows (`rowsUnread`), so a
+    Lead idle with mail unread is poked and then carded or restarted as "not responding" exactly as on
+    Orca (the board's `leadVerdict` too). The observer also lists every other terminal in a member's
+    folder (`observed_terminals`, `doc.extra`): one with no `DS_GEN` is a plain shell, a `stray` once
+    quiet for `STRAY_QUIET`, closed only while `agent.state` says idle and carded otherwise (on
+    `state: none` the card says the backend cannot tell); one with another generation is a second agent,
+    a `duplicate`, closed once it is not busy. Both fulfillers read `terminal.list` again before a close
+    (`squad/contract-terminal.ts`). The board's failed-report reader matches the generation's episode.
+    `tests/loop/contract-guards.test.ts`.
   - **Role scripts (U11b).** See "Role scripts off Orca" below.
   - **Not yet.** `nesting.ts` skips such a squad (only Orca moves a worktree under a parent).
 

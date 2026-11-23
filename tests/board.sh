@@ -1264,8 +1264,8 @@ has "studio: the line names the account" "$st" "@acct-studio"
 # prompt reads idle, the Builder that printed just now working, the Thinker with no terminal gone.
 CL="zztmux_$$"; CR="$TMP/contract-root"; mkdir -p "$CR/$CL/squads"
 cwt(){ printf 'local::/tmp/zz-%s-%s' "$CL" "$1"; }
-printf '{"topic":"ontmux","status":"running","type":"feature","members":[{"role":"lead","wt":"%s"},{"role":"builder","suffix":"u1","wt":"%s"},{"role":"thinker","wt":"%s"}],"units":[],"worktrees":["%s","%s","%s"]}\n' \
-  "$(cwt lead)" "$(cwt builder-u1)" "$(cwt thinker)" "$(cwt lead)" "$(cwt builder-u1)" "$(cwt thinker)" > "$CR/$CL/squads/ontmux.json"
+printf '{"topic":"ontmux","status":"running","type":"feature","members":[{"role":"lead","wt":"%s"},{"role":"builder","suffix":"u1","wt":"%s"},{"role":"thinker","wt":"%s"}],"units":[{"slug":"u1","status":"dispatched","builder_wt":"%s"}],"worktrees":["%s","%s","%s"]}\n' \
+  "$(cwt lead)" "$(cwt builder-u1)" "$(cwt thinker)" "$(cwt builder-u1)" "$(cwt lead)" "$(cwt builder-u1)" "$(cwt thinker)" > "$CR/$CL/squads/ontmux.json"
 DS_STATE_ROOT="$CR" bun "$ROOT/tests/board-contract-db.ts" "$CL"
 DS_STATE_ROOT="$CR" PATH="$NP" "$ROOT/bin/board/board.sh" "$CL" --json > "$TMP/contract.json"
 jt "tmux squad: on the tmux backend" "$TMP/contract.json" '.squads[] | select(.topic=="ontmux") | .backend == "tmux"'
@@ -1273,6 +1273,9 @@ jt "tmux squad: each member's state from the contract observer" "$TMP/contract.j
   '[.squads[] | select(.topic=="ontmux") | .members[] | {label, state}] == [{"label":"lead","state":"idle"},{"label":"builder-u1","state":"working"},{"label":"thinker","state":"gone"}]'
 ct="$(DS_STATE_ROOT="$CR" PATH="$NP" "$ROOT/bin/board/board.sh" "$CL" 2>&1)"
 has "tmux squad: the text board names the backend" "$ct" "on:tmux"
+# U12b: with no dispatch, the Builder's no-PR report is found by its generation, and the Builder still reads working.
+jt "tmux squad: a Builder that ended with no PR waits on its Lead (no dispatch)" "$TMP/contract.json" \
+  '.squads[] | select(.topic=="ontmux") | .units[] | select(.slug=="u1") | .wait_label == "waiting · Lead · ended with no PR"'
 has "tmux squad: the text board shows the Builder working" "$ct" "builder-u1                                 working"
 # chat-with-studio U1: the entry carries the Crew box's mail count (a message stored under squad _studio, role studio),
 # whether it is mid-turn and the time of its newest assistant text turn; a quiet Studio has 0 / false / null.

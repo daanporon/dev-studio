@@ -2,7 +2,8 @@
 // the tmux backend (squads.backend, written before its squad file is imported, as the spawn writes it)
 // and one contract observer tick (observers/contract.ts) over the fake contract with `state: none`, the
 // way the loop reads a tmux squad: the Lead's agent sits at an empty prompt (idle), the Builder's terminal
-// printed just now (working), the Thinker has no terminal (gone). The squad file is
+// printed just now (working), the Thinker has no terminal (gone). U12b: unit u1's Builder ended with no PR.
+// The squad file is
 // <root>/<label>/squads/ontmux.json, members at /tmp/zz-<label>-{lead,builder-u1,thinker}.
 import { open } from "../bin/loop/core/store.ts";
 import { Loop } from "../bin/loop/core/tick.ts";
@@ -26,4 +27,9 @@ const walk = async () => [at("lead"), at("builder-u1")].map((cwd, i) => ({ cwd, 
 const loop = new Loop(s, { observers: [contractObserver({ backends: () => ({ backend: fake, caps: fake.caps }), walk })], reconcilers: [] }, { act() {} }, { projects: () => [label] });
 loop.boot(now);
 await loop.tick(now);
+// U12b: the Builder of unit u1 (generation g1) ended with no PR; liveness filed the Lead's report under its
+// generation, as off Orca there is no dispatch to name (liveness.ts idleBuilder).
+s.db.run("UPDATE members SET gen = 'g1' WHERE project = ? AND wt = ?", [label, `local::${at("builder-u1")}`]);
+s.db.run(`INSERT INTO episodes (project, subject, kind, squad, started_at, episode_key, state, source, observed_at)
+  VALUES (?, 'frep.builder.idle', 'idle', 'ontmux', ?, 'failed|u1|gen:g1', 'failed_report', 'test', ?)`, [label, now, now]);
 s.close();

@@ -93,6 +93,7 @@ import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioView } from "../s
 import { memo } from "../capacity/walk-memo.ts";
 import { onContract } from "../squad/backend.ts";
 import { finishOf } from "../squad/finish-read.ts";
+import { UNREAD } from "../messages/messages.ts";
 
 export const POKE_TEXT = "dev-studio loop: you went quiet with unread messages. Check your inbox now and carry on with your work.";
 export const QUIET_POKE_TEXT = "dev-studio loop: you have been working with no output for a while — are you stuck? If you are, ask your Lead; if not, carry on with your work.";
@@ -415,12 +416,22 @@ export function longStepOpen(store: Store, project: string, wt: string, now: num
   return cap > 0 && now - out < cap * 60 + extra && stepOpen(store, wt);
 }
 
+// U12b: the unread mail of a member of a squad off Orca (no Run, no inbox count on its worker row): its
+// unread `messages` rows (UNREAD). null for a member on Orca, whose worker row's `unread` is Orca's count.
+export function rowsUnread(store: Store, project: string, wt: string): number | null {
+  const m = store.db.query("SELECT squad, role, suffix FROM members WHERE project = ? AND wt = ? ORDER BY id DESC").get(project, wt) as Row | null;
+  if (!m || !onContract(store, project, String(m.squad))) return null;
+  const r = store.db.query(`SELECT COUNT(*) AS n FROM messages m WHERE m.project = ? AND m.squad = ? AND m.to_role = ? AND m.to_suffix = ? AND ${UNREAD}`)
+    .get(project, String(m.squad), String(m.role), String(m.suffix ?? "")) as { n: number };
+  return r.n;
+}
+
 // The board's read of a Lead: the verdict liveness.broken() would reach for it, from the rows
 // alone (writes nothing). null = nothing wrong (or a case the reconciler also leaves alone).
 export type LeadVerdict = { verdict: "not responding" | "hung"; since: number };
 export function leadVerdict(store: Store, project: string, wt: string, now: number): LeadVerdict | null {
-  const sq = store.db.query("SELECT run_id FROM squads WHERE project = ? AND lead_wt = ? ORDER BY rowid DESC").get(project, wt) as { run_id: string | null } | null;
-  if (sq && !sq.run_id) return null;
+  const sq = store.db.query("SELECT run_id, topic FROM squads WHERE project = ? AND lead_wt = ? ORDER BY rowid DESC").get(project, wt) as { run_id: string | null; topic: string } | null;
+  if (sq && !sq.run_id && !onContract(store, project, sq.topic)) return null;
   const w = store.db.query("SELECT * FROM observed_workers WHERE project = ? AND wt = ? AND gone_at IS NULL").get(project, wt) as Row | null;
   if (!w || spawnGrace(store, project, wt, now) || workerLimited(store, project, wt, w, now)) return null;
   const hung = knob(store, project, "HUNG_MIN", 30) * 60, silent = knob(store, project, "SILENT_MIN", 10) * 60;
@@ -431,10 +442,13 @@ export function leadVerdict(store: Store, project: string, wt: string, now: numb
   }
   if (w.state !== "idle" && w.state !== "done") return null;
   const ep = store.get("episodes", { project, subject: wt, kind: "unread" });
-  if (!ep || ep.ended_at != null || ep.started_at == null || Number(w.unread ?? 0) <= 0) return null;
+  if (!ep || ep.ended_at != null || ep.started_at == null || (rowsUnread(store, project, wt) ?? Number(w.unread ?? 0)) <= 0) return null;
   const since = Number(ep.started_at);
   return now - since >= silent ? { verdict: "not responding", since } : null;
 }
+
+// broken()'s `run` for a Lead off Orca: its mail is its `messages` rows (U12b).
+const ROWS = "\u0000rows";
 
 class Pass {
   readonly actions: Action[] = [];
@@ -474,9 +488,10 @@ class Pass {
   // Unread Run mail first seen while idle or done. It ends when the mail is gone or the count
   // falls (the member read some); a turn that leaves the same mail unread keeps the clock (the
   // sweep keys the episode on the oldest unread message, which a turn does not change).
-  unreadSince(wt: string, w: Row): number | null {
+  // U12b: off Orca the count is the member's unread `messages` rows (rowsUnread).
+  unreadSince(wt: string, w: Row, rows: number | null = null): number | null {
     const key = { project: this.project, subject: wt, kind: "unread" };
-    const row = this.store.get("episodes", key), unread = Number(w.unread ?? 0);
+    const row = this.store.get("episodes", key), unread = rows ?? Number(w.unread ?? 0);
     const open = row && row.ended_at == null && row.started_at != null;
     if (open && (unread === 0 || unread < Number(row!.count ?? 0))) {
       this.store.upsert("episodes", key, { ended_at: this.now, state: "read", observed_at: this.now });
@@ -493,7 +508,9 @@ class Pass {
 
   broken(wt: string, run: string | null, grace: boolean): Broken | null {
     const w = this.worker(wt), n = this.now;
-    const first = w && run ? this.unreadSince(wt, w) : null;
+    // `run`: the Lead's mail is read: its Run's inbox, or ROWS (a squad off Orca) its `messages` rows.
+    const rows = w && run === ROWS ? rowsUnread(this.store, this.project, wt) : null;
+    const first = w && run && (run !== ROWS || rows != null) ? this.unreadSince(wt, w, rows) : null;
     if (!w) return grace && this.inGrace(wt) ? null : { cause: "dead", since: n, ep: `gone|${wt}` };
     if (w.state === "working") {
       const out = Number(w.last_output_at ?? 0);
@@ -807,7 +824,8 @@ class Pass {
       const topic = String(sq.topic), lead = leadOf(store, sq);
       if (paused(store, { project, squad: topic })) continue;
       let aboveBuilder = topic;
-      if (lead && this.check(topic, `${topic}.lead`, aboveLead, "lead", lead, (sq.run_id as string | null) ?? null, true).cannot) aboveBuilder = aboveLead;
+      const mail = (sq.run_id as string | null) ?? (onContract(store, project, topic) ? ROWS : null);
+      if (lead && this.check(topic, `${topic}.lead`, aboveLead, "lead", lead, mail, true).cannot) aboveBuilder = aboveLead;
       const members = store.db.query("SELECT role, suffix, wt FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone' AND COALESCE(status, '') != 'gone' ORDER BY id")
         .all(project, topic) as { role: string; suffix: string; wt: string }[];
       for (const m of members.filter((x) => x.role === "thinker")) this.check(topic, `${topic}.${who(m)}`, aboveLead, who(m), m.wt, null, true);

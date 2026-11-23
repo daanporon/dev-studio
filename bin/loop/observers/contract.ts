@@ -27,18 +27,20 @@ import { contracts, sharedContracts, type MakeContract, type Contracted } from "
 import { localPath } from "../drivers/contract.ts";
 import { promptDraft, workingOnScreen } from "../squad/member-ready.ts";
 import { limitInt } from "../settings/limits.ts";
-import { mainAgents, liveModel, shellAdapter, type LiveAccount, type Walk } from "./orca.ts";
+import { mainAgents, subAgents, liveModel, shellAdapter, type LiveAccount, type SubAgent, type Walk } from "./orca.ts";
 
 export type ContractObserverOpts = {
   backends?: MakeContract;                 // a test's fake; the shared resolver by default
   walk?: () => Promise<LiveAccount[]>;      // the host's process walk; orca.sh agent-accounts by default
 };
 
-type Seen = { m: Row; path: string; t: Terminal | null };
+type Seen = { m: Row; path: string; t: Terminal | null; others: Terminal[] };
+type Walk2 = { main: Map<string, Walk>; subs: Map<string, SubAgent[]> };
 
+const inFolder = (ts: Terminal[], path: string) => ts.filter((t) => t.cwd.replace(/\/+$/, "") === path).sort((a, b) => b.created_at - a.created_at);
 // The member's terminal: of its own generation first, else the newest in its folder.
 export function terminalFor(ts: Terminal[], path: string, gen: unknown): Terminal | null {
-  const here = ts.filter((t) => t.cwd.replace(/\/+$/, "") === path).sort((a, b) => b.created_at - a.created_at);
+  const here = inFolder(ts, path);
   return here.find((t) => gen != null && t.gen === String(gen)) ?? here[0] ?? null;
 }
 
@@ -91,10 +93,11 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
         if (!l.ok) continue; // no evidence: nothing written, nothing marked gone
         const seen: Seen[] = members.map((m) => {
           const path = localPath(String(m.wt))!.replace(/\/+$/, "");
-          return { m, path, t: terminalFor(l.terminals, path, m.gen) };
+          const t = terminalFor(l.terminals, path, m.gen);
+          return { m, path, t, others: t ? inFolder(l.terminals, path).filter((o) => o.id !== t.id) : [] };
         });
-        const walks: Map<string, Walk> | null = Array.isArray(procs)
-          ? mainAgents(seen.map((s) => ({ worktreeId: String(s.m.wt), path: s.path })), procs) : null;
+        const ps = seen.map((s) => ({ worktreeId: String(s.m.wt), path: s.path }));
+        const walks: Walk2 | null = Array.isArray(procs) ? { main: mainAgents(ps, procs), subs: subAgents(ps, procs) } : null;
         // The backend reads per live terminal, outside the write.
         const reads = await Promise.all(seen.map(async (s) => {
           if (!s.t) return null;
@@ -104,7 +107,9 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
             c.backend.call("terminal.read", { id, screen: true }),
             c.caps.state === "native" ? c.backend.call("agent.state", { id }) : Promise.resolve(null),
           ]);
-          return { out: out.ok ? out.at : null, tail: screen.ok ? redact(screen.text).trimEnd() : null, native: st?.ok ? st.state : null };
+          // U12b: the other terminals in its folder, for the stray and duplicate checks (reconcilers/members.ts).
+          const others = await Promise.all(s.others.map(async (o) => { const r = await c.backend.call("terminal.last_output", { id: o.id }); return r.ok ? r.at : null; }));
+          return { out: out.ok ? out.at : null, tail: screen.ok ? redact(screen.text).trimEnd() : null, native: st?.ok ? st.state : null, others };
         }));
         store.tx(() => {
           seen.forEach((s, i) => write(store, project, topic, s, reads[i], walks, procs === "failed", now, quiet));
@@ -114,25 +119,29 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
   };
 }
 
-function write(store: Store, project: string, topic: string, s: Seen, r: { out: number | null; tail: string | null; native: string | null } | null,
-  walks: Map<string, Walk> | null, failed: boolean, now: number, quiet: number): void {
+function write(store: Store, project: string, topic: string, s: Seen, r: { out: number | null; tail: string | null; native: string | null; others: (number | null)[] } | null,
+  walks: Walk2 | null, failed: boolean, now: number, quiet: number): void {
   const wt = String(s.m.wt), prev = store.get("observed_workers", { project, wt });
   const wtRow = store.db.query("SELECT branch, parent_path FROM worktrees WHERE host = 'local' AND path = ?").get(s.path) as Row | null;
   const tree = (agents: number | null) => store.upsert("observed_worktrees", { project, wt }, { path: s.path, branch: wtRow?.branch ?? null,
     parent: wtRow?.parent_path ? `local::${wtRow.parent_path}` : null, doc: { agents, backend: "contract" }, observed_at: now, gone_at: null });
   if (!s.t || !r) {
-    // Its terminal is gone: the worker with it. The walk's last verdict stays for the decider.
-    if (prev && prev.gone_at == null) store.upsert("observed_workers", { project, wt }, { gone_at: now, observed_at: now, presence: "none" });
+    // Its terminal is gone: the worker with it. The walk's last verdict stays for the decider. Stamped each
+    // tick, as on Orca, with no terminal seen this tick, so a pause (fulfil/pause.ts) can finish after its close.
+    if (prev) store.upsert("observed_workers", { project, wt }, { gone_at: prev.gone_at ?? now, observed_at: now, presence: "none",
+      doc: { squad: topic, role: s.m.role, suffix: s.m.suffix ?? "", backend: "contract", terminal: null, agent_states: [], terminals_seen_at: now } });
     store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND wt = ? AND gone_at IS NULL", [now, project, wt]);
     tree(0);
     return;
   }
   let ran: Row = failed ? { walk: "unknown" } : {};
   if (walks) {
-    const { walk, main } = walks.get(wt) ?? { walk: "none" as const, main: null };
+    const { walk, main } = walks.main.get(wt) ?? { walk: "none" as const, main: null };
     const live = main ? liveModel(store, project, wt, main) : { model: null, effort: null };
+    // Its sub-agents as on Orca: NULL once none are live (a pause closes only with none).
+    const sub = JSON.stringify(walks.subs.get(wt) ?? []);
     ran = { walk, agent: main?.agent ?? null, account: main?.account ?? null, account_at: now, pid: main?.pid ?? null,
-      started_at: main?.start ?? null, rss_kb: main?.rss ?? null, live_model: live.model, live_effort: live.effort };
+      started_at: main?.start ?? null, rss_kb: main?.rss ?? null, live_model: live.model, live_effort: live.effort, sub_agents: sub !== "[]" ? sub : null };
   }
   const walk = String(ran.walk ?? prev?.walk ?? "unknown");
   const tail = r.tail ?? String(prev?.tail ?? "");
@@ -141,7 +150,13 @@ function write(store: Store, project: string, topic: string, s: Seen, r: { out: 
   store.upsert("observed_terminals", { project, handle: s.t.id }, { wt, title: `${topic}/${s.t.label}`,
     doc: { agent: walk === "running", squad: topic, role: s.m.role, suffix: s.m.suffix ?? "", newest: true, gen: s.t.gen, last_output_at: r.out, unread: 0 },
     ...(r.tail != null ? { tail: r.tail, tail_at: now } : {}), observed_at: now, gone_at: null });
-  store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND wt = ? AND gone_at IS NULL AND handle != ?", [now, project, wt, s.t.id]);
+  // Every other terminal in the folder, as Orca lists them: one the loop started (a generation) counts
+  // as an agent, one with none is a plain shell. `extra` marks it as not the member's own.
+  s.others.forEach((o, i) => store.upsert("observed_terminals", { project, handle: o.id }, { wt, title: `${topic}/${o.label}`,
+    doc: { agent: o.gen != null, squad: topic, role: s.m.role, suffix: s.m.suffix ?? "", newest: false, gen: o.gen, last_output_at: r.others[i], unread: 0, extra: true },
+    observed_at: now, gone_at: null }));
+  store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND wt = ? AND gone_at IS NULL AND handle NOT IN (SELECT value FROM json_each(?))",
+    [now, project, wt, JSON.stringify([s.t.id, ...s.others.map((o) => o.id)])]);
   store.upsert("observed_workers", { project, wt }, { state, unread: 0, last_output_at: r.out, name: s.t.label,
     since: prev?.state === state && prev?.gone_at == null ? prev.since ?? now : now,
     doc: { squad: topic, role: s.m.role, suffix: s.m.suffix ?? "", backend: "contract", terminal: s.t.id, agent_states: [state], terminals_seen_at: now },
