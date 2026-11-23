@@ -99,7 +99,7 @@ async function settle(a: Action, x: Exec, p: P, t: { wt: string; handle: string 
     const o = await card(x.store, a, t, "a pause recorded it as the member's session, so the loop leaves it open");
     return o.code === 0 ? { done: true } : { retry: errOf(o, "alerts.sh") };
   }
-  return "close" as const;
+  return "close";
 }
 
 async function closedOr(a: Action, x: Exec, t: { wt: string; handle: string }, title: string | null, why: string | null): Promise<Result> {

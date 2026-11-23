@@ -259,9 +259,9 @@ function contractTesters(ctx: TickCtx): void {
 // generation (no DS_GEN: no terminal the loop started) is a plain shell, a stray once it is quiet; one with
 // another generation is a second agent the loop started (a close that failed, a start the guard missed),
 // so it gets the same `duplicate` action as on Orca. A stray card whose terminal is gone is cleared.
-export const CONTRACT_SHELL = "unknown";
+const CONTRACT_SHELL = "unknown";
 function contractGuards(ctx: TickCtx): Action[] {
-  const { store, project, now } = ctx, out: Action[] = [], up = new Set<string>();
+  const { store, project, now } = ctx, out: Action[] = [];
   const dups = dupAt.get(store) ?? new Map<string, number>();
   dupAt.set(store, dups);
   const busyS = limitInt(store, project, "chat_quiet_s", 10);
@@ -273,7 +273,6 @@ function contractGuards(ctx: TickCtx): Action[] {
     if (stopping(store, project, wt) || paused(store, m as { project: string }) || starting(m, now, store)) continue;
     const w = store.get("observed_workers", { project, wt });
     if (!w || w.gone_at != null || w.presence !== "running") continue;
-    up.add(wt);
     const own = (JSON.parse(String(w.doc ?? "{}")) as Row).terminal;
     const rows = store.db.query("SELECT handle, title, doc FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle").all(project, wt) as Row[];
     for (const r of rows) {
