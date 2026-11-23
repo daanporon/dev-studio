@@ -275,6 +275,9 @@ Script-callable (implemented by the adapter, used by the loop's observers and fu
 | `limited` | — | `<worktree_id>\t<reset_epoch or ->\t<notice text>` per worker showing a usage limit that has been idle/done for the silent threshold (`DS_SWEEP_SILENT_MIN`, default 10 — so a transient 429 on a working agent doesn't count); nothing if none or unsupported |
 | `gate-list` | `<run_id>` | integer count of pending checkpoint gates |
 | `current` | — | this terminal's own worktree id (close-squad's self-close guard) |
+| `wt-make` | `<repo> <name> <branch> <base> [parent_path]` | the new worktree as one JSON line (`id`, `path`, `branch`, `head`, `parentWorktreeId`): `orca worktree create` with no agent and no Run, `--setup skip`, nested under `<parent_path>` or `--no-parent`; Orca picks the folder and suffixes `-2` on an existing branch or taken name, so the caller checks it (the `orca` worktree provider, `bin/loop/io/providers/orca.ts`) |
+| `wt-show` | `<selector>` | the worktree as one JSON line, as `wt-make` prints it; exit 3 when Orca has no such worktree (`path:<path>` also finds one Orca no longer lists) |
+| `wt-list` | `<repo>` | one JSON line per worktree Orca lists for the repo, the main checkout left out; exit 1 when the list cannot be read whole |
 | `worktree-rm` | `<selector> [force]` | — (remove a worktree + stop its worker; keeps unmerged branches unless `force`) |
 | `attention` | — | displayNames of worktrees whose agent is **waiting for input** (the board's live backstop; the backend owns what "waiting" means, so the board stays backend-agnostic) |
 | `activity` | — | `<worktree-id>\t<active\|waiting>` per non-idle worktree (lets the board show live truth — e.g. flag a stale `done` squad whose workers are still active) |
