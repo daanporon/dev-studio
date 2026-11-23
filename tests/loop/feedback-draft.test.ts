@@ -4,7 +4,7 @@
 // issue, leaves a project-only note with no draft, stores a draft holding a listed word as blocked, keeps
 // a note it gave no verdict, and a replay writes nothing.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import reconciler from "../../bin/loop/reconcilers/feedback.ts";
@@ -12,7 +12,7 @@ import fulfiller from "../../bin/loop/fulfil/feedback-draft.ts";
 import { alertGone } from "../../bin/loop/reconcilers/alerts.ts";
 import { addNote, NOBODY } from "../../bin/loop/feedback/notes.ts";
 import { parseAnswer } from "../../bin/loop/feedback/prompt.ts";
-import { draftKey } from "../../bin/loop/feedback/draft.ts";
+import { draftKey, writeVerdicts } from "../../bin/loop/feedback/draft.ts";
 import type { Action, TickCtx } from "../../bin/loop/core/plugins.ts";
 import type { Exec, Result } from "../../bin/loop/core/actuator.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
@@ -47,9 +47,10 @@ function fixture(opts: { words?: string | null } = {}) {
   process.env.DS_LEAK_WORDS = words;
 
   mkdirSync(bin);
-  const files = { answer: join(d, "answer.json"), issues: join(d, "issues.json"), prompt: join(d, "prompt.txt"), calls: join(d, "calls") };
+  const files = { answer: join(d, "answer.json"), issues: join(d, "issues.json"), prompt: join(d, "prompt.txt"), calls: join(d, "calls"), run: join(d, "run.txt") };
   writeFileSync(join(bin, "claude"), `#!/usr/bin/env bash
 echo claude >> "$STUB_CALLS"
+{ pwd; echo "state: $(ls -A state 2>/dev/null | tr '\\n' ' ')"; [ -f AGENTS.md ] && echo has-agents; printf '%s\n' "$@"; } > "$STUB_RUN"
 cat > "$STUB_PROMPT"
 python3 -c 'import json,sys; print(json.dumps({"type":"result","is_error":False,"result":open(sys.argv[1]).read()}))' "$STUB_ANSWER"
 `);
@@ -63,7 +64,7 @@ cat "$STUB_ISSUES"
     { number: 9, title: "Not ours", body: "no marker here" },
   ]));
   writeFileSync(files.calls, "");
-  Object.assign(process.env, { PATH: `${bin}:${saved.PATH ?? process.env.PATH}`, STUB_ANSWER: files.answer, STUB_ISSUES: files.issues, STUB_PROMPT: files.prompt, STUB_CALLS: files.calls });
+  Object.assign(process.env, { PATH: `${bin}:${saved.PATH ?? process.env.PATH}`, STUB_ANSWER: files.answer, STUB_ISSUES: files.issues, STUB_PROMPT: files.prompt, STUB_CALLS: files.calls, STUB_RUN: files.run });
 
   const note = (text: string, at: number) => String(addNote(s, { ...NOBODY, project: "realp", role: "builder" }, text, at).row.key);
   const ctx = (now = T): TickCtx => ({ store: s, project: "", tick: 1, now, fired: [], poked: new Set() } as unknown as TickCtx);
@@ -124,6 +125,17 @@ test("one pass: issue, add-to, project-only, blocked, no verdict; a replay write
   expect(prompt).toContain("Board hides a stuck unit");
   expect(prompt).not.toContain("Not ours");
 
+  // The drafter ran in a snapshot of HEAD (no private state), with Read, Grep and Glob only and Read denied on the state root.
+  const run = readFileSync(f.files.run, "utf8").split("\n");
+  expect(run[0]).not.toBe(ROOT);
+  expect(run).toContain("has-agents");
+  expect(run).toContain("state: SCHEMA.json ");                   // only the tracked schema: no loop.db, no project
+
+  expect(run[run.indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob");
+  const deny = run[run.indexOf("--disallowedTools") + 1].split(",");
+  expect(deny).toEqual(expect.arrayContaining(["Bash", "Edit", "Write", `Read(/${f.s.root}/**)`]));
+  expect(existsSync(run[0])).toBe(false);                         // the snapshot is gone after the pass
+
   // A replay of the same action: the notes are no longer due, nothing is called or written.
   const before = f.calls().length;
   expect(await f.exec(acts[0])).toEqual({ done: true, result: "nothing new" });
@@ -135,6 +147,25 @@ test("one pass: issue, add-to, project-only, blocked, no verdict; a replay write
   f.s.upsert("episodes", { project: "", subject: "feedback.draft", kind: "action:feedback.draft" }, { state: "done", started_at: T, ended_at: T, episode_key: "x", source: "loop", observed_at: T });
   expect(drafts(reconciler.run(f.ctx(T + 3600)))).toEqual([]);
   expect(drafts(reconciler.run(f.ctx(T + 86_401)))[0]?.payload).toMatchObject({ keys: [g] });
+});
+
+test("a dismissed note is never sent, and a note that leaves `new` during a pass is not moved", () => {
+  const f = fixture();
+  const a = f.note("the board drops a card", T - 300);
+  const b = f.note("a private aside the operator dismissed", T - 200);
+  const c = f.note("watch.sh ticks twice", T - 100);
+  f.s.db.run("UPDATE feedback_notes SET state = 'dismissed' WHERE key = ?", [b]);
+  expect(drafts(reconciler.run(f.ctx()))[0]?.payload).toMatchObject({ keys: [a, c] });
+
+  // c is dismissed while the drafter runs: its verdict writes the draft but leaves the note as the operator set it.
+  f.s.db.run("UPDATE feedback_notes SET state = 'dismissed' WHERE key = ?", [c]);
+  const w = writeVerdicts(f.s, [a, c], [
+    { verdict: "project-only", notes: [a], reason: "the project's own board" },
+    { verdict: "issue", notes: [c], title: "watch.sh ticks twice", body: "It ticks twice.", area: "loop", kind: "bug", evidence: "", leak: { ok: true } },
+  ], { repo: "example-org/dev-studio", head: "", model: null, account: null, at: T });
+  expect(w).toMatchObject({ notes: 1, drafts: 1 });
+  const by = Object.fromEntries(f.notes().map((n) => [n.key, n]));
+  expect([by[a].state, by[b].state, by[c].state, by[c].draft_id]).toEqual(["project-only", "dismissed", "dismissed", null]);
 });
 
 test("no word list: one Studio card and no pass; the card clears once the list holds a word", async () => {

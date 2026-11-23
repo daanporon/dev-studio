@@ -7,12 +7,18 @@
 //      `repo` that carry the marker (`gh issue list --search`), a rate limit waits too,
 //   4. the `studio` pick on claude (capacity/pick.ts) and its account's config dir (the backend's
 //      `claude-config-dir`),
-//   5. one headless `claude -p` in the host checkout, read-only tools only, the prompt (feedback/prompt.ts)
-//      on stdin, ended after DS_FEEDBACK_DRAFT_S (900),
+//   5. one headless `claude -p` in a snapshot of the checkout's HEAD (`git archive` into a temp folder, so
+//      no state/ and no untracked file is in reach), with Read, Grep and Glob only (no Bash: a git command
+//      can run a pager or write a file) and Read denied on the state root; the issue bodies in the prompt
+//      come from anyone, so the drafter gets nothing that writes, runs or reaches private state. The
+//      prompt (feedback/prompt.ts) goes on stdin; the run ends after DS_FEEDBACK_DRAFT_S (900),
 //   6. the answer parsed (parseAnswer); each draft's final text (title + body + marker + ds-key) through
 //      the leak guard (feedback/leak.ts), a hit stored as leak `blocked` with the kinds it found,
 //   7. writeVerdicts (feedback/draft.ts): drafts, notes and one `feedback_drafted` event in one transaction.
 // A failed pass writes nothing; the reconciler offers the notes again after DS_FEEDBACK_RETRY_S.
+import { mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import type { Exec, Fulfiller, Result } from "../core/actuator.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
 import { ROOT } from "../core/store.ts";
@@ -30,7 +36,10 @@ type Run = { code: number; out: string; err: string };
 
 export const draftS = () => envInt("DS_FEEDBACK_DRAFT_S", 900);
 const RATE_WAIT_S = 900;
-const TOOLS = "Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(git grep:*),Bash(git blame:*)";
+export const TOOLS = "Read,Grep,Glob";
+// Every tool that writes, runs or fetches, and Read on the state root and the host's own state.
+export const denied = (stateRoot: string) => ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent",
+  ...[...new Set([stateRoot, join(ROOT, "state"), join(homedir(), ".dev-studio", "state")])].map((d) => `Read(/${resolve(d)}/**)`)].join(",");
 
 async function run(argv: string[], env: Record<string, string>, opts: { cwd?: string; stdin?: string; timeoutMs: number }): Promise<Run> {
   try {
@@ -83,8 +92,14 @@ async function draft(x: Exec, p: P): Promise<Result> {
     notes: notes.map((n) => ({ key: String(n.key), role: (n.role as string | null) ?? null, text: String(n.text ?? "") })) };
 
   const argv = ["claude", "-p", "--model", pk.model, ...(pk.effort ? ["--effort", pk.effort] : []), "--setting-sources", "user",
-    "--permission-mode", "default", "--allowedTools", TOOLS, "--disallowedTools", "Edit,Write,NotebookEdit", "--output-format", "json"];
-  const r = await run(argv, env, { cwd: ROOT, stdin: buildPrompt(input), timeoutMs: draftS() * 1000 });
+    "--permission-mode", "default", "--allowedTools", TOOLS, "--disallowedTools", denied(store.root), "--output-format", "json"];
+  const snap = mkdtempSync(join(tmpdir(), "ds-feedback-"));
+  let r: Run;
+  try {
+    const tree = await run(["bash", "-c", 'set -o pipefail; git -C "$1" archive --format=tar HEAD | tar -x -C "$2"', "bash", ROOT, snap], childEnv(), { timeoutMs: 120_000 });
+    if (tree.code !== 0) return { failed: `snapshot of the checkout: ${why(tree)}` };
+    r = await run(argv, env, { cwd: snap, stdin: buildPrompt(input), timeoutMs: draftS() * 1000 });
+  } finally { rmSync(snap, { recursive: true, force: true }); }
   if (r.code !== 0) return { failed: `claude: ${why(r)}` };
   let answer: string;
   try {
