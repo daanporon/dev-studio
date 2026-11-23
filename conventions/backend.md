@@ -243,7 +243,8 @@ backend (U11, "Started" below).
     (`drivers/claude-launch.ts` `markTrusted`), then one `terminal.create` (cwd, label `<role>[-suffix]`,
     `group` = the squad on `parents: groups`, `parent` = the Lead's path on `parents: native`) with env
     `DS_GEN` (the call's retry id), `DS_BACKEND`, `DS_MEMBER` and `DS_WT`, and the Claude launch line
-    (`claudeLine`, the same one Orca's adapter types) sent once with `submit`. Only Claude has a launch
+    (`claudeLine`, the one Orca's adapter types, here as `exec env …` so claude replaces the shell and the
+    terminal ends with it: a poke never types into a bare shell) sent once with `submit`. Only Claude has a launch
     line: `spawn-squad` refuses a non-Orca squad whose roster names Codex or Muse (primary or fallback).
   - **Ledger.** Starts and closes are `orca_calls` rows with the contract verb as `op` (`terminal.create`,
     `terminal.close`), in `LOCK_OPS`, `stopOpen()` and `startInFlight()`. A start lists the terminals

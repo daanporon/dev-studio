@@ -54,7 +54,7 @@ export const contract: DriverModule = {
       }
       if (!existsSync(path)) return { ok: false, error: `worktree ${path} is gone` };
       markTrusted(a.dir, path);   // claude stops at the folder-trust prompt otherwise
-      const line = claudeLine({ config: a.config, gates: isDir(gates) ? gates : "", args: [...opts, ...c.settings(m.role, path), ...(text ? [text] : [])], utf8: utf8Locale(process.env) });
+      const line = claudeLine({ config: a.config, gates: isDir(gates) ? gates : "", args: [...opts, ...c.settings(m.role, path), ...(text ? [text] : [])], utf8: utf8Locale(process.env), exec: true });
       const parent = localPath(m.role === "lead" ? seat.squad.studio_wt : seat.squad.lead_wt);
       const r = await c.start({ cwd: path, label: `${m.role}${m.suffix ? `-${m.suffix}` : ""}`,
         ...(c.caps.parents === "groups" ? { group: m.squad } : {}), ...(c.caps.parents === "native" && parent ? { parent } : {}) }, { ...meta, line });

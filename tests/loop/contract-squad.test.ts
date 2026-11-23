@@ -140,7 +140,7 @@ describe("a squad on a contract backend (U11)", () => {
       const typed = sends(r.fake).filter((x) => x.id === t[0].t.id);
       expect(typed).toHaveLength(1);
       expect(typed[0].submit).toBe(true);
-      expect(typed[0].text).toStartWith("env -u CLAUDE_CONFIG_DIR ");
+      expect(typed[0].text).toStartWith("exec env -u CLAUDE_CONFIG_DIR ");   // claude replaces the shell: none is left for a poke
       expect(typed[0].text).toContain("claude --dangerously-skip-permissions --model opus");
       expect(typed[0].text).toContain("build\\ u1");
       // The folder was trusted in the account's .claude.json before the terminal was made; other keys kept.
@@ -228,6 +228,16 @@ describe("a squad on a contract backend (U11)", () => {
     });
   }
 
+  test("a poke to a member whose terminal is gone types nothing", async () => {
+    const r = await rig({ turn_confirm: "none" });
+    const l = await startLead(r);
+    const t = live(r.fake, pathOf(l))[0];
+    r.fake.exit(t.t.id);
+    r.s.request("poke", { text: "echo $(id)" }, { project: "fx", squad: SQ, member: String(l.wt) });
+    await r.tick(2);
+    expect(sends(r.fake).map((x) => x.text)).not.toContain("echo $(id)");
+  });
+
   test("a restart closes the old terminal first; a stop closes the member's terminals", async () => {
     const r = await rig();
     await startLead(r);
@@ -248,4 +258,13 @@ describe("a squad on a contract backend (U11)", () => {
     expect(close?.state).toBe("completed");
     expect(orcaFor(r)).toEqual([]);
   });
+});
+
+test("the contract's launch line execs claude for every account form; Orca's lines do not exec", async () => {
+  const { claudeLine } = await import("../../bin/loop/drivers/claude-launch.ts");
+  const base = { gates: "/g", args: ["--model", "opus"], utf8: true, exec: true };
+  expect(claudeLine({ ...base, config: { system: true } })).toStartWith("exec env -u CLAUDE_CONFIG_DIR PATH=");
+  expect(claudeLine({ ...base, config: { home: "/h" } })).toStartWith("exec env CLAUDE_CONFIG_DIR=");
+  expect(claudeLine({ ...base, config: null })).toStartWith("exec env PATH=");
+  expect(claudeLine({ ...base, config: null, exec: false })).toStartWith("PATH=");
 });

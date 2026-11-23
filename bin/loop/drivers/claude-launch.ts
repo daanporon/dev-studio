@@ -58,6 +58,9 @@ export type LaunchLine = {
   resume?: string | null;     // `--continue … --model <model>` on the default login (Orca's resumeTab)
   args: string[];             // each quoted after the command
   utf8: boolean;
+  // U11: `exec env …`, so the shell is replaced by claude and the terminal ends with it. A contract
+  // backend's poke types into the terminal: with no shell left behind, text never reaches a prompt.
+  exec?: boolean;
 };
 
 /** The command line that starts `claude` for a role. `system` keeps its onboarded config at ~/.claude.json, so it
@@ -69,7 +72,8 @@ export function claudeLine(o: LaunchLine): string {
   const id = o.identity?.member ? `DS_MEMBER=${q(o.identity.member)} DS_WT=${q(o.identity.wt)} ${o.identity.gen ? `DS_GEN=${q(o.identity.gen)} ` : ""}` : "";
   const env = o.config === null ? "" : "system" in o.config ? "env -u CLAUDE_CONFIG_DIR " : `CLAUDE_CONFIG_DIR=${q(o.config.home)} `;
   const claude = o.resume ? `claude --continue --dangerously-skip-permissions --model ${o.resume}` : "claude --dangerously-skip-permissions";
-  return `${env}${id}PATH=${q(o.gates)}:$PATH ${claude}${o.args.map((a) => ` ${q(a)}`).join("")}`;
+  const head = !o.exec ? env : env.startsWith("env ") ? `exec ${env}` : `exec env ${env}`;
+  return `${head}${id}PATH=${q(o.gates)}:$PATH ${claude}${o.args.map((a) => ` ${q(a)}`).join("")}`;
 }
 
 /** The claude args for one --settings JSON that holds the auto-compact window (env), the role's skillOverrides, its
