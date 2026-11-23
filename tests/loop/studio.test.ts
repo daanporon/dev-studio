@@ -211,6 +211,19 @@ describe("studioReady", () => {
     expect(studioReady(s, "fx", T + 60)).toMatchObject({ ready: false, why: "no Studio terminal adopted" });
   });
 
+  test("a Studio stopped with Esc is ready; the working marker on its screen still holds a chat (studio-hung-agent-broken U4)", async () => {
+    // Orca reads the Studio worktree `working` after the Esc; its transcript ends on the interruption.
+    // The Studio is read by its adopted handle, so the worktree's state does not hold it: this pins that
+    // (it held before U4 too; the `working` branch is member-ready.test.ts's), and that the marker still waits.
+    const { s } = await adopted();
+    s.upsert("observed_workers", { project: "fx", wt: STUDIO }, { state: "working", last_output_at: T - 600, gone_at: null, observed_at: T });
+    s.upsert("observed_transcripts", { path: join(ROOT, "tests", "fixtures", "liveness", "interrupted.jsonl") }, { project: "fx", wt: STUDIO, mtime: T - 300, observed_at: T });
+    expect(studioReady(s, "fx", T + 60)).toEqual({ ready: true, why: "idle" });
+    expect(studioReady(s, "fx", T + 60, 10, null, "ignore")).toEqual({ ready: true, why: "idle" });
+    s.db.run("UPDATE observed_terminals SET tail = ? WHERE handle = 'term_s1'", ["✢ Booping… (2s)\n│ ❯ │\n  ⏵⏵ bypass permissions on · esc to interrupt\n"]);
+    expect(studioReady(s, "fx", T + 60, 10, null, "ignore")).toEqual({ ready: false, why: "busy: working on screen" });
+  });
+
   test("promptDraft reads the last prompt row, boxed or not", () => {
     expect(promptDraft("> \n")).toBe("");
     expect(promptDraft("│ > draft text   │\n│ footer │")).toBe("draft text");
