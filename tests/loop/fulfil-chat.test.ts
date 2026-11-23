@@ -104,15 +104,29 @@ describe("chat fulfiller", () => {
     await tick(T);
     expect(req(s, id).done_at).toBeNull();
     expect(result(s, id)).toEqual({ state: "queued", why: "busy: working", since: T });
-    // still mid-turn, output still moving: the why changes, nothing typed
-    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T + 8, tail: "│ ❯ │\n", tail_at: T + 9 });
+    // still mid-turn, Claude's working marker on the screen: the why changes, nothing typed
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T + 8, tail: "✢ Booping… (2s)\n│ ❯ │\n  ⏵⏵ bypass permissions on · esc to interrupt\n", tail_at: T + 9 });
     await tick(T + 10);
-    expect(result(s, id)).toEqual({ state: "queued", why: "busy: terminal output", since: T });
+    expect(result(s, id)).toEqual({ state: "queued", why: "busy: working on screen", since: T });
     expect(orca.of("poke").length).toBe(0);
     idleAt(s, B, T + 120);
     await tick(T + 120);
     expect(typed(orca)).toEqual([`${SAYS}hold on`]);
     expect(req(s, id).done_at).toBe(T + 120);
+  });
+
+  test("output alone does not hold a chat to a Claude member; a Codex member keeps the quiet window", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    // the pane printed 5 s ago, the transcript is 5 min old, the screen read after the print is an empty prompt
+    s.upsert("observed_workers", { project: "fx", wt: B }, { state: "idle", last_output_at: T - 5, tail: "│ ❯ │\n", tail_at: T - 2, unread: 0, gone_at: null, observed_at: T });
+    s.upsert("observed_transcripts", { path: "/x/b.jsonl" }, { project: "fx", wt: B, mtime: T - 300, observed_at: T });
+    s.db.run("UPDATE members SET agent = 'codex' WHERE project = 'fx' AND wt = ?", [B]);
+    const id = chat(s, "codex waits");
+    await tick(T);
+    expect(result(s, id)).toEqual({ state: "queued", why: "busy: terminal output", since: T });
+    s.db.run("UPDATE members SET agent = 'claude' WHERE project = 'fx' AND wt = ?", [B]);
+    await tick(T + 1);
+    expect(typed(orca)).toEqual([`${SAYS}codex waits`]);
   });
 
   test("an accepted send is a chat delivery: verified once working, never resent", async () => {
@@ -205,15 +219,16 @@ describe("chat fulfiller", () => {
     const s = imported(), { orca, tick } = rig(s);
     s.db.run("UPDATE requests SET done_at = ? WHERE project = 'fx' AND key LIKE 'file:fx/_studio/%'", [T]);
     s.upsert("members", { project: "fx", squad: "_studio", wt: STUDIO }, { role: "studio", suffix: "", agent: "claude", handle: "term_s1", status: "running", observed_at: T, updated_at: T });
-    const term = (lastOut: number) => s.upsert("observed_terminals", { project: "fx", handle: "term_s1" },
-      { wt: STUDIO, title: "claude", tail: "│ ❯ │\n", tail_at: lastOut + 5, doc: JSON.stringify({ agent: true, identity: "claude", last_output_at: lastOut, unread: 0 }), observed_at: T, gone_at: null });
-    term(T - 5);
+    const term = (lastOut: number, tail = "│ ❯ │\n") => s.upsert("observed_terminals", { project: "fx", handle: "term_s1" },
+      { wt: STUDIO, title: "claude", tail, tail_at: lastOut + 5, doc: JSON.stringify({ agent: true, identity: "claude", last_output_at: lastOut, unread: 0 }), observed_at: T, gone_at: null });
+    term(T - 10, "│ ❯ │\n  ⏵⏵ bypass permissions on · esc to interrupt\n");
     const id = Number(s.request("chat", { text: "morning", via: "board" }, { project: "fx", squad: "_studio", member: STUDIO }).row.id);
     s.db.run("UPDATE requests SET created_at = ? WHERE id = ?", [T, id]);
     await tick(T);
-    expect(result(s, id)).toEqual({ state: "queued", why: "busy: terminal output", since: T });
+    expect(result(s, id)).toEqual({ state: "queued", why: "busy: working on screen", since: T });
     expect(orca.of("poke-terminal").length).toBe(0);
-    term(T - 600);
+    // the turn ended and the pane printed again 5 s ago: screen noise alone does not hold a Claude Studio
+    term(T + 5);
     await tick(T + 10);
     expect(orca.of("poke-terminal").map((c) => c.args)).toEqual([["term_s1", `${SAYS}morning`]]);
     expect(orca.of("poke").length).toBe(0);
