@@ -5,7 +5,8 @@
 // Answers only requests whose Host names this machine (DS_BOARD_HOSTS, space-separated names/IPs,
 // set by board.sh); any other Host gets 403, so a web page can't read the board via DNS rebinding.
 // The server only talks to loop.db: it never runs a command and never reads a state or conf file
-// (the page file is the one file read). Reads open loop.db read-only per request; a write is one
+// (the page file is the one file read; the one folder it writes and serves is a project's chat images,
+// `<state root>/<label>/chat-files/<topic>/`). Reads open loop.db read-only per request; a write is one
 // wish or `requests` row the loop fulfils on its next tick, answered 202 with the row's id — the
 // page then learns the outcome from the event log (GET /api/stream).
 //
@@ -29,6 +30,8 @@
 //   GET /api/chat?project=<label>&topic=<slug|_studio>&wt=<worktree>   one live member's turns from
 //                              observed_chat and its last 10 chats with their state (404: no such member)
 //   GET /api/messages?project=<label>&topic=<slug>[&wt=<worktree>]   that member's (or the squad's) message rows, newest first; a read, never an ack
+//   GET /api/chat-file?project=<label>&topic=<slug|_studio>&name=<sha16>.<ext>   one stored chat image (and HEAD),
+//                              nosniff, a no-script CSP, cached a day (the name is a content hash); no member check
 //   GET /healthz               {ok, pid, port}: the loop's ping (the loop runs this server, U16)
 //   GET /lavish/<key>          302 to that Lavish review page; when Lavish is down, a `lavish`
 //                              request and a page that reloads until it is up
@@ -43,8 +46,14 @@
 //   /api/pause, /api/resume {scope, project, topic?, wt?, role?, suffix?, prerequisites?}
 //                 shared activity state, answered 200; the loop owns checkpoint/close/start
 //   /api/poke     {project, topic}  `poke`: a wake-up line typed into a quiet Lead's terminal
-//   /api/chat     {project, topic, wt, text}  `chat`: one line (no newline or control character, at most
-//                 2000 characters) the loop types into that live, unpaused member's terminal once it is ready
+//   /api/chat     {project, topic, wt, text, files?}  `chat`: one line (no newline or control character, at most
+//                 2000 characters) the loop types into that live, unpaused member's terminal once it is ready;
+//                 `files` names up to 4 stored chat images (text may then be empty; a gone one is 409)
+//   /api/chat-file?project=&topic=&wt=  the raw bytes of one PNG/JPEG/WebP/GIF (Content-Type the image's, at
+//                 most 5 MiB, magic bytes checked) for a live member, stored once as
+//                 `<state root>/<label>/chat-files/<topic>/<sha256[:16]>.<ext>` (0600), answered 200 {id, url, bytes};
+//                 each upload first prunes the project's images older than chat_files_keep_d days (500 MiB cap: 507).
+//                 The only route a body over 128 KiB may reach.
 //   /api/limits   {project, key, value|null}  `limits`: the loop sets or drops the limit; {project, key, undo: <history id>} files `config-undo` (U258)
 //   GET /api/settings-export?project=<label> the export text (a transfer file, header line first); GET /api/settings-import?project= the other projects an import can read
 //   /api/settings-import/preview {project, text|from}  the plan (one row per setting; reads only)
@@ -60,7 +69,7 @@
 //                 model/account "until done", or back to auto
 // Everything else is 404, so no state file is ever reachable.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
@@ -70,8 +79,8 @@ import { squadDoc } from "../loop/db/export-json.ts";
 import { skillsJson } from "./skills-data.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
 import { answer as answerQuestion } from "../loop/messages/questions.ts";
-import { dbPath, open, openReadOnly, type Row, type Store } from "../loop/core/store.ts";
-import { checkExportText, exportTransfer, IMPORT_FILES, planImport, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
+import { dbPath, open, openReadOnly, stateRoot, type Row, type Store } from "../loop/core/store.ts";
+import { checkExportText, exportTransfer, IMPORT_FILES, planImport, readGet, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
 import { canRestartRole } from "../loop/pause/restart-roles.ts";
 import { paused, type PauseTarget, type Prerequisite } from "../loop/pause/pause.ts";
 
@@ -300,14 +309,175 @@ async function chatPost(req: Request) {
   if ("error" in t) return json(t.status, { error: t.error });
   const raw = pr.b.text;
   if (typeof raw !== "string" || /[\x00-\x1f\x7f-\x9f]/.test(raw)) return json(400, { error: "one line of text, no newlines or control characters" });
+  const files = pr.b.files ?? [];
+  if (!Array.isArray(files) || files.length > CHAT_FILES_PER_SEND || new Set(files).size !== files.length
+    || files.some((f) => typeof f !== "string" || !CHAT_FILE_NAME.test(f)))
+    return json(400, { error: `files: at most ${CHAT_FILES_PER_SEND} distinct image names from /api/chat-file` });
   const text = raw.trim();
-  if (!text) return json(400, { error: "say something" });
+  if (!text && !files.length) return json(400, { error: "say something" });
   if (Array.from(text).length > CHAT_MAX) return json(400, { error: `at most ${CHAT_MAX} characters` });
+  for (const f of files as string[]) if (!chatFileAt(t.project, t.topic, f)) return json(409, { error: `image ${f} is gone — attach it again` });
   return write((s) => {
     const m = chatMember(s, t.project, t.topic, t.wt) ?? no(404, noMember(t));
     if (t.topic !== "_studio" && paused(s, m as { project: string })) no(409, "this member is paused or resuming; use Resume before chatting");
-    return board(s, "chat", { text, via: "board" }, { project: t.project, squad: t.topic, member: t.wt });
+    return board(s, "chat", { text, via: "board", ...(files.length ? { files } : {}) }, { project: t.project, squad: t.topic, member: t.wt });
   });
+}
+
+// ---- chat images (chat-image-upload U1) -------------------------------------------------------------
+// The shared contract with the loop (bin/loop/chat/files.ts, chat-image-upload U2): a project's images
+// live in `<state root>/<label>/chat-files/<topic>/`, each named by the first 16 hex characters of its
+// sha256 plus the extension of its sniffed type; a `chat` row names files only, never a path. These are
+// this server's own copies of the folder and name rule until the popup unit imports that module.
+const CHAT_FILE_NAME = /^[0-9a-f]{16}\.(png|jpg|webp|gif)$/;
+const chatFilesRoot = (project: string) => join(stateRoot(), project, "chat-files");
+const CHAT_FILE_MAX = 5 * 1024 * 1024; // per stored file
+const CHAT_FILES_CAP = 500 * 1024 * 1024; // per project's chat-files/
+const CHAT_FILES_PER_SEND = 4;
+const CHAT_FILES_KEEP_D = 14; // chat_files_keep_d's default
+const CHAT_TMP = /^\..*\.tmp$/;
+const CHAT_TYPES: Record<string, "png" | "jpg" | "webp" | "gif"> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+const CHAT_EXT_TYPE: Record<string, string> = { png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+
+// The image type the first bytes say, or null: PNG, JPEG, GIF87a/89a, RIFF????WEBP. SVG is never one.
+function sniffImage(b: Uint8Array): "png" | "jpg" | "webp" | "gif" | null {
+  const at = (i: number, s: number[]) => s.every((v, k) => b[i + k] === v);
+  const ascii = (i: number, s: string) => at(i, [...s].map((c) => c.charCodeAt(0)));
+  if (at(0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "png";
+  if (at(0, [0xff, 0xd8, 0xff])) return "jpg";
+  if (ascii(0, "GIF87a") || ascii(0, "GIF89a")) return "gif";
+  if (b.length >= 12 && ascii(0, "RIFF") && ascii(8, "WEBP")) return "webp";
+  return null;
+}
+
+// A plain folder (never a symlink) at `p`, made 0700 when missing; throws ChatFolder otherwise.
+class ChatFolder extends Error {}
+function plainDir(p: string, make: boolean): boolean {
+  let st = lstatSync(p, { throwIfNoEntry: false });
+  if (!st && make) { try { mkdirSync(p, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; } st = lstatSync(p, { throwIfNoEntry: false }); }
+  if (!st) return false;
+  if (!st.isDirectory()) throw new ChatFolder("chat-files is not a plain folder");
+  return true;
+}
+// The topic's folder, every level under `<label>/chat-files/` checked plain; null when it is not there.
+function chatDir(project: string, topic: string, make: boolean): string | null {
+  const top = chatFilesRoot(project), dir = join(top, topic);
+  if (make && !existsSync(join(stateRoot(), project))) mkdirSync(join(stateRoot(), project), { recursive: true, mode: 0o700 });
+  return plainDir(top, make) && plainDir(dir, make) ? dir : null;
+}
+// The stored image's path when it is a plain file in the topic's plain folder, else null.
+function chatFileAt(project: string, topic: string, name: string): string | null {
+  if (!CHAT_FILE_NAME.test(name)) return null;
+  try {
+    const dir = chatDir(project, topic, false);
+    const p = dir && join(dir, name);
+    return p && lstatSync(p, { throwIfNoEntry: false })?.isFile() ? p : null;
+  } catch { return null; }
+}
+
+// chat_files_keep_d through the settings read API; a bad or missing value is 14.
+function chatKeepDays(project: string): number {
+  try {
+    const v = readGet(project, "limits.conf", "chat_files_keep_d").value ?? "";
+    const n = /^\d+$/.test(v) ? Number(v) : NaN;
+    return n >= 1 && n <= 365 ? n : CHAT_FILES_KEEP_D;
+  } catch { return CHAT_FILES_KEEP_D; }
+}
+
+// The prune every upload runs first: over `<label>/chat-files/*/`, plain files only, an image older than
+// chat_files_keep_d days and a temp file older than an hour go; any other file stays. Returns the bytes
+// left. An error never fails the upload: it is one stderr line, and the walk goes on.
+function chatPrune(project: string): number {
+  const now = Date.now(), keepMs = chatKeepDays(project) * 86400_000;
+  let left = 0, err = "";
+  const top = chatFilesRoot(project);
+  try {
+    if (!plainDir(top, false)) return 0;
+    for (const topic of readdirSync(top)) {
+      const dir = join(top, topic);
+      try {
+        if (!lstatSync(dir).isDirectory()) continue;
+        for (const name of readdirSync(dir)) {
+          const p = join(dir, name);
+          try {
+            const st = lstatSync(p);
+            if (!st.isFile()) continue;
+            const age = now - st.mtimeMs;
+            if ((CHAT_FILE_NAME.test(name) && age > keepMs) || (CHAT_TMP.test(name) && age > 3600_000)) unlinkSync(p);
+            else left += st.size;
+          } catch (e) { err ||= `${p}: ${e}`; }
+        }
+      } catch (e) { err ||= `${dir}: ${e}`; }
+    }
+  } catch (e) { err ||= `${top}: ${e}`; }
+  if (err) console.error(`board (serve): chat-files prune: ${err}`);
+  return left;
+}
+
+// POST /api/chat-file?project=&topic=&wt=, body = the image's bytes. The checks run in this order and the
+// body is read only after the header ones pass; a refused upload writes no file.
+async function chatFilePost(req: Request, url: URL) {
+  const origin = req.headers.get("Origin");
+  let oh = "";
+  try { oh = origin ? new URL(origin).host.toLowerCase() : ""; } catch { /* refused below */ }
+  if (!oh || oh !== (req.headers.get("Host") || "").toLowerCase()) return text(403, "forbidden origin\n");
+  const ext = CHAT_TYPES[(req.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase()];
+  if (!ext) return json(415, { error: "want image/png, image/jpeg, image/webp or image/gif" });
+  const q = url.searchParams, t = chatTarget(q.get("project"), q.get("topic"), q.get("wt"));
+  if ("error" in t) return json(t.status, { error: t.error });
+  const tooBig = { error: `an image is at most ${CHAT_FILE_MAX / 1024 / 1024} MiB` };
+  if (Number(req.headers.get("Content-Length") || 0) > CHAT_FILE_MAX) return json(413, tooBig);
+  let bytes: Uint8Array;
+  try { bytes = new Uint8Array(await req.arrayBuffer()); } catch { return json(413, tooBig); }
+  if (bytes.length > CHAT_FILE_MAX) return json(413, tooBig);
+  if (!bytes.length) return json(400, { error: "empty body: send the image's bytes" });
+  if (sniffImage(bytes) !== ext) return json(415, { error: "not a png/jpeg/webp/gif" });
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  let live = false;
+  try { const s = openReadOnly(); try { live = !!chatMember(s, t.project, t.topic, t.wt); } finally { s.close(); } }
+  catch (e) { return json(503, { error: `loop.db: ${e}` }); }
+  if (!live) return json(404, { error: noMember(t) });
+  const name = `${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.${ext}`;
+  try {
+    const left = chatPrune(t.project);
+    const dir = chatDir(t.project, t.topic, true)!, p = join(dir, name);
+    const st = lstatSync(p, { throwIfNoEntry: false });
+    if (st?.isFile()) { const now = new Date(); utimesSync(p, now, now); }
+    else {
+      if (left + bytes.length > CHAT_FILES_CAP) return json(507, { error: `this project's chat images are over ${CHAT_FILES_CAP / 1024 / 1024} MiB; wait for old ones to be pruned` });
+      const tmp = join(dir, `.${name}.${process.pid}.tmp`);
+      try { writeFileSync(tmp, bytes, { mode: 0o600, flag: "wx" }); renameSync(tmp, p); }
+      catch (e) { try { unlinkSync(tmp); } catch { /* not written */ } throw e; }
+    }
+  } catch (e) {
+    return json(500, { error: e instanceof ChatFolder ? e.message : `storing the image: ${String(e).slice(-300)}` });
+  }
+  const u = new URLSearchParams({ project: t.project, topic: t.topic, name });
+  return json(200, { id: name, url: `api/chat-file?${u}`, bytes: bytes.length });
+}
+
+// GET /api/chat-file?project=&topic=&name=: one stored image, never a symlink or anything outside its folder.
+// No member check, so an ended member's old bubbles still show.
+function chatFileGet(url: URL) {
+  const q = url.searchParams, project = q.get("project"), topic = q.get("topic"), name = q.get("name") ?? "";
+  if (typeof project !== "string" || !NAME.test(project) || typeof topic !== "string" || !SQUAD.test(topic))
+    return json(400, { error: "need project and topic" });
+  if ((scope.project && scope.project !== project) || (scope.topic && scope.topic !== topic)) return json(403, { error: "target is outside this board's scope" });
+  if (!CHAT_FILE_NAME.test(name)) return json(400, { error: "bad image name" });
+  const p = chatFileAt(project, topic, name);
+  if (!p) return text(404, "image removed\n");
+  let fd = -1;
+  try {
+    fd = openSync(p, fsc.O_RDONLY | fsc.O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > CHAT_FILE_MAX) return text(404, "image removed\n");
+    const buf = Buffer.alloc(st.size);
+    for (let off = 0; off < st.size;) { const n = readSync(fd, buf, off, st.size - off, off); if (!n) break; off += n; }
+    return new Response(buf, { status: 200, headers: {
+      "Content-Type": CHAT_EXT_TYPE[name.split(".")[1]], "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline",
+      "Content-Security-Policy": "default-src 'none'; img-src 'self'", "Cache-Control": "private, max-age=86400" } });
+  } catch { return text(404, "image removed\n"); }
+  finally { if (fd >= 0) closeSync(fd); }
 }
 
 // GET /api/messages?project=&topic=[&wt=]: U278's read-only View of a member's (or the squad's) message rows.
@@ -882,6 +1052,7 @@ async function get(req: Request, url: URL) {
   if (path === "/api/events") return eventsGet(url);
   if (path === "/api/events/lists") return eventsListsGet(url);
   if (path === "/api/chat") return chatGet(url);
+  if (path === "/api/chat-file") return chatFileGet(url);
   if (path === "/api/messages") return messagesGet(url);
   if (path === "/api/questions") return questionsGet(url);
   if (path === "/") {
@@ -905,7 +1076,11 @@ const POSTS: Record<string, (req: Request) => Promise<Response>> = {
 
 async function handle(req: Request) {
   if (!hosts.has(hostName(req.headers.get("Host")))) return text(403, "forbidden host\n");
-  const path = new URL(req.url).pathname;
+  const url = new URL(req.url), path = url.pathname;
+  // Bun takes bodies up to an image's size (maxRequestBodySize) for the upload alone: any other request
+  // that says it is bigger than a JSON post may be is refused before routing.
+  if (path === "/api/chat-file" && req.method === "POST") return chatFilePost(req, url);
+  if (Number(req.headers.get("Content-Length") || 0) > MAX_BODY) return text(413, "too large\n");
   if (Object.hasOwn(POSTS, path)) return req.method === "POST" ? POSTS[path](req) : text(405, "POST only\n");
   // These paths are GET routes too (the read block), so they are not in POSTS.
   if (path === "/api/limits" && req.method === "POST") return limitsPost(req);
@@ -914,7 +1089,7 @@ async function handle(req: Request) {
   if (path === "/api/settings-import" && req.method === "POST") return settingsImportPost(req);
   if (path === "/api/chat" && req.method === "POST") return chatPost(req);
   if (req.method !== "GET" && req.method !== "HEAD") return text(405, "GET only\n");
-  return get(req, new URL(req.url));
+  return get(req, url);
 }
 
 // One listener per address (e.g. 127.0.0.1 and the tailnet IP). Retry a few seconds (30 tries,
@@ -922,7 +1097,7 @@ async function handle(req: Request) {
 const bindTries = Math.max(1, Number(process.env.DS_BOARD_BIND_TRIES) || 30);
 for (const hostname of bindArg.split(/\s+/).filter(Boolean)) {
   for (let i = 0; ; i++) {
-    try { Bun.serve({ hostname, port, fetch: handle, maxRequestBodySize: MAX_BODY, idleTimeout: 30 }); break; }
+    try { Bun.serve({ hostname, port, fetch: handle, maxRequestBodySize: CHAT_FILE_MAX + 64 * 1024, idleTimeout: 30 }); break; }
     catch (e) {
       if (i >= bindTries - 1) { console.error(`board (serve): could not bind ${hostname}:${port} — ${e}`); process.exit(1); }
       await Bun.sleep(200);

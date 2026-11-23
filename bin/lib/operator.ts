@@ -152,6 +152,9 @@ export function limitValueProblem(key: string, val: string): string {
     case "briefing_merges_lag_min":
       if (!/^\d+$/.test(val) || Number(val) > 120) return `briefing_merges_lag_min must be whole minutes from 0 to 120 (got '${val}')`;
       break;
+    case "chat_files_keep_d":
+      if (!/^\d+$/.test(val) || Number(val) < 1 || Number(val) > 365) return `chat_files_keep_d must be whole days from 1 to 365 (got '${val}')`;
+      break;
     case "notes_cap":
       if (!/^\d+$/.test(val) || Number(val) < 1 || Number(val) > 100) return `notes_cap must be a whole number from 1 to 100 (got '${val}')`;
       break;
