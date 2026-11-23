@@ -98,6 +98,8 @@ const ONLY_ACTIONS = {
   "cleanup.report": obj({ refused: opt(str) }),
   // exposed-cleanup U2: run one group of queued stop commands (exposed rows `ids`, one command) once.
   "expose.stop": obj({ ids: arr(num), cmd: str, cwd: opt(str) }),
+  // main-red-liveness-test U2: merge the base into a merge-ready unit PR that is only behind it.
+  "update-branch": obj({ n: num, repo: str, ref: str, head: opt(str), unit: opt(str), topic: opt(str), base: opt(str) }),
   board_start: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_restart: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_stop: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),

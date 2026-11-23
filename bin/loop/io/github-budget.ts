@@ -1,6 +1,6 @@
 // github-budget.ts — the loop's GitHub GraphQL budget (U286). The PR observer (observers/github.ts)
-// and the merge fulfiller (fulfil/merge.ts) spend the same per-user GraphQL budget (5000 points an
-// hour), so both read it here:
+// and the merge and update-branch fulfillers (fulfil/merge.ts, fulfil/update-branch.ts) spend the same
+// per-user GraphQL budget (5000 points an hour), so all three read it here:
 //
 //   - isRateLimit / rateLimitedBody: the one test for "GitHub refused this for its rate limit". GraphQL
 //     says `type: "RATE_LIMITED"` or `"RATE_LIMIT"` (code graphql_rate_limit), gh's stderr says
@@ -8,6 +8,7 @@
 //     one: a permission refusal is a 403 too.
 //   - budgetOf: what the last read said, from the observer's schedule row (observed_github, repo '').
 //   - restRateLimit: `gh api rate_limit`, which costs nothing, for the reset time a refusal leaves out.
+//   - resetWaitAt: when a rate-limited write (a merge, a branch update) asks again.
 //   - pace: how long the next read waits so the reads spend at most github_budget_share of the budget.
 import { closeSync, lstatSync, openSync, readdirSync, readSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -103,6 +104,15 @@ export function clearStaleGhCache(dirs: string[] = ghCacheDirs()): number {
   };
   for (const d of dirs) walk(d, 0);
   return removed;
+}
+
+// When a rate-limited GitHub write asks again: an empty bucket's reset + grace, from the observer's last
+// read, else REST. A refusal with budget left is a secondary limit, which clears within `retryS`.
+export async function resetWaitAt(store: Store, now: number, retryS: number): Promise<number> {
+  const back = budgetBackAt(budgetOf(store), now);
+  if (back !== null) return back;
+  const r = await restRateLimit().catch(() => null);
+  return r && r.remaining <= 0 && r.reset > now ? r.reset + RESET_GRACE_S : now + retryS;
 }
 
 // `gh api rate_limit` (REST, free): the GraphQL bucket, or null when gh fails or says something else.

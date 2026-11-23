@@ -18,7 +18,7 @@ import type { Exec, Fulfiller } from "../core/actuator.ts";
 import type { Action } from "../core/plugins.ts";
 import { MERGE_CARD } from "../reconcilers/alerts.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
-import { budgetBackAt, budgetOf, clearStaleGhCache, hasBudget, isRateLimit, RESET_GRACE_S, restRateLimit } from "../io/github-budget.ts";
+import { budgetOf, clearStaleGhCache, hasBudget, isRateLimit, resetWaitAt, restRateLimit } from "../io/github-budget.ts";
 
 export type MergePayload = {
   n?: number; repo?: string; method?: string; unit?: string; topic?: string;
@@ -28,15 +28,6 @@ export type MergePayload = {
 const METHODS = ["squash", "merge", "rebase"];
 const MERGE_TRIES = 3;
 const retryS = () => { const v = Number(process.env.DS_LOOP_MERGE_RETRY_S); return Number.isFinite(v) && v > 0 ? v : 180; };
-
-// When a rate-limited merge asks again: an empty bucket's reset + grace, from the observer's last read,
-// else REST. A refusal with budget left is a secondary limit, which clears within the retry gap.
-async function resetWaitAt(store: Exec["store"], now: number): Promise<number> {
-  const back = budgetBackAt(budgetOf(store), now);
-  if (back !== null) return back;
-  const r = await restRateLimit().catch(() => null);
-  return r && r.remaining <= 0 && r.reset > now ? r.reset + RESET_GRACE_S : now + retryS();
-}
 
 // U290: does GitHub's budget have room right now? The observer's last read when it is recent (a few read
 // intervals), else the free `gh api rate_limit`; unreadable reads as no room (today's wait).
@@ -102,14 +93,14 @@ const merge: Fulfiller = {
           `gh had cached GitHub's rate-limit error; cleared ${cleared} entr${cleared === 1 ? "y" : "ies"} and retried the merge of #${n}.`,
           { title: "gh cache cleared", fields: { kind: "gh_cache_cleared", ref: p.ref ?? `${repo}#${n}` } });
         r = await spawn(mergeArgv, {}, 60_000);
-        if (r.code !== 0 && isRateLimit(`${r.err}\n${r.out}`)) CLEARED.set(cacheKey, (await resetWaitAt(x.store, x.now)));
+        if (r.code !== 0 && isRateLimit(`${r.err}\n${r.out}`)) CLEARED.set(cacheKey, (await resetWaitAt(x.store, x.now, retryS())));
       }
     }
     if (r.code !== 0) {
       const why = errOf(r, "gh pr merge");
       ALLOWED.delete(repo);   // the setting may have changed: read it again next time
       if (isRateLimit(`${r.err}\n${r.out}`)) {
-        return { wait: `rate limited, waiting for GitHub's reset: ${why}`, at: await resetWaitAt(x.store, x.now) };
+        return { wait: `rate limited, waiting for GitHub's reset: ${why}`, at: await resetWaitAt(x.store, x.now, retryS()) };
       }
       // U240: a refusal is tried again a few minutes later (same episode, same head) before a card.
       const key = { project: a.project, subject: a.subject, kind: "merge-tries" };

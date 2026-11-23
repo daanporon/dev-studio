@@ -100,7 +100,7 @@ const startSlots = () => envInt("DS_LOOP_START_SLOTS", 4);
 // U239: these kinds run in the background like a start: the tick claims, the call runs on its own and
 // its result settles the episode. Their own slots; one at a time per subject and per member worktree;
 // a call that has not ended after DS_LOOP_BG_TIMEOUT_S (120) settles as a retry and frees its subject.
-export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "finish-unit", "studio-move", "expose.stop"]);
+export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "update-branch", "finish-unit", "studio-move", "expose.stop"]);
 const bgSlots = () => envInt("DS_LOOP_BG_SLOTS", 6);
 const bgTimeoutMs = () => envInt("DS_LOOP_BG_TIMEOUT_S", 120) * 1000;
 
@@ -232,8 +232,8 @@ export class LoopActuator implements Actuator {
   // A background kind waits for a later tick while its subject or worktree has an action running, or the slots are taken.
   private bgKeys(a: Action): string[] {
     const wt = (a.payload as { wt?: unknown } | undefined)?.wt ?? a.member;
-    // U249: a merge's subject is its PR, and it holds no worktree: two PRs of one Lead merge side by side.
-    return [`${a.project}|${a.subject}`, ...(a.kind !== "merge" && typeof wt === "string" && wt ? [`${a.project}|wt|${wt}`] : [])];
+    // U249: a merge's subject is its PR, and it holds no worktree: two PRs of one Lead merge side by side (an update-branch too).
+    return [`${a.project}|${a.subject}`, ...(a.kind !== "merge" && a.kind !== "update-branch" && typeof wt === "string" && wt ? [`${a.project}|wt|${wt}`] : [])];
   }
   private bgFull(a: Action): boolean {
     return BACKGROUND_KINDS.has(a.kind) && (this.bgCount >= (this.opts.bgSlots ?? bgSlots()) || this.bgKeys(a).some((k) => this.bgBusy.has(k)));
