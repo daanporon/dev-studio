@@ -204,6 +204,33 @@ does not use it yet.
   it skips those cases and prints why. The mappings and the protocol pin always run. How well herdr
   reads agent state is a trial of its own (U16c).
 
+## A backend per squad
+
+Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
+lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
+`herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
+others, the first being its default). Only `orca` is one the loop can start a squad on today (herdr's v2
+adapter, above, is not wired to squad starts yet); the rest are listed so a project can name them, and a
+start on one is refused with a line that says it is not built yet.
+
+- **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
+  pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
+  project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
+  refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet and a
+  binary missing on PATH; a refused spawn writes no wish and never falls back to `orca`.
+- **Written once.** The squad's row keeps `backend`, `backend_host` (`local`; the machine it runs on) and
+  `worktree_provider` (migration 0054; every existing squad reads `orca`/`local`/`orca`). Once the loop
+  has started the squad the columns cannot change (a table trigger), and `spawn-squad` refuses a different
+  `--backend` for it; a later change of `default_backend` touches only new squads. A closed squad started
+  again under its topic may pick again.
+- **Not `squads.host`.** That column is spawn-squad's dev-env host (`--host`), unchanged; the backend's
+  machine is `backend_host`.
+- **Shown.** The board's squad row and box carry a chip with the backend (and the tool, when it is not the
+  backend's default) for a squad off `orca`; the text board adds ` · on:<backend>[/<tool>]` to its line.
+  Settings → Agents & nudges lists both keys.
+- **Started.** The loop's squad fulfiller (`bin/loop/fulfil/squad.ts`) starts only `orca` squads; a wish
+  for another fails with `squad <topic> is on backend <name>, which the loop cannot start yet`.
+
 ## The Orca adapter (contract v1)
 
 ### Selecting the backend
