@@ -6,6 +6,7 @@
 //   open(store, project, squad, entry)              a new open row (U15's board asks through it)
 //   answer(store, project, squad, id, text, via)    the open row answered + an events row question_answered
 //   list(store, project, squad, {limit, before})    answered rows, newest first
+//   drop(store, project, squad, reason)             every open row dropped (archive) + question_dropped events
 import type { Row, Store } from "../core/store.ts";
 import { json, now } from "../core/store.ts";
 
@@ -79,6 +80,21 @@ export function answer(store: Store, project: string, squad: string, id: string,
     const r = rows[rows.length - 1];
     store.event("question_answered", { project, squad, payload: { id, title: r.title ?? r.question ?? null, answer: answerText, via } });
     return { ...r, status: "answered", answer: answerText, answered_via: via, answered_at: at };
+  });
+}
+
+// morning-brief-stale-items U2: an archived squad's open rows are dropped, never answered: status
+// `dropped`, the reason in `answer`, via `archive`. They stay in the table (nothing is deleted), out of
+// `pending`, `list` (answered history) and `answer`. One `question_dropped` event per row; returns the
+// rows as they were (still open), so the caller can name them.
+export function drop(store: Store, project: string, squad: string, reason: string): Row[] {
+  return store.tx(() => {
+    const rows = pending(store, project, squad), at = now();
+    for (const r of rows) {
+      store.db.run("UPDATE questions SET status = 'dropped', answer = ?, answered_via = 'archive', answered_at = ? WHERE seq = ? AND status = 'open'", [reason, at, r.seq as number]);
+      store.event("question_dropped", { project, squad, payload: { id: r.id, title: r.title ?? r.question ?? null, blocking: r.blocking === 1, reason } });
+    }
+    return rows;
   });
 }
 
