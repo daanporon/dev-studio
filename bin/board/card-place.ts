@@ -11,12 +11,12 @@ export type CardLike = { subject?: unknown; squad?: unknown; id?: unknown; kind?
 
 // Kept by `kind` where the card has one, else by the id prefix or the title it had before kinds.
 const NEEDS_KINDS = new Set(["out_of_credits", "agent_broken", "restart_failed", "review_stopped", "loop_refusal", "cancel_failed", "account_skills", "studio_move_up", "questions_dropped"]);
-const NEEDS_ID = /^(loop|sweep)-studio\.(ctx|limit)-|^sweep-(account-skills|disk-pressure)\./;
-const NEEDS_TITLE = /(^|[ :·])(studio\.ctx|studio\.limit|Studio out of credits|Studio's account removed|Agent broken|Agent broke again|Agent presence unknown|Restart failed|Reviews? stopped|Loop action refused|Cancellation failed)$/;
+const NEEDS_ID = /^(loop|sweep)-studio\.(ctx|limit)-|^sweep-(account-skills|disk-pressure)\.|^sweep-studio\.adopt-/;
+const NEEDS_TITLE = /(^|[ :·])(studio\.ctx|studio\.limit|Studio out of credits|Studio's account removed|Agent broken|Agent broke again|Agent presence unknown|Restart failed|Reviews? stopped|Loop action refused|Cancellation failed|Lifecycle failed)$/;
 // Cards that heal by themselves: they need the operator only if they last.
 const GRACE_KINDS = new Set(["out_of_credits", "agent_broken"]);
-const GRACE_TITLE = /(^|[ :·])(Agent broken|Agent broke again|Agent presence unknown|Studio out of credits)$/;
-const GRACE_ID = /^(loop|sweep)-studio\.limit-/;
+const GRACE_TITLE = /(^|[ :·])(Agent broken|Agent broke again|Agent presence unknown|Studio out of credits|Lifecycle failed)$/;
+const GRACE_ID = /^(loop|sweep)-studio\.(limit|adopt)-/;
 
 const s = (v: unknown) => (typeof v === "string" ? v : "");
 const epoch = (v: unknown): number | null => { const t = Date.parse(s(v)); return Number.isFinite(t) ? Math.floor(t / 1000) : null; };
