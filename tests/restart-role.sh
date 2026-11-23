@@ -45,5 +45,11 @@ if run bin/commands/restart-role.sh fx t1 builder u1 --model sonnet >/dev/null 2
 ck "restart --model: says pin" "$(grep -c 'ds want member' "$TMP/err" || true)" "1"
 if run bin/commands/restart-role.sh fx t1 builder u1 --agent codex >/dev/null 2>&1; then ck "restart --agent: refused" "0" "2"; else ck "restart --agent: refused" "$?" "2"; fi
 
+# U4 (orca-backend-alternatives): a worker found by its DS_MEMBER can't restart itself; another member it can.
+unset DS_MEMBER DS_WT DS_GEN
+if (cd "$TMP" && DS_MEMBER=fx/t1/builder-u1 bin/commands/restart-role.sh fx t1 builder u1 >/dev/null 2>"$TMP/err"); then ck "restart self by DS_MEMBER: refused" "0" "1"; else ck "restart self by DS_MEMBER: refused" "$?" "1"; fi
+ck "restart self by DS_MEMBER: says why" "$(grep -c "can't restart itself" "$TMP/err" || true)" "1"
+(cd "$TMP" && DS_MEMBER=fx/t1/lead bin/commands/restart-role.sh fx t1 builder u1 >/dev/null 2>"$TMP/err") || ck "restart another by DS_MEMBER: exits 0" "$?: $(cat "$TMP/err")" "0"
+
 echo "restart-role.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

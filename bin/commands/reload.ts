@@ -8,6 +8,7 @@
 import { open, now, pendingWishes } from "../loop/core/store.ts";
 import { effective } from "../loop/pause/pause.ts";
 import { parse, print, shape } from "../loop/core/cli.ts";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = `ack <project> <squad> <role> [suffix] — confirm you re-read your instructions after a reload wish`;
 
@@ -19,7 +20,7 @@ export async function run(args: string[]): Promise<number> {
   const s = open();
   try {
     const row = s.acknowledgeReload(`${project}/${squad}/${role}${suffix && suffix !== "-" ? `/${suffix}` : ""}`,
-      process.env.ORCA_TERMINAL_HANDLE, now());
+      whoAmI().handle ?? undefined, now());
     print({ ...shape(row), effective: effective(s, row).state, pending: pendingWishes(row, now()) });
     return 0;
   } finally { s.close(); }

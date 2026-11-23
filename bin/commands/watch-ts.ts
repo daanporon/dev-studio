@@ -10,6 +10,7 @@ import { settle } from "../loop/squad/squad-finish.ts";
 import { open, openReadOnly } from "../loop/core/store.ts";
 import { toplevel } from "../loop/squad/exposed.ts";
 import { ack, inbox, line, senderAt, waitingFor, waitingLines, type Addr, type Message } from "../loop/messages/messages.ts";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 /** U276: whose message rows this tick reads on a loop root — `me`, else this worktree's member; null when
  *  loop.db can't tell (no db, no member: the Orca read stays). */
@@ -204,7 +205,7 @@ export async function run(argv: string[]): Promise<number> {
     let holder = "";
     if (MODE === "lead" && !ROWS) holder = chomp((await runCmd([BACKEND, "run-coordinator", RUN])).out);
     if (ROWS) { own = true; LOOPRUN = true; hdr = `lead messages (loop.db; the loop holds run=${RUN} and writes its mail here)`; }
-    else if (holder && holder !== (process.env.ORCA_TERMINAL_HANDLE ?? "")) { own = true; LOOPRUN = true; hdr = `worktree inbox (the loop holds run=${RUN} and relays its mail here)`; }
+    else if (holder && holder !== (whoAmI().handle ?? "")) { own = true; LOOPRUN = true; hdr = `worktree inbox (the loop holds run=${RUN} and relays its mail here)`; }
     else { own = false; hdr = `run=${RUN}`; }
   }
   let rows: Message[] | null = null, rd = { out: "", err: "", rc: 0 };

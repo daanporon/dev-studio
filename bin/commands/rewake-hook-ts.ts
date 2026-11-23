@@ -5,6 +5,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { ROOT, stateRoot, dsPrefix, chomp, run as runCmd, writeErr } from "../lib/shared";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = "rewake-hook-ts <watch-args…> [--done-check <state> <builder_wt>] — the rewake Stop hook (bin/hooks/rewake-hook.sh)";
 
@@ -131,7 +132,7 @@ export async function run(argv: string[]): Promise<number> {
   let input = "";
   try { input = chomp(await Bun.stdin.text()); } catch { /* no stdin */ }
   const sha = stopHookActive(input);
-  log(`FIRE args=[${all}] handle=${process.env.ORCA_TERMINAL_HANDLE ? "set" : "UNSET"} stop_hook_active=${sha}`);
+  log(`FIRE args=[${all}] handle=${whoAmI().handle ? "set" : "UNSET"} stop_hook_active=${sha}`);
 
   // ONE hook per worktree: the newest replaces the previous one (a shell or a port hook).
   const piddir = process.env.DS_REWAKE_PIDDIR || join(ROOT, "state", "rewake");

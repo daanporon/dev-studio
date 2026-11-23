@@ -7,6 +7,7 @@
 import { parse, print } from "../loop/core/cli.ts";
 import { latest } from "../loop/pause/stop-checkpoint.ts";
 import { open } from "../loop/core/store.ts";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = "show <project> <squad> <role> <suffix|-> <generation> — check a stop checkpoint ask (pause-checkpoint.sh)";
 
@@ -14,7 +15,7 @@ export async function run(args: string[]): Promise<number> {
   const { pos } = parse(args, [], []);
   if (pos[0] !== "show" || pos.length !== 6) { console.error(`usage: ds stop-checkpoint ${help}`); return 2; }
   const [, project, squad, role, sfx, generation] = pos;
-  const suffix = sfx === "-" ? "" : sfx, handle = process.env.ORCA_TERMINAL_HANDLE ?? "";
+  const suffix = sfx === "-" ? "" : sfx, handle = whoAmI().handle ?? "";
   const s = open();
   try {
     const m = s.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND role = ? AND COALESCE(suffix, '') = ? ORDER BY id DESC LIMIT 1").get(project, squad, role, suffix) as Record<string, unknown> | null;
