@@ -26,7 +26,10 @@ export function startedAt(store: Store, project: string | null): number | null {
 const explained = (store: Store) => new Set((store.db.query("SELECT json_extract(payload, '$.event') AS e FROM events WHERE kind = 'shadow_explained'").all() as { e: number }[]).map((r) => Number(r.e)));
 
 export function report(store: Store, o: { project?: string | null; since?: number | null; now?: number } = {}): Report {
-  const project = o.project ?? null, since = o.since ?? startedAt(store, project), at = o.now ?? clock();
+  // Nothing before the shadow's start counts (finish rows are written whether it ran or not): an
+  // earlier --since starts at the shadow's start.
+  const project = o.project ?? null, start = startedAt(store, project), at = o.now ?? clock();
+  const since = start == null ? (o.since ?? null) : Math.max(o.since ?? start, start);
   const from = since ?? 0, ex = explained(store);
   const points: Report["points"] = Object.fromEntries(POINTS.map((p) => [p, { counted: 0, transient: 0, explained: 0 }]));
   const unexplained: Report["unexplained"] = [];
@@ -43,9 +46,9 @@ export function report(store: Store, o: { project?: string | null; since?: numbe
   const f = store.db.query(`SELECT COUNT(*) AS n, SUM(outcome IN ('no-pr', 'failed')) AS hard FROM finishes WHERE gen IS NOT NULL AND at >= ?${scope(project)}`)
     .get(...binds(project, from)) as { n: number; hard: number | null };
   const crashes = (store.db.query(`SELECT COUNT(*) AS n FROM events WHERE kind = 'shadow_crash' AND at >= ?${scope(project)}`).get(...binds(project, from)) as { n: number }).n;
-  const days = since == null ? 0 : Math.max(0, (at - since) / 86400);
+  const days = since == null || start == null ? 0 : Math.max(0, (at - since) / 86400);
   const hard = Number(f.hard ?? 0), short: string[] = [];
-  if (since == null) short.push("the shadow has not run");
+  if (start == null) short.push("the shadow has not run");
   if (unexplained.length) short.push(`${unexplained.length} unexplained`);
   if (f.n < EXIT.finishes) short.push(`${f.n} of ${EXIT.finishes} finishes`);
   if (hard < EXIT.hard) short.push(`${hard} of ${EXIT.hard} no-PR or failed finishes`);

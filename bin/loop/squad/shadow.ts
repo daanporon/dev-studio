@@ -24,6 +24,8 @@ import { lastStart, view } from "./member-state.ts";
 import { turnEnded, workerDone } from "../reconcilers/liveness.ts";
 import { roleName } from "../messages/messages.ts";
 import { runWorkers, type RunWorker } from "./run-reads.ts";
+import { stopping } from "./cancel.ts";
+import { settledTask } from "../reconcilers/members.ts";
 import type { Row, Store } from "../core/store.ts";
 
 export const POINTS = ["start", "finished", "retire", "member"] as const;
@@ -136,23 +138,27 @@ export function retirePair(store: Store, m: Row, workers: RunWorker[] | null): P
 // ---------------------------------------------------------------- member
 // What members.ts does with the Run's list: a member it lists live is bound; one it lists with a task
 // that did not finish (a one-shot's report, a completed dispatch) is rebound; a live worker with a
-// dispatch and no member row is unbound. A member the Run does not list gets nothing: no opinion.
+// dispatch and no member row is unbound. A member the Run does not list gets nothing: no opinion, and
+// neither does one being stopped. A standing role bound through a rebind the loop settled (U89) stays
+// not live with that task and is left alone: a member.
 const reported = (m: Row, w: RunWorker) => (w.status === "completed" || w.reported === true) && !STANDING.has(String(m.role));
 
 /** Is it a member: "member" or "absent", per worktree. Members leaving, paused or not running are left out. */
 export function memberPairs(store: Store, project: string, squad: string, workers: RunWorker[], members: Row[], now: number): Pair[] {
   const out: Pair[] = [];
   for (const m of members) {
+    const wt = String(m.wt);
     if (m.squad !== squad || m.want === "gone" || newReality(store, m, now) !== "running"
-      || paused(store, { project, squad, member: String(m.wt) })) continue;
-    const w = workers.find((x) => x.wt === m.wt);
-    if (w?.live) out.push(pair("member", m, "member", "member"));
+      || stopping(store, project, wt) || paused(store, { project, squad, member: wt })) continue;
+    const w = workers.find((x) => x.wt === wt);
+    const bound = !!w?.task && STANDING.has(String(m.role)) && settledTask(store, project, squad, wt, w.task);
+    if (w?.live || bound) out.push(pair("member", m, "member", "member"));
     else if (w?.task && !reported(m, w)) out.push(pair("member", m, "absent", "member"));
   }
   // A live Run worker with a dispatch and no member row in loop.db. A worktree whose newest row has no
   // generation is left out (its member is not shadowed).
   for (const w of workers) {
-    if (!w.live || !w.dispatch || paused(store, { project, squad, member: w.wt })) continue;
+    if (!w.live || !w.dispatch || stopping(store, project, w.wt) || paused(store, { project, squad, member: w.wt })) continue;
     const latest = store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project, squad, w.wt) as Row | null;
     if (latest && (!latest.gen || latest.status !== "gone")) continue;
     out.push({ point: "member", subject: `member:wt:${w.wt}`, member: latest ? nameOf(latest) : w.wt, id: latest ? Number(latest.id) : null,

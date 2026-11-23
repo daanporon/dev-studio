@@ -202,6 +202,14 @@ describe("disagreements", () => {
     expect(disagreements()).toEqual([]);
   });
 
+  test("a Lead bound through a settled rebind is a member on both sides", () => {
+    const lead = member("lead");
+    s.event("member_rebound_settled", { project: P, squad: SQ, member: String(lead.wt), payload: { task: "task_rb", handle: "term_l" } });
+    for (let i = 0; i < 3; i++) step([{ wt: String(lead.wt), live: false, dispatch: null, task: "task_rb", status: "completed" }]);
+    expect(pairs(s, P, tick, now).filter((p) => p.point === "member").map((p) => [p.old, p.new])).toEqual([["member", "member"]]);
+    expect(disagreements()).toEqual([]);
+  });
+
   test("an explained event leaves the unexplained count; a transient or unknown one is refused", () => {
     const b = member("builder", "u10-j");
     step(live(b)); finish(b, "ok");
@@ -241,6 +249,17 @@ describe("ds shadow report", () => {
     r = report(s, { project: P, now: start + 8 * 86400 });
     expect(r).toMatchObject({ finishes: 20, hard: 3, crashes: 5, met: true, short: [] });
     expect(reportText(r).at(-1)).toBe("exit: met");
+  });
+
+  test("a --since before the shadow's start counts from the start", () => {
+    for (let i = 0; i < 3; i++)
+      recordFinish(s, { member: { project: P, squad: SQ, role: "builder", suffix: `e${i}` }, unit: `e${i}`, outcome: "ok", body: "b", gen: `e${i}`, wt: `/w/e${i}` }, now - 30 * 86400);
+    expect(report(s, { project: P, since: now - 40 * 86400, now }).short).toContain("the shadow has not run");
+    step([]);
+    const start = Number(events("shadow_started")[0].at);
+    const r = report(s, { project: P, since: start - 40 * 86400, now: start + 86400 });
+    expect(r).toMatchObject({ since: start, finishes: 0 });
+    expect(r.days).toBeCloseTo(1, 5);
   });
 
   test("the CLI prints the report and records an explanation", () => {
