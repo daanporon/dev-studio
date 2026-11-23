@@ -692,12 +692,16 @@ export function memberAt(store: Store, a: Action, wt: string): Member {
 export const alertPrefix = (subject: string) => `loop-${subject.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(-60)}-`;
 export const alertId = (subject: string, episode: string) => `${alertPrefix(subject)}${Bun.hash(episode).toString(36)}`;
 
+// A reconciler's own `sweep-<key>-<n>` id is the stored id, so the checks that look for it (cardPlace, alertGone,
+// the prefix clears) find the card; any other id keeps `loop-<subject>-<hash>`.
+export const cardId = (subject: string, episode: string, id?: unknown) => typeof id === "string" && id.startsWith("sweep-") ? id : alertId(subject, episode);
+
 // opts.fields lands on the card beside its text, for a reconciler to read (alerts.sh add's extra JSON).
 export async function alert(store: Store, project: string, subject: string, episode: string, text: string,
-  opts: { title?: string; option?: string; why?: string; fields?: Record<string, unknown>; who?: Whose } = {}): Promise<Out> {
+  opts: { id?: string; title?: string; option?: string; why?: string; fields?: Record<string, unknown>; who?: Whose } = {}): Promise<Out> {
   // U232: the one place a card's title is built: `<squad> · <unit or role>: <title>`.
   const title = opts.who ? cardTitle(store, project, opts.who, opts.title ?? "") : opts.title ?? "";
-  return spawn([join(ROOT, "bin", "lib", "alerts.sh"), join(store.root, project, "alerts.json"), "add", alertId(subject, episode), title, text, opts.option ?? "", opts.why ?? "",
+  return spawn([join(ROOT, "bin", "lib", "alerts.sh"), join(store.root, project, "alerts.json"), "add", cardId(subject, episode, opts.id), title, text, opts.option ?? "", opts.why ?? "",
     ...(opts.fields ? [JSON.stringify(opts.fields)] : [])], {}, 30_000);
 }
 

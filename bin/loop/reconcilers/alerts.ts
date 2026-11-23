@@ -383,6 +383,7 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
   }
   const failed = /(^|[ :·])Restart failed$/.test(String(a.title)) ? text.match(/^(\S+) of (\S+) \(.* — the loop could not restart it/) : null;
   if (failed) return restartSettled(store, project, memberByLabel(store, project, failed[2], failed[1]), null, now);
+  if (/^sweep-debrief-/.test(id)) return false;                    // R3: stays until Mark read or Dismiss
   const acct = id.match(/^sweep-account-skills\.(.+)-[0-9]+$/);
   if (acct) {
     const v = skillsOf(store, acct[1]);

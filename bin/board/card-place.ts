@@ -24,7 +24,7 @@ const epoch = (v: unknown): number | null => { const t = Date.parse(s(v)); retur
 export function cardPlace(a: CardLike, now: number, graceMin = 10, refusalMin = 240): Place {
   const kind = s(a.kind), id = s(a.id), title = s(a.title);
   // U7: the morning brief and a finished squad wait on the operator, so they are needs, with no grace.
-  if (/^brief-/.test(id) || (kind === "poke_unanswered" && s(a.reason) === "all-done")) return "needs";
+  if (/^(brief|sweep-debrief)-/.test(id) || (kind === "poke_unanswered" && s(a.reason) === "all-done")) return "needs";
   // U287: a merge card from a rate-limited merge is a note (the budget card covers it); any other one ("merge it
   // by hand", "could not be armed") only a person clears, so it is Needs-you once it has lasted the grace.
   if (kind === "merge_card") {
