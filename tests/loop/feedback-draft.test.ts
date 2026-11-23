@@ -207,6 +207,18 @@ test("feedback_repo '-' offers nothing; a pass in flight blocks the next; a fail
   expect(later[0].episode).toEndWith(`|${T}`);
 });
 
+test("project row only: the reconciler offers a pass; with no word list, the card and no pass", () => {
+  const f = fixture();
+  f.s.db.query("DELETE FROM config WHERE project = '' AND key = 'feedback_repo'").run();
+  f.s.upsert("config", { project: "realp", file: "limits.conf", key: "feedback_repo" }, { value: "example-org/dev-studio", observed_at: T });
+  f.note("a snag", T - 10);
+  expect(drafts(reconciler.run(f.ctx()))).toHaveLength(1);
+  rmSync(process.env.DS_LEAK_WORDS!);
+  const acts = reconciler.run(f.ctx(T + 1));
+  expect(drafts(acts)).toEqual([]);
+  expect(acts.length).toBeGreaterThan(0);
+});
+
 test("parseAnswer: an add-to to an unknown issue, an already-fixed with no evidence and a fence", () => {
   expect(finalBody("Body.\n", "loop", "bug", "fd:0123")).toBe("Body.\n\n<!-- ds-feedback v1 area:loop kind:bug -->\n<!-- ds-key:fd:0123 -->\n");
   const input = { repo: "o/r", head: "abc", issues: [{ number: 7, title: "t", body: "b" }],

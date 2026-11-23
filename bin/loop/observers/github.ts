@@ -58,7 +58,7 @@ export { prUrl } from "../settings/projects.ts";
 import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { ROOT } from "../core/store.ts";
-import { feedbackRepo } from "../feedback/draft.ts";
+import { feedbackRepo } from "../feedback/post.ts";
 import { budgetBackAt, budgetOf, budgetShare, hasBudget, isRateLimit, pace, RESET_GRACE_S, rateLimitedBody, restRateLimit, type Rest, type RestLimit } from "../io/github-budget.ts";
 
 export type GhResult = { code: number; stdout: string; stderr: string };
