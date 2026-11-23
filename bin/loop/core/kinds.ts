@@ -43,7 +43,7 @@ export const REQUESTS = {
   "alert-clear": obj({ prefix: opt(str), id: opt(str) }),
   answer: obj({ id: str, answer: str, seq: opt(num), card_wt: opt(str), choices: opt(arr(any)), transcript: opt(str), tool_use_id: opt(str), via: opt(str) }),
   board: obj({ file: str, text: str }),
-  chat: obj({ text: str, via: opt(str), request: opt(num) }),
+  chat: obj({ text: str, via: opt(str), request: opt(num), files: opt(arr(str)) }),
   dismiss: obj({ id: str, answer: opt(str) }),
   duplicate: obj({ wt: opt(str), handle: opt(str), newest: opt(str), runHandle: opt(str), mismatch: opt(bool), first: opt(num) }),
   "finish-unit": replay,
@@ -114,7 +114,7 @@ export function payloadOf<K extends ActionKind>(a: { kind: string; payload?: unk
 const ep = obj({ episode: opt(str), account: opt(str), notice: opt(str), reset: opt(num), kind: opt(str), until: opt(num) });
 const svc = { id: num, name: opt(str), project: opt(str), topic: opt(str), port: opt(num) };
 const delivery = { delivery: num, state: opt(str), settled_at: opt(num), tries: opt(num), at: opt(num), verify_at: opt(num) };
-const wishDone = obj({ result: opt(str), want: opt(str), id: opt(num), subject: opt(str), rescued: opt(str) });
+const wishDone = obj({ result: opt(str), want: opt(str), id: opt(num), subject: opt(str), rescued: opt(str), dropped_questions: opt(num) });
 const anyOf = obj({}); // payload is the written columns: not fixed
 
 export const FACTS = {
@@ -132,6 +132,7 @@ export const FACTS = {
   message_read: obj({ ids: arr(num), by: str }),
   message_replied: obj({ id: num, reply: opt(num), request: opt(num) }),
   message_sent: obj({ key: str, to: str, from: str, kind: str, subject: str }),
+  finish_recorded: obj({ key: str, member: str, unit: opt(str), outcome: str, gen: opt(str) }),
   builder_wish_settled: obj({ id: num, unit: str, was: opt(str) }),
   builder_wish_withdrawn: obj({ id: num, unit: str, why: str, by: str, reason: opt(str) }),
   member_drift_cleared: obj({ id: opt(num), path: opt(str), status: opt(str) }),

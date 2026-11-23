@@ -6,6 +6,7 @@
 import { open } from "../bin/loop/core/store.ts";
 import { Loop } from "../bin/loop/core/tick.ts";
 import { FakeOrca } from "../bin/loop/fakes/orca.ts";
+import { sendMessage } from "../bin/loop/messages/messages.ts";
 import { orcaObserver } from "../bin/loop/observers/orca.ts";
 
 const label = process.argv[2]!, s = open(), now = Math.floor(Date.now() / 1000);
@@ -24,4 +25,14 @@ l.boot(now);
 await l.tick(now);
 if (process.argv.includes("--moved"))
   s.event("studio_moved", { project: label, squad: "_studio", member: wt, payload: { handle: "term_studio", previous: "term_old", from: "claude:acct-a", to: "claude:B", model: "sonnet" } });
+// chat-with-studio U1: `--chatty` adds one role message to the Studio (squad _studio, role studio), a Studio reply in
+// observed_chat (a tool turn and a user turn after it, which never count) and a working Studio.
+if (process.argv.includes("--chatty")) {
+  sendMessage(s, { to: { project: label, squad: "_studio", role: "studio", suffix: "" }, from: { project: label, squad: "sq", role: "lead", suffix: "", member: null },
+    subject: "need a call", body: "which way?" }, now);
+  const turns = JSON.stringify([{ role: "assistant", text: "older", at: now - 90 }, { role: "assistant", text: "latest reply", at: now - 60 },
+    { role: "assistant", tool: "2 tools", text: "2 tools", at: now - 30 }, { role: "user", text: "q", at: now - 10 }]);
+  s.db.run("INSERT INTO observed_chat (project, wt, agent, source, path, read_to, size, turns, updated_at) VALUES (?, ?, 'claude', 'transcript', '/x.jsonl', 1, 1, ?, ?)", [label, wt, turns, now]);
+  s.db.run("UPDATE observed_workers SET state = 'working' WHERE project = ? AND wt = ?", [label, wt]);
+}
 s.close();

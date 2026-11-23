@@ -4,13 +4,17 @@ import { basename, dirname, join } from "node:path";
 import { ROOT, backendPath, callerScript, dsLoopArgs, dsLoopFront, dsLoopOn, readJson, run as runCmd, writeErr, writeOut } from "../lib/shared";
 import { prHealthLine, repoSlug } from "../lib/lib";
 import { shipMode } from "../lib/operator";
+import { open } from "../loop/core/store";
+import { toplevel } from "../loop/squad/exposed";
+import { parseMember, recordFinish, type Member, type Outcome } from "../loop/squad/finish";
 
-export const help = `<state> <unit> [--check | --no-pr] — end a Builder's unit: record its branch PR, journal, send worker_done (finish-unit.sh)`;
+export const help = `<state> <unit> [--check | --no-pr | --failed <why>] — end a Builder's unit: record its branch PR and its finish, journal, send worker_done (finish-unit.sh)`;
 
 const USAGE_TEXT = [
-  "usage: finish-unit.sh <state> <unit> [--check | --no-pr]",
-  "  end a Builder's unit: record its branch PR in state, journal, send worker_done",
+  "usage: finish-unit.sh <state> <unit> [--check | --no-pr | --failed <why>]",
+  "  end a Builder's unit: record its branch PR in state and its finish in loop.db, journal, send worker_done",
   "  --check prints the merge-ready verdict without writing or sending anything",
+  "  --no-pr ends a local-only or no-code unit; --failed <why> ends a unit that cannot be built (worker_done --outcome failed)",
 ].join("\n") + "\n";
 
 const trim = (s: string): string => s.replace(/\n+$/, "");
@@ -26,9 +30,14 @@ export async function run(raw: string[]): Promise<number> {
   if (argv.some((a) => a === "-h" || a === "--help")) { writeOut(USAGE_TEXT); return 0; }
   if (argv.length < 2) return usage();
   const STATE = argv[0], UNIT = argv[1]; let rest = argv.slice(2);
-  let NO_PR = false, CHECK = false;
+  let NO_PR = false, CHECK = false, FAILED = "";
   if (rest[0] === "--no-pr") { NO_PR = true; rest = rest.slice(1); }
   else if (rest[0] === "--check") { CHECK = true; rest = rest.slice(1); }
+  else if (rest[0] === "--failed") {
+    FAILED = (rest[1] ?? "").trim();
+    if (!FAILED) { writeErr("finish-unit: --failed needs the reason the unit cannot be built\n"); return usage(); }
+    NO_PR = true; rest = rest.slice(2);
+  }
   if (rest.length) return usage();
 
   let isFile = false; try { isFile = statSync(STATE).isFile(); } catch { /* none */ }
@@ -130,9 +139,10 @@ export async function run(raw: string[]): Promise<number> {
   }
 
   const topic = basename(STATE, ".json");
+  const hd = await runCmd(["git", "rev-parse", "HEAD"]);
+  const head = hd.rc === 0 && trim(hd.out) ? trim(hd.out) : "none";
   if (dsLoopOn()) {
-    const head = await runCmd(["git", "rev-parse", "HEAD"]);
-    return dsLoopFront({ label, kind: "finish-unit", subject: topic, id: "", key: `finish-unit:${label || "?"}/${topic}/${UNIT}@${head.rc === 0 && trim(head.out) ? trim(head.out) : "none"}`, script, argv, wait: la.wait });
+    return dsLoopFront({ label, kind: "finish-unit", subject: topic, id: "", key: `finish-unit:${label || "?"}/${topic}/${UNIT}@${head}${FAILED ? ":failed" : ""}`, script, argv, wait: la.wait });
   }
 
   if (!NO_PR) {
@@ -141,16 +151,11 @@ export async function run(raw: string[]): Promise<number> {
     if (sp.rc !== 0) return sp.rc;
   }
 
-  if (label) {
-    const [jt, jw] = NO_PR
-      ? ["unit finished without a PR (--no-pr)", "finish-unit.sh sent worker_done with no PR recorded"]
-      : [`unit finished: PR #${PR} on ${br}`, "finish-unit.sh recorded the PR and sent worker_done"];
-    const j = await runCmd([join(ROOT, "bin", "role", "journal.sh"), label, topic, `builder-${UNIT}`, "add", "keep", jt, jw]);
-    if (j.rc !== 0) writeErr("finish-unit: warning: journal note failed (continuing)\n");
-  } else writeErr(`finish-unit: warning: '${STATE}' is not state/<project>/squads/<topic>.json — skipping journal note\n`);
-
   let subject: string, body: string;
-  if (NO_PR) {
+  if (FAILED) {
+    subject = `failed ${UNIT}`;
+    body = `Unit \`${UNIT}\` cannot be built: ${FAILED}. Nothing is merged for it; the Lead decides what happens to the unit.`;
+  } else if (NO_PR) {
     subject = `finished ${UNIT} (no PR)`;
     body = `Unit \`${UNIT}\` is finished with no PR (--no-pr: a local-only or no-code unit). Its work is committed in the Builder worktree. Nothing is left for the Builder.`;
   } else if (verdict === "merged") {
@@ -160,7 +165,33 @@ export async function run(raw: string[]): Promise<number> {
     subject = `finished ${UNIT}: PR #${PR}`;
     body = `PR #${PR} merge-ready: checks green, no open review threads, mergeable. Unit ${UNIT} on branch ${br} is recorded in state and waits on the operator's merge. Stay at your prompt: if the PR goes stale before the merge (conflict, base moved, red check, new review comment), the dev-studio loop pokes you to fix it — then babysit until --check passes; don't send worker_done again.${reviewNote ? ` ${reviewNote}` : ""}`;
   }
-  const wd = await runCmd([BACKEND, "worker-done", subject, body]);
+
+  // U3 (orca-backend-alternatives): the finish row, on every path, then the journal, then worker_done. Its
+  // key is the unit, HEAD and outcome, so a replayed or re-run finish writes no second row.
+  if (label) {
+    const env = process.env.DS_MEMBER ? parseMember(process.env.DS_MEMBER) : null;
+    const member: Member = env ?? { project: label, squad: topic, role: "builder", suffix: UNIT };
+    const outcome: Outcome = FAILED ? "failed" : NO_PR ? "no-pr" : "ok";
+    try {
+      const s = open();
+      try {
+        recordFinish(s, { member, unit: UNIT, outcome, body, gen: process.env.DS_GEN || null, wt: toplevel(),
+          key: `finish-unit:${label}/${topic}/${UNIT}@${head}:${outcome}` });
+      } finally { s.close(); }
+    } catch (e) {
+      writeErr(`finish-unit: could not record the finish in loop.db (${(e as Error).message}) — fix it and re-run; nothing was sent\n`);
+      return 1;
+    }
+    const [jt, jw] = FAILED
+      ? [`unit failed: ${FAILED}`, "finish-unit.sh --failed recorded the finish and sent worker_done --outcome failed"]
+      : NO_PR
+      ? ["unit finished without a PR (--no-pr)", "finish-unit.sh sent worker_done with no PR recorded"]
+      : [`unit finished: PR #${PR} on ${br}`, "finish-unit.sh recorded the PR and sent worker_done"];
+    const j = await runCmd([join(ROOT, "bin", "role", "journal.sh"), label, topic, `builder-${UNIT}`, "add", "keep", jt, jw]);
+    if (j.rc !== 0) writeErr("finish-unit: warning: journal note failed (continuing)\n");
+  } else writeErr(`finish-unit: warning: '${STATE}' is not state/<project>/squads/<topic>.json — skipping the finish record and journal note\n`);
+
+  const wd = await runCmd([BACKEND, "worker-done", ...(FAILED ? ["--outcome", "failed"] : []), subject, body]);
   const wdOut = trim(wd.out + wd.err);
   if (wd.rc !== 0) {
     if (wdOut.includes("no active dispatch")) {
@@ -172,6 +203,6 @@ export async function run(raw: string[]): Promise<number> {
     return 1;
   }
   if (wdOut) writeOut(wdOut + "\n");
-  writeOut(NO_PR ? `finish-unit: unit '${UNIT}' finished (no PR)\n` : `finish-unit: unit '${UNIT}' finished (PR #${PR})\n`);
+  writeOut(FAILED ? `finish-unit: unit '${UNIT}' ended failed\n` : NO_PR ? `finish-unit: unit '${UNIT}' finished (no PR)\n` : `finish-unit: unit '${UNIT}' finished (PR #${PR})\n`);
   return 0;
 }

@@ -198,6 +198,9 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .arch .item,.detail .item{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:6px 0;font:12px var(--mono)}
 .arch .item>*{white-space:nowrap}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50}
+/* a fixed overlay chains the scroll it does not use to the page: :has() freezes the page while any popup (stacked or not) is open, the gutter keeps the width, contain keeps each popup's scroll to itself */
+html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavior:none}
+.modal,.modal .mbox,.modal .md,.modal .qbody,.modal .msg-list,.modal .chat-log,.modal .set-body,.modal .set-box,.modal textarea{overscroll-behavior:contain}
 .mbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:min(900px,100%);max-height:85vh;display:flex;flex-direction:column}
 .mhd{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);font:600 13px var(--mono)} .mhd .sp{flex:1}
 .md{padding:16px 20px;overflow:auto} .md h3,.md h4,.md h5,.md h6{margin:14px 0 6px} .md p{margin:6px 0}
@@ -248,6 +251,8 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .qbody textarea{width:100%;min-height:60px;resize:vertical;background:#0f1218;border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:8px 10px;font:13px var(--sans)}
 .qfoot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line);flex-wrap:wrap} .qfoot .sp{flex:1}
 .link-chip{display:inline-block;margin-left:6px;font:600 11px var(--mono);opacity:.8}
+.studio-dot{display:inline-block;width:8px;height:8px;margin-left:6px;border-radius:50%;background:var(--amber)}
+.studio-btn .studio-work{font-size:11px}
 .msg-badge{display:inline-block;min-width:16px;padding:0 5px;margin-left:6px;border-radius:9px;background:var(--amber);color:#111;font:600 11px var(--mono);text-align:center}
 .msg-list{flex:1;min-height:120px;overflow:auto;padding:10px 16px;display:flex;flex-direction:column;gap:10px}
 .msg{border:1px solid var(--line);border-radius:6px;padding:8px 10px} .msg.unread{border-color:var(--amber)} .msg.ended{opacity:.55} button.chip-btn{cursor:pointer;font:inherit;color:inherit;border:1px solid var(--line);background:transparent} .msg .mh{display:flex;gap:8px;flex-wrap:wrap;font:12px var(--mono);color:var(--mut)}
@@ -2063,7 +2068,11 @@ function chatTurn(r, source, i) {
   if (t.role === "user") return html`<div key=${i} class="chat-turn in" title=${text}><span>in${time ? " · " + time : ""}</span><span class="txt">${text}</span></div>`;
   return html`<div key=${i} class="chat-turn agent"><div class="md" dangerouslySetInnerHTML=${{ __html: mdToHtml(text) }}></div><span class="chat-time">${time}<${CopyBtn} key=${text} text=${text} /></span></div>`;
 }
-function ChatPanel({ project, topic, wt, label, onClose }) {
+// The seen mark of a chat (local storage, per browser): the `at` of the newest assistant text turn the operator has had open.
+// One key and one meaning for every feature that shows a "new reply" dot.
+const chatSeenKey = (project, wt) => "b:chat-seen:" + project + "/" + wt;
+const chatReplyAt = (turns) => { for (let i = (turns || []).length - 1; i >= 0; i--) { const t = turns[i]; if (t && t.role === "assistant" && !t.tool && t.at != null) return t.at; } return null; };
+function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [text, setText] = useState("");
@@ -2087,6 +2096,12 @@ function ChatPanel({ project, topic, wt, label, onClose }) {
   }, [url]);
   // After each render: follow the newest row while pinned; once scrolled up, stay put.
   useEffect(() => { const el = log.current; if (el && pinned) el.scrollTop = el.scrollHeight; });
+  // The Studio chat (header button): while open, its newest reply counts as read (the shared seen mark, chatSeenKey).
+  useEffect(() => {
+    if (topic !== "_studio" || !data) return;
+    const at = chatReplyAt(data.turns);
+    if (at != null) { lstore.set(chatSeenKey(project, wt), at); if (onSeen) onSeen(); }
+  }, [data]);
   const onScroll = (e) => { const el = e.currentTarget, end = el.scrollHeight - el.scrollTop - el.clientHeight < 24; if (end !== pinned) setPinned(end); };
   const toEnd = () => { const el = log.current; if (el) el.scrollTop = el.scrollHeight; setPinned(true); };
   // The input grows with its text to about six lines (CSS max-height), then scrolls.
@@ -2103,7 +2118,7 @@ function ChatPanel({ project, topic, wt, label, onClose }) {
   const left = CHAT_MAX - text.length;
   return html`<div class="modal chat-modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox chat">
-      <div class="mhd">Chat · ${label}<span class="mut"> · ${topic === "_studio" ? "Studio" : topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
+      <div class="mhd">${topic === "_studio" ? "Chat · Studio · " + project : "Chat · " + label}<span class="mut">${topic === "_studio" ? "" : " · " + topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll}>${rows.length ? rows.map((r, i) => chatTurn(r, data.source, i))
         : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
         ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
@@ -3427,6 +3442,7 @@ function App() {
   };
 
   // The Flow card's unit details window: the squad and unit are looked up in the live board on every render.
+  const [studioChat, setStudioChat] = useState(null), [, bumpSeen] = useState(0);   // the header Studio chat; bumpSeen re-renders its dot
   const [flowUnit, setFlowUnit] = useState(null);   // { label, topic, slug, ask }
   const openFlowUnit = (c) => setFlowUnit({ label: c.project, topic: c.squad, slug: c.slug, ask: c.needs_you && c.ask ? c.ask : null, card: c });
   const showMember = (sq, m) => { show(sq.label, sq.topic); markCrewRow(sq, m); };
@@ -3442,6 +3458,20 @@ function App() {
   const accFlags = (data.accounts || []).filter((a) => /^broken/.test(a.skills || "") && !a.disabled);
   const H = data.header || {}, AS = data.accounts_summary || { total: 0, free: 0, limited: [], near: [], level: "ok" };
   const M = data.machine;
+  // Header Studio button(s) (chat-with-studio U1): one per `studio` entry of board.json, opening ChatPanel on topic _studio.
+  // Mail badge = the Crew box's unread + reply_due; the dot = a reply newer than this browser's seen mark (b:chat-seen:<project>/<wt>);
+  // a first visit with no mark takes reply_at as the mark, so only a later reply raises it. Settings is not rendered host-wide,
+  // so there the buttons end the header.
+  const studioBtns = (data.studio || []).map((st) => {
+    const k = chatSeenKey(st.label, st.wt), mail = (st.unread || 0) + (st.reply_due || 0);
+    let seen = lstore.get(k, null);
+    if (seen == null && st.reply_at != null) { lstore.set(k, st.reply_at); seen = st.reply_at; }
+    const dot = st.reply_at != null && seen != null && st.reply_at > seen;
+    const name = data.project ? "Studio" : "Studio · " + st.label;
+    return html`<button key=${"studio-" + st.label} class="btn sm studio-btn" disabled=${!st.adopted}
+      title=${st.adopted ? "Chat with this project's Studio" : "the loop has not adopted this project's Studio terminal yet — see the studio.adopt card"}
+      onClick=${() => setStudioChat({ project: st.label, topic: "_studio", wt: st.wt, label: "Studio" })}>💬 ${name}${mail > 0 && html`<span class="msg-badge" title=${st.unread + " unread · " + st.reply_due + " waiting for a reply"}>${mail}</span>`}${dot && html`<span class="studio-dot" title="new reply" aria-label="new reply"></span>`}${st.working && html`<span class="mut studio-work"> working</span>`}</button>`;
+  });
   const openMachine = () => { setMachOpen(true); lstore.set("b:machine", true); setTimeout(() => { const el = document.getElementById("machine"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 50); };
   const openAccounts = () => { setAccOpen(true); lstore.set("b:accts", true); setTimeout(() => { const el = document.getElementById("accounts"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 50); };
   const GHT = githubTile(data.github);
@@ -3470,6 +3500,7 @@ function App() {
         data.spent_total && html`<span title="price-weighted tokens, all squads of the project, archived included">spent ≈${fmtTok(data.spent_total.spent)} since ${dayOf(data.spent_total.since)}</span>`,
         !data.gh.ok && html`<span class="stale-dot" title="the loop's GitHub observer has no PR rows yet">no PR status yet</span>`].filter(Boolean).map((x, k) => html`<${React.Fragment} key=${k}>${k ? " · " : ""}${x}</${React.Fragment}>`)}</span>
       <span class="sp"></span>
+      ${studioBtns}
       ${data.project && html`<button class="btn sm" title="Limits and roles for ${data.project}" onClick=${() => setSettings(true)}>⚙ Settings</button>`}
     </div>
 
@@ -3641,6 +3672,7 @@ function App() {
     <${Briefs} list=${data.briefings || []} schedule=${data.briefing_schedule} project=${data.project || (data.squads[0] && data.squads[0].label) || ""} />
     <${EventLog} tick=${data.generated_at} toast=${setToast} />
 
+    ${studioChat && html`<${ChatPanel} ...${studioChat} onSeen=${() => bumpSeen((n) => n + 1)} onClose=${() => { setStudioChat(null); bumpSeen((n) => n + 1); }} />`}
     ${settingsOpen && data.project && html`<${Settings} project=${data.project} toast=${setToast} onClose=${() => setSettings(false)} />`}
 
     ${ask && html`<${AskOverlay} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}

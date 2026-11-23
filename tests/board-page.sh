@@ -475,15 +475,22 @@ jt "pre-0017 loop.db keeps the agent state" "$TMP/u17.json" '.squads[] | select(
 rm -f "$SD/u17.json"
 
 # The board reads and writes loop.db alone: no command, no file read and no config script or Lavish
-# start in the whole of bin/board/board-data.ts and bin/board/board-server.ts (import lines aside) — the one
-# exception is the page itself, web/board.html, read by its line in the server.
+# start in the whole of bin/board/board-data.ts and bin/board/board-server.ts (import lines aside) — the
+# exceptions are the page itself, web/board.html, read by its line in the server, and the chat images
+# (chat-image-upload U1): chatPrune lists `<label>/chat-files/*/` and chatFileGet serves one image.
 PAT='Bun\.spawn|run\(\[|readFileSync|readdirSync|Bun\.file\(|roles\.sh|limits\.sh|lavish-axi|DS_LAVISH_START'
 eq "board-data.ts: no spawn, no file read, no script" "$(grep -nE "$PAT" "$ROOT/bin/board/board-data.ts" | grep -vcE '^[0-9]+:import ' || true)" "0"
-HITS="$(grep -nE "$PAT" "$ROOT/bin/board/board-server.ts" | grep -vE '^[0-9]+:import ' || true)"
-eq "board-server.ts: only the page is read" "$(printf '%s\n' "$HITS" | grep -c . || true)" "1"
+# Each hit outside the page line must sit inside chatPrune or chatFileGet (from its `function` line to the
+# next line that is a lone `}`).
+HITS="$(PAT="$PAT" awk '
+  /^(async )?function (chatPrune|chatFileGet)\(/ { inside = 1 }
+  $0 ~ ENVIRON["PAT"] && $0 !~ /^import / && !inside { print NR ": " $0 }
+  inside && /^}$/ { inside = 0 }' "$ROOT/bin/board/board-server.ts")"
+eq "board-server.ts: only the page is read outside the chat-image block" "$(printf '%s\n' "$HITS" | grep -c . || true)" "1"
 has "board-server.ts: the exception is readFileSync(page)" "$HITS" "readFileSync(page)"
-echo "  (the one exception, web/board.html: bin/board/board-server.ts:${HITS%%:*})"
-eq "board-server.ts: every GET goes through the read block" "$(grep -cE '^  return get\(req, new URL\(req\.url\)\);' "$ROOT/bin/board/board-server.ts")" "1"
+echo "  (the page, web/board.html: bin/board/board-server.ts:${HITS%%:*})"
+eq "board-server.ts: the chat-image block reads files" "$(awk '/^(async )?function (chatPrune|chatFileGet)\(/ { i = 1 } i && /readdirSync|readFileSync/ { n++ } i && /^}$/ { i = 0 } END { print n + 0 }' "$ROOT/bin/board/board-server.ts")" "3"
+eq "board-server.ts: every GET goes through the read block" "$(grep -cE '^  return get\(req, url\);' "$ROOT/bin/board/board-server.ts")" "1"
 
 # Header tiles (plan U3, KTD8): /board.json `accounts_summary` and `header` are computed in board-data;
 # the page only lays them out. Fixture: three accounts (one limited until later today+, one above
