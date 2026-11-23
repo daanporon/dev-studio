@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { accountPlan, accountSkillsCheck } from "../lib/account-skills";
-import { backendPath, globJson, readIfs, run as runCmd, stateRoot, writeErr } from "../lib/shared";
+import { hostBackendPath, globJson, readIfs, run as runCmd, stateRoot, writeErr } from "../lib/shared";
 import { globNames } from "../lib/install";
 
 export const help = `[--limited <file>] [--max-age <s>] — rewrite state/accounts.tsv from the backend's accounts, usage and limits (accounts-refresh.sh)`;
@@ -68,7 +68,7 @@ export async function run(argv: string[]): Promise<number> {
   if (existsSync(LOCK) && Math.floor(Date.now() / 1000) - mtime(LOCK) > 600) { try { rmdirSync(LOCK); } catch { /* taken */ } }
   try { mkdirSync(LOCK); } catch { return 0; }
   try {
-    const be = backendPath();
+    const be = hostBackendPath();
     const out = async (args: string[]) => stripNl((await runCmd([be, ...args])).out);
     const LIST = await out(["account-list"]);
     if (!LIST) return 0; // nothing to describe: leave the last file alone

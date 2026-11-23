@@ -44,6 +44,14 @@
 //           U214: a failed check RUN the stretch never sent is news too, but one that only ran again and failed
 //           again on a head already told about waits red_repoke_min (15; 0 = off), needs an idle Builder, and
 //           pokes at most twice a head; its key carries a digest of the failed runs, and the poke names the lanes
+//   U2      (main-red-liveness-test) with auto_merge on, a dispatched unit PR into the default branch that is
+//           mergeable and only `behind` gets an `update-branch` action per head (fulfil/update-branch.ts merges
+//           the base in on GitHub), one PR per repo at a time, lowest PR number first: the slot (episode
+//           `lifecycle:update-branch`, subject the repo, key the PR ref) holds until the PR merges or closes,
+//           turns blocked for another reason, its update fails, or it has not merged DS_LOOP_UPDATE_HOLD_S
+//           (3600) after its last update. While the loop will update a PR its Builder gets no pr-stale or
+//           pr-news poke; a failed update (`update-branch-failed` for the head, or a failed or dropped claim)
+//           drops it from the line, so the usual "merge the base in" message goes out
 //   10      a feature squad all done (retest.ts; U238 a retest due instead, episode `retest|<topic>|<slug#pr,…>`): all_done_at, and one all-done nudge to an
 //           idle Lead quiet for DS_SWEEP_DONE_IDLE_MIN, episode `done|<topic>|<slug#pr,…>`
 // worktree.remove is sent again every DS_LOOP_LIFECYCLE_RETRY_S (600) while it still
@@ -75,6 +83,7 @@ import { wake } from "../pause/wake.ts";
 import { atPrompt } from "./liveness.ts";
 import { allDone as allDoneIn, retestDue, settleIn } from "../squad/retest.ts";
 import { paused } from "../pause/pause.ts";
+import { UPDATE_FAILED } from "../fulfil/update-branch.ts";
 
 const MERGE_TRIES = 3;
 // U249: GitHub's own word on the PR: the observer's autoMergeRequest is null (key present, value null).
@@ -217,14 +226,39 @@ function prNews(store: Store, project: string, pr: Row, u: Row, applies: boolean
   }
   if (list.includes("draft")) to.push("the PR is a draft.");
   if (!to.length) return null;
-  return { key, text: `${head} changed (${reasons}): ${to.join(" ")} The loop pokes you again when the PR changes; do not poll GitHub. If a blocker needs the Lead, orch.sh ask it.` };
+  return { key, text: `${head} changed (${reasons}): ${to.join(" ")}${pullFirst(store, project, pr)} The loop pokes you again when the PR changes; do not poll GitHub. If a blocker needs the Lead, orch.sh ask it.` };
 }
+
+// U2: a PR the loop will merge the base into, in its repo's line.
+type Updatable = { nwo: string; n: number; ref: string; head: string; topic: string; slug: string; lead: string | null; base: string };
+// U2: the update-branch action's episode for one head of a PR, and its claim row.
+const updateEp = (ref: string, head: string) => `update-branch:${ref}|${head}`;
+const updateClaim = (store: Store, project: string, ref: string) => store.get("episodes", { project, subject: ref, kind: "action:update-branch" });
+// U2: the loop merges the base into this PR itself: auto_merge on, a dispatched unit's open PR into the
+// default branch, mergeable, `behind` its only reason, and no update of this head failed.
+function loopUpdates(store: Store, project: string, pr: Row, u: Row, dflt: string | null): boolean {
+  if (u.status !== "dispatched" || !dflt || pr.base !== dflt || pr.state !== "OPEN" || pr.gone_at || pr.mergeable !== "MERGEABLE") return false;
+  const reasons = pr.reasons ? String(JSON.parse(String(pr.reasons))).split(",").filter(Boolean) : [];
+  if (reasons.length !== 1 || reasons[0] !== "behind" || autoMerge(store, project) === "off") return false;
+  const ref = String(pr.ref), head = headOf(pr);
+  const failed = store.get("episodes", { project, subject: ref, kind: UPDATE_FAILED });
+  if (failed && String(failed.episode_key ?? "") === head) return false;
+  const claim = updateClaim(store, project, ref);
+  return !(claim?.episode_key === updateEp(ref, head) && (claim.state === "failed" || claim.state === "dropped"));
+}
+// U2: after the loop merged the base in on GitHub, the Builder's worktree is a merge commit behind its remote.
+const pullFirst = (store: Store, project: string, pr: Row): string => {
+  const c = updateClaim(store, project, String(pr.ref));
+  return c?.state === "done" && c.result === "updated" ? " The loop merged the base into this branch on GitHub: git pull --no-rebase before you push." : "";
+};
 
 export function run(ctx: TickCtx): Action[] {
   const { store, project, now: t } = ctx, out: Action[] = cancellationActions(ctx);
   const retry = Math.floor(t / envInt("DS_LOOP_LIFECYCLE_RETRY_S", 600));
   const squads = store.db.query("SELECT * FROM squads WHERE project = ? AND doc IS NOT NULL AND COALESCE(status, '') != 'closed' ORDER BY topic").all(project) as Row[];
   const extraGates = humanCheckNames(store, project), expected = prExpectedChecks(store, project);
+  // U2: per repo, the PRs the loop updates (in line) and the open PRs that are not blocked (still on their way to merge).
+  const updates = new Map<string, Updatable[]>(), onTrack = new Set<string>();
   for (const s of squads) {
     const topic = String(s.topic);
     const nwo = (store.get("config", { project, file: "github", key: `repo:${s.repo}` })?.value as string) || null;
@@ -334,12 +368,18 @@ export function run(ctx: TickCtx): Action[] {
         end(row); end(mr); end(slr); end(nr); end(rwr);
         continue;
       }
+      const updating = loopUpdates(store, project, pr, u, dflt);
+      if (updating && nwo && dflt) {
+        const list = updates.get(nwo) ?? [];
+        list.push({ nwo, n: Number(pr.pr), ref: String(pr.ref), head: headOf(pr), topic, slug, lead: lead ?? null, base: dflt });
+        updates.set(nwo, list);
+      } else if (u.status === "dispatched" && !blocked) onTrack.add(String(pr.ref));
       const staleRepoke = envOr(store, project, "DS_LOOP_STALE_REPOKE_MIN", "stale_repoke_min", 30);
       // The sweep's stale_prs pokes: ready or a wait on required:* alone ends the episode, any other
       // waiting arms a second poke.
       if (pr.verdict === "ready" || (pr.verdict === "waiting" && requiredOnly(all.filter(Boolean)))) { end(row); end(slr); } // the full list, as github.ts's carrySince reads it
       else if (pr.verdict === "waiting") { if (row && row.state !== "armed") store.upsert("episodes", sk, { state: "armed", observed_at: t }); }
-      else if (blocked && babysits && m && tree(bwt) && !gateFailOnly) {
+      else if (blocked && babysits && m && tree(bwt) && !gateFailOnly && !updating) {
         const key = `${pr.pr}|${pr.since ?? ""}`, same = row?.episode_key === key, n = same ? Number(row!.count ?? 0) : 0;
         // U182: merge the base in, never rebase; only a `base_update rebase` project keeps the rebase wording.
         const sf = stateFile(store, project, topic), fix = baseUpdate(store, project) === "rebase"
@@ -364,7 +404,7 @@ export function run(ctx: TickCtx): Action[] {
         let q: { prompt: boolean } | null = null;
         const told = () => tell(store, project, topic, slug, pr, prNews(store, project, pr, u, u.status === "dispatched", sf, dflt)?.key ?? null, t);
         if (n === 0 || (same && row!.state === "armed" && n < 2)) {
-          const text = `dev-studio loop: PR #${pr.pr} for your unit ${slug} is not merge-ready (${reasons}).${threadList(pr)} ${fix}`;
+          const text = `dev-studio loop: PR #${pr.pr} for your unit ${slug} is not merge-ready (${reasons}).${threadList(pr)}${pullFirst(store, project, pr)} ${fix}`;
           const w = wake(ctx, bwt, text, "pr-stale", `${pr.problem ?? ""}|${pr.since ?? ""}#${n + 1}`, { allowWorking: claude(m) });
           out.push(...w.actions);
           if (w.status === "sent") store.upsert("episodes", sk, { squad: topic, episode_key: key, count: n + 1, state: "poked", source: "loop", started_at: same ? row!.started_at : t, observed_at: t,
@@ -453,7 +493,7 @@ export function run(ctx: TickCtx): Action[] {
       }
       // U77, after step 9's pr-stale poke (a Builder poked this tick hears the news at its next step if it is a working Claude, else once it is idle): one poke when the
       // PR turns ready, or (U178) when a blocked one shows a new head or a blocking reason not yet sent in this stretch.
-      const news = gateFailOnly ? null : prNews(store, project, pr, u, u.status === "dispatched" && babysits && !!m && !!tree(bwt), stateFile(store, project, topic), dflt);
+      const news = gateFailOnly || updating ? null : prNews(store, project, pr, u, u.status === "dispatched" && babysits && !!m && !!tree(bwt), stateFile(store, project, topic), dflt);
       const nrow = store.get("episodes", nk), told = toldOf(nrow, pr.since);
       const nowHeard = pr.verdict === "blocked" && told ? heard(store, project, pr) : null;
       // U214: a repeat (a failed check ran again) is not fresh news, so it keeps to the wait, an idle Builder and two a head.
@@ -738,6 +778,35 @@ export function run(ctx: TickCtx): Action[] {
     const ep = `done|${topic}|${done.map((u) => `${u.slug}#${u.pr}`).sort().join(",")}`;
     const text = `dev-studio loop: every unit of your squad is done (PR merged) or cancelled, and none is held. Do the testability handoff to your Thinker (skip it for docs-only or one-unit squads), write the debrief (squad-state.sh <state> set-debrief), then set-status done and tell the operator to run /ds-close-squad ${topic}. The loop never closes a squad.`;
     out.push(...wake(ctx, lead, text, "all-done", ep).actions);
+  }
+  out.push(...updateQueue(store, project, t, updates, onTrack));
+  return out;
+}
+
+// U2: one update in flight per repo. The slot names the PR it holds; a PR still in line (its update not
+// yet run, or behind again on a new head) keeps it, and so does one on its way to merge (checks running,
+// ready) for DS_LOOP_UPDATE_HOLD_S after its last update; anything else frees it for the lowest PR number
+// in line. The action is emitted every tick until the actuator has claimed it (it takes an episode once).
+function updateQueue(store: Store, project: string, t: number, updates: Map<string, Updatable[]>, onTrack: Set<string>): Action[] {
+  const out: Action[] = [], hold = envInt("DS_LOOP_UPDATE_HOLD_S", 3600);
+  const slots = store.db.query("SELECT * FROM episodes WHERE project = ? AND kind = 'lifecycle:update-branch'").all(project) as Row[];
+  for (const nwo of new Set([...updates.keys(), ...slots.map((r) => String(r.subject))])) {
+    const key = { project, subject: nwo, kind: "lifecycle:update-branch" }, line = (updates.get(nwo) ?? []).sort((a, b) => a.n - b.n);
+    const row = slots.find((r) => r.subject === nwo) ?? null;
+    let slot = row?.state === "updating" ? row : null;
+    const held = slot ? line.find((c) => c.ref === slot!.episode_key) : undefined;
+    // A free slot keeps its row (state `free`, the last PR it held), so nothing is deleted.
+    if (slot && !held && (!onTrack.has(String(slot.episode_key)) || t >= Number(slot.next_at ?? 0))) {
+      store.upsert("episodes", key, { state: "free", observed_at: t, next_at: null, ended_at: t });
+      slot = null;
+    }
+    const next = slot ? held : line[0];
+    if (!next) continue;
+    // A new head (the PR held, or the next in line) starts the hold clock again.
+    if (!slot || slot.episode_key !== next.ref || slot.result !== next.head)
+      store.upsert("episodes", key, { squad: next.topic, episode_key: next.ref, count: 1, state: "updating", result: next.head, source: "loop", started_at: t, observed_at: t, next_at: t + hold, ended_at: null });
+    out.push({ project, squad: next.topic, ...(next.lead ? { member: next.lead } : {}), subject: next.ref, kind: "update-branch", episode: updateEp(next.ref, next.head),
+      payload: { n: next.n, repo: nwo, ref: next.ref, head: next.head, unit: next.slug, topic: next.topic, base: next.base } });
   }
   return out;
 }

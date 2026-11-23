@@ -5,6 +5,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { ROOT, backendPath, chomp, readJson, run as runCmd, writeErr, writeOut } from "../lib/shared";
 import { prHealthLine } from "../lib/lib";
+import { squadContract } from "../lib/contract-roles.ts";
 import { alt, interp, truthy } from "./watch-ts";
 import { LABEL_FORM, PLAIN_HEADING, PLAIN_LABELS, REVISION_LABELS, approvedCopyPath, planRevisions, plainSection } from "../lib/plan-plain";
 
@@ -192,7 +193,10 @@ async function main(argv: string[]): Promise<number> {
   if (!existsSync(STATE)) refuse(`NOT on the board — no state file at ${STATE} (your spec's state= path; ls ~/.dev-studio/state/*/squads/)`);
   const st = readJson(STATE);
   const runId = st?.run_id;
-  if (!truthy(runId) || runId === "")
+  // A squad off Orca (U11b) has no Run: its loop.db row's backend says it is live all the same.
+  const sqDir = dirname(resolve(STATE)), offOrca = basename(sqDir) === "squads"
+    && squadContract(dirname(dirname(sqDir)), basename(dirname(sqDir)), basename(STATE, ".json")) !== null;
+  if ((!truthy(runId) || runId === "") && !offOrca)
     refuse(`NOT on the board — ${STATE} has no run_id (not a live squad's state file)`);
   // U3: a linked document (--doc), or for a plan-* question the plan found by the id rule; a plan ask needs the plain section.
   let DOC_PATH = "", plainLines: { label: string; text: string }[] = [], revLines: { label: string; text: string }[] = [], revNum = 0;

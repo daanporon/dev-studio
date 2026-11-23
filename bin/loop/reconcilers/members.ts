@@ -35,6 +35,7 @@ import { shell, type Orca, type Out } from "../io/orca.ts";
 import { pmap, readSlots } from "../core/tick.ts";
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
+import { noteRunWorkers } from "../squad/run-reads.ts";
 
 export type Worker = { wt: string; live: boolean; dispatch: string | null; handle: string | null; task: string | null; status: string | null; reported?: boolean };
 // busy: the agent-handles 4th column (`busy` mid-turn, `idle` at its prompt); null when the backend
@@ -246,6 +247,7 @@ export async function reconcile(ctx: TickCtx, orca: Orca): Promise<Action[]> {
     const rw = rws[i];
     if (rw.code !== 0) continue;
     const workers = parseWorkers(rw.out);
+    noteRunWorkers(project, squad, ctx.tick, workers);   // U10: the shadow's member point reuses this read
     const squadType = String((store.db.query("SELECT type FROM squads WHERE project = ? AND topic = ?").get(project, squad) as Row | null)?.type ?? "feature");
     const members = store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND COALESCE(status, '') != 'gone' ORDER BY id")
       .all(project, squad) as Row[];

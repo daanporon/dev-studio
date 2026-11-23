@@ -1,7 +1,8 @@
 // ds team-ts — a squad's roster, switch and reap (U222): what bin/commands/team.sh runs.
 import { existsSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { ROOT, dsLabel, chomp, readJson, globJson, backend, run as runCmd, writeOut, writeErr } from "../lib/shared";
+import { ROOT, dsLabel, chomp, readJson, globJson, backendPath, hostBackendPath, run as runCmd, stateRoot, writeOut, writeErr } from "../lib/shared";
+import { contractStates, isLocalWt } from "../lib/contract-roles.ts";
 
 export const help = `<project> [--topic <slug>] [--switch <label>|--reap] — print a squad's roster, jump to a role's terminal, or reap stale terminals (team.sh)`;
 
@@ -14,9 +15,11 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 async function main(argv: string[]): Promise<number> {
-  const BACKEND = process.env.BACKEND || join(ROOT, "bin", "backend", "orca.sh");
+  // `current` through this squad's own adapter (bin/backend/contract.sh off Orca); every other read is
+  // about Orca's members, so it goes to the host's adapter, and a `local::` member is the contract's (U11b).
+  const BACKEND = hostBackendPath();
   const DIRECTORY = process.env.DIRECTORY || join(ROOT, "bin", "lib", "directory.sh");
-  const be = (args: string[]) => runCmd([BACKEND, ...args]);
+  const be = (args: string[]) => runCmd([args[0] === "current" ? backendPath() : BACKEND, ...args]);
   const err = (s: string) => writeErr(s + "\n");
   const out = (s: string) => writeOut(s);
 
@@ -72,6 +75,10 @@ async function main(argv: string[]): Promise<number> {
     const wid = hit ? str(hit.wt) : "";
     if (!wid) { err(`team: no roster member '${SWITCH}' in ${topic}`); return 1; }
     const tok = str((hit.terminals ?? [])[0]);
+    if (isLocalWt(wid)) {
+      err(`team: '${SWITCH}' runs off Orca (${wid}) — attach to it on its own backend; Orca cannot switch to it`);
+      return 1;
+    }
     if (!tok) {
       const r = Bun.spawnSync([BACKEND, "focus", wid], { stdout: "inherit", stderr: "ignore", stdin: "ignore" });
       if (r.exitCode !== 0) { err(`team: '${SWITCH}' has no live terminal (idle/gone?) — nothing to switch to`); return 1; }
@@ -103,7 +110,16 @@ async function main(argv: string[]): Promise<number> {
   }
 
   // Default: print the roster.
-  const states = chomp((await be(["worker-states"])).out).split("\n").map((l) => l.split("\t"));
+  const scope = TOPIC ? [oneSquad()] : globJson(DIR);
+  const wts = scope.flatMap((f) => { const d = readJson(f); return (d && Array.isArray(d.members) ? d.members : []).map((m: any) => str(m?.wt)); });
+  const lines: string[] = [];
+  if (wts.some((w: string) => w && !isLocalWt(w))) lines.push(...chomp((await be(["worker-states"])).out).split("\n"));
+  if (wts.some(isLocalWt)) {
+    const c = await contractStates(stateRoot(), LABEL);
+    lines.push(...c.lines);
+    for (const b of c.blind) err(`team: can't read the squads off Orca (${b}) — their members show GONE`);
+  }
+  const states = lines.map((l) => l.split("\t"));
   const stateOf = (id: string) => str(states.find((r) => r[0] === id)?.[1]);
   const nameOf = (id: string) => str(states.find((r) => r[0] === id)?.[2]);
   const DIR_JSON = await dirList();
@@ -134,11 +150,7 @@ async function main(argv: string[]): Promise<number> {
     out("\n");
   };
 
-  if (TOPIC) squad(oneSquad());
-  else {
-    const files = globJson(DIR);
-    for (const f of files) squad(f);
-    if (!files.length) out(`team: no squads for '${LABEL}'\n`);
-  }
+  for (const f of scope) squad(f);
+  if (!TOPIC && !scope.length) out(`team: no squads for '${LABEL}'\n`);
   return 0;
 }

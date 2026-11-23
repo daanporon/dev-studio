@@ -48,6 +48,12 @@ export const REQUESTS = {
   "chat-now": obj({ chat: num, request: opt(num) }),
   dismiss: obj({ id: str, answer: opt(str) }),
   duplicate: obj({ wt: opt(str), handle: opt(str), newest: opt(str), runHandle: opt(str), mismatch: opt(bool), first: opt(num) }),
+  // ds-feedback-github-issues U3: the operator's review of one feedback draft or note (fulfil/feedback.ts).
+  "feedback-post": obj({ draft: num, ...THROUGH }),
+  "feedback-add-to": obj({ draft: num, target: num, ...THROUGH }),
+  "feedback-edit": obj({ draft: num, title: opt(str), body: opt(str), ...THROUGH }),
+  "feedback-dismiss": obj({ draft: opt(num), note: opt(num), why: opt(str), ...THROUGH }),
+  "feedback-restore": obj({ note: num, ...THROUGH }),
   "finish-unit": replay,
   keys: obj({ text: str, enter: opt(bool) }),
   lavish: obj({ port: either(num, str) }),
@@ -98,6 +104,8 @@ const ONLY_ACTIONS = {
   "cleanup.report": obj({ refused: opt(str) }),
   // exposed-cleanup U2: run one group of queued stop commands (exposed rows `ids`, one command) once.
   "expose.stop": obj({ ids: arr(num), cmd: str, cwd: opt(str) }),
+  // main-red-liveness-test U2: merge the base into a merge-ready unit PR that is only behind it.
+  "update-branch": obj({ n: num, repo: str, ref: str, head: opt(str), unit: opt(str), topic: opt(str), base: opt(str) }),
   // ds-feedback-github-issues U2: one drafter pass over the `new` notes (`keys`, oldest first) for `repo`.
   "feedback.draft": obj({ repo: str, keys: arr(str) }),
   board_start: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
@@ -139,6 +147,12 @@ export const FACTS = {
   feedback_imported: obj({ file: str, lines: num, added: num, renamed: opt(str) }),
   feedback_noted: obj({ key: str, project: str, member: opt(str), source: str }),
   feedback_drafted: obj({ repo: str, notes: num, drafts: num, blocked: num, kept: num, model: opt(str), account: opt(str), head: opt(str) }),
+  // U3: a draft on its way out, out (filed #issue), edited, dismissed (a draft or one note), a note restored.
+  feedback_posting: obj({ draft: num, repo: str, kind: str, target: opt(num) }),
+  feedback_filed: obj({ draft: num, repo: str, issue: num, url: str, notes: arr(num), found: bool }),
+  feedback_edited: obj({ draft: num, leak: str }),
+  feedback_dismissed: obj({ draft: opt(num), notes: arr(num), why: opt(str) }),
+  feedback_restored: obj({ note: num }),
   limit_cleared: ep,
   limit_expired: ep,
   limit_wait: ep,
@@ -151,6 +165,11 @@ export const FACTS = {
   worktree_created: obj({ path: str, provider: str, branch: str, adopted: bool, parent: opt(str) }),
   worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
   worktree_gone: obj({ path: str, provider: str, why: str }),
+  // U10 (squad/shadow.ts): the shadow signals.
+  shadow_started: obj({}),
+  shadow_disagree: obj({ point: str, old: str, new: str, member: str, id: opt(num), gen: opt(str), wt: opt(str), transient: bool, ticks: num, first_at: num }),
+  shadow_explained: obj({ event: num, why: str, by: opt(str) }),
+  shadow_crash: obj({ member: str, id: num, gen: str, next: str }),
   builder_wish_settled: obj({ id: num, unit: str, was: opt(str) }),
   builder_wish_withdrawn: obj({ id: num, unit: str, why: str, by: str, reason: opt(str) }),
   member_drift_cleared: obj({ id: opt(num), path: opt(str), status: opt(str) }),

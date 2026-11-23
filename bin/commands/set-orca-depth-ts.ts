@@ -3,7 +3,7 @@
 // service around it, and confirms first unless --yes is given.
 import { existsSync, readFileSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, backendPath, run as runCmd, writeErr, writeOut } from "../lib/shared";
+import { ROOT, hostBackendPath, run as runCmd, writeErr, writeOut } from "../lib/shared";
 import { inherit } from "../lib/install";
 
 export const help = `[<n>=5] [--auto [--yes]] — set Orca's "Nested worker depth" to >= n (set-orca-depth.sh)`;
@@ -41,7 +41,7 @@ export async function run(argv: string[]): Promise<number> {
     else if (a === "" || /[^0-9]/.test(a)) { writeErr("usage: set-orca-depth.sh [<n>=5] [--auto [--yes]]\n"); return 2; }
     else want = a;
   }
-  if (!auto) return inherit([backendPath(), "set-nested-depth", want]);
+  if (!auto) return inherit([hostBackendPath(), "set-nested-depth", want]);
 
   const cfg = join(process.env.XDG_CONFIG_HOME || join(process.env.HOME ?? "", ".config"), "orca");
   const profiles = (): string[] => { try { return readdirSync(join(cfg, "profiles")).sort().map((d) => join(cfg, "profiles", d, "orca-data.json")); } catch { return []; } };

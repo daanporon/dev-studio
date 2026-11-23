@@ -12,8 +12,10 @@
 // open() creates the file (WAL, busy timeout, foreign keys) and applies every migration in
 // bin/loop/migrations/*.sql (or $DS_LOOP_MIGRATIONS) not yet recorded in schema_migrations, by
 // filename order — a unit that lands out of number order still migrates (KTD14).
+// Tests only: $DS_LOOP_DB_TEMPLATE names a loop.db already migrated with the shipped migrations
+// (tests/loop/preload-db-template.ts); a new file opened with them starts as a copy (seed()).
 import { Database } from "bun:sqlite";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pause, resume, type PauseOptions, type PauseTarget } from "../pause/pause.ts";
 import { FACTS, MEMBER_WANTS, ONE_TIME, REQUESTS, RESTART_MODES, SERVICE_WANTS, WANTS, WISH_PAYLOADS, problem, type RequestKind, type RequestPayload } from "./kinds.ts";
@@ -108,6 +110,27 @@ export function migrate(db: Database, dir = process.env.DS_LOOP_MIGRATIONS || MI
   return { applied, all: (db.query("SELECT filename FROM schema_migrations ORDER BY filename").all() as { filename: string }[]).map((r) => r.filename) };
 }
 
+// A test hook (squad-cpu-usage U3): with $DS_LOOP_DB_TEMPLATE set (not "0"), a loop.db that does not exist
+// yet starts as a copy of that template instead of replaying every migration; migrate() then applies any it
+// lacks. Only for the shipped migrations: a store with its own dir (opts.migrations, $DS_LOOP_MIGRATIONS)
+// always migrates from scratch. The copy goes to a temp name and is hard-linked into place, so a second
+// opener never sees half a file and an existing file is never replaced. Unset (production), nothing changes.
+function seed(path: string, migrations?: string): boolean {
+  const tpl = process.env.DS_LOOP_DB_TEMPLATE;
+  if (!tpl || tpl === "0" || migrations || process.env.DS_LOOP_MIGRATIONS) return false;
+  if (existsSync(path) || existsSync(`${path}-wal`) || !existsSync(tpl)) return false;
+  const tmp = `${path}.seed-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    copyFileSync(tpl, tmp);
+    linkSync(tmp, path);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
 type RequestOpts = { key?: string | null; project?: string | null; squad?: string | null; member?: string | null; tier?: string | null; by?: string | null };
 
 export class Store {
@@ -126,6 +149,7 @@ export class Store {
       return;
     }
     mkdirSync(root, { recursive: true });
+    const seeded = seed(dbPath(root), opts.migrations);
     this.db = new Database(dbPath(root), { create: true });
     this.db.run("PRAGMA busy_timeout = 5000");
     // SQLite does not call the busy handler for the journal-mode switch, so two processes opening a
@@ -140,7 +164,9 @@ export class Store {
       }
     }
     this.db.run("PRAGMA foreign_keys = ON");
-    this.migrated = migrate(this.db, opts.migrations);
+    const m = migrate(this.db, opts.migrations);
+    // A seeded file is as new as one migrated here: every migration it holds counts as applied by this open.
+    this.migrated = seeded ? { applied: m.all, all: m.all } : m;
   }
 
   close(): void { this.db.close(); }
