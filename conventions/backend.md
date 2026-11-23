@@ -267,7 +267,7 @@ backend (U11, "Started" below).
   closes them with the contract driver (`drivers/contract.ts`). The actuator reaches `tmux` through
   `bin/backend/tmux.ts` and `orca-lite` through `bin/backend/orca-lite.ts` (U13), and has no adapter for
   `herdr`; the registry still marks all three
-  not built (their `adapter` is null until the observer and removal land, U12 and U11c), so a spawn on
+  not built (their `adapter` is null until the observer lands, U12), so a spawn on
   one is still refused. A test reaches this path through `LoopActuator`'s `backends` option and the
   contract fake.
   - **Start.** The member's worktree comes from the squad's recorded `worktree_provider` through
@@ -288,9 +288,22 @@ backend (U11, "Started" below).
     `terminal.send` with `submit`, `turn_started` read as started, `accepted` as accepted.
   - **Finish.** `finish-unit` and `ds finish` know the squad's backend (`DS_BACKEND`, else its loop.db
     row): off Orca there is no Run, so the finish row is the whole finish and no `worker_done` is sent.
+  - **Removal (U11c).** Every removal path closes the member's terminals with `terminal.close` (by the
+    folder path, through the contract seat, one `orca_calls` row per step key so a replay closes nothing
+    twice) and removes its worktree through the squad's recorded provider (`io/worktrees.ts`
+    `removeWorktree`, by path), all in `squad/removal.ts`: a close (`fulfil/close.ts`), a cancel
+    (`fulfil/cancel.ts`: the stop closes, the remove closes again and is forced as `worktree-rm force` is on Orca;
+    until U12 no observer sees these terminals, so a live Builder can skip the stop), a
+    leftover pass (`fulfil/worktree.ts`) and a host tidy of a class `d` tree (`fulfil/cleanup-act.ts`,
+    found by its live `worktrees` row; no `worktree ps` read, and the tree is probed again before the
+    removal). The provider keeps the branch (an unmerged one always); a dirty or unpushed tree is kept as
+    a leftover as on Orca. Before the provider runs, the removal checks the fence Orca's `worktree-rm`
+    checks (`pause.ts` `gateBlock` on the action's `childActivity` gate; blocked answers 75, a wait), and
+    a `terminal.close` that fails keeps the tree, since no backend drops a terminal with its folder. A cancel reads the tree from the `worktrees` row when Orca has none. Squads on
+    `orca` keep `terminal-close-worktree` and `worktree-rm` by id. `tests/loop/contract-removal.test.ts`.
   - **Role scripts (U11b).** See "Role scripts off Orca" below.
-  - **Not yet.** Removal (close, cancel, leftovers, tidy) is U11c's; the observer that reads these
-    members' state is U12's. `nesting.ts` skips such a squad (only Orca moves a worktree under a parent).
+  - **Not yet.** The observer that reads these members' state is U12's. `nesting.ts` skips such a
+    squad (only Orca moves a worktree under a parent).
 
 ### Role scripts off Orca
 

@@ -40,8 +40,16 @@ export function stopping(store: Store, project: string, wt: string): boolean {
     return !cancel || !us.some(u => u.slug === cancel.unit && sharedBuilder(store, u));
   });
 }
+// The worktree a cancelled Builder's id names: Orca's row, or (U11c) for a member of a squad on a contract
+// backend (`local::<path>`) its provider's `worktrees` row, read the same way (seen when it was made).
+// Read straight from the table: store.ts → pause.ts imports this file, so io/worktrees.ts would be a cycle.
+function treeOf(store: Store, project: string, wt: string): Row | null {
+  const orca = wt ? store.get("observed_worktrees", { project, wt }) : null;
+  const r = !orca && wt.startsWith("local::") ? store.get("worktrees", { host: "local", path: wt.slice("local::".length) }) : null;
+  return orca ?? (r ? { path: r.path, gone_at: r.gone_at, observed_at: r.created_at, doc: null } : null);
+}
 export function cancellationReality(store: Store, project: string, wt: string) {
-  const tree = wt ? store.get("observed_worktrees", { project, wt }) : null;
+  const tree = treeOf(store, project, wt);
   const tabs = wt ? store.db.query("SELECT handle, observed_at FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle").all(project, wt) as Row[] : [];
   const worker = wt ? store.get("observed_workers", { project, wt }) : null;
   let agents = 0; try { agents = Number(JSON.parse(String(tree?.doc ?? "{}")).agents ?? 0); } catch {}

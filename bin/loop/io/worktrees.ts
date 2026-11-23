@@ -91,6 +91,8 @@ export async function git(args: string[], timeoutMs = 120_000): Promise<Out> {
 export const lastLine = (o: Out): string => (o.err + "\n" + o.out).split("\n").map((l) => l.trim()).filter(Boolean).at(-1)?.slice(0, 300) ?? `exit ${o.code}`;
 
 const rowAt = (s: Store, path: string, host = HOST): Row | null => s.get("worktrees", { host, path });
+/** The `worktrees` row at `path` on this host, live or gone. */
+export const worktreeAt = (s: Store, path: string): Row | null => rowAt(s, canon(path));
 const ctx = (r: { project?: unknown; squad?: unknown }) => ({ project: r.project == null ? undefined : String(r.project), squad: r.squad == null ? undefined : String(r.squad) });
 
 function check(spec: Spec): void {
