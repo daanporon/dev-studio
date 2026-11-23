@@ -3535,7 +3535,7 @@ function App() {
       };
       const markRead = async () => {
         if (sentQ.has(nkey(n))) return;
-        try { await sendAnswer(n.label, "_studio", n.id, "Mark read"); say("marked the debrief read"); }
+        try { await sendAnswer(n.label, "_studio", n.id, (n.options || [])[0] || "Mark read"); say("marked the debrief read"); }
         catch (e) { say("not read: " + (e.message || e)); }
         qbump((x) => x + 1);
       };
