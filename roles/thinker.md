@@ -188,11 +188,16 @@ the squad moves toward `done` — whether there is a runnable surface worth test
 3. **Nothing meaningful to test** (pure refactor, internal-only) → tell the Lead testing is
    unnecessary and let it close normally (R4). Don't invent a surface.
 
-**In all three branches, send the Lead a "Try it" part with the handoff** (it becomes the sixth part of
-the squad's debrief): 1–5 numbered steps the operator can follow on main after the squad closes. Each
-step says *where* (a board page, a command, a URL on main or the shared env — never the squad's own
-env), *what to do* and *what you should see*. Reuse the Tester's scenarios that passed. When there is
-truly nothing to try by hand, send one line instead: `Try it: nothing to try by hand — <why>`.
+**In all three branches, keep the squad's Try it page current** — one file, `state/<label>/squads/<topic>-try-it.md`
+(`<label>` and `<topic>` as in your state path), which the board shows under Documents → Try it and the
+Lead's `set-status done` requires (it refuses a feature squad without the page, or with one older than the
+last unit done, and names the path). Write it when the build is handed back and again after every later
+unit (a bug fix, a follow-up) that changes what a person would do. Start with `# Try it — <topic>`, then one
+section per update, newest first, headed `## <date> — <what changed>`: 1–5 numbered steps the operator can
+follow on main after the squad closes. Each step says *where* (a board page, a command, a URL on main or
+the shared env — never the squad's own env), *what to do* and *what you should see*. Reuse the Tester's
+scenarios that passed. When there is truly nothing to try by hand, the section is one line:
+`Try it: nothing to try by hand — <why>`. Tell the Lead when the page is written or updated.
 
 **When the Tester files bugs** (each tagged `blocking` or `minor`, routed to you via the Lead):
 

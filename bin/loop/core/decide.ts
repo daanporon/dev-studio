@@ -47,6 +47,7 @@ import { STANDING } from "../drivers/types.ts";
 
 import type { Action, Reconciler, TickCtx } from "./plugins.ts";
 import { ROOT, type Row, type Store } from "./store.ts";
+import { withDecideMemo } from "../capacity/walk-memo.ts";
 
 export type Reality = "none" | "starting" | "running" | "unknown";
 export type Facts = {
@@ -372,8 +373,12 @@ function splitAccount(key: string): [string, string] {
   return [acct.slice(0, i), acct.slice(i + 1)];
 }
 
-// Host scope: seed, compare, pick, act.
+// Host scope: seed, compare, pick, act. Every pick() of one decide reads the limits rows and the machine sample
+// once (walk-memo.ts withDecideMemo; the picks walk keeps more, withWalkMemo).
 export function decide(ctx: TickCtx): Action[] {
+  return withDecideMemo(ctx.store, ctx.now, () => decideNow(ctx));
+}
+function decideNow(ctx: TickCtx): Action[] {
   const { store, now } = ctx;
   seed(ctx);
   const seen = members(store).filter((m) => !isCancel(store, m)).filter((m) => !driftCleared(store, m, now)).map((m) => look(store, m, now));
