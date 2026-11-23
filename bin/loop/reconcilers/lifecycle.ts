@@ -75,6 +75,8 @@ import { wake } from "../pause/wake.ts";
 import { atPrompt } from "./liveness.ts";
 import { allDone as allDoneIn, retestDue, settleIn } from "../squad/retest.ts";
 import { paused } from "../pause/pause.ts";
+import { onContract } from "../squad/backend.ts";
+import { finishOf } from "../squad/finish-read.ts";
 
 const MERGE_TRIES = 3;
 // U249: GitHub's own word on the PR: the observer's autoMergeRequest is null (key present, value null).
@@ -251,6 +253,7 @@ export function run(ctx: TickCtx): Action[] {
     const tree = (wt: unknown): Row | null => (wt ? store.db.query("SELECT * FROM observed_worktrees WHERE project = ? AND wt = ? AND gone_at IS NULL").get(project, String(wt)) as Row | null : null);
     const lead = (s.lead_wt as string) || (store.db.query("SELECT wt FROM members WHERE project = ? AND squad = ? AND role = 'lead' AND COALESCE(status, '') != 'gone' ORDER BY ord DESC, id DESC").get(project, topic) as { wt: string } | null)?.wt;
     const babysits = store.get("config", { project, file: "ship-mode", key: "mode" })?.value !== "local-only";
+    const contract = onContract(store, project, topic);
     const units = () => store.db.query("SELECT rowid AS _rowid, * FROM units WHERE project = ? AND squad = ? ORDER BY ord IS NULL, ord, id").all(project, topic) as Row[];
     // U160: `hold` keeps a planned unit quiet; a unit dispatched by hand despite it is only held back by a blocking question (U28/#273).
     const waitingForRuling = (u: Row, questions = waiting(store, project, topic)) => (u.status !== "dispatched" && !!u.hold) || !!blockingForUnit(questions.map(entryOf), String(u.slug));
@@ -301,7 +304,9 @@ export function run(ctx: TickCtx): Action[] {
       const pr = u.pr ? prRow(u.pr, slug) : null;
       // 1c (U155): write the Builder's own archived wish; the decider (decide.ts) closes it
       // only once it is not working or waiting, and fulfil/close.ts removes its worktree.
-      if (u.status === "done" && pr?.state === "MERGED" && m && m.want !== "gone" && !paused(store, { project, squad: topic, member: bwt }) && !["working", "waiting"].includes(String(worker(bwt)?.state ?? ""))) {
+      // U12: off Orca, a finish row of its generation also says its work ended.
+      const idle = !["working", "waiting"].includes(String(worker(bwt)?.state ?? "")) || (!!m && contract && !!finishOf(store, m));
+      if (u.status === "done" && pr?.state === "MERGED" && m && m.want !== "gone" && !paused(store, { project, squad: topic, member: bwt }) && idle) {
         store.want("member", String(m.id), "gone", { by: "loop", why: `unit ${slug} done` });
       }
       // 9: dispatched, or done while its Builder is still a member

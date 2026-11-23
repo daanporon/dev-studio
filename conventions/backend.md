@@ -255,9 +255,18 @@ backend (U11, "Started" below).
     `terminal.send` with `submit`, `turn_started` read as started, `accepted` as accepted.
   - **Finish.** `finish-unit` and `ds finish` know the squad's backend (`DS_BACKEND`, else its loop.db
     row): off Orca there is no Run, so the finish row is the whole finish and no `worker_done` is sent.
-  - **Not yet.** Removal (close, cancel, leftovers, tidy) is U11c's; the observer that reads these
-    members' state is U12's; the role scripts' own backend calls are U11b's. `nesting.ts` skips such a
-    squad (only Orca moves a worktree under a parent).
+  - **Observed (U12).** `observers/contract.ts` reads these members, not the Orca observer (whose known
+    worktrees and gone sweeps skip every worktree and folder of a squad off Orca): per member the newest
+    terminal `terminal.list` shows in its folder (its own `DS_GEN` first), `terminal.last_output`,
+    `terminal.read` and, on `state: native`, `agent.state`, plus the host's process walk. Its state is
+    idle when the walk finds no agent process, else the native answer; on `state: none`, working while
+    the transcript or output moved within `chat_quiet_s` (or `esc to interrupt` shows), idle at an empty
+    prompt with the agent alive, else unknown. A terminal no longer listed marks the worker gone; a
+    failed list marks nothing. The decider reads the walk alone (`walkReality`), and the finish row
+    (`ds finish`, of the member's generation) stands in for Orca's dispatch: it ends a one-shot role,
+    retires a Tester, lets a done Builder retire and carries the Lead's failed / no-PR report.
+  - **Not yet.** Removal (close, cancel, leftovers, tidy) is U11c's; the role scripts' own backend calls
+    are U11b's. `nesting.ts` skips such a squad (only Orca moves a worktree under a parent).
 
 ## The Orca adapter (contract v1)
 

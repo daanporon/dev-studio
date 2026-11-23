@@ -44,6 +44,7 @@ import { wake } from "../pause/wake.ts";
 import { ask as askCheckpoint, owed, pendingWhy, sweep as sweepCheckpoints } from "../pause/stop-checkpoint.ts";
 import { seed } from "../db/seed.ts";
 import { STANDING } from "../drivers/types.ts";
+import { onContract } from "../squad/backend.ts";
 
 import type { Action, Reconciler, TickCtx } from "./plugins.ts";
 import { ROOT, type Row, type Store } from "./store.ts";
@@ -122,7 +123,9 @@ export function compare(f: Facts): Act {
 // Reality as the decider reads it: running, none or unknown from presence (U149). A member the loop
 // placed that no walk has read since (no worker row yet, or one older than the start) is "starting"
 // for the spawn grace (DS_SWEEP_SPAWN_GRACE_MIN), then unknown: never a second start beside it.
+// U12: a squad off Orca has no dispatch, so its reality is the process walk alone (walkReality).
 export function reality(store: Store, m: Row, now: number): Reality {
+  if (onContract(store, String(m.project), String(m.squad))) return walkReality(store, m, now);
   const w = m.wt ? store.get("observed_workers", { project: m.project, wt: m.wt }) : null, placed = lastStart(m);
   const unread = !w || w.gone_at != null || Number(w.account_at ?? 0) <= placed;
   // account-move-slow U2: the loop stopped it and a walk read since found no agent, while Orca's
@@ -137,6 +140,19 @@ export function reality(store: Store, m: Row, now: number): Reality {
   if (w && w.gone_at != null && Number(w.gone_at) > placed) return "none";
   if (placed && unread) return now - placed < graceS() ? "starting" : "unknown";
   if (!w || w.gone_at != null || w.presence === "none") return "none";
+  return "unknown";
+}
+
+// Reality from the process walk alone (U10's new input, U12's for a squad off Orca): an agent process
+// in the member's worktree is running, none is none, a failed or split walk unknown; a start no walk
+// has read since is starting for the spawn grace, then unknown. A shell left open is no agent.
+export function walkReality(store: Store, m: Row, now: number): Reality {
+  const w = m.wt ? store.get("observed_workers", { project: m.project, wt: m.wt }) : null, placed = lastStart(m);
+  const unread = !w || w.gone_at != null || Number(w.account_at ?? 0) <= placed;
+  if (w && w.gone_at == null && w.walk === "running") return "running";
+  if (w && w.gone_at != null && Number(w.gone_at) > placed) return "none";
+  if (placed && unread) return now - placed < graceS() ? "starting" : "unknown";
+  if (!w || w.gone_at != null || w.walk === "none") return "none";
   return "unknown";
 }
 

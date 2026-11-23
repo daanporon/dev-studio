@@ -24,6 +24,7 @@ import { backendOp, backendPath, inProcess } from "../io/orca.ts";
 import { redact } from "../core/redact.ts";
 import { adoptStudio, STUDIO_SQUAD, studioAgent } from "../squad/studio.ts";
 import { loopProjects } from "../settings/projects.ts";
+import { offOrca } from "../squad/backend.ts";
 
 export type PsAgent = { state?: string; stateStartedAt?: number; lastAssistantMessage?: string };
 export type PsWorktree = { worktreeId: string; path?: string; branch?: string; displayName?: string; lastOutputAt?: number;
@@ -352,11 +353,17 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
         ctx.facts.unreadRuns = coordinatorMail(store, unread);
         if (terminals) ctx.facts.terminalHandles = new Set(terminals.map((t) => t.handle));
       }
-      const live = store.db.query("SELECT COUNT(*) AS n FROM observed_workers WHERE project = ? AND gone_at IS NULL").get(project) as { n: number };
+      const live = store.db.query("SELECT COUNT(*) AS n FROM observed_workers WHERE project = ? AND gone_at IS NULL AND wt NOT LIKE 'local::%'").get(project) as { n: number };
       if (ps.length === 0 && live.n > 0) throw new Error("orca ps listed no worktrees (an Orca hiccup?); nothing marked gone");
 
-      const ids = knownWts(store, project, ps);
+      // U12: squads on Orca and the Studio only. A member of a squad off Orca, and any folder such a
+      // squad's worktrees row owns, is the contract observer's (observers/contract.ts): never read,
+      // never marked gone here.
+      const off = offOrca(store, project);
+      const offPath = (w: PsWorktree) => { const p = pathOf(w); return !!p && off.paths.has(p.replace(/\/+$/, "")); };
+      const ids = knownWts(store, project, ps.filter((w) => !offPath(w)));
       for (const d of dir) if (d.wt) ids.add(d.wt);
+      for (const wt of ids) if (off.wts.has(wt) || wt.startsWith("local::") || off.paths.has(String(wtPath(wt) ?? "").replace(/\/+$/, ""))) ids.delete(wt);
       const byWt = new Map(dir.map((d) => [d.wt, d]));
       const mine = ps.filter((w) => ids.has(w.worktreeId) && !w.isArchived);
       const mail = new Map<string, number>();
@@ -426,15 +433,20 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
           store.upsert("observed_workers", { project, wt }, { gone_at: previous?.gone_at ?? now, observed_at: now,
             doc: { agent_states: [], terminals_seen_at: terminals ? now : null } });
         }
+        // U12: the contract observer's rows (a `local::` worktree, a member off Orca) are left alone.
+        const theirs = JSON.stringify([...off.wts]);
         for (const t of ["observed_worktrees", "observed_workers"]) {
-          store.db.run(`UPDATE ${t} SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt NOT IN (SELECT value FROM json_each(?))`, [now, project, seen]);
+          store.db.run(`UPDATE ${t} SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt NOT IN (SELECT value FROM json_each(?))
+            AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?))`, [now, project, seen, theirs]);
         }
-        if (terminals || !adapter.terminals) store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND handle NOT IN (SELECT value FROM json_each(?))",
-          [now, project, JSON.stringify(terminals ? terminals.filter((t) => t.connected === true && t.writable !== false && t.orphaned !== true).map((t) => t.handle) : dir.flatMap((d) => d.terminals ?? []))]);
+        if (terminals || !adapter.terminals) store.db.run(`UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND handle NOT IN (SELECT value FROM json_each(?))
+            AND COALESCE(wt, '') NOT LIKE 'local::%' AND COALESCE(wt, '') NOT IN (SELECT value FROM json_each(?))`,
+          [now, project, JSON.stringify(terminals ? terminals.filter((t) => t.connected === true && t.writable !== false && t.orphaned !== true).map((t) => t.handle) : dir.flatMap((d) => d.terminals ?? [])), theirs]);
         // A terminal row whose worktree is no longer the project's (an over-wide name match before) is
         // gone too, though its handle is still live under the project that owns it.
-        store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt IS NOT NULL AND wt NOT IN (SELECT value FROM json_each(?))",
-          [now, project, JSON.stringify([...ids])]);
+        store.db.run(`UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt IS NOT NULL AND wt NOT IN (SELECT value FROM json_each(?))
+            AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?))`,
+          [now, project, JSON.stringify([...ids]), theirs]);
         // U261: only a listing that succeeded can adopt, keep or release the Studio's terminal.
         if (terminals) adoptStudio(store, project, now);
       });

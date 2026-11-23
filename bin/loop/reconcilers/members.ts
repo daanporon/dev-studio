@@ -30,6 +30,7 @@ import { stopping } from "../squad/cancel.ts";
 // pane the loop owns is never one. A card is cleared once its terminal is gone (a close clears its own).
 import { paused } from "../pause/pause.ts";
 import { lock } from "../squad/member-state.ts";
+import { finishOf } from "../squad/finish-read.ts";
 import { STANDING } from "../drivers/types.ts";
 import { shell, type Orca, type Out } from "../io/orca.ts";
 import { pmap, readSlots } from "../core/tick.ts";
@@ -229,8 +230,32 @@ function held(store: Store, project: string): Row[] {
       AND COALESCE(s.status, '') NOT IN ('suspended', 'closed', 'gone') ORDER BY s.topic`).all(project) as Row[];
 }
 
+// U12: the squads off Orca. They have no Run to read, so only the Tester retire applies: a feature
+// squad's Tester whose pass ended (a verdict finish row of its generation, no agent process left in its
+// worktree) is closed like a done Builder. Rebinds, strays and duplicates are Orca's.
+function contractTesters(ctx: TickCtx): void {
+  const { store, project } = ctx;
+  const squads = store.db.query(`SELECT topic FROM squads WHERE project = ? AND COALESCE(backend, 'orca') != 'orca' AND COALESCE(type, 'feature') = 'feature'
+      AND COALESCE(status, '') NOT IN ('suspended', 'closed', 'gone') ORDER BY topic`).all(project) as Row[];
+  for (const s of squads) {
+    const squad = String(s.topic);
+    const testers = store.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND role = 'tester' AND wt IS NOT NULL
+        AND COALESCE(status, '') != 'gone' AND COALESCE(want, '') != 'gone' ORDER BY id`).all(project, squad) as Row[];
+    for (const m of testers) {
+      const wt = String(m.wt);
+      if (stopping(store, project, wt) || paused(store, m as { project: string }) || starting(m, ctx.now, store)) continue;
+      if (finishOf(store, m)?.outcome !== "verdict") continue;
+      const w = store.get("observed_workers", { project, wt });
+      if (w && w.gone_at == null && w.walk !== "none") continue;
+      if (store.want("member", String(m.id), "gone", { by: "loop", why: "tester pass finished" }).changed)
+        store.event("tester_pass_done", { project, squad, member: wt, payload: { suffix: m.suffix ?? "", at: ctx.now } });
+    }
+  }
+}
+
 export async function reconcile(ctx: TickCtx, orca: Orca): Promise<Action[]> {
   const { store, project } = ctx, squads = held(store, project);
+  contractTesters(ctx);
   // With no squad held or no agent list, no member is up: strays only clears the cards of gone terminals.
   if (!squads.length) return strays(ctx, orca, new Map(), loopPanes(store, project));
   // U239: the reads go out together: agent-handles, terminal-shells (when strays is due) and each held
