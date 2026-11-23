@@ -5,6 +5,8 @@
 // is empty, no picker is open (an open picker question for it, or a menu its driver knows on the
 // screen), no mail to it is unread, and no earlier typed action for it (an undone answer, poke, keys
 // or chat request, or a delivery not yet taken) is ahead of this one. Each refusal names its own why.
+// A board chat to a Claude member passes `screenNoise: "ignore"`: output alone does not hold it, only a
+// fresh transcript or Claude's working marker on a screen read since that output.
 //
 // A member is read by worktree (observed_workers: the worktree's agent terminal, the one the backend's
 // poke types into). The Studio is read by its adopted handle only (observed_terminals), since its
@@ -20,7 +22,19 @@ export type ReadyOpts = {
   handle?: string | null;   // read this terminal (the Studio's adopted one) instead of the worktree's
   agent?: string | null;    // whose driver knows the menus on the screen
   before?: number | null;   // this request's id: only requests filed before it count as ahead
+  // "ignore" (board chat only, fulfil/chat.ts): for a Claude member, recent terminal output alone is
+  // not busy. It is busy only while its transcript was written within quietS or the newest screen read,
+  // taken after that output, shows Claude's working marker (workingOnScreen). Any other agent keeps the rule.
+  screenNoise?: "ignore";
 };
+
+// Claude's working marker: `esc to interrupt` in the status row under its prompt box (or on the
+// spinner row just above it). Only the screen's last rows are read, so a reply quoting the words
+// higher up does not read as working.
+const MARKER_ROWS = 6;
+export function workingOnScreen(tail: string): boolean {
+  return tail.replace(/\s+$/, "").split("\n").slice(-MARKER_ROWS).some((l) => /esc to interrupt/i.test(l));
+}
 
 // The request kinds that type into a member's terminal.
 export const TYPED_KINDS = ["answer", "poke", "keys", "chat"] as const;
@@ -62,10 +76,12 @@ export function memberReady(store: Store, project: string, wt: string, now: numb
     if (w.state === "working") return no("busy: working");
     out = Number(w.last_output_at ?? 0); tail = String(w.tail ?? ""); tailAt = w.tail_at == null ? null : Number(w.tail_at); unread = Number(w.unread ?? 0);
   }
-  if (now - out < o.quietS) return no("busy: terminal output");
+  const noise = o.screenNoise === "ignore" && (o.agent || "claude") === "claude";
+  if (!noise && now - out < o.quietS) return no("busy: terminal output");
   const tr = store.db.query("SELECT MAX(mtime) AS m FROM observed_transcripts WHERE project = ? AND wt = ? AND COALESCE(entrypoint, '') != 'sdk-cli'").get(project, wt) as { m: number | null };
   if (tr.m != null && now - tr.m < o.quietS) return no("busy: transcript");
   if (tailAt == null || tailAt < out) return no("screen not read since its last output");
+  if (noise && workingOnScreen(tail)) return no("busy: working on screen");
   const draft = promptDraft(tail);
   if (draft === null) return no("no prompt on screen");
   if (draft) return no("text at the prompt");
