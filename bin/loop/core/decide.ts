@@ -3,6 +3,7 @@
 // (observed_workers.presence, U149) and gives at most one act. compare() is the act table, pure:
 //
 //   lock held (a lifecycle claim acted/running, an Orca call sent/pending)      nothing
+//   the archive's final-debrief hold (a Lead, squad/archive-debrief.ts)          nothing: no close, no start
 //   stopped/archived/suspended, agent present (U155)                             close: stop
 //   archived/suspended, no agent, worktree present (U155)                        close: remove
 //   paused                                                                       nothing (the pause flow)
@@ -50,6 +51,7 @@ import { ROOT, type Row, type Store } from "./store.ts";
 export type Reality = "none" | "starting" | "running" | "unknown";
 export type Facts = {
   view: View; lock: boolean; reality: Reality;
+  hold?: boolean;          // the squad archives and its Lead writes the final debrief (effective() why archive-debrief)
   unknownS: number;        // how long reality has read unknown
   recheckS: number;        // RECHECK_MIN in seconds
   resume: boolean | null;  // a pause resume: may it start (null: none)
@@ -75,7 +77,7 @@ export type Act = { act: "start" } | { act: "stop"; why: string } | { act: "chec
   | { act: "reload" } | { act: "clear" } | { act: "close"; phase: "stop" | "remove"; why: string } | null;
 
 export function compare(f: Facts): Act {
-  if (f.lock) return null;
+  if (f.lock || f.hold) return null;
   // U155: a stopped member is never restarted; an archived one is closed, then its worktree
   // removed. A cancelled Builder is cancel.ts's, filtered out first.
   if (f.view === "suspended") {
@@ -304,13 +306,14 @@ function look(store: Store, m: Row, now: number): Seen {
   const w = payloadOf(m);
   const sw = switchFacts(store, m, now), stops = stopFacts(store, m, now);
   const tree = m.wt ? store.get("observed_worktrees", { project: m.project, wt: m.wt }) : null;
+  const why = effective(store, m).why;
   const wtPath = tree?.path ? String(tree.path) : m.wt && String(m.wt).includes("::") ? String(m.wt).split("::").at(-1)! : "";
   return { m, resume: resuming ? resume : null, f: {
-    view: view(store, m), lock: lock(store, m), reality: r, switchStuck: limitStuck(store, m, now),
-    closeOK: ["stopped", "gone"].includes(String(m.want ?? "")) || effective(store, m).why === "squad" || !closeBusy(store, m),
+    view: view(store, m), lock: lock(store, m), reality: r, hold: why === "archive-debrief", switchStuck: limitStuck(store, m, now),
+    closeOK: ["stopped", "gone"].includes(String(m.want ?? "")) || why === "squad" || !closeBusy(store, m),
     hasWorktree: !!m.wt && ((!!tree && tree.gone_at == null) || (!!wtPath && existsSync(wtPath))),
     wt: !!m.wt,
-    staleWtOk: effective(store, m).why === "squad" || m.want === "gone",
+    staleWtOk: why === "squad" || m.want === "gone",
     unknownS: unknownFor(store, m, r, now), recheckS: knob(store, String(m.project), "RECHECK_MIN", 5) * 60,
     resume: resuming ? resumeGate(store, m, resume!) : null,
     switchDue: m.want_result == null && (!ACTED.includes(w.why as string | undefined) || pinsOther(m, w)),

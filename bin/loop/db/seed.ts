@@ -5,7 +5,8 @@
 // walk succeeds (and before its first compare) every member's wish is set from what is there, in
 // this order:
 //   1. a member wanted gone stays gone (no event)
-//   2. a member of a closed squad (closed, archived, gone, or wanted gone) -> gone
+//   2. a member of a closed squad (closed, archived, gone, or wanted gone) -> gone, except the Lead
+//      the archive's final-debrief step holds (left as it is)
 //   3. its agent present (the walk this tick saw it) -> running
 //   4. open work -> running: a standing role (Lead, Thinker) of a running or suspended squad, or a
 //      Builder whose unit is dispatched and not done, merged or cancelled
@@ -16,6 +17,7 @@
 // `wish_seeded` event; the project's `wish_seed` episode row marks it done.
 import { mergedUnit } from "../pause/pause-conditions.ts";
 import { STANDING } from "../drivers/types.ts";
+import { debriefHold } from "../squad/archive-debrief.ts";
 import type { TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
 
@@ -36,6 +38,8 @@ function present(store: Store, m: Row, now: number): boolean {
 export function seedWish(store: Store, m: Row, now: number): Wish | null {
   if (m.want === "gone") return null;
   const sq = store.get("squads", { project: m.project, topic: m.squad });
+  // The Lead of an archiving squad keeps its wish while the final-debrief step holds it (squad/archive-debrief.ts).
+  if (debriefHold(store, m, sq)) return null;
   if (!sq || CLOSED.includes(String(sq.status)) || sq.want === "gone") return "gone";
   if (present(store, m, now)) return "running";
   const squadOpen = (sq.want ?? sq.status) === "running" || (sq.want ?? sq.status) === "suspended";

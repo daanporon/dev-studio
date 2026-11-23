@@ -80,7 +80,7 @@ const USAGE = `usage: squad-state.sh <file> <command> [args]
   set-repo         <file> <repo-selector>
   set-host         <file> <saved-env-or-empty>
   set-framing      <file> <framing-text>
-  set-debrief      <file> <text> | --file <path>   (the squad's short debrief — six parts, the sixth a feature squad's "Try it" — written before set-status done; empty is refused)
+  set-debrief      <file> <text> | --file <path>   (the squad's short debrief — six parts, the sixth a feature squad's "Try it" — written before set-status done; empty is refused; also records debrief_at and debrief_units)
   set-spawn        <file> <repo> <host> <framing>   (all three at once)
   set-type         <file> <feature|testing>
   set-autonomy     <file> <checkpoints|lfg>
@@ -688,7 +688,8 @@ function main(argv: string[]): void {
       }
       text = text.trim();
       if (text === "") die(1, "squad-state: set-debrief: refusing an empty debrief");
-      return set((d) => { d.debrief = text; });
+      // debrief_at and debrief_units say when and over which units: the archive names the units added after it.
+      return set((d) => { d.debrief = text; d.debrief_at = nowDate(); d.debrief_units = unitsOf(d).map((u) => u?.slug).filter((x) => typeof x === "string"); });
     }
     case "set-spawn": need(3); return set((d) => { d.repo = a[0]; d.host = a[1] === "" ? null : a[1]; d.framing = a[2]; });
     case "add-unit": {

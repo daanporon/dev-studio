@@ -528,6 +528,17 @@ Needs-you row on it) and tell the operator, in your terminal, the exact Studio p
 `/ds-close-squad <topic>`. The operator decides and closes it from the Studio, branches kept.
 `set-status done` refuses without a debrief (a feature squad's needs its `Try it` part), and while any unit is still dispatched, planned or held (it names each with the command that settles it: `cancel-unit`, `set-unit-hold <slug> off`, dropping HELD from the plan, or promoting a follow-up; or leave the squad parked, it is not done) — don't mark a unit with a PR done by hand (a no-PR unit still goes through `set-unit-status <slug> done --no-pr`): the loop marks it done when its PR merges, and the tick's live `‼ merged` line says when it hasn't.
 
+### Final debrief at archive
+
+When the operator archives the squad while you run, the loop keeps you up for up to
+`archive_debrief_min` minutes (default 10) and types one message: write the final debrief. Rewrite
+all six parts above so they cover **every** unit, each named with its PR, including the ones added
+after your done-time debrief (mark those as added late); paste the Thinker's "Try it" steps you
+already have. Save it with `set-debrief` (the message names the exact command) and run nothing else:
+no unit, status or plan change, no messages to your team, which is already closing. The squad then
+closes and the archive keeps your text. If you don't answer in time, it closes with the done-time
+debrief and a line on top naming the units added after it.
+
 ### Parked squad (only held work left)
 
 When every unit is done or cancelled except held ones (and no Tester is up), the squad is **parked**,

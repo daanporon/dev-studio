@@ -63,6 +63,7 @@ export function pokeAsk(reason: string): string {
     msg: "The poke told it a message was waiting in its ds msg inbox.",
     ready: "The poke told it a unit was ready to start.",
     "stop-checkpoint": "The poke asked it to write a journal checkpoint before a planned restart.",
+    "archive-debrief": "The poke asked the Lead to write the final debrief before its squad archives.",
   };
   return ask[reason] ?? (reason.startsWith("pr") ? "The poke told it about a change on its PR." : `The poke was a "${reason}" nudge from the loop.`);
 }
