@@ -20,10 +20,11 @@ import { since } from "../../bin/loop/core/events.ts";
 const ROOT = join(import.meta.dir, "..", "..");
 const T = 1_800_000_000, UNTIL = T + 3 * 86400 + 17;
 const temps: string[] = [], stores: Store[] = [];
+const prevRoot = process.env.DS_STATE_ROOT;
 afterEach(() => {
   for (const s of stores.splice(0)) { try { s.close(); } catch { /* closed */ } }
   for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
-  delete process.env.DS_STATE_ROOT;
+  if (prevRoot === undefined) delete process.env.DS_STATE_ROOT; else process.env.DS_STATE_ROOT = prevRoot;
 });
 
 // accounts.tsv with acct-a blocked by an imported episode and the tsv's own limited_until.
