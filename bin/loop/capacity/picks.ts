@@ -35,6 +35,7 @@ import { candidates, type Wanting } from "../core/decide.ts";
 import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { startWait } from "./slot.ts";
+import { withWalkMemo } from "./walk-memo.ts";
 
 export const startSlots = () => envInt("DS_LOOP_START_SLOTS", 4);
 // A start retry further away than this gives its slot up (U270).
@@ -92,7 +93,10 @@ export function reconcile({ store, now: at }: TickCtx, { eligible, moves }: Want
   store.db.run("DROP TABLE IF EXISTS temp.picks");
   store.db.run("CREATE TEMP TABLE picks AS SELECT * FROM main.picks WHERE member IN (SELECT value FROM json_each(?))", [ids]);
   store.db.run("UPDATE temp.picks SET slot = 0");   // re-earned in order below
-  try {
+  // U3 (loop-tick-8s): the facts every pick() and slot() of this walk read again (each Builder's lock, pause and
+  // presence, the reservations, the limits rows, the units and lanes) are read once (walk-memo.ts); a slot a pick
+  // earlier in the walk took is still read live from the temp copy.
+  try { withWalkMemo(store, at, () => {
     for (const m of eligible) {
       const project = String(m.project), role = String(m.role), id = Number(m.id);
       const unit = store.db.query("SELECT tier FROM units WHERE project = ? AND squad = ? AND slug = ?").get(project, String(m.squad), String(m.suffix ?? "")) as { tier: string | null } | null;
@@ -127,7 +131,7 @@ export function reconcile({ store, now: at }: TickCtx, { eligible, moves }: Want
       store.upsert("picks", { member: id }, row);   // the temp copy: later picks of this walk see it
       plan.push({ m, id, phase, row, override: overrideOf(store, m)?.id ?? null });
     }
-  } finally { store.db.run("DROP TABLE IF EXISTS temp.picks"); }
+  }); } finally { store.db.run("DROP TABLE IF EXISTS temp.picks"); }
   store.tx(() => {
     const before = new Map((store.db.query("SELECT * FROM picks").all() as Row[]).map((p) => [Number(p.member), p]));
     store.db.run("DELETE FROM picks WHERE member NOT IN (SELECT value FROM json_each(?))", [ids]);
