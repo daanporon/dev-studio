@@ -1,27 +1,29 @@
 // ds spawn-squad-ts — spawn one topic squad (U263): what bin/commands/spawn-squad.sh runs. A wish writer.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { dsLabel, dsLoopArgs, readJson, settingsAt, stateRoot, writeErr } from "../lib/shared";
 import { dsExec, waitArgs } from "../lib/operator";
-import { readRoster } from "../loop/settings/settings";
+import { readGet, readRoster } from "../loop/settings/settings";
+import { openReadOnly, dbPath } from "../loop/core/store";
+import { chooseSquadBackend } from "../backend/registry";
 import { whoAmI } from "../loop/core/whoami.ts";
 
-export const help = `--repo <selector> --topic <slug> [--type t] [--autonomy a] [--host h] [--framing f | --framing-file path] [--start s] — write a squad's running wish (spawn-squad.sh)`;
+export const help = `--repo <selector> --topic <slug> [--type t] [--autonomy a] [--host h] [--backend b] [--framing f | --framing-file path] [--start s] — write a squad's running wish (spawn-squad.sh)`;
 
-const USAGE = "usage: spawn-squad.sh --repo <selector> --topic <slug> [--type feature|testing] [--autonomy checkpoints|lfg] [--host <saved-env>] [--framing <text>] [--start plan|brainstorm|ask|investigate|fix]\n";
+const USAGE = "usage: spawn-squad.sh --repo <selector> --topic <slug> [--type feature|testing] [--autonomy checkpoints|lfg] [--host <saved-env>] [--backend orca|orca-lite|tmux|herdr] [--framing <text>] [--start plan|brainstorm|ask|investigate|fix]\n";
 
 export async function run(raw: string[]): Promise<number> {
   const la = dsLoopArgs("spawn-squad.sh", raw);
   if (la.error) { writeErr(la.error + "\n"); return 2; }
   const argv = la.argv;
-  let repo = "", topic = "", host = "", framing = "", framingFile = "", start = "", type = "feature", autonomy = "checkpoints";
+  let repo = "", topic = "", host = "", backend = "", framing = "", framingFile = "", start = "", type = "feature", autonomy = "checkpoints";
   for (let i = 0; i < argv.length; i += 2) {
     const a = argv[i];
-    if (!["--repo", "--topic", "--type", "--autonomy", "--host", "--framing", "--framing-file", "--start"].includes(a)) { writeErr(USAGE); return 2; }
+    if (!["--repo", "--topic", "--type", "--autonomy", "--host", "--backend", "--framing", "--framing-file", "--start"].includes(a)) { writeErr(USAGE); return 2; }
     if (i + 1 >= argv.length) { writeErr("spawn-squad.sh: $2: unbound variable\n"); return 1; }
     const v = argv[i + 1];
     if (a === "--repo") repo = v; else if (a === "--topic") topic = v; else if (a === "--type") type = v;
-    else if (a === "--autonomy") autonomy = v; else if (a === "--host") host = v; else if (a === "--start") start = v; else if (a === "--framing-file") framingFile = v; else framing = v;
+    else if (a === "--autonomy") autonomy = v; else if (a === "--host") host = v; else if (a === "--backend") backend = v; else if (a === "--start") start = v; else if (a === "--framing-file") framingFile = v; else framing = v;
   }
   if (repo === "" || topic === "") { writeErr(USAGE); return 2; }
   if (framingFile !== "") {
@@ -44,9 +46,31 @@ export async function run(raw: string[]): Promise<number> {
   if (roster.size > 0 && !roster.has("lead")) {
     writeErr("spawn-squad: roster (conventions/roles.conf) has no 'lead' role\n"); return 1;
   }
+  // The backend and worktree tool (U9, bin/backend/registry.ts): written once, with the first wish. A squad
+  // that has started and is not closed keeps its own; asking it for another one is refused.
+  const placed = squadBackend(label, topic);
+  let on: Record<string, string> = {};
+  if (placed) {
+    if (backend !== "" && backend !== placed) { writeErr(`spawn-squad: squad ${topic} runs on ${placed}; a squad's backend is written once at spawn\n`); return 1; }
+  } else {
+    const word = (key: string) => String(readGet(label, "limits.conf", key, settingsAt()).value ?? "").trim().split(/\s+/)[0];
+    const c = chooseSquadBackend({ flag: backend, projectBackend: word("default_backend"), providerSetting: word("worktree_provider") });
+    if (!c.ok) { writeErr(`spawn-squad: ${c.error}\n`); return 1; }
+    on = { backend: c.backend, backend_host: c.host, worktree_provider: c.provider };
+  }
   const keep = (o: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== ""));
-  const fill = keep({ repo, type, autonomy, host, framing });
+  const fill = keep({ repo, type, autonomy, host, framing, ...on });
   const from = whoAmI().handle ?? "";
-  const payload = keep({ repo, type, autonomy, host, framing, start, from });
+  const payload = keep({ repo, type, autonomy, host, framing, start, from, ...on });
   return dsExec(["want", "squad", `${label}/${topic}`, "running", "--payload", JSON.stringify(payload), "--fill", JSON.stringify(fill), "--by", "spawn-squad", ...waitArgs(la.wait)]);
+}
+
+/** The backend of a squad that has started (its doc is written) and is not closed; null for a new one. */
+function squadBackend(label: string, topic: string): string | null {
+  if (!existsSync(dbPath())) return null;
+  const s = openReadOnly();
+  try {
+    const r = s.db.query("SELECT backend FROM squads WHERE project = ? AND topic = ? AND doc IS NOT NULL AND COALESCE(status, '') NOT IN ('closed', 'gone')").get(label, topic) as { backend: string } | null;
+    return r ? r.backend : null;
+  } finally { s.close(); }
 }

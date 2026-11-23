@@ -48,6 +48,7 @@ import { settle, type Finish } from "../loop/squad/squad-finish.ts";
 import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
 import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
+import { BACKEND_NAMES, DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
 
@@ -1469,6 +1470,14 @@ const ctxLevel = (db: Db, c: number | null, label: string) => {
   return c >= (dsLimit(db, label, "context_compact") ?? 150000) ? "red" : c >= (dsLimit(db, label, "context_warn") ?? 100000) ? "amber" : "ok";
 };
 
+// U9: the backend a squad runs on and its worktree tool (squads.backend, squads.worktree_provider, migration 0054).
+function squadBackend(db: Db, label: string, topic: string): { backend: string; worktree_provider: string; provider_default: boolean } {
+  let r: any = null;
+  try { r = db.one("SELECT backend, worktree_provider FROM squads WHERE project = ? AND topic = ?", label, topic); } catch { /* a db before migration 0054 */ }
+  const backend = String(r?.backend ?? DEFAULT_BACKEND), provider = String(r?.worktree_provider ?? (isBackend(backend) ? defaultProvider(backend) : "orca"));
+  return { backend, worktree_provider: provider, provider_default: !isBackend(backend) || provider === defaultProvider(backend) };
+}
+
 // One squad. Units are listed in NATURAL ORDER (first u-number in the slug; none -> last); a
 // planned unit is READY when every dep is done, else BLOCKED; a dispatched unit carries its
 // Builder's live state, or "gone" when that worktree vanished. The mermaid text draws the DAG.
@@ -1579,6 +1588,8 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
     pause: { ...activity, descendants_paused: !inactive && members.some((m) => ["pausing", "paused"].includes(m.pause?.state)) },
     type: st.type ?? "feature", autonomy: st.autonomy ?? "checkpoints", ship_mode: shipMode(db, label, String(st.repo ?? "")),
     task_id: st.task_id ?? null, run_id: st.run_id ?? null, framing: st.framing ?? null,
+    // U9: written once at spawn. The page shows a chip only off `orca`, the tool only when not the default.
+    ...squadBackend(db, label, topic),
     // The focus squad (squad-priority U2): `focus` = this squad is the one that counts now; `focus_squad` = the
     // project's focus value while it is not (a suspended focus keeps it), for the menu's "replaces <squad>".
     focus: focusSquad(db.s, label) === topic,
@@ -2061,7 +2072,9 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     backend_ok: live.backendOk,
     project: label || null,
     projects: db ? labels.map((project) => ({ label: project, pause: { ...projection(db.s, { project }),
-      descendants_paused: !!db.one("SELECT 1 FROM pause_intents WHERE project = ? AND cleared_at IS NULL LIMIT 1", project) } })) : [],
+      descendants_paused: !!db.one("SELECT 1 FROM pause_intents WHERE project = ? AND cleared_at IS NULL LIMIT 1", project) },
+      // U9: what the Start squad dialog presets its Backend field to.
+      default_backend: ((v) => (isBackend(v) ? v : DEFAULT_BACKEND))(limit(db.s, project, "default_backend")) })) : [],
     prerequisites: db ? labels.flatMap((project) => [
       ...db.all("SELECT squad, slug, status, hold FROM units WHERE project = ? ORDER BY squad, id", project).map((u) => ({ kind: "unit", project, squad: u.squad, slug: u.slug,
         label: `${project}/${u.squad}/${u.slug}`, state: u.status, hold: !!u.hold, url: `#sq-${project}/${u.squad}` })),
@@ -2286,7 +2299,7 @@ export function renderText(b: Board): string {
     if (s.still_active) live += " ⚠still-active";
     if (s.lead.verdict === "unreachable") live += " ⚠LEAD-UNREACHABLE";
     else if (s.lead.verdict) live += ` ⚠LEAD-${s.lead.verdict === "hung" ? "HUNG" : "NOT-RESPONDING"}(${Math.floor((s.lead.since_s ?? 0) / 60)}m)`;
-    o.push("", `▣ ${s.type === "testing" ? "🧪 " : ""}${(s as any).focus ? "★ " : ""}${s.topic}  [${s.display_status}${s.phase_stuck ? " ⚠stuck" : ""}]${s.held && s.display_key !== "held-only" ? ` ${s.held} held` : ""}  ${s.type}/${s.autonomy} · ship:${s.ship_mode}${live}${s.exposed_summary && s.exposed_summary.open ? `  open:${s.exposed_summary.open}` : ""}${s.exposed_summary && s.exposed_summary.down ? ` (${s.exposed_summary.down} down)` : ""}`);
+    o.push("", `▣ ${s.type === "testing" ? "🧪 " : ""}${(s as any).focus ? "★ " : ""}${s.topic}  [${s.display_status}${s.phase_stuck ? " ⚠stuck" : ""}]${s.held && s.display_key !== "held-only" ? ` ${s.held} held` : ""}  ${s.type}/${s.autonomy} · ship:${s.ship_mode}${s.backend && s.backend !== "orca" ? ` · on:${s.backend}${s.provider_default ? "" : `/${s.worktree_provider}`}` : ""}${live}${s.exposed_summary && s.exposed_summary.open ? `  open:${s.exposed_summary.open}` : ""}${s.exposed_summary && s.exposed_summary.down ? ` (${s.exposed_summary.down} down)` : ""}`);
     if ("error" in s) o.push(`   ${s.framing}`);
     else {
       if (s.explain) o.push(`   ${s.display_status}: ${s.explain.means} (set by ${s.explain.set_by}). You can: ${s.explain.you_can}.`);
@@ -2382,7 +2395,7 @@ function withDb<T>(fn: (db: Db) => T, root = stateRoot()): T | null {
 export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] }[] = [
   { name: "Context & compaction", keys: ["studio_move"], prefixes: ["context_", "compact_", "auto_compact_"] },
   { name: "Accounts & model picking", keys: ["limit_pct", "limit_wait_max", "credits_hold_h", "fallback_return_min"], prefixes: ["pick_"] },
-  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "archive_debrief_min", "notes_cap"] },
+  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "default_backend", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "archive_debrief_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
   { name: "Board & machine", keys: ["board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
@@ -2422,7 +2435,7 @@ export function limitsJson(project: string, root = stateRoot()) {
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
       const hint = key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
-      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
+      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : key === "default_backend" ? [...BACKEND_NAMES] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
     const used = new Set(limits.map((l) => l.group));
     return { project, groups: [...LIMIT_GROUPS.map((g) => g.name).filter((n) => used.has(n)), ...(used.has("Other") ? ["Other"] : [])], limits };

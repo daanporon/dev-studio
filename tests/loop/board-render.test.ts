@@ -158,8 +158,8 @@ test("a member with 2 unread messages shows 'Inbox 2' and opens the 'Inbox · <m
 });
 
 // ---- board-start-squad-box U1: the Start squad dialog.
-async function startDialog(reply: (body: any) => any) {
-  const r = await mount(board, false);
+async function startDialog(reply: (body: any) => any, b: any = board) {
+  const r = await mount(b, false);
   const w = r.window, doc = w.document, posts: any[] = [];
   w.fetch = async (url: string, init?: any) => {
     if (String(url) !== "api/request") return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
@@ -187,7 +187,7 @@ test("Start squad: a multi-line brief and the fields are one POST that keeps eve
     await d.click(d.btn(/^Send$/)); await d.click(d.btn(/^Sending…$/));
     d.text()?.dispatchEvent(new d.w.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
     await d.wait(120);
-    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan" }]);
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan", backend: "orca" }]);
     expect(d.doc.querySelector('[role="dialog"][aria-label="Start squad"]')).toBeNull();
     expect(d.doc.body.textContent).toContain("sent to the Studio: start squad my-topic (request #7)");
     expect(d.r.errors).toEqual([]);
@@ -215,7 +215,7 @@ test("Start squad: a 400 keeps the dialog and the text; testing disables Start a
     await d.set(".start-type", "testing", "change");
     expect(d.doc.querySelector(".start-start").disabled).toBe(true);
     await d.click(d.btn(/^Send$/));
-    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "a\nb", type: "testing", autonomy: "checkpoints" }]);
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "a\nb", type: "testing", autonomy: "checkpoints", backend: "orca" }]);
     expect(d.doc.querySelector(".start-text").value).toBe("a\nb");
     expect(d.doc.body.textContent).toContain("not sent: the text has a control character on line 2");
     expect(d.btn(/^Send$/)).toBeTruthy();
@@ -552,4 +552,37 @@ test("chat-with-studio U1: a non-adopted Studio's button is disabled with its re
   try {
     expect(btns(r2).map((x) => x.textContent.trim().replace(/\s+/g, " "))).toEqual(["💬 Studio · a", "💬 Studio · b"]);
   } finally { await r2.window.happyDOM.close(); }
+});
+
+// ---- orca-backend-alternatives U9: the dialog presets the project's default_backend and sends the backend picked.
+test("Start squad: Backend starts on the project's default_backend, follows the project, and is sent", async () => {
+  const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", default_backend: "tmux" }, { label: "other", default_backend: "orca" }] };
+  const d = await startDialog(() => ({ status: 202, body: { ok: true, id: 3 } }), b);
+  try {
+    expect(d.doc.querySelector(".start-backend").value).toBe("tmux");
+    expect([...d.doc.querySelectorAll(".start-backend option")].map((o: any) => o.value)).toEqual(["orca", "orca-lite", "tmux", "herdr"]);
+    await d.set(".start-project", "other", "change");
+    expect(d.doc.querySelector(".start-backend").value).toBe("orca");
+    await d.set(".start-project", "fixture", "change");
+    await d.set(".start-backend", "herdr", "change");
+    await d.set(".start-text", "go");
+    await d.click(d.btn(/^Send$/));
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "go", type: "feature", autonomy: "checkpoints", backend: "herdr" }]);
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+
+test("a squad off orca shows its backend chip, with the worktree tool only when it is not the backend's default", async () => {
+  const sq = (topic: string, over: any) => ({ label: "fixture", topic, type: "feature", autonomy: "orchestration", ship_mode: "ce-pipeline", display_status: "working", display_key: "working", phase: "build", status: "active", members: [], units: [], questions: [], ...over });
+  const r = await mount({ ...board, squads: [sq("plain", { backend: "orca", worktree_provider: "orca", provider_default: true }),
+    sq("ontmux", { backend: "tmux", worktree_provider: "git", provider_default: true }), sq("ontree", { backend: "tmux", worktree_provider: "treehouse", provider_default: false })] }, false);
+  try {
+    const doc = r.window.document;
+    for (let k = 0; k < 40 && doc.querySelectorAll(".row.squad").length < 3; k++) await new Promise((res) => setTimeout(res, 25));
+    const rowOf = (t: string) => [...doc.querySelectorAll(".row.squad")].find((e: any) => e.textContent.includes(t)) as any;
+    expect(rowOf("plain").querySelector(".sqbackend")).toBeNull();
+    expect(rowOf("ontmux").querySelector(".sqbackend").textContent).toBe("tmux");
+    expect(rowOf("ontree").querySelector(".sqbackend").textContent).toBe("tmux · treehouse");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
 });

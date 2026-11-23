@@ -73,6 +73,7 @@ import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSyn
 import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
+import { BACKEND_NAMES } from "../backend/registry.ts";
 import { isCat } from "./event-cats.ts";
 import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
@@ -178,8 +179,8 @@ const ACTIONS: Record<string, { topic: boolean; cmd: (p: string, t: string, role
 };
 
 // The start dialog's fields (contract of board-start-squad-box U1). An error string, or the clean fields.
-const START_ENUMS = { type: ["feature", "testing"], autonomy: ["checkpoints", "lfg"], start: ["plan", "brainstorm", "ask", "investigate", "fix", "auto"] } as const;
-function startFields(b: any): { error: string } | { framing: string; slug?: string; type?: string; autonomy?: string; start?: string } {
+const START_ENUMS = { type: ["feature", "testing"], autonomy: ["checkpoints", "lfg"], start: ["plan", "brainstorm", "ask", "investigate", "fix", "auto"], backend: BACKEND_NAMES } as const;
+function startFields(b: any): { error: string } | { framing: string; slug?: string; type?: string; autonomy?: string; start?: string; backend?: string } {
   if (typeof b.text !== "string") return { error: "say what the squad should do: the text is empty" };
   // CRLF and a lone CR become LF; nothing else changes.
   const framing = b.text.replace(/\r\n?/g, "\n");
@@ -188,13 +189,13 @@ function startFields(b: any): { error: string } | { framing: string; slug?: stri
   if (bytes > BRIEF_MAX) return { error: `the text is ${(bytes / 1024).toFixed(1)} KiB; the limit is 32 KiB` };
   const bad = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.exec(framing);
   if (bad) return { error: `the text has a control character on line ${framing.slice(0, bad.index).split("\n").length}` };
-  const out: { framing: string; slug?: string; type?: string; autonomy?: string; start?: string } = { framing };
+  const out: { framing: string; slug?: string; type?: string; autonomy?: string; start?: string; backend?: string } = { framing };
   if (b.slug != null && b.slug !== "") {
     if (typeof b.slug !== "string" || b.slug.length > 64 || b.slug.startsWith(".") || /[^A-Za-z0-9._-]/.test(b.slug))
       return { error: "topic slug may only use letters, digits, . _ - and must not start with ." };
     out.slug = b.slug;
   }
-  for (const k of ["type", "autonomy", "start"] as const) {
+  for (const k of ["type", "autonomy", "start", "backend"] as const) {
     if (b[k] == null || b[k] === "") continue;
     const ok = START_ENUMS[k] as readonly string[];
     if (typeof b[k] !== "string" || !ok.includes(b[k])) return { error: `${k} must be one of ${ok.join(", ")}` };
@@ -223,7 +224,7 @@ async function request(req: Request) {
     sf = f;
   }
   const line = sf
-    ? `board: the operator asks you to run: /ds-start-squad --repo ${project}${sf.slug ? ` --topic ${sf.slug}` : ""}${sf.type ? ` --type ${sf.type}` : ""}${sf.autonomy ? ` --autonomy ${sf.autonomy}` : ""}${sf.start ? ` --start ${sf.start}` : ""}`
+    ? `board: the operator asks you to run: /ds-start-squad --repo ${project}${sf.slug ? ` --topic ${sf.slug}` : ""}${sf.type ? ` --type ${sf.type}` : ""}${sf.autonomy ? ` --autonomy ${sf.autonomy}` : ""}${sf.start ? ` --start ${sf.start}` : ""}${sf.backend ? ` --backend ${sf.backend}` : ""}`
     : `board: the operator asks you to run: ${a.cmd(project, topic, role, brief)}`;
   return write((s) => {
     if (sf && !one(s, "SELECT 1 AS x FROM projects WHERE label = ?", project)) no(409, `no project ${project} on this board`);

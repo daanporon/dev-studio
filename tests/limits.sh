@@ -228,6 +228,14 @@ eq "studio keys default" "$(ds_limit proj context_compact_studio)/$(ds_limit pro
 if "$L" set proj compact_mode_studio clear >/dev/null 2>&1; then fail=$((fail+1)); echo "  FAIL: compact_mode_studio clear accepted" >&2; else pass=$((pass+1)); fi
 if "$L" set proj studio_move maybe >/dev/null 2>&1; then fail=$((fail+1)); echo "  FAIL: bad studio_move accepted" >&2; else pass=$((pass+1)); fi
 "$L" set proj studio_move ask >/dev/null; eq "studio_move ask accepted" "$(ds_limit proj studio_move)" "ask"
+# U9: the backend a new squad starts on, and its worktree tool.
+eq "backend keys default" "$(ds_limit proj default_backend)/$(ds_limit proj worktree_provider)" "orca/auto"
+for kv in "default_backend screen" "worktree_provider orca"; do
+  # shellcheck disable=SC2086
+  if "$L" set proj $kv >/dev/null 2>"$TMP/err"; then fail=$((fail+1)); echo "  FAIL: $kv accepted" >&2; else pass=$((pass+1)); has "$kv message names key" "$(cat "$TMP/err")" "${kv%% *} must be"; fi
+done
+"$L" set proj default_backend tmux >/dev/null; eq "default_backend tmux accepted" "$(ds_limit proj default_backend)" "tmux"
+"$L" set proj worktree_provider treehouse >/dev/null; eq "worktree_provider treehouse accepted" "$(ds_limit proj worktree_provider)" "treehouse"
 # expose-hosted-services U1: minutes an exposed URL may stay down; a whole number of minutes
 eq "expose_down_min default" "$(ds_limit proj expose_down_min)" "15"
 if "$L" set proj expose_down_min soon >/dev/null 2>"$TMP/err"; then fail=$((fail+1)); echo "  FAIL: expose_down_min soon accepted" >&2; else pass=$((pass+1)); has "expose_down_min message names key" "$(cat "$TMP/err")" "expose_down_min must be"; fi

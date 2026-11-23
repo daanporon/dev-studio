@@ -23,7 +23,7 @@ export const RESTART_MODES = ["now", "idle"] as const;
 
 // A wish's payload (`want_payload`), by subject. A string is a stored replay and is not checked.
 export const WISH_PAYLOADS = {
-  squad: obj({ from: opt(str), id: opt(num) }),
+  squad: obj({ from: opt(str), id: opt(num), backend: opt(str), backend_host: opt(str), worktree_provider: opt(str) }),   // backend…: U9, chosen once at spawn
   member: obj({ why: opt(str), prompt: opt(str), agent: opt(str), model: opt(str), effort: opt(str), account: opt(str), ctx: opt(num),
     request: opt(bool), unit: opt(str), spec: opt(str), pauseResume: opt(str) }),
   service: obj({ bind: opt(str), hosts: opt(str) }),
