@@ -25,6 +25,7 @@ import { dispatchVerdict, leadVerdict } from "../loop/reconcilers/liveness.ts";
 import { planPlain, planRevisions, approvedCopyPath } from "../lib/plan-plain.ts";
 import { planChanges } from "./plan-changes.ts";
 import { compareSquads } from "./squad-order.ts";
+import { archiveDebriefStep, type Step } from "../loop/squad/archive-debrief.ts";
 import { redact } from "../loop/chat/redact.ts";
 import { planUnitFacts } from "../loop/squad/plan-lines.ts";
 import { blockingForUnit, entryOf, list, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
@@ -666,6 +667,12 @@ function displayStatus(st: any, status: string, retest: Retest | null = null, fi
 // `suspending` / `resuming`: the squad's wish (squads.want) is written and not granted yet; the
 // hover says when, by whom and the last wish event; over WISH_STUCK_S it reads stuck.
 const WISH_STUCK_S = 15 * 60;
+// debrief-on-archive U2: what the archive's final-debrief step says on the hover, "" when it has none.
+function debriefNote(step: Step): string {
+  if (step.state === "open") return `Lead writing the final debrief (${Math.floor(Math.max(0, NOW() - step.asked_at) / 60)} of ${Math.round(step.limit_s / 60)} min)`;
+  return step.state === "written" ? "debrief written" : step.state === "timeout" ? "debrief timed out"
+    : step.state === "lead-gone" ? `debrief not written: Lead gone${step.why ? ` (${step.why})` : ""}` : `debrief skipped${step.why ? `: ${step.why}` : ""}`;
+}
 type PhaseFact = { status: string; note: string | null; stuck: boolean };
 function phaseFact(db: Db, label: string, topic: string, st: any, status: string, shown: string, ready: boolean): PhaseFact {
   const w = db.one("SELECT want, want_at, want_by, want_result FROM squads WHERE project = ? AND topic = ?", label, topic);
@@ -678,9 +685,12 @@ function phaseFact(db: Db, label: string, topic: string, st: any, status: string
       AND kind IN ('wish_failed', 'wish_given_up', 'member_drift_cleared') ORDER BY id DESC LIMIT 1`, label, topic, at) : null;
     const failed = String(w?.want_result ?? "").startsWith("failed") ? String(w?.want_result) : null;
     const why = ev ? `${ev.kind}${(parse(ev.payload) as any)?.error ? `: ${(parse(ev.payload) as any).error}` : ""}` : failed;
-    const stuck = age > WISH_STUCK_S;
+    // While the debrief step is open the archive is waiting on the Lead, not stuck; once it settles the clock runs from its end.
+    const step = word === "archiving" ? archiveDebriefStep(db.s, label, topic) : null;
+    const stuck = step ? step.state !== "open" && step.settled_at != null && NOW() - step.settled_at > WISH_STUCK_S : age > WISH_STUCK_S;
+    if (step) bits.push(debriefNote(step));
     if (why) bits.push(`latest: ${why}`);
-    if (stuck && !why) bits.push(`no progress for ${Math.floor(age / 60)} min`);
+    if (stuck && !why) bits.push(`no progress for ${Math.floor((step?.settled_at ? NOW() - step.settled_at : age) / 60)} min`);
     return { status: word, note: bits.join("; "), stuck };
   }
   if (shown !== "planning" || !ready || (st.type ?? "feature") !== "feature") return { status: shown, note: null, stuck: false };

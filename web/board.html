@@ -3510,7 +3510,8 @@ function App() {
     ${data.needs_you.length > 0 && html`<div class="qlist">${data.needs_you.map((n) => {
       // U10: every Needs-you item is one block shape: who · age and the buttons, the title, the text.
       const brief = /^brief-/.test(n.id || "");
-      const studioCard = n.squad === "_studio" && !brief;
+      const debrief = /^sweep-debrief-/.test(n.id || ""); // debrief-on-archive U2: the archived squad's final debrief
+      const studioCard = n.squad === "_studio" && !brief && !debrief;
       const doneRow = n.kind === "done";
       const sent = n.id && sentQ.has(nkey(n));
       const say = (t) => { setToast(t); clearTimeout(toastTimer); toastTimer = setTimeout(() => setToast(null), 4000); };
@@ -3527,10 +3528,21 @@ function App() {
         catch (e) { say("not dismissed: " + (e.message || e)); return; }
         qbump((x) => x + 1);
       };
-      const who = brief ? "Brief" : sqName(n) + (n.about ? " · " + n.about : "");
+      const dTopic = debrief ? String(n.title || "").replace(/^Debrief:\s*/, "") : "";
+      const openDebrief = () => { // the topic comes from the card's title; the text is the archived doc's debrief
+        const a = (data.archived || []).find((x) => x.topic === dTopic && (!n.label || x.label === n.label || x.label == null));
+        setPlan({ name: dTopic + " — debrief", markdown: a && a.debrief ? a.debrief : "No debrief was written." });
+      };
+      const markRead = async () => {
+        if (sentQ.has(nkey(n))) return;
+        try { await sendAnswer(n.label, "_studio", n.id, "Mark read"); say("marked the debrief read"); }
+        catch (e) { say("not read: " + (e.message || e)); }
+        qbump((x) => x + 1);
+      };
+      const who = debrief ? "Debrief · " + dTopic : brief ? "Brief" : sqName(n) + (n.about ? " · " + n.about : "");
       const asker = !brief && n.from && !who.includes(n.from) ? " · from " + n.from : "";
-      return html`<div key=${nkey(n)} class=${"qnote" + (sent ? " sent" : "")} onClick=${() => brief ? read() : doneRow ? show(n.label, n.card_squad) : setAsk(nkey(n))}>
-        <div class="l1">${!brief && html`<span class=${"kind " + n.kind}>${n.kind}</span>`}<span class="sq">${who}${asker} · <span class=${"ag" + ((n.age_min || 0) > 24 * 60 ? " old" : "")}>${fmtAge(n.age_min)}</span></span><span class="sp"></span>
+      return html`<div key=${nkey(n)} class=${"qnote" + (sent ? " sent" : "")} onClick=${() => brief ? read() : debrief ? openDebrief() : doneRow ? show(n.label, n.card_squad) : setAsk(nkey(n))}>
+        <div class="l1">${!brief && !debrief && html`<span class=${"kind " + n.kind}>${n.kind}</span>`}<span class="sq">${who}${asker} · <span class=${"ag" + ((n.age_min || 0) > 24 * 60 ? " old" : "")}>${fmtAge(n.age_min)}</span></span><span class="sp"></span>
           ${n.pr && html`<${QPr} pr=${n.pr} />`}
           ${(studioCard || doneRow) && n.act && html`<${ActBtn} n=${n} toast=${setToast} />`}
           ${doneRow && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); show(n.label, n.card_squad); }}>Open</button>`}
@@ -3538,12 +3550,14 @@ function App() {
           ${studioCard && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); dismiss(); }}>Dismiss</button>`}
           ${!brief && !studioCard && !doneRow && n.doc && html`<button class="btn sm" data-ev="open-doc" onClick=${(e) => { e.stopPropagation(); setPlan(n.doc); }}>${docLabel(n)}</button>`}
           ${!brief && !studioCard && !doneRow && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); setAsk(nkey(n)); }}>Answer</button>`}
-          ${brief && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); read(); }}>Read</button>`}</div>
+          ${brief && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); read(); }}>Read</button>`}
+          ${debrief && html`<button class="btn sm" data-ev="open-debrief" onClick=${(e) => { e.stopPropagation(); openDebrief(); }}>Open</button>`}
+          ${debrief && html`<button class="btn sm" data-ev="mark-read" onClick=${(e) => { e.stopPropagation(); markRead(); }}>Mark read</button>`}</div>
         <div class="l2">${linkedQ(n.title, n.repo_slug)}</div>
         ${n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
           : n.text && n.text !== n.title && html`<div class="lndet">${linkedQ(n.text, n.repo_slug)}</div>`}
         ${n.why && html`<div class="lndet">Why: ${linkedQ(n.why, n.repo_slug)}</div>`}
-        ${sent && html`<div class="lndet ok">${brief ? "✓ marked read" : n.squad === "_studio" ? "✓ dismissed" : "✓ sent"}</div>`}</div>`;
+        ${sent && html`<div class="lndet ok">${brief || debrief ? "✓ marked read" : n.squad === "_studio" ? "✓ dismissed" : "✓ sent"}</div>`}</div>`;
     })}</div>`}
     <${LoopNotes} notes=${data.loop_notes || []} open=${notesOpen} setOpen=${(o) => { setNotesOpen(o); lstore.set("b:notes", o); }} sq=${notesSq} setSq=${(v) => { setNotesSq(v); lstore.set("b:notes-sq", v); }} toast=${setToast} onShow=${show} />
     ${startOpen && data.project && html`<${StartSquad} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setStartOpen(false)} />`}
