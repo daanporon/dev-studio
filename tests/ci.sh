@@ -87,6 +87,9 @@ if [ -z "${DS_TOKEN_DIR:-}" ]; then
   mkdir -p "$OUT/token-dir"
   export DS_TOKEN_DIR="$OUT/token-dir"
 fi
+# squad-cpu-usage U3: the bun tests' migrated template loop.db (tests/loop/preload-db-template.ts), built once
+# for the run and shared by every job; under $OUT so the temp-dirs guard below never sees it.
+[ -n "${DS_LOOP_DB_TEMPLATE_DIR:-}" ] || export DS_LOOP_DB_TEMPLATE_DIR="$OUT/db-template"
 # U284: one temp root for the run. Every job gets TMPDIR and XDG_RUNTIME_DIR pointed at $RUN_TMP/t (which the
 # fixtures and tests/lib/hook-tree.sh use), under the fast runtime dir when there is one. It is removed when the run
 # ends, on failure too; before that, anything a test left in it is listed and fails the run (guard below).
