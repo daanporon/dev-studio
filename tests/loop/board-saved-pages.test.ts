@@ -88,3 +88,14 @@ test("servePage serves a saved page and its css, and nothing outside the squad's
   expect(get("a")).toBeNull();
   expect(servePage(f.root, "realp", "t3", ["x.html"])).toBeNull();
 });
+
+test("a gone session whose event names no copy still finds its copy by path, once", () => {
+  const f = fixture({ events: false });
+  const s = open(f.root);
+  s.event("pages_rescued", { project: "realp", squad: "t1", member: `x::${WT}`, payload: { wt: `x::${WT}`, path: WT, dest: join(f.root, "realp", "pages", "t1", "rescued", "elsewhere"), count: 0, bytes: 0, same: 0, capped: 0, listed: true, files: [] } });
+  s.close();
+  const l = arch(f.board()).lavish, m = byName(l);
+  expect(l.map((e: any) => e.name).sort()).toEqual(["idea.html", "plan.html"]);
+  expect(m["plan.html"]).toMatchObject({ key: "aaaaaaaaaaaaaaaa", saved: "realp/pages/t1/rescued/builder-u1/.lavish/plan.html" });
+  expect(m["idea.html"].saved).toBe("realp/pages/t1/rescued/builder-u1/.scratch/b/idea.2.html");
+});

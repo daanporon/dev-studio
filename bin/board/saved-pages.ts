@@ -14,6 +14,9 @@ const stem = (name: string): string => { const m = VARIANT.exec(name); return m 
 /** The page this file stands for: its folder and its name without a rescue's `.<n>`. */
 export const familyOf = (file: string): string => join(dirname(file), stem(basename(file)));
 
+/** A relative path without a rescue's `.<n>` before the extension. */
+export const familyRel = (rel: string): string => { const i = rel.lastIndexOf("/"); return rel.slice(0, i + 1) + stem(rel.slice(i + 1)); };
+
 const mtimeOf = (p: string): number | null => {
   try { const s = lstatSync(p); return s.isFile() ? Math.floor(s.mtimeMs / 1000) : null; } catch { return null; }
 };

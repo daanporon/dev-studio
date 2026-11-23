@@ -15,7 +15,7 @@
 import { resolveBackUp, returnOf } from "../loop/settings/roster.ts";
 import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
 import { basename, dirname, join, resolve } from "node:path";
-import { familyOf, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
+import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { debriefTopic } from "./card-place.ts";
@@ -515,13 +515,14 @@ function lavish(db: Db, st: any, label: string, topic: string) {
     .map((e) => parse(e.payload) ?? {}).filter((p) => typeof p.path === "string" && typeof p.dest === "string");
   const wts = [...arr(st?.worktrees).map(String).map((w) => w.includes("::") ? w.slice(w.lastIndexOf("::") + 2) : w), ...rescued.map((p) => String(p.path))].filter(Boolean);
   const homes = [`${db.s.root}/${label}/pages/${topic}/`, `${db.s.root}/${label}/squads/${topic}-board/`];
+  const sessionFile = new Map<any, string>();
   const taken = new Set<string>(); // absolute files and page families a listed entry stands for
   const out = db.all("SELECT file, url, status, doc FROM observed_sessions WHERE COALESCE(status, '') != 'log' ORDER BY file")
     .filter((s) => wts.some((w) => String(s.file).startsWith(w + "/")) || homes.some((h) => String(s.file).startsWith(h)))
     .map((s) => {
       const d = parse(s.doc) ?? {}, f = String(s.file);
       const e: any = { key: d.key ?? null, name: basename(f), dir: basename(f.slice(0, f.lastIndexOf("/"))), mtime: Number(d.mtime) || 0, url: s.url ?? null, status: s.status ?? null };
-      taken.add(f);
+      taken.add(f); sessionFile.set(e, f);
       for (const p of rescued) {
         if (!f.startsWith(String(p.path) + "/")) continue;
         const copy = savedCopy(db.s.root, label, topic, String(p.dest), f.slice(String(p.path).length + 1));
@@ -531,9 +532,25 @@ function lavish(db: Db, st: any, label: string, topic: string) {
       }
       return e;
     });
+  // A gone session with no event (a squad archived before the rescue logged one): its saved copy is the file under
+  // `rescued/<role>/` whose path inside the worktree ends the session's path.
+  const files = pageFiles(db.s.root, label, topic);
+  for (const e of out) {
+    if (e.saved || e.key == null) continue;
+    const f = sessionFile.get(e);
+    if (!f || isFile(f)) continue;
+    let best: { file: string; mtime: number } | null = null;
+    for (const c of files) {
+      const rel = c.split("/rescued/").slice(1).join("/rescued/").split("/").slice(1).join("/");
+      if (!rel || !f.endsWith("/" + familyRel(rel))) continue;
+      const m = fileMtime(c);
+      if (!best || m > best.mtime) best = { file: c, mtime: m };
+    }
+    if (best) { taken.add(best.file); taken.add(familyOf(best.file)); e.saved = underRoot(db.s.root, best.file); e.mtime ||= best.mtime; }
+  }
   // Saved pages no session stands for (one per page: the newest of its rescue copies).
   const extra = new Map<string, { file: string; mtime: number }>();
-  for (const file of pageFiles(db.s.root, label, topic)) {
+  for (const file of files) {
     const fam = familyOf(file);
     if (taken.has(file) || taken.has(fam)) continue;
     const m = fileMtime(file), cur = extra.get(fam);
