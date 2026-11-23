@@ -180,6 +180,14 @@ if ("skip" in got) {
         await treehouse(r.repo, ["return", "--force", String(c.row.path)]);
         const gone = await removeWorktree(r.s, String(c.row.path), {}, 4000);
         expect(gone.gone).toMatchObject({ removed: true, already: true, branch: "kept" });
+        // Returned by hand with no list since: the next lease gets the slot, and the stale row is not taken over.
+        const d = await createWorktree(r.s, "treehouse", spec(r, "d1"), 5000);
+        await treehouse(r.repo, ["return", "--force", String(d.row.path)]);
+        const e = await createWorktree(r.s, "treehouse", spec(r, "e1", { squad: null, role: null, parent: null }), 6000);
+        expect(e.row.path).toBe(d.row.path);
+        expect(e.row).toMatchObject({ name: "e1", squad: null, role: null, parent_path: null, created_at: 6000, lease: expect.any(String) });
+        expect(e.row.lease).not.toBe(d.row.lease);
+        expect(events(r, "worktree_gone").map((x) => JSON.parse(String(x.payload)).why).at(-1)).toBe("'e1' now holds it");
       } finally { restore(); }
     }, T);
   });

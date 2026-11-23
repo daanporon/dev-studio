@@ -161,8 +161,15 @@ async function createPicked(s: Store, p: Provider, spec: Spec, at: number): Prom
   if (other) throw new WorktreeError(`worktrees: '${spec.name}' is recorded at ${other.path} on branch '${other.branch}', not '${spec.branch}'`);
   const made = await p.create(spec, null);
   const path = canon(made.path);
-  const live = liveRow(rowAt(s, path));
+  let live = liveRow(rowAt(s, path));
   if (live && live.provider !== p.name) throw new WorktreeError(`worktrees: ${p.name} gave ${path}, which is recorded for provider '${live.provider}'`);
+  // A reused folder whose row still names another worktree (a lease returned outside the loop, no list
+  // since): that one is gone, and this create starts a row of its own.
+  if (live && (live.name !== spec.name || (made.lease != null && live.lease != null && live.lease !== made.lease))) {
+    s.fact("worktree_gone", [{ table: "worktrees", key: { host: HOST, path }, set: { gone_at: at } }],
+      { ...ctx(live), payload: { path, provider: p.name, why: `'${spec.name}' now holds it` } });
+    live = null;
+  }
   for (const r of same) {
     if (r.path === path) continue;
     s.fact("worktree_gone", [{ table: "worktrees", key: { host: HOST, path: r.path }, set: { gone_at: at } }],
