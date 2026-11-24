@@ -2,11 +2,12 @@
 // running loop when the commit moved (U191): what bin/host/update-host.sh runs. The pull half of /ds-update,
 // which branches on the DS-UPDATE: line printed here. All modules are loaded before the reset below replaces
 // them on disk, so the run finishes on the code it started with.
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ROOT, chomp, run as sh, stateRoot, writeOut, writeErr } from "../lib/shared";
 import { inherit } from "../lib/upkeep";
 import { loopProjects } from "../loop/settings/projects";
+import { hostUpdateHold } from "../loop/core/code-watch";
 
 export const help = `— pull the host checkout to its branch head, reinstall, restart the loop if it moved (update-host.sh)`;
 
@@ -22,7 +23,18 @@ function writeAtomic(file: string, data: unknown): void {
   } catch { /* best effort */ }
 }
 
-export async function run(_argv: string[]): Promise<number> {
+// The loop restarts itself on new loop code (bin/loop/core/code-watch.ts) but not while this run holds the
+// checkout: an install that fails resets it back, and the loop must not have booted (and migrated) on the new
+// commit in between. The hold names this pid, so one left by a killed run counts for nothing.
+export async function run(argv: string[]): Promise<number> {
+  const hold = hostUpdateHold(stateRoot());
+  writeAtomic(hold, { pid: process.pid });
+  try { return await update(argv); } finally {
+    try { if (JSON.parse(readFileSync(hold, "utf8")).pid === process.pid) rmSync(hold); } catch { /* gone already */ }
+  }
+}
+
+async function update(_argv: string[]): Promise<number> {
   const root = ROOT;
   const git = async (...a: string[]) => sh(["git", ...a], { cwd: root });
   let branch: string | null = null, before = "", after = "";
