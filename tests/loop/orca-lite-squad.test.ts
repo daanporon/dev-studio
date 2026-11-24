@@ -107,7 +107,7 @@ test("a squad on orca-lite: Lead and Builder in Orca-made worktrees, nested, tab
   const row = r.s.db.query("SELECT * FROM orca_calls WHERE op = 'terminal.create' AND payload LIKE ?").get(`%${bp}%`) as Row;
   expect(row.state).toBe("completed");
   expect(tabs[1].args[2]).toContain(`DS_GEN='${row.retry_id}'`);
-  expect(r.orca.of("terminal-type").filter((c) => String(c.args[1]).includes("claude --"))).toHaveLength(2);
+  expect(r.orca.of("terminal-type").filter((c) => String(c.args[1]).startsWith("exec sh "))).toHaveLength(2);
   // No Run, task, coordinator or worker start for this squad.
   expect(r.s.db.query("SELECT run_id, task_id FROM squads WHERE project = 'fx' AND topic = ?").get(SQ)).toEqual({ run_id: null, task_id: null });
   const runOps = r.orca.calls.filter((c) => /^(run-|worker-|task-|adopt|dispatch)/.test(c.op) && JSON.stringify(c).includes(SQ));

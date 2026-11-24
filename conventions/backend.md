@@ -308,7 +308,10 @@ contract backend (U11, "Started" below).
     `group` = the squad on `parents: groups`, `parent` = the Lead's path on `parents: native`) with env
     `DS_GEN` (the call's retry id), `DS_BACKEND`, `DS_MEMBER` and `DS_WT`, and the Claude launch line
     (`claudeLine`, the one Orca's adapter types, here as `exec env …` so claude replaces the shell and the
-    terminal ends with it: a poke never types into a bare shell) sent once with `submit`. Only Claude has a launch
+    terminal ends with it: a poke never types into a bare shell) sent once with `submit`. The line is about 9,500 bytes, and a shell
+    with no prompt yet keeps at most 4,095 bytes of one line, so (U20a) the loop writes it to
+    `<state>/<project>/loop/launch/<folder>/<generation>.sh` (`squad/launch-file.ts`, mode 0600, the next generation's start or the
+    terminal's close removes it) and types only `exec sh '<file>'`, under 512 bytes. Only Claude has a launch
     line: `spawn-squad` refuses a non-Orca squad whose roster names Codex or Muse (primary or fallback).
   - **Ledger.** Starts and closes are `orca_calls` rows with the contract verb as `op` (`terminal.create`,
     `terminal.close`), in `LOCK_OPS`, `stopOpen()` and `startInFlight()`. A start lists the terminals

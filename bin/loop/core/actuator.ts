@@ -63,6 +63,7 @@ import { envInt } from "./tick.ts";
 import { loopStopping } from "./stopping.ts";
 import { carded, classify, clear, causeOf, fingerprint, lapse, launchRetryAt, LAUNCH_TRIES, refuse, REFUSAL_KIND, standing } from "../io/refusals.ts";
 import { keepStartFailed } from "../squad/start-failed.ts";
+import { removeLaunch, writeLaunch } from "../squad/launch-file.ts";
 import { redact, redactPayload } from "./redact.ts";
 
 export type Result =
@@ -719,11 +720,11 @@ export class LoopActuator implements Actuator {
         const b = blocked();
         if (b) return Promise.resolve({ ok: false, error: b, busy: true });
         return this.contractStart(store, c().backend, { ...req, env: { ...req.env, DS_BACKEND: name, DS_WT: req.cwd, ...(ident ? { DS_MEMBER: ident } : {}) } }, meta,
-          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen);
+          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen, req.cwd);
       },
       close: (cwd, id) => {
         const b = blocked();
-        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` }, id);
+        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` }, id, cwd);
       },
       ask: (op, req) => c().backend.call(op, req),
       worktree: async (m) => {
@@ -771,7 +772,7 @@ export class LoopActuator implements Actuator {
   // other is an old agent's, closed first (a crashed member's restart). The launch line is typed once:
   // the row notes `typed` before the send, and a replay that finds it set never types again. A thrown
   // call leaves the row unsettled and out of the member lock (`absent`), so the replay keeps the id.
-  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void): ReturnType<ContractSeat["start"]> {
+  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string): ReturnType<ContractSeat["start"]> {
     const last = this.lastCall(store, o);
     if (last?.op === "terminal.create" && last.state === "completed") {
       setGen(String(last.retry_id));
@@ -804,7 +805,11 @@ export class LoopActuator implements Actuator {
       if (!progress.typed) {
         progress = { terminal: t, typed: true };
         store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [JSON.stringify(progress), retry]);
-        const s = await b.call("terminal.send", { id: t.id, text: m0.line, submit: true });
+        // U20a: the full line goes to a file; the terminal gets a short one that fits a shell with no prompt yet.
+        let text: string;
+        try { text = writeLaunch(store.root, o.project, who, retry, m0.line); }
+        catch (e) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: `launch file: ${(e as Error).message}` }), o.at); return { ok: false, error: `launch file: ${(e as Error).message}` }; }
+        const s = await b.call("terminal.send", { id: t.id, text, submit: true });
         if (!s.ok) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: s.error.message }), o.at); return { ok: false, error: `terminal.send: ${s.error.message}` }; }
       }
       this.settleCall(store, retry, "completed", JSON.stringify({ terminal: t, typed: true }), o.at);
@@ -819,7 +824,7 @@ export class LoopActuator implements Actuator {
   // U11: close every terminal in a folder (U12b: only `id`, a pause's agent terminal), one orca_calls row
   // (op terminal.close) under the seat's key.
   // A gone terminal answers closed:false (or not_found between the list and the close): a replay is safe.
-  private async contractClose(store: Store, b: Backend, cwd: string, o: CallAt, id?: string): Promise<{ ok: boolean; error?: string }> {
+  private async contractClose(store: Store, b: Backend, cwd: string, o: CallAt, id?: string, who?: string): Promise<{ ok: boolean; error?: string }> {
     const last = this.lastCall(store, o);
     if (last?.op === "terminal.close" && last.state === "completed") return { ok: true };
     if (last?.op === "terminal.close" && last.settled_at == null && this.inFlight.has(String(last.retry_id))) return { ok: false, error: "close still in flight" };
@@ -834,6 +839,7 @@ export class LoopActuator implements Actuator {
         if (!c.ok && c.error.code !== "not_found") { this.settleCall(store, retry, "failed", c.error.message, o.at); return { ok: false, error: `terminal.close ${t.id}: ${c.error.message}` }; }
         closed.push(t.id);
       }
+      if (who) { try { removeLaunch(store.root, o.project, who); } catch { /* a leftover file is dropped by the next start */ } }   // U20a
       this.settleCall(store, retry, "completed", JSON.stringify({ closed }), o.at);
       return { ok: true };
     } catch (e) {

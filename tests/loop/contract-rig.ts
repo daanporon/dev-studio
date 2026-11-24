@@ -5,7 +5,7 @@
 // line was typed into, until the test kills it (`kill`) or closes the terminal (`fake.exit`).
 // Hermetic: a copy of the fixture state, a temp HOME, DS_WORKTREE_ROOT under the temp dir.
 import { expect } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LoopActuator, type Fulfiller, type Picker } from "../../bin/loop/core/actuator.ts";
@@ -70,9 +70,14 @@ export async function rig(caps: Partial<Capabilities> = {}, o: { extra?: Reconci
   // The host's agents: one in each terminal the launch line went into, until killed.
   const killed = new Set<string>(), pids = new Map<string, number>();
   let walks = 0;
+  // U20a: the typed line is `exec sh '<file>'`; the file holds the launch line.
+  const ranClaude = (l: string): boolean => {
+    const f = /^(?:\$ )?exec sh '(.*)'$/.exec(l)?.[1];
+    return l.includes("claude --") || (!!f && existsSync(f) && readFileSync(f, "utf8").includes("claude --"));
+  };
   const walk = async (): Promise<LiveAccount[]> => {
     walks++;
-    return [...fake.terms.values()].filter((x) => !killed.has(x.t.id) && x.lines.some((l) => l.includes("claude --")))
+    return [...fake.terms.values()].filter((x) => !killed.has(x.t.id) && x.lines.some(ranClaude))
       .map((x) => {
         if (!pids.has(x.t.id)) pids.set(x.t.id, 4000 + pids.size);
         return { cwd: x.t.cwd, agent: "claude", account: "system", kind: "main", model: "opus", pid: pids.get(x.t.id), start: x.t.created_at };

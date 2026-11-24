@@ -289,6 +289,34 @@ describe("decide", () => {
     expect(run(r)).toEqual(["alert:Agent broke again"]);
   });
 
+  test("U20a: three rebreaks in a row are one card with the try count; a start that lasted opens a new one", () => {
+    const r = fixture();
+    const b = member(r, "builder", { want: "running", want_at: T - 3600 }, { unit: "dispatched", presence: "none" });
+    const card = (now: number) => decide(ctx(r, now)).find((a) => a.kind === "alert")!;
+    const restart = (at: number) => r.upsert("episodes", { project: "p", subject: `member:${b.id}`, kind: "restarted" }, { started_at: at, state: "done", source: "loop", observed_at: at });
+    restart(T - 60);
+    const c1 = card(T) as unknown as { episode: string; payload: Row };
+    expect(c1.payload.text).toContain("(1 try so far)");
+    expect(c1.payload.text).toContain("tries again every 30 min");
+    card(T + 600);                       // later ticks of the same break: no new try
+    card(T + 28 * 60 + 50);
+    restart(T + 30 * 60 + 5);            // REBREAK_MIN passed: the loop starts it again, and it breaks again
+    const c2 = card(T + 30 * 60 + 60) as unknown as { episode: string; payload: Row };
+    card(T + 59 * 60);
+    restart(T + 60 * 60 + 20);
+    const c3 = card(T + 60 * 60 + 90) as unknown as { episode: string; payload: Row };
+    expect(c2.episode).toBe(c1.episode);
+    expect(c3.episode).toBe(c1.episode);
+    expect(c2.payload.text).toContain("(2 tries so far)");
+    expect(c3.payload.text).toContain("(3 tries so far)");
+    // a start that lasted well past REBREAK_MIN before it broke: a new run, a new card
+    const later = T + 5 * 3600;
+    restart(later - 60);
+    const c4 = card(later) as unknown as { episode: string; payload: Row };
+    expect(c4.episode).not.toBe(c1.episode);
+    expect(c4.payload.text).toContain("(1 try so far)");
+  });
+
   test("U288: restart, then a loop stop (phase switch), then gone -> a start, no rebroke card; no loop stop -> the card", () => {
     const r = fixture();
     const b = member(r, "builder", { want: "running", want_at: T - 3600 }, { unit: "dispatched", presence: "none" });
