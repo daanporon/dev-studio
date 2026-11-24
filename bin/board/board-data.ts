@@ -29,6 +29,7 @@ import { planPlain, planRevisions, approvedCopyPath } from "../lib/plan-plain.ts
 import { planChanges } from "./plan-changes.ts";
 import { compareSquads } from "./squad-order.ts";
 import { archiveDebriefStep, type Step } from "../loop/squad/archive-debrief.ts";
+import { removeWaitS } from "../loop/squad/close-drift.ts";
 import { redact } from "../loop/chat/redact.ts";
 import { planUnitFacts } from "../loop/squad/plan-lines.ts";
 import { blockingForUnit, entryOf, list, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
@@ -762,6 +763,33 @@ function debriefNote(step: Step): string {
   return step.state === "written" ? "debrief written" : step.state === "timeout" ? "debrief timed out"
     : step.state === "lead-gone" ? `debrief not written: Lead gone${step.why ? ` (${step.why})` : ""}` : `debrief skipped${step.why ? `: ${step.why}` : ""}`;
 }
+// archive-stuck-worktrees U2: what an archiving squad still waits on, one bit per member that has a worktree
+// (newest row per role[-suffix], not gone): its newest `action:member.close` episode says which step it is on.
+function archiveWaits(db: Db, label: string, topic: string, wantAt: number): { bits: string[]; lastAt: number } {
+  const rows = db.all(`SELECT id, role, suffix, wt, status FROM members WHERE project = ? AND squad = ? ORDER BY id DESC`, label, topic);
+  const seen = new Set<string>(), bits: string[] = [];
+  for (const m of rows) {
+    const who = m.suffix ? `${m.role}-${m.suffix}` : String(m.role);
+    if (seen.has(who)) continue;
+    seen.add(who);
+    if (!m.wt || m.status === "gone") continue;
+    const e = db.one("SELECT episode_key, state, result, ended_at, started_at FROM episodes WHERE project = ? AND subject = ? AND kind = 'action:member.close'", label, `member:${m.id}`);
+    const key = String(e?.episode_key ?? ""), remove = key.startsWith("close:remove:"), n = Number(/:retry(\d+)$/.exec(key)?.[1] ?? 0);
+    const kept = db.one("SELECT payload FROM events WHERE project = ? AND squad = ? AND kind = 'leftover_recorded' AND member = ? AND at >= ? ORDER BY id DESC LIMIT 1", label, topic, String(m.wt), wantAt);
+    let step: string;
+    if (kept) step = `kept as a leftover: ${(parse(kept.payload) as any)?.reason ?? "unknown"}`;
+    else if (e && remove && e.state === "dropped" && /^stale(:|$)/.test(String(e.result ?? ""))) {
+      const reason = String(e.result).replace(/^stale:?\s*/, "") || "stale", at = Number(e.ended_at ?? NOW());
+      const next = Math.max(0, at + removeWaitS(db.s, label, n) - NOW());
+      step = `removal skipped (${reason}) ${Math.floor(Math.max(0, NOW() - at) / 60)} min ago, try ${n + 1}, next in ${next >= 60 ? Math.ceil(next / 60) + " min" : next + " s"}`;
+    } else if (e && remove) step = "removing the worktree";
+    else if (e && (e.state === "acted" || e.state === "running")) step = "stopping";
+    else step = "waiting for a stop";
+    bits.push(`waiting on ${who}: ${step}`);
+  }
+  const last = db.one("SELECT MAX(at) AS at FROM events WHERE project = ? AND squad = ? AND kind IN ('member_closed', 'leftover_recorded') AND at >= ?", label, topic, wantAt);
+  return { bits, lastAt: Number(last?.at ?? 0) };
+}
 type PhaseFact = { status: string; note: string | null; stuck: boolean };
 function phaseFact(db: Db, label: string, topic: string, st: any, status: string, shown: string, ready: boolean): PhaseFact {
   const w = db.one("SELECT want, want_at, want_by, want_result FROM squads WHERE project = ? AND topic = ?", label, topic);
@@ -776,10 +804,14 @@ function phaseFact(db: Db, label: string, topic: string, st: any, status: string
     const why = ev ? `${ev.kind}${(parse(ev.payload) as any)?.error ? `: ${(parse(ev.payload) as any).error}` : ""}` : failed;
     // While the debrief step is open the archive is waiting on the Lead, not stuck; once it settles the clock runs from its end.
     const step = word === "archiving" ? archiveDebriefStep(db.s, label, topic) : null;
-    const stuck = step ? step.state !== "open" && step.settled_at != null && NOW() - step.settled_at > WISH_STUCK_S : age > WISH_STUCK_S;
+    const waits = word === "archiving" ? archiveWaits(db, label, topic, at) : null;
+    // The clock runs from the newest of the wish, the debrief step's end and the last member close event.
+    const base = Math.max(at, step?.settled_at ?? 0, waits?.lastAt ?? 0);
+    const stuck = step?.state === "open" ? false : base ? NOW() - base > WISH_STUCK_S : age > WISH_STUCK_S;
     if (step) bits.push(debriefNote(step));
+    if (waits) bits.push(...waits.bits);
     if (why) bits.push(`latest: ${why}`);
-    if (stuck && !why) bits.push(`no progress for ${Math.floor((step?.settled_at ? NOW() - step.settled_at : age) / 60)} min`);
+    if (stuck && !why) bits.push(`no progress for ${Math.floor((word === "archiving" && base ? NOW() - base : age) / 60)} min`);
     return { status: word, note: bits.join("; "), stuck };
   }
   if (shown !== "planning" || !ready || (st.type ?? "feature") !== "feature") return { status: shown, note: null, stuck: false };
