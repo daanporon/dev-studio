@@ -297,8 +297,8 @@ One name per state; the pill's hover, the expanded squad and the text board say 
 | `planning` `implementing` `testing` `fixing` `retest due` `queued` | the loop (computed) | work is in flight | nothing, unless a question is in Needs-you |
 | `blocked` / `waiting-on-you` | the Lead | a question or blocker needs you | answer it in Needs-you |
 | `parked · N held` | the loop (computed) | nothing dispatched or ready; the only open work is N held units | release them, cancel them, suspend the squad, or leave it parked |
-| `wrapping up` | the loop (computed) | every unit done or cancelled, no open PR, no Tester; the Lead owes the test check and the debrief | nothing; a "Wrap-up stalled" card comes only if the Lead stops answering |
-| `done` | the Lead; the debrief is written at archive | finished; waits only for you | Close squad (the debrief is written then) (a Needs-you row says so) |
+| `wrapping up` | the loop (computed) | every unit done or cancelled, no open PR, no Tester; the Lead owes the test check and the debrief (not with `debrief off`) | nothing; a "Wrap-up stalled" card comes only if the Lead stops answering |
+| `done` | the Lead; the debrief is written at archive | finished; waits only for you | Close squad (the debrief is written then, unless the project has `debrief off`) (a Needs-you row says so) |
 | `pausing` `paused` `resuming` | you (Pause) | agents stopped, worktrees kept | Resume |
 | `suspended` | you (Suspend) | worktrees removed, branches kept | Restore |
 | `archiving` `suspending` | you | the loop is carrying it out | wait; it reads stuck after 15 min |

@@ -18,7 +18,7 @@ import { reality } from "../core/decide.ts";
 import { paused } from "../pause/pause.ts";
 import { wake } from "../pause/wake.ts";
 import { alertAction } from "./alerts.ts";
-import { KIND, finalDebrief, limitS, parseJson, provenance, stepKey, stepOf, unitsOf, type Step, type StepState } from "../squad/archive-debrief.ts";
+import { KIND, debriefOn, finalDebrief, limitS, parseJson, provenance, stepKey, stepOf, unitsOf, type Step, type StepState } from "../squad/archive-debrief.ts";
 
 export const REASON = "archive-debrief";
 
@@ -99,14 +99,26 @@ function card(ctx: TickCtx, sq: Row, step: Step): Action[] {
   return out;
 }
 
+// `debrief off`: no step opens and no card is raised. A step still open settles skipped; one not yet
+// carded is marked carded without a card; a carded one stays as it is.
+function uncarded(ctx: TickCtx, sq: Row, s: Step): Action[] {
+  if (s.carded_at != null) return [];
+  const { store, now } = ctx;
+  if (s.state === "open") save(store, sq, now, "skipped", { why: "debriefs are off for this project", carded_at: now });
+  else save(store, sq, now, s.state, { carded_at: now });
+  return [];
+}
+
 export function archiveDebrief(ctx: TickCtx): Action[] {
   const { store, project } = ctx, out: Action[] = [];
   const rows = store.db.query(`SELECT s.* FROM squads s WHERE s.project = ? AND s.want = 'gone' AND s.want_at IS NOT NULL
     AND (COALESCE(s.status, '') != 'closed' OR EXISTS (SELECT 1 FROM episodes e WHERE e.project = s.project AND e.subject = 'squad:' || s.id AND e.kind = ?
       AND e.episode_key = CAST(s.want_at AS TEXT) AND json_extract(e.result, '$.carded_at') IS NULL)) ORDER BY s.id`).all(project, KIND) as Row[];
   for (const sq of rows) {
-    if (sq.status === "closed") { const s = stepOf(store, sq); if (s) out.push(...card(ctx, sq, s)); continue; }
+    const off = !debriefOn(store, project);
+    if (sq.status === "closed") { const s = stepOf(store, sq); if (s) out.push(...(off ? uncarded(ctx, sq, s) : card(ctx, sq, s))); continue; }
     if (["archived", "gone"].includes(String(sq.status ?? ""))) continue;
+    if (off) { const s = stepOf(store, sq); if (s) uncarded(ctx, sq, s); continue; }
     out.push(...step(ctx, sq));
   }
   return out;

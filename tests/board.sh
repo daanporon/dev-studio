@@ -464,6 +464,10 @@ eq "text board: a running squad's held badge" "$(tb "zzrdy_$$" 2>/dev/null | gre
 jt "explain: wrapping up has means, set_by, you_can" "$TMP/rdy.json" '.squads[] | select(.topic=="bbb-ready") | .display_key=="wrapping-up" and .display_status=="wrapping up" and (.explain.means|length)>0 and (.explain.set_by|length)>0 and (.explain.you_can|length)>0'
 jt "explain: parked and done have one" "$TMP/rdy.json" '[.squads[] | select(.topic=="ccc-parked" or .topic=="zzz-done") | .explain.you_can|length>0] | all'
 jt "done: a Needs-you row with Close squad" "$TMP/rdy.json" '[.needs_you[] | select(.kind=="done" and .squad=="zzz-done")] | length==1 and (.[0].act.label=="Close squad") and (.[0].title|test("try it out, then Close squad")) and ((.[0].title|test("read the debrief"))|not)'
+# debrief-toggle U1: a project with `debrief off` names no debrief on its done card or status meanings; with it on they stay.
+jt "debrief on: the done card and the done meaning still name the debrief" "$TMP/rdy.json" '([.needs_you[] | select(.kind=="done" and .squad=="zzz-done") | .title | test("debrief")] | all) and (.squads[] | select(.topic=="zzz-done") | .explain.you_can | test("debrief"))'
+DS_LIMIT_DEBRIEF=off render "zzrdy_$$" --json > "$TMP/rdy-off.json"
+jt "debrief off: the done card, the done meaning and the wrapping-up meaning name no debrief" "$TMP/rdy-off.json" '([.needs_you[] | select(.kind=="done" and .squad=="zzz-done") | (.title, .text) | test("debrief")] | any | not) and ([.squads[] | select(.topic=="zzz-done" or .topic=="bbb-ready") | .explain | (.means, .you_can) | test("debrief")] | any | not)'
 jt "done: the row sorts after the questions and is counted" "$TMP/rdy.json" '(.needs_you|last|.kind)=="done" and .needs_count==([.needs_you[]]|length)'
 jt "no board text says ready to close" "$TMP/rdy.json" '[.. | strings | select(test("ready to close"))] | length==0'
 TXT="$(tb "zzrdy_$$" 2>/dev/null)"

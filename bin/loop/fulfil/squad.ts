@@ -27,7 +27,7 @@ import { spawn } from "../io/orca.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 import { limitInt } from "../settings/limits.ts";
 import { endSquad, stopsPending } from "../squad/exposed.ts";
-import { finalDebrief, stepOf, unitsOf } from "../squad/archive-debrief.ts";
+import { debriefOn, finalDebrief, stepOf, unitsOf } from "../squad/archive-debrief.ts";
 import * as questions from "../messages/questions.ts";
 import type { Action } from "../core/plugins.ts";
 import { payloadOf as actionPayload, type ActionPayload } from "../core/kinds.ts";
@@ -211,8 +211,11 @@ async function archive(a: Action, x: Exec, r: Row): Promise<Result> {
     doc.waiting_on_you = [];
     if (dropped.length) doc.dropped_questions = [...(Array.isArray(doc.dropped_questions) ? doc.dropped_questions : []), ...dropped];
     // debrief-on-archive U1: the Lead's final debrief, else the done-time one under a line naming what it misses.
-    const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r));
-    doc.debrief = final.debrief; doc.debrief_source = final.source;
+    if (debriefOn(store, project)) {
+      const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r));
+      doc.debrief = final.debrief; doc.debrief_source = final.source;
+    } else if (typeof doc.debrief === "string" && doc.debrief.trim()) doc.debrief_source = "done"; // hand-written: kept as written
+    else { delete doc.debrief; delete doc.debrief_source; }
     const arch = join(store.root, project, "archive");
     mkdirSync(arch, { recursive: true });
     const stamp = isoAt(at).replace(/[-:]/g, "").replace("T", "-").slice(0, 15);

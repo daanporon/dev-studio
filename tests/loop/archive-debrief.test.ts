@@ -13,16 +13,20 @@ import { effective } from "../../bin/loop/pause/pause.ts";
 import { archiveDebrief } from "../../bin/loop/reconcilers/archive-debrief.ts";
 import { archiveDebriefStep, finalDebrief } from "../../bin/loop/squad/archive-debrief.ts";
 import { seedWish } from "../../bin/loop/db/seed.ts";
+import { limitValueProblem } from "../../bin/lib/operator.ts";
+import { explainState, LIMIT_GROUPS, limitGroup } from "../../bin/board/board-data.ts";
 import squadFulfiller from "../../bin/loop/fulfil/squad.ts";
 
 const T = 1_800_000_000;
 const iso = (t: number) => new Date(t * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 const ENV = "DS_LIMIT_ARCHIVE_DEBRIEF_MIN", saved = process.env[ENV];
+const OFF = "DS_LIMIT_DEBRIEF", savedOff = process.env[OFF];
 const roots: string[] = [], stores: Store[] = [];
 afterEach(() => {
   for (const s of stores.splice(0)) { try { s.close(); } catch { /* closed */ } }
   for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
   if (saved === undefined) delete process.env[ENV]; else process.env[ENV] = saved;
+  if (savedOff === undefined) delete process.env[OFF]; else process.env[OFF] = savedOff;
 });
 
 const DONE_DEBRIEF = "Set out to do: the debrief step\nShipped: #1\nTry it: nothing to try by hand — loop only";
@@ -184,6 +188,70 @@ describe("the archive's final-debrief step", () => {
     expect(archiveDebriefStep(s, "p", "one")).toBeNull();
     reconcile(s, T + 200);
     expect(archiveDebriefStep(s, "p", "one")).toMatchObject({ state: "open", asked_at: T + 200 });
+  });
+});
+
+describe("debrief off for the project", () => {
+  const off = (s: Store) => s.upsert("config", { project: "p", file: "limits.conf", key: "debrief" }, { value: "off", observed_at: 1 });
+  const cardsFor = (s: Store, now: number) => { s.db.run("UPDATE squads SET status = 'closed' WHERE project = 'p'"); return card(reconcile(s, now)); };
+
+  test("no hold before or after a step, no step, no card, and the Lead closes with the squad", () => {
+    const s = fixture({ status: "done" });
+    off(s); archiveWish(s);
+    expect(forMember(decide(ctx(s, T)), s, "lead").map((a) => a.kind)).toEqual(["member.close"]);
+    expect(reconcile(s, T)).toEqual([]);
+    expect(archiveDebriefStep(s, "p", "one")).toBeNull();
+    expect(forMember(decide(ctx(s, T + 5)), s, "lead").map((a) => a.kind)).toEqual(["member.close"]);
+    expect(cardsFor(s, T + 10)).toEqual([]);
+  });
+
+  test("a step open when the setting flips settles skipped with carded_at set and raises no card", () => {
+    const s = fixture({ status: "done" });
+    archiveWish(s);
+    reconcile(s, T);
+    expect(archiveDebriefStep(s, "p", "one")?.state).toBe("open");
+    off(s);
+    expect(forMember(decide(ctx(s, T + 1)), s, "lead").map((a) => a.kind)).toEqual(["member.close"]);
+    expect(reconcile(s, T + 2)).toEqual([]);
+    expect(archiveDebriefStep(s, "p", "one")).toMatchObject({ state: "skipped", why: "debriefs are off for this project", carded_at: T + 2 });
+    expect(cardsFor(s, T + 10)).toEqual([]);
+  });
+
+  test("archive with hand-written text keeps it as written; with none, no debrief field", async () => {
+    const a = fixture({ status: "done" });
+    off(a); archiveWish(a);
+    const kept = await archive(a, T + 60);
+    expect(kept.debrief).toBe(DONE_DEBRIEF);
+    expect(kept.debrief_source).toBe("done");
+    const b = fixture({ status: "done" }, { debrief: undefined, debrief_at: undefined, debrief_units: undefined });
+    off(b); archiveWish(b);
+    const none = await archive(b, T + 60);
+    expect("debrief" in none).toBe(false);
+    expect("debrief_source" in none).toBe(false);
+  });
+
+  test("the env var switches it off too, and `on` keeps today's behaviour", () => {
+    process.env[OFF] = "off";
+    const s = fixture({ status: "done" });
+    archiveWish(s);
+    expect(forMember(decide(ctx(s, T)), s, "lead").map((a) => a.kind)).toEqual(["member.close"]);
+    process.env[OFF] = "on";
+    expect(forMember(decide(ctx(s, T)), s, "lead")).toEqual([]);
+  });
+});
+
+describe("the debrief setting", () => {
+  test("only on and off are accepted, and it sits in Agents & nudges", () => {
+    expect(limitValueProblem("debrief", "off")).toBe("");
+    expect(limitValueProblem("debrief", "on")).toBe("");
+    expect(limitValueProblem("debrief", "maybe")).toBe("debrief must be on or off (got 'maybe')");
+    expect(limitGroup("debrief")).toBe("Agents & nudges");
+    expect(LIMIT_GROUPS.length).toBeGreaterThan(0);
+  });
+  test("the status meanings drop their debrief clause for an off project", () => {
+    expect(explainState("done")?.you_can).toContain("debrief");
+    expect(explainState("wrapping-up")?.means).toContain("debrief");
+    for (const k of ["done", "wrapping-up"]) expect(JSON.stringify(explainState(k, true))).not.toContain("debrief");
   });
 });
 

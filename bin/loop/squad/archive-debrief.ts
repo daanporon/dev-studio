@@ -7,7 +7,7 @@
 // settled, and the payload `{asked_at, limit_s, lead_wt, why, poked_at, carded_at}` as JSON in `result`.
 // No import of pause.ts here: pause.ts reads debriefHold().
 import type { Row, Store } from "../core/store.ts";
-import { limitInt } from "../settings/limits.ts";
+import { limit, limitInt } from "../settings/limits.ts";
 import { prNumber } from "./cancel.ts";
 
 export const KIND = "archive-debrief";
@@ -18,6 +18,8 @@ export type Step = { state: StepState; asked_at: number; limit_s: number; settle
 
 const ENDED = ["closed", "archived", "gone"];
 export const limitS = (store: Store, project: string): number => limitInt(store, project, LIMIT_KEY, 10) * 60;
+// The per-project switch (`debrief on|off`, default on): the one place that reads the key.
+export const debriefOn = (store: Store, project: string): boolean => String(limit(store, project, "debrief") ?? "on").trim() !== "off";
 export const stepKey = (sq: Row) => ({ project: String(sq.project), subject: `squad:${sq.id}`, kind: KIND });
 
 // A JSON object column (an episode result, a squad doc); anything else reads as {}.
@@ -46,7 +48,7 @@ export function archiveDebriefStep(store: Store, project: string, topic: string)
 // not close the Lead). Once the step settles the Lead closes like every other member.
 export function debriefHold(store: Store, m: Row, sq: Row | null): boolean {
   if (!sq || sq.want !== "gone" || m.role !== "lead" || (m.suffix ?? "") !== "" || !m.wt || m.want !== "running") return false;
-  if (ENDED.includes(String(sq.status ?? ""))) return false;
+  if (ENDED.includes(String(sq.status ?? "")) || !debriefOn(store, String(m.project))) return false;
   const step = stepOf(store, sq);
   if (step) return step.state === "open" && (step.lead_wt == null || step.lead_wt === m.wt);
   return sq.status !== "suspended" && limitS(store, String(m.project)) > 0;

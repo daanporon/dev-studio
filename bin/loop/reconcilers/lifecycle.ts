@@ -86,6 +86,7 @@ import { paused } from "../pause/pause.ts";
 import { onContract } from "../squad/backend.ts";
 import { finishOf } from "../squad/finish-read.ts";
 import { UPDATE_FAILED } from "../fulfil/update-branch.ts";
+import { debriefOn } from "../squad/archive-debrief.ts";
 
 const MERGE_TRIES = 3;
 // U249: GitHub's own word on the PR: the observer's autoMergeRequest is null (key present, value null).
@@ -794,7 +795,7 @@ export function run(ctx: TickCtx): Action[] {
       continue;
     }
     const ep = `done|${topic}|${done.map((u) => `${u.slug}#${u.pr}`).sort().join(",")}`;
-    const text = `dev-studio loop: every unit of your squad is done (PR merged) or cancelled, and none is held. Do the testability handoff to your Thinker (skip it for docs-only or one-unit squads), check the Try it page is current, then set-status done and tell the operator to run /ds-close-squad ${topic}. Write no debrief now: the loop asks for it when the operator archives. The loop never closes a squad.`;
+    const text = `dev-studio loop: every unit of your squad is done (PR merged) or cancelled, and none is held. Do the testability handoff to your Thinker (skip it for docs-only or one-unit squads), check the Try it page is current, then set-status done and tell the operator to run /ds-close-squad ${topic}. ${debriefOn(store, project) ? "Write no debrief now: the loop asks for it when the operator archives." : "Debriefs are off for this project: write none."} The loop never closes a squad.`;
     out.push(...wake(ctx, lead, text, "all-done", ep).actions);
   }
   out.push(...updateQueue(store, project, t, updates, onTrack));

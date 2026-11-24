@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { now, openReadOnly, type Row, type Store } from "../loop/core/store.ts";
 import { parse } from "../loop/core/cli.ts";
 import { limitInt } from "../loop/settings/limits.ts";
+import { debriefOn } from "../loop/squad/archive-debrief.ts";
 import { entryOf, pending } from "../loop/messages/questions.ts";
 import { budgetCard, githubView } from "../board/github-view.ts";
 import { doneWaits, dropMergeCopies, mergePrOf, placeAlert, proposalsOf, questionItems, questionsCount, shownStatus, squadListed } from "../board/needs-rules.ts";
@@ -31,6 +32,7 @@ type Pull = { pr: number; title: string };
 // left out), and how many units it gained. Only squads that moved or grew are listed.
 type SquadFacts = { squad: string; status: string; live: boolean; before: number | null; now: number | null; added: number };
 export type Facts = {
+  debrief_off?: boolean; // the project has `debrief off`: no debrief words in the render
   label: string; date: string; since: number; until: number;
   // `count` is the board's `needs_count`: questions + Studio cards + done squads (the board lists proposals but does not count them).
   // `notes` are the board's loop notes (no answer needed), grouped by title; `squads` are blocked squads.
@@ -377,7 +379,7 @@ export function collect(s: Store, w: Window): Facts {
   }
 
   return {
-    label, date: w.date, since, until,
+    label, date: w.date, since, until, ...(debriefOn(s, label) ? {} : { debrief_off: true }),
     needs: { count: questions.length + alerts.length + done.length, notes, proposals, done, questions, alerts, squads: needSquads, accounts },
     progress,
     merged: { total: mergedTotal, before: mergedBefore, squads: mergedSquads },
@@ -542,7 +544,7 @@ export function render(f: Facts): string[] {
   for (const a of n.alerts.slice(0, CAP.alerts)) L.push(`- ${a.new ? "new" : `waiting${a.age ? " " + a.age : ""}`} card: ${a.title}${a.text ? ` — ${a.text}` : ""}`);
   L.push(...more(n.alerts.length, CAP.alerts, "cards"));
   for (const p of n.proposals) L.push(`- proposed fix squad (${p.squad}): ${p.topic ?? "?"} (listed on the board, not in its count)`);
-  for (const d of n.done) L.push(`- squad ${d} is done: try it, then close it (the debrief is written at close)`);
+  for (const d of n.done) L.push(`- squad ${d} is done: try it, then close it${f.debrief_off ? "" : " (the debrief is written at close)"}`);
   for (const q of n.squads) L.push(`- waiting: squad ${q.squad} is ${q.status} (not counted above)`);
   for (const a of n.accounts.slice(0, CAP.accounts)) L.push(`- waiting: account ${a.account}: ${a.problem} (not counted above)`);
   L.push(...more(n.accounts.length, CAP.accounts, "accounts"));
@@ -595,7 +597,7 @@ export function render(f: Facts): string[] {
   L.push("## 4. Done or closed in the window");
   if (!f.finished.length) L.push("- none");
   for (const x of f.finished.slice(0, CAP.finished)) {
-    L.push(`- ${x.squad} (${x.how} ${dayTime(x.at)}): ${x.debrief ? "debrief:" : x.how === "done" ? "debrief at archive" : "no debrief"}`);
+    L.push(`- ${x.squad} (${x.how} ${dayTime(x.at)}): ${f.debrief_off ? "" : x.debrief ? "debrief:" : x.how === "done" ? "debrief at archive" : "no debrief"}`.replace(/: $/, ""));
     if (x.debrief) {
       const lines = x.debrief.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim());
       for (const l of lines.slice(0, CAP.debrief)) L.push(`  > ${oneLine(l, 200)}`);

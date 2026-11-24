@@ -432,6 +432,16 @@ function unitTokens(units: any[], toks: Map<string, any>) {
 // limits.conf row > the conventions row.
 const LIMIT_ENV: Record<string, string> = { context_warn: "DS_RESUME_MAX_CTX", limit_pct: "DS_SWEEP_LIMIT_PCT",
   pick_session_max: "DS_PICK_SESSION_MAX", pick_weekly_max: "DS_PICK_WEEKLY_MAX", unit_token_x: "DS_UNIT_TOKEN_X", unit_token_max: "DS_UNIT_TOKEN_MAX" };
+// The per-project `debrief on|off` switch, read the way the loop reads it (squad/archive-debrief.ts debriefOn).
+function debriefOnDb(db: Db, label: string): boolean {
+  const ev = process.env.DS_LIMIT_DEBRIEF;
+  if (ev) return ev.trim().split(/\s+/)[0] !== "off";
+  for (const p of [label, ""]) {
+    const v = String(db.one("SELECT value FROM config WHERE project = ? AND file = 'limits.conf' AND key = 'debrief'", p)?.value ?? "").trim().split(/\s+/)[0];
+    if (v) return v !== "off";
+  }
+  return true;
+}
 function dsLimit(db: Db, label: string, key: string): number | null {
   const ev = process.env[LIMIT_ENV[key] ?? "DS_LIMIT_" + key.toUpperCase()];
   if (ev && /^[0-9]+$/.test(ev)) return Number(ev);
@@ -722,7 +732,14 @@ const EXPLAIN: Record<string, StateExplain> = {
 export const STATE_LEGEND = ["paused: you stopped its agents; its worktrees stay",
   "suspended: you removed its worktrees; branches stay",
   "parked: nobody stopped it; it only has held work left"];
-export const explainState = (key: string): StateExplain | null => EXPLAIN[key] ?? null;
+// `noDebrief`: the project has `debrief off`, so the meanings drop their debrief clause.
+export const explainState = (key: string, noDebrief = false): StateExplain | null => {
+  const e = EXPLAIN[key] ?? null;
+  if (!e || !noDebrief) return e;
+  if (key === "wrapping-up") return { ...e, means: "every unit is done or cancelled with no open PR and no Tester; the Lead owes the test check" };
+  if (key === "done") return { ...e, you_can: "try it out (Documents → Try it), then Close squad" };
+  return e;
+};
 const allUnitsDone = (fin: Finish | null): boolean => fin?.state === "wrapping-up";
 // A parked squad's hover adds the planned units that can only wait on the held ones (squad-done-definition U8).
 const waitingNote = (e: any, m: number) => (e && m > 0 ? { ...e, means: `${e.means} (+${m} waiting on them)` } : e);
@@ -1712,7 +1729,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
   const exposed = exposedFor(db, label, topic, st);
   const out = {
     limits: { context_warn: dsLimit(db, label, "context_warn") ?? 100000, context_compact: dsLimit(db, label, "context_compact") ?? 150000 },
-    topic, label, status, display_status: phase.status, display_key: displayKey, explain: waitingNote(explainState(String(phase.status === shown ? displayKey : phase.status)), displayKey === "held-only" ? fin?.waiting.length ?? 0 : 0), held: heldN, phase_note: phase.note ?? displayNote, phase_stuck: phase.stuck,
+    topic, label, status, display_status: phase.status, display_key: displayKey, explain: waitingNote(explainState(String(phase.status === shown ? displayKey : phase.status), !debriefOnDb(db, label)), displayKey === "held-only" ? fin?.waiting.length ?? 0 : 0), held: heldN, phase_note: phase.note ?? displayNote, phase_stuck: phase.stuck,
     pause: { ...activity, descendants_paused: !inactive && members.some((m) => ["pausing", "paused"].includes(m.pause?.state)) },
     type: st.type ?? "feature", autonomy: st.autonomy ?? "checkpoints", ship_mode: shipMode(db, label, String(st.repo ?? "")),
     task_id: st.task_id ?? null, run_id: st.run_id ?? null, framing: st.framing ?? null,
@@ -2174,12 +2191,14 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   for (const s of squads) s.questions = dropLeadMergeCopies(s.questions, (q: any) => q.pr?.num != null && studioMergePrs.has(`${s.label}:${q.pr.num}`));
   // squad-done-definition U4: a squad the Lead marked `done` waits only for the operator. Read-only: no alert is
   // written, so the row is gone once the squad is closed, archiving, or set back to running.
-  const doneRows = squads.filter((s) => doneWaits(s.status, s.display_status, !!s.error)).map((s) => ({
+  const doneRows = squads.filter((s) => doneWaits(s.status, s.display_status, !!s.error)).map((s) => {
+    const dTail = db && !debriefOnDb(db, s.label) ? "" : " (the Lead writes the debrief then)";
+    return {
     squad: s.topic, label: s.label, kind: "done", id: null, from: "lead", card_squad: s.topic, repo_slug: s.repo_slug ?? null, pr: null,
     act: { action: "close", topic: s.topic, label: "Close squad" }, open: true,
-    title: `${s.topic} is done — try it out, then Close squad (the Lead writes the debrief then)`, titled: true,
-    text: `${s.topic} is done — try it out, then Close squad (the Lead writes the debrief then)`, choices: [], suggestion: null, why: null, options: [], age_min: null, command: null,
-  }));
+    title: `${s.topic} is done — try it out, then Close squad${dTail}`, titled: true,
+    text: `${s.topic} is done — try it out, then Close squad${dTail}`, choices: [], suggestion: null, why: null, options: [], age_min: null, command: null,
+  }; });
   const loopNotes = allAlerts.filter((a) => a.place === "note").sort((a, b) => (a.age_min ?? 0) - (b.age_min ?? 0))
 ;
   for (const s of squads) s.notes = loopNotes.filter((n) => n.project === s.label && n.squad === s.topic);
@@ -2584,7 +2603,7 @@ function withDb<T>(fn: (db: Db) => T, root = stateRoot()): T | null {
 export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] }[] = [
   { name: "Context & compaction", keys: ["studio_move"], prefixes: ["context_", "compact_", "auto_compact_"] },
   { name: "Accounts & model picking", keys: ["limit_pct", "limit_wait_max", "credits_hold_h", "fallback_return_min"], prefixes: ["pick_"] },
-  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "default_backend", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "archive_debrief_min", "notes_cap"] },
+  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "default_backend", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "debrief", "archive_debrief_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
   { name: "Board & machine", keys: ["board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
@@ -2625,7 +2644,7 @@ export function limitsJson(project: string, root = stateRoot()) {
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
       const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
-      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : key === "default_backend" ? [...BACKEND_NAMES] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
+      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "default_backend" ? [...BACKEND_NAMES] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
     const used = new Set(limits.map((l) => l.group));
     return { project, groups: [...LIMIT_GROUPS.map((g) => g.name).filter((n) => used.has(n)), ...(used.has("Other") ? ["Other"] : [])], limits };
