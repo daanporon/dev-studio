@@ -125,6 +125,7 @@ const shoot = async (size: any, view: string, base: boolean) => {
   await p.goto(url!, { waitUntil: "networkidle" }); await p.waitForTimeout(1200);
   // A spinning status dot's box changes with its angle: stop animations so a measure never depends on the moment.
   await p.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" });
+  const y0: number = await p.evaluate(() => scrollY);
   const opened = await v.open(p);
   if (v.kind === "keyboard") {
     if (!opened || !(await p.locator(v.field!).count())) { await ctx.close(); return { opened: false, m: null }; }
@@ -145,13 +146,19 @@ const shoot = async (size: any, view: string, base: boolean) => {
       const rgb: number[] = await p.evaluate(`new Promise((ok) => { const i = new Image(); i.onload = () => { const c = document.createElement("canvas"); c.width = c.height = 1; const g = c.getContext("2d"); g.drawImage(i, 0, 0); ok([...g.getImageData(0, 0, 1, 1).data].slice(0, 3)); }; i.src = "data:image/png;base64,${png}"; })`);
       cover.push({ ...pt, ...hit, rgb });
     }
+    // iOS 26 shows a copy of the rendered page in that strip, so the board under the sheet must not render at all.
+    const HIDE = `(() => { const vis = (e) => e ? getComputedStyle(e).visibility : "none";
+      return { tiles: vis(document.querySelector(".tiles")), row: vis(document.querySelector("#root tr, #root .sq")), box: vis(document.querySelector(".modal .mbox")), bg: getComputedStyle(document.documentElement).backgroundColor, y: scrollY }; })()`;
+    const hide: any = await p.evaluate(HIDE);
     const open0 = await p.locator(".modal").count();
     await p.mouse.click(pts[1].x, pts[1].y); await p.waitForTimeout(200);
     const stays = (await p.locator(".modal").count()) === open0;
     await p.evaluate(() => (window as any).__kb(null)); await p.waitForTimeout(400);
     const back = await p.evaluate(`${KB_MEASURE}(${JSON.stringify(v.field)})`);
+    for (let i = 0; i < 4 && (await p.locator(".modal").count()); i++) { await p.keyboard.press("Escape"); await p.waitForTimeout(150); if (await p.locator(".modal").count()) await p.locator(".modal .mclose").last().click({ timeout: 1000 }).catch(() => {}); await p.waitForTimeout(150); }
+    const after: any = await p.evaluate(HIDE);
     await ctx.close();
-    return { opened, m: null, kb, back, cover, stays };
+    return { opened, m: null, kb, back, cover, stays, hide, after, y0 };
   }
   const m = opened ? await p.evaluate(MEASURE) : null;
   if (opened && !base) await p.screenshot({ path: join(OUT, `${size.w}-${view}.png`) });
@@ -161,7 +168,7 @@ const shoot = async (size: any, view: string, base: boolean) => {
 
 for (const size of SIZES) for (const v of VIEWS) {
   if (v.kind === "keyboard" && !size.phone) continue;
-  const key = `${size.w}/${v.name}`; const { opened, m, kb, back, cover, stays } = await shoot(size, v.name, false);
+  const key = `${size.w}/${v.name}`; const { opened, m, kb, back, cover, stays, hide, after, y0 } = await shoot(size, v.name, false);
   report[key] = { opened, m, kb, back, cover, stays };
   if (!opened) { if (v.strict) breaks.push(`${key}: did not open`); continue; }
   if (v.kind === "keyboard") {
@@ -174,6 +181,10 @@ for (const size of SIZES) for (const v of VIEWS) {
       need(c.inside && c.topmost, `keyboard open: the point (${c.x}, ${c.y}) under the sheet hits the board, not the sheet`);
       need(c.rgb.every((v: number, i: number) => Math.abs(v - [0x15, 0x19, 0x20][i]) <= 2), `keyboard open: the point (${c.x}, ${c.y}) under the sheet paints rgb(${c.rgb}), not the sheet's #151920`);
     }
+    need(hide.tiles === "hidden" && hide.row !== "visible", `keyboard open: the board still renders under the sheet (tiles ${hide.tiles}, row ${hide.row})`);
+    need(hide.box === "visible", `keyboard open: the sheet itself is ${hide.box}`);
+    need((hide.bg.match(/\d+/g) || []).slice(0, 3).every((v: string, i: number) => Math.abs(+v - [0x15, 0x19, 0x20][i]) <= 2), `keyboard open: the page background ${hide.bg} is not the sheet's #151920`);
+    need(after.tiles === "visible" && after.y === y0, `sheet closed: tiles ${after.tiles}, scrollY ${after.y} (was ${y0})`);
     need(stays, "keyboard open: a tap on the strip under the sheet closed it");
     need(kb.kb, "keyboard open: no kb-open on the root");
     need(kb.secondary === 0, `keyboard open: ${kb.secondary} secondary footer button(s) still shown`);
