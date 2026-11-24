@@ -183,7 +183,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .crew .m .badge{margin-left:6px;flex:none;font:10px var(--mono);padding:0 5px;border-radius:4px;background:#232833;color:var(--dim)}
 .crew .m .badge.at-prompt{background:#3a2e12;color:#e8b04a}
 .ust{font-size:12px;color:var(--mut)} .ust.working,.ust.waiting,.ust.built,.ust.building,.ust.testing,.ust.babysitting{color:var(--blue)} .ust.ready{color:var(--fg)} .ust.done{color:var(--green)} .ust.gone{color:var(--red)} .ust.fixing,.ust.noPR{color:var(--amber)} .ust.merged{color:var(--purple)} .ust.held{color:var(--mut);font-style:italic} .ust.cancelled{color:var(--dim);text-decoration:line-through} .ust.stale{color:var(--amber)} .ust.merge-ready{color:var(--green)}
-.lo{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:6px 4px;border-top:1px solid var(--line);font:12px var(--mono)} .lo .path{color:var(--fg);word-break:break-all} .lo .flag{color:var(--amber)}
+.lo{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:6px 4px;border-top:1px solid var(--line);font:12px var(--mono)} .lo .path{color:var(--fg);word-break:break-all} .lo .flag{color:var(--amber)} .lo .lo-d{flex-basis:100%;padding-left:18px}
 .dot.spin{display:inline-block;flex:none;background:transparent;border:2px solid var(--blue);border-right-color:transparent;animation:spin .8s linear infinite}
 .topic .dot.spin{margin-right:7px;vertical-align:-1px}
 @keyframes spin{to{transform:rotate(360deg)}} @media (prefers-reduced-motion:reduce){.dot.spin{animation:none}}
@@ -1602,16 +1602,28 @@ function UnitsBox({ s, flow, toast, onPlan }) {
         ${s.unit_tokens && s.unit_tokens.spent > 0 && html`<div class="tier" title="price-weighted tokens (cache write ×2 on 1h, ×1.25 on 5m; cache read ×0.05 Opus, ×0.1 other; output ×5; input ×1), review included: the sum of the unit rows above">spent ≈${fmtTok(s.unit_tokens.spent)} over ${s.unit_tokens.units} units (7 days)</div>`}</div>`;
 }
 
-// Kept worktrees: close-role couldn't remove one without losing work, so it stays until the
-// sweep proves it safe (clean and pushed/merged). Hover a row for the uncommitted file names.
-function LeftoversBox({ s }) {
-  return html`<div class="box"><h3>Leftovers <span>kept, not yet safe to remove</span></h3>
-    ${(s.leftovers || []).map((l) => html`<div key=${l.wt || l.path} class="lo" title=${(l.files || []).join("\n") || "no file list"}>
-      <span class="flag">⚑</span><span class="path">${l.path}</span>
-      <span class="mut">${l.branch}, ${l.n_files} uncommitted${l.unpushed ? ", " + l.unpushed + " unpushed" : ""}</span>
-      <span>${l.reason || ""}</span><span class="mut">waits on ${l.waits_on || "?"} · ${fmtAge(l.age_min)}</span></div>`)}</div>`;
+// Kept worktrees (archive-leftovers U3): the loop checks each against main and shows what is in it: safe (the
+// next check removes it) or look first, with the commits and files not on main and a way to keep them.
+function LeftoversBox({ s, toast }) {
+  const ago = (sec) => sec == null ? "" : sec >= 3600 ? Math.floor(sec / 3600) + "h" : Math.max(1, Math.floor(sec / 60)) + "m";
+  return html`<div class="box"><h3>Leftovers <span>kept because they hold work not on main</span></h3>
+    ${(s.leftovers || []).map((l) => {
+      const c = l.check, plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+      const dir = "~/.dev-studio/state/" + s.label + "/pages/" + s.topic + "/leftovers", patch = dir + "/" + String(l.wt || "").replace(/[^A-Za-z0-9._-]+/g, "_") + ".patch";
+      const keep = ["git -C " + l.path + " push origin HEAD:refs/heads/" + l.branch, "mkdir -p " + dir + " && git -C " + l.path + " diff --binary HEAD > " + patch];
+      return html`<div key=${l.wt || l.path} class="lo">
+        <span class="flag">⚑</span><span class="path">${l.path}</span>
+        <span class="mut">${l.branch}${l.pr ? " · PR #" + l.pr : ""}</span>
+        ${!c ? html`<span class="mut">not checked yet</span>`
+          : c.safe ? html`<span>safe, removing on the next check</span>`
+          : html`<span><b>look first</b></span>`}
+        ${c && !c.safe && html`<div class="lo-d">
+          ${c.commits.length > 0 && html`<div>${plural(c.commits.length, "commit")} not on main: ${c.commits.map((k) => html`<div class="mut" key=${k.sha}>${k.sha.slice(0, 8)} ${k.title}</div>`)}</div>`}
+          ${c.n_differ > 0 && html`<div title=${(c.differ || []).join("\n")}>${plural(c.n_differ, "file")} differ from main: <span class="mut">${(c.differ || []).slice(0, 5).join(", ")}${c.n_differ > 5 ? ", …" : ""}</span></div>`}</div>`}
+        ${c && html`<span class="mut">checked ${ago(c.checked_age_s)} ago</span>`}
+        <a href="#" class="mut" title=${keep.join("\n")} onClick=${(e) => { e.preventDefault(); copy(keep.join("\n"), toast); }}>Keep it</a></div>`;
+    })}</div>`;
 }
-
 // "2h" / "3d" since an epoch-seconds mtime; "" when unknown.
 const docAge = (t) => { if (!t) return ""; const m = Math.max(0, Math.floor((Date.now() / 1000 - t) / 60)); return m < 60 ? m + "m" : m < 48 * 60 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
 const docWhen = (t) => t ? new Date(t * 1000).toLocaleString() : "";
@@ -3126,7 +3138,7 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
       <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} atArchive=${true} />
       ${s.mermaid && html`<${GraphBox} s=${s} />`}
       ${(s.units || []).length > 0 && html`<${UnitsBox} s=${s} flow=${flow} toast=${toast} onPlan=${onPlan} />`}
-      ${(s.leftovers || []).length > 0 && html`<${LeftoversBox} s=${s} />`}
+      ${(s.leftovers || []).length > 0 && html`<${LeftoversBox} s=${s} toast=${toast} />`}
       ${(s.proposals || []).length > 0 && html`<div class="box"><h3>Proposed fixes</h3>${s.proposals.map((p) => html`<div key=${p.id} class="prop">
           <span>${p.id}: ${p.topic}</span><button class="btn pri sm" title=${p.command} onClick=${() => copy(p.command, toast)}>Approve</button></div>`)}</div>`}
       ${otherPrs.length > 0 && html`<div class="box"><h3>Other pull requests <span>not on a work unit</span></h3>${otherPrs.map((p) => html`<${PrChip} key=${p.num} pr=${p} />`)}</div>`}

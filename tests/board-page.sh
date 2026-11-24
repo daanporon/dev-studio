@@ -323,8 +323,8 @@ has "text: cancelled row folds into PR"  "$CXT" "folded into PR#19717"
 hasre "text: ✗ marks the cancelled row"  "$CXT" '✗ u1 '
 has "text: blocked names work dropped"   "$CXT" "blocked by u3 (work dropped)"
 has "text: LEFTOVERS block"              "$CXT" "LEFTOVERS"
-has "text: leftover names path+branch"   "$CXT" "⚑ /tmp/wt-keep  (br-keep, 2 uncommitted, 1 unpushed)"
-has "text: leftover waits on the PR"     "$CXT" "waits on PR#19717"
+has "text: leftover names path+branch"   "$CXT" "⚑ /tmp/wt-keep  (br-keep) — not checked yet"
+case "$CXT" in *"waits on PR#19717"*) fail=$((fail+1)); echo "  FAIL: text still shows waits on" >&2;; *) pass=$((pass+1));; esac
 # Same dep without into_merged -> blocked; dropped-cancelled dep -> blocked.
 jq '(.units[] | select(.slug=="u1") | .into_merged) = false' "$SD/cx-sq.json" > "$TMP/cx2" && mv "$TMP/cx2" "$SD/cx-sq.json"
 board "$LBL" > "$TMP/cx2.json"
@@ -334,7 +334,7 @@ eq "web board: cancelled counts as finished" "$(grep -cF 'u.state === "cancelled
 eq "board-data: open units exclude cancelled" "$(grep -cF 'u.state !== "done" && u.state !== "cancelled"' "$ROOT/bin/board/board-data.ts")" "2"
 eq "web board: units total excludes cancelled" "$(grep -cF 'total: n((x) => x.state !== "cancelled")' "$ROOT/web/board.html")" "1"
 eq "web board: LeftoversBox under UnitsBox" "$(grep -cF "<\${LeftoversBox} s=" "$ROOT/web/board.html")" "1"
-eq "web board: leftover files in a title tooltip" "$(grep -cF '(l.files || []).join("\n")' "$ROOT/web/board.html")" "1"
+eq "web board: leftover files in a title tooltip" "$(grep -cF '(c.differ || []).join("\n")' "$ROOT/web/board.html")" "1"
 eq "web board: cancelled dot + state styles" "$(grep -cF '.dot.cancelled' "$ROOT/web/board.html")$(grep -cF '.ust.cancelled' "$ROOT/web/board.html")" "11"
 
 # The loop's health row: a fresh tick -> no banner; older than board_stale_ticks (12) ticks of

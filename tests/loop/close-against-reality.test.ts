@@ -237,7 +237,7 @@ describe("close tidies the worktree (host-disk-cleanup U1)", () => {
     await r.close();
     expect(r.orca.of("worktree-rm")).toEqual([]);
     expect(r.leftovers()).toHaveLength(1);
-    expect(String(r.leftovers()[0].reason)).toBe("uncommitted changes (after cleanup_on_close)");
+    expect(String(r.leftovers()[0].reason)).toMatch(/^kept: [0-9]+ uncommitted, [0-9]+ unpushed \(after cleanup_on_close\)$/);
     expect(existsSync(r.temp)).toBe(true);
     expect(r.kinds()).toEqual(["cleanup_on_close_ran"]);
   });
@@ -250,7 +250,7 @@ describe("close tidies the worktree (host-disk-cleanup U1)", () => {
     expect(r.kinds()).toEqual([]);
     expect(existsSync(r.log)).toBe(false);
     expect(existsSync(r.temp)).toBe(true);
-    expect(r.leftovers()[0]).toMatchObject({ reason: "uncommitted changes" });
+    expect(r.leftovers()[0]).toMatchObject({ reason: expect.stringMatching(/^kept: [0-9]+ uncommitted, [0-9]+ unpushed$/) });
   });
 
   test("a process under a live agent is spared and named; the worktree goes, its temp dir stays", async () => {

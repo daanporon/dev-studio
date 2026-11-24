@@ -176,7 +176,7 @@ describe("member.close (U155)", () => {
     expect(builder(r.s).status).toBe("gone");
     const doc = JSON.parse(String(r.s.get("squads", { project: "fx", topic: "t1" })!.doc));
     expect(doc.leftovers).toHaveLength(1);
-    expect(doc.leftovers[0]).toMatchObject({ wt: "wtb", path: wt, reason: "uncommitted changes" });
+    expect(doc.leftovers[0]).toMatchObject({ wt: "wtb", path: wt, reason: expect.stringMatching(/^kept: [0-9]+ uncommitted, [0-9]+ unpushed$/) });
   });
 
   test("U203: a done unit's Builder working only through a background task is closed, not dropped as stale", async () => {

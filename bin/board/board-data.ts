@@ -133,6 +133,28 @@ export function openDependents(units: any[], slug: string): string[] {
   return units.map((x) => String(x?.slug ?? "")).filter((s) => out.has(s));
 }
 
+// archive-leftovers U3: a squad's kept worktrees, each with the loop's last check of it (the `leftover-check`
+// episode fulfil/worktree.ts writes: commits and files not on main, `safe`, the fingerprint; `checked_age_s`
+// from its last probe), or `check: null` for a tree not checked yet. `waits_on` is an old record's text, kept
+// in the JSON and not shown. Live and archived squads read the same way.
+function leftoverRows(db: Db, label: string, list: unknown, units: unknown) {
+  const checks = db.memo(`leftover-checks:${label}`, () => {
+    const m = new Map<string, Row>();
+    for (const r of db.all("SELECT subject, result, observed_at FROM episodes WHERE project = ? AND kind = 'leftover-check'", label)) {
+      try { const c = JSON.parse(String(r.result)); if (c && typeof c === "object") m.set(String(r.subject), { ...c, checked_age_s: Math.max(0, Math.floor(NOW() - Number(r.observed_at))) }); } catch { /* an unreadable row reads as not checked */ }
+    }
+    return m;
+  });
+  return arr(list).map((l) => ({
+    wt: l?.wt ?? null, path: l?.path ?? null, branch: l?.branch ?? null,
+    n_files: l?.n_files ?? 0, files: arr(l?.files).map(String), unpushed: l?.unpushed ?? 0,
+    reason: l?.reason ?? null, waits_on: l?.waits_on ?? null, unit: l?.unit ?? null,
+    pr: l?.unit ? (arr(units).find((u) => u?.slug === l.unit)?.pr ?? null) : null,
+    age_min: ageMin(l?.recorded_at),
+    check: checks.get(String(l?.wt ?? "")) ?? null,
+  }));
+}
+
 function ageMin(since: unknown): number | null {
   if (typeof since !== "string") return null;
   const s = since.replace(/\.[0-9]+/, "");
@@ -1822,19 +1844,13 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
     })),
     // Kept worktrees (close-role couldn't remove one without losing work): path, branch, dirty
     // files, why it was kept, what it waits on. The sweep removes them when provably safe.
-    leftovers: leftoversOf(st),
+    leftovers: leftoverRows(db, label, st.leftovers, st.units),
   };
   flowUnitsOf.set(out, flowUnits.sort((a, b) => a.order - b.order).map(({ order, ...f }) => f));
   return out;
 }
 
 // Kept worktrees of a squad's state (live or archived): path, branch, dirty files, why it was kept, what it waits on.
-const leftoversOf = (st: any) => arr(st.leftovers).map((l: any) => ({
-  wt: l?.wt ?? null, path: l?.path ?? null, branch: l?.branch ?? null,
-  n_files: l?.n_files ?? 0, files: arr(l?.files).map(String), unpushed: l?.unpushed ?? 0,
-  reason: l?.reason ?? null, waits_on: l?.waits_on ?? null, unit: l?.unit ?? null,
-  age_min: ageMin(l?.recorded_at),
-}));
 
 // The open units squad() handed the Flow, per squad object (kept off the squad's JSON).
 const flowUnitsOf = new WeakMap<object, FlowUnit[]>();
@@ -2055,7 +2071,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       prs: squadPrs(db, l, st, repoSlug(db, l, String(st.repo ?? ""))), plans: plans(db, l, `${l}/archive/${t}`),
       try_it: tryIt(db, l, `${l}/archive/${t}`),
       lavish: lavish(db, null, l, t),
-      leftovers: leftoversOf(st),
+      leftovers: leftoverRows(db, l, st.leftovers, st.units),
     };
   })) : [];
 
@@ -2502,9 +2518,11 @@ function leftoverText(o: string[], leftovers: any[] | undefined): void {
   if (!(leftovers ?? []).length) return;
   o.push(`   LEFTOVERS`);
   for (const l of leftovers!) {
-    const la = l.age_min;
-    const lag = la == null || la < 0 ? "?" : la >= 60 ? `${Math.floor(la / 60)}h` : `${la}m`;
-    o.push(`      ⚑ ${l.path}  (${l.branch ?? "?"}, ${l.n_files} uncommitted${l.unpushed ? `, ${l.unpushed} unpushed` : ""}) — ${l.reason ?? "?"}; waits on ${l.waits_on ?? "?"} · ${lag}`);
+    const c = l.check, ca = c?.checked_age_s;
+    const lag = (n: number | null) => n == null ? "?" : n >= 3600 ? `${Math.floor(n / 3600)}h` : `${Math.max(1, Math.floor(n / 60))}m`;
+    const what = !c ? "not checked yet" : c.safe ? "safe, removing on the next check"
+      : `look first: ${c.commits.length} commit${c.commits.length === 1 ? "" : "s"}, ${c.n_differ} file${c.n_differ === 1 ? "" : "s"} not on main · checked ${lag(ca)}`;
+    o.push(`      ⚑ ${l.path}  (${l.branch ?? "?"}) — ${what}`);
   }
 }
 

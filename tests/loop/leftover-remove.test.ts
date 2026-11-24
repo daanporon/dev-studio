@@ -281,6 +281,46 @@ describe("leftover rule (archive-leftovers U1)", () => {
     expect(existsSync(g.wt)).toBe(true);   // fake Orca's worktree-rm leaves the folder: the copy came first
   });
 });
+// archive-leftovers U3: each probe writes its result as one `leftover-check` episode per leftover.
+describe("leftover check episode (archive-leftovers U3)", () => {
+  const episode = (s: Store, wt = "wtx") => s.db.query("SELECT * FROM episodes WHERE project = 'fx' AND subject = ? AND kind = 'leftover-check'").get(wt) as Row | null;
+  const body = (s: Store, wt = "wtx") => JSON.parse(String(episode(s, wt)!.result));
+  test("a kept tree's episode holds its commits and files; the fingerprint changes when the tree does", async () => {
+    const g = repos(), r = rig("wtx", g.wt);
+    g.commit({ "a.txt": "base\nmine\n" }, "first work");
+    g.commit({ "b.txt": "b\n" }, "second work");
+    await r.send();
+    const c = body(r.s);
+    expect(c.safe).toBe(false);
+    expect(c.commits.map((k: Row) => k.title)).toEqual(["second work", "first work"]);
+    expect(c.differ).toEqual(["a.txt", "b.txt"]);
+    expect(c.n_differ).toBe(2);
+    expect(c.target).toBe("origin/HEAD");
+    expect(c.target_sha).toBe(git(g.wt, "rev-parse", "origin/main").trim());
+    expect(c.head).toBe(git(g.wt, "rev-parse", "HEAD").trim());
+    expect(episode(r.s)!.episode_key).toBe(c.fingerprint);
+    r.action.episode = "leftover:wtx@2";   // a new retry: the same episode would be one action
+    await r.send();
+    expect(events(r.s, "action_done").filter((e) => e.kind === "worktree.remove")).toHaveLength(2);
+    expect(body(r.s).fingerprint).toBe(c.fingerprint);
+    writeFileSync(join(g.wt, "b.txt"), "changed\n");
+    r.action.episode = "leftover:wtx@3";
+    await r.send();
+    expect(body(r.s).fingerprint).not.toBe(c.fingerprint);
+  });
+  test("a removable tree's episode says safe, and it goes with the tree", async () => {
+    const g = repos(), r = rig("wtx", g.wt);
+    await r.send();
+    expect(episode(r.s)).toBeNull();   // removed in the same pass: nothing is left to show
+  });
+  test("a safe tree kept for another reason shows safe", async () => {
+    const g = repos(), r = rig("wtx", g.wt);
+    writeFileSync(join(g.wt, ".env"), "SECRET=1\n");
+    await r.send();
+    expect(body(r.s).safe).toBe(true);
+    expect(results(r.s)).toEqual(["left: ignored files"]);
+  });
+});
 
 describe("archived squads' leftovers (archive-leftovers U2)", () => {
   const inFile = (f: string) => (JSON.parse(readFileSync(f, "utf8")).leftovers ?? []) as Row[];
