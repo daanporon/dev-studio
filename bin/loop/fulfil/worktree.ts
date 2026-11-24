@@ -21,7 +21,7 @@
 // (event `leftover_note`) is once per cause, as the sweep's leftover_note: the episodes row
 // (kind `leftover-note`) holds the last cause noted and goes when the worktree does.
 // It runs in the background: a removal deletes a whole tree and must not hold up the tick.
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Action } from "../core/plugins.ts";
 import type { Exec, Fulfiller, Result } from "../core/actuator.ts";
@@ -95,8 +95,33 @@ async function safe(a: Action, x: Exec, p: P, path: string): Promise<Result | { 
   return { check };
 }
 
+// The state file a squad's leftover record lives in: the live `squads/<topic>.json`, else (a closed squad) the newest
+// `archive/<topic>-<stamp>.json` that still names the tree.
+function recordFile(root: string, project: string, topic: string, wt: string): string | null {
+  const live = join(root, project, "squads", `${topic}.json`);
+  if (existsSync(live)) return live;
+  const dir = join(root, project, "archive"), re = new RegExp(`^${topic.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d{8}-\\d{6}\\.json$`);
+  let names: string[] = [];
+  try { names = readdirSync(dir).filter((f) => re.test(f)).sort().reverse(); } catch { /* no archive folder */ }
+  for (const f of names) {
+    try { if ((JSON.parse(readFileSync(join(dir, f), "utf8")).leftovers ?? []).some((l: { wt?: string }) => l?.wt === wt)) return join(dir, f); } catch { /* unreadable */ }
+  }
+  return null;
+}
+
+async function dropRecord(x: Exec, project: string, topic: string, wt: string): Promise<void> {
+  const state = recordFile(x.store.root, project, topic, wt);
+  if (state) await spawn([join(ROOT, "bin", "role", "squad-state.sh"), state, "drop-leftover", wt], { DS_STATE_ROOT: x.store.root }, 30_000);
+}
+
 async function remove(a: Action, x: Exec, p: P): Promise<Result> {
   const { wt, path } = p as { wt: string; path: string };
+  // The reconciler saw the folder gone: only the state file still names it.
+  if (p.gone && !existsSync(path)) {
+    x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, "leftover-note"]);
+    await dropRecord(x, a.project, p.topic!, wt);
+    return { done: true, result: "dropped: folder gone" };
+  }
   const fetched = await fetchTarget(path, x.now);
   if (fetched.error) x.store.event("leftover_fetch_failed", { project: a.project, squad: a.squad, unit: p.unit ?? null, payload: { wt, path, error: fetched.error } });
   const first = await safe(a, x, p, path);
@@ -134,8 +159,7 @@ async function remove(a: Action, x: Exec, p: P): Promise<Result> {
   await closeTidy.after(a, x, path, tidy);
   for (const kind of ["leftover-note", "leftover-check"]) x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, kind]);
   // The tree is gone either way: a record this could not drop, the reconciler drops as gone.
-  const state = join(x.store.root, a.project, "squads", `${p.topic}.json`);
-  await spawn([join(ROOT, "bin", "role", "squad-state.sh"), state, "drop-leftover", wt], { DS_STATE_ROOT: x.store.root }, 30_000);
+  await dropRecord(x, a.project, p.topic!, wt);
   return { done: true, result: "removed: all on main" };
 }
 
@@ -144,7 +168,7 @@ const worktree: Fulfiller = {
   kinds: ["worktree.remove"],
   run: () => [],
   // The directory went meanwhile: the reconciler drops that record itself.
-  stale: (a) => !existsSync(String((a.payload as P | null)?.path ?? "")),
+  stale: (a) => !(a.payload as P | null)?.gone && !existsSync(String((a.payload as P | null)?.path ?? "")),
   exec(a, x) {
     const p = payloadOf<"worktree.remove">(a);
     if (!a.project || !p.topic || !p.wt || !p.path) return { failed: "a leftover removal needs a project, a topic, a worktree and a path" };

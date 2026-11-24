@@ -685,3 +685,25 @@ test("a squad's Leftovers block shows look first with commits, files and Keep it
     expect(r.errors).toEqual([]);
   } finally { await r.window.happyDOM.close(); }
 });
+
+// archive-leftovers U2: an archived squad's box lists its kept worktrees in the same Leftovers block as a live squad.
+test("an archived squad's box shows the Leftovers block", async () => {
+  const archived = { topic: "oldsq", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [],
+    leftovers: [{ wt: "wt-arch", path: "/tmp/wt-arch-UNIQUE", branch: "br-arch", n_files: 1, files: ["a.txt"], unpushed: 0, reason: "kept", waits_on: null, unit: "u1", age_min: 5 }] };
+  const r = await mount({ ...board, archived: [archived] }, false);
+  const w = r.window, doc = w.document;
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && !doc.querySelector(".arch"); k++) await wait(25);
+    const show = [...doc.querySelectorAll(".arch button")].find((b: any) => b.textContent.trim() === "show") as any;
+    show.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    const row = [...doc.querySelectorAll(".row.squad")].find((e: any) => e.textContent.includes("oldsq")) as any;
+    expect(row).toBeTruthy();
+    row.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("Leftovers");
+    expect(doc.body.textContent).toContain("/tmp/wt-arch-UNIQUE");
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
