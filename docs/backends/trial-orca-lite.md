@@ -1,15 +1,8 @@
 # Trial: orca-lite (orca-backend-alternatives U16a)
 
-**Status: not run.** This page is the runbook and the empty record. Part 1 (this PR) wires orca-lite into
-squad starts behind a trial gate and adds the record helper `ds trial`. Part 2, the live run, is a follow-up
-after:
-
-- the shadow exit is met (`docs/backends/shadow.md`; the earliest date is 2026-11-30);
-- the host is updated to a checkout that holds part 1;
-- the operator has picked the trial project (a throwaway repo is recommended);
-- the operator has agreed to the host-wide steps: the loop restart and the Orca upgrade.
-
-Nothing below the "Record" heading is filled in yet.
+**Status: run 2026-11-24 (steps 1-4 and 6 run, step 5 not run: the Orca upgrade moved to U24a).** The live trial ran with
+the operator's go (board question `u24-host-window`, answered "Now"). The crash, loop-restart and retirement checks
+passed and the squad's PR merged. One gap: the Thinker's worktree is not nested under the Lead's. See "Record" below.
 
 ## What part 1 changed
 
@@ -57,17 +50,17 @@ each drill step (`--step <name>`, output appended to a file) and keep the events
    for the squad, and anything the operator saw. Fixes of about 40 files or fewer go in the part 2 PR. Anything
    bigger becomes a follow-up unit that the Lead adds.
 
-## Record (fill in when run)
+## Record (run 2026-11-24)
 
-- Trial project and squad: _
-- Host checkout (commit) and Orca version before / after the upgrade: _
-- The squad's merged PR: _
-- Forced crash (time, Builder, the `member_started` event id of the restart): _
-- Retirement after the merge (the `unit_done` event id, then the `member_closed` event id): _
-- Agent pids before / after the loop restart (from the two snapshots): _
-- `orca worktree show` with the Lead's `childWorktreeIds` (snapshot `start`): _
-- Worktree rows before / after the Orca upgrade (the two snapshots): _
-- Upgrade outcome (what still worked, what had to be redone): _
-- Memory (loop RSS, agents' RSS) at start, after the restart, after the upgrade: _
-- Backend calls per tick (Orca CLI spawns, ledgered calls by op): _
-- Failures seen and what was done about each: _
+- Trial project and squad: dev-studio-public, squad `reload-ack-off-orca` (task: ds-feedback #4/#5, `ds reload ack` refused off Orca), spawned 17:17:30Z on orca-lite (`default_backend` went to `orca-lite` and back to `orca` in the same second; the only other squad off Orca was `backend-pick-guide` on tmux). The builder roster row was already claude-only from U20.
+- Host checkout (commit) and Orca version before / after the upgrade: checkout `c6e01e76` when spawned, Orca 1.4.246; no upgrade was done (moved to U24a), so there is no "after".
+- The squad's merged PR: #161 `fix(loop): confirm a reload ack from an off-Orca terminal`, merged 18:12:03Z as `a4e7104`.
+- Forced crash (time, Builder, the `member_started` event id of the restart): `shadow-drill.sh crash` at 17:55:46Z on `builder-u1-reload-ack-session` (it was running tests); the loop started it again at 17:56:09Z, `member_started` #616868, with `shadow_crash` #616870.
+- Retirement after the merge (the `unit_done` event id, then the `member_closed` event id): `unit_done` #617060 (18:12:35Z), then `member_closed` #617064 (18:12:37Z). Right order.
+- Agent pids before / after the loop restart (from the two snapshots): `systemctl --user restart ds-loop` at 17:57:31Z (loop pid 2455279 to 115456). Lead 3540825, Thinker 3540823 and Builder 96201 were the same in both snapshots, and no `member_started` came after it.
+- `orca worktree show` with the Lead's `childWorktreeIds` (snapshot `builder-up`): the Builder's worktree has the Lead's as its `parentWorktreeId`, and the Lead lists the Builder in `childWorktreeIds`. The Lead and the Thinker both had `parentWorktreeId none`, and the Thinker is not a child of the Lead, so Orca's window shows the Thinker beside the Lead, not under it.
+- Worktree rows before / after the Orca upgrade (the two snapshots): not run.
+- Upgrade outcome (what still worked, what had to be redone): not run (U24a).
+- Memory (loop RSS, agents' RSS) at start, after the restart, after the upgrade: loop 181.9 MB with the squad up, 199.8 MB just before the restart, 160.5 MB just after, 144.9 MB at the end (no upgrade). Agents: Lead 312 to 327 MB, Thinker 358 to 363 MB, Builder 393 to 409 MB.
+- Backend calls per tick (Orca CLI spawns, ledgered calls by op): 7 to 14 Orca CLI spawns per tick (`terminal read`, `worker-list`, `terminal list`, `worktree ps`, inbox); the squad's ledger ended at `terminal.create` x5 and `terminal.close` x3, none failed.
+- Failures seen and what was done about each: `ds events --kind action_failed` listed none for the squad. The Thinker is not nested under the Lead (above); no fix made, the squad is otherwise unaffected. The squad is still `waiting-on-you` for the Lead's or the operator's close.
