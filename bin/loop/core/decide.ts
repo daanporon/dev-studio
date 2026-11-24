@@ -379,15 +379,32 @@ export function candidates(store: Store, now: number): Wanting {
 }
 
 const who = (m: Row) => `${m.role}${m.suffix ? ` ${m.suffix}` : ""} of ${m.squad}`;
-function card(m: Row, why: "unknown" | "rebroke", f: Omit<Facts, "room">, store: Store): Action {
+// U20a: one rebroke card per member while its starts keep breaking. The loop starts it again once
+// REBREAK_MIN has passed, so each break would open a new card under `rebroke:<restart time>`; the
+// `rebroke-run` episode keeps the first break's time (the card's key), the tries so far (count) and the
+// last restart counted (ended_at). A break whose restart came right after the last card's window joins the
+// run; a start that survived REBREAK_MIN leaves a gap longer than half of it, so the next break is a new run.
+function rebreakRun(store: Store, m: Row, restart: number, now: number): { first: number; tries: number } {
+  const key = { project: m.project, subject: `member:${m.id}`, kind: "rebroke-run" };
+  const r = store.get("episodes", key), gap = knob(store, String(m.project), "REBREAK_MIN", 30) * 30;
+  let first = restart, tries = 1;
+  if (r && Number(r.ended_at) === restart) { first = Number(r.started_at); tries = Number(r.count ?? 1); }   // the same break, seen again
+  else if (r && restart > Number(r.ended_at) && restart - Number(r.observed_at) <= gap) { first = Number(r.started_at); tries = Number(r.count ?? 1) + 1; }
+  store.upsert("episodes", key, { squad: m.squad, started_at: first, ended_at: restart, count: tries, state: "open", source: "loop", observed_at: now });
+  return { first, tries };
+}
+
+function card(m: Row, why: "unknown" | "rebroke", f: Omit<Facts, "room">, store: Store, now: number): Action {
   const since = store.get("episodes", { project: m.project, subject: `member:${m.id}`, kind: why === "unknown" ? "presence_unknown" : "restarted" })?.started_at;
+  const mins = Math.round(knob(store, String(m.project), "REBREAK_MIN", 30));
+  const run = why === "rebroke" ? rebreakRun(store, m, Number(since ?? 0), now) : null;
   const text = why === "unknown"
     ? `The loop cannot tell whether the ${who(m)} runs (${m.wt}): the process walk has read unknown for ${Math.round(f.unknownS / 60)} min. It starts nothing until it can tell.`
-    : `The ${who(m)} (${m.wt}) is gone again within ${Math.round(knob(store, String(m.project), "REBREAK_MIN", 30))} min of a restart; the loop does not restart it again.`;
+    : `The ${who(m)} (${m.wt}) is gone again within ${mins} min of a restart (${run!.tries} ${run!.tries === 1 ? "try" : "tries"} so far). The loop tries again every ${mins} min and keeps this one card until a start lasts.`;
   return { project: String(m.project), squad: String(m.squad), member: (m.wt as string | null) ?? null, subject: `member:${m.id}`, kind: "alert",
-    episode: `${why}:${since ?? 0}`, payload: { title: why === "unknown" ? "Agent presence unknown" : "Agent broke again", ...(why === "rebroke" ? { card: "agent_rebroke" } : {}), text,
+    episode: `${why}:${run ? run.first : (since ?? 0)}`, payload: { title: why === "unknown" ? "Agent presence unknown" : "Agent broke again", ...(why === "rebroke" ? { card: "agent_rebroke" } : {}), text,
       option: why === "unknown" ? "look at the worktree's processes (orca.sh agent-accounts)" : "look at it, then restart it by hand (ds want member <id> --restart)",
-      why: why === "unknown" ? "a start beside a live agent would make a second session" : "the loop does not restart an agent that did not come back" } };
+      why: why === "unknown" ? "a start beside a live agent would make a second session" : "a start that breaks again within the window is retried, not forgotten" } };
 }
 
 function stopCard(m: Row, tries: number, store: Store): Action {
@@ -434,7 +451,7 @@ function decideNow(ctx: TickCtx): Action[] {
       if (!step.settled) { out.push(...step.actions); continue; }
       act = { act: "stop", why: act.why };
     }
-    if (act.act === "card") { out.push(card(s.m, act.why, s.f, store)); continue; }
+    if (act.act === "card") { out.push(card(s.m, act.why, s.f, store, now)); continue; }
     if (act.act === "tell") {
       // U3's "works again" names the account its credits episode was on (`<agent>/<account>|<notice>`).
       const wt = String(s.m.wt ?? ""), project = String(s.m.project), key = act.why === "limit" ? s.f.tellLimit! : s.f.tellOk!;
