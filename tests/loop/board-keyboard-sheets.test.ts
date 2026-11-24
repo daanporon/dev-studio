@@ -120,5 +120,7 @@ test("the page installs it and sizes the phone sheet by the variables", () => {
   expect(page).toMatch(/@media \(max-width:600px\)\{\n\.modal\{top:var\(--vvtop,0px\);bottom:auto;height:var\(--vvh,100dvh\)\}/);
   expect(page).toContain(".modal .mbox{position:relative}\n.modal .mbox::after{content:\"\";position:absolute;top:100%;left:0;right:0;height:100lvh;background:var(--panel)}");
   expect(page).toContain(".kb-open .mbox>.qfoot>.qsec,.kb-open .mbox>.qfoot>.chat-btn{display:none}");
-  expect(page.match(/enterkeyhint="send"/g)?.length).toBe(2);
+  // The answer box's key reads "send"; the chat box's too, but "enter" on a touch screen, where Enter is a new line (U19).
+  expect(page.match(/enterkeyhint="send"/g)?.length).toBe(1);
+  expect(page).toContain('enterkeyhint=${chatTouch() ? "enter" : "send"}');
 });

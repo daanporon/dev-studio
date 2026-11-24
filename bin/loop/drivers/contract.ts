@@ -9,7 +9,7 @@ import { existsSync, statSync } from "node:fs";
 import { ROOT } from "../core/store.ts";
 import { answerMenu, resumeSpec } from "./claude.ts";
 import { accountHome, claudeLine, markTrusted, systemJsonDir, utf8Locale, type ClaudeConfig } from "./claude-launch.ts";
-import type { ContractSeat, Driver, DriverModule, Member, Poked, Seat, StartMeta, Started } from "./types.ts";
+import type { ContractSeat, Driver, DriverModule, Keyed, Member, Poked, Seat, StartMeta, Started } from "./types.ts";
 
 export const LOCAL = "local::";
 export const localPath = (wt: string | null | undefined): string | null => (wt?.startsWith(LOCAL) ? wt.slice(LOCAL.length) : null);
@@ -73,6 +73,13 @@ export const contract: DriverModule = {
         if (!id) return "failed";
         const s = await c.ask("terminal.send", { id, text, submit: true });
         return !s.ok ? "failed" : s.delivery === "turn_started" ? "started" : "accepted";
+      },
+      async keys(m, keys): Promise<Keyed> {
+        if (c.caps.keys === "none") return { ok: false, error: `backend ${c.backend} cannot press keys` };
+        const path = localPath(m.wt), id = path ? await terminalOf(c, path) : null;
+        if (!id) return { ok: false, error: "no terminal" };
+        const s = await c.ask("terminal.send", { id, keys });
+        return s.ok ? { ok: true } : { ok: false, error: s.error.message };
       },
       async stop(makeSeat, m) {
         const path = localPath(m.wt);

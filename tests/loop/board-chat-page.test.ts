@@ -218,21 +218,24 @@ test("crew-terminal-access U5: a send is shown once: pending at the bottom, then
   expect(p.mod.chatRows([{ role: "user", from: "operator", text: "next", at: T }], [{ id: 9, text: "next", at: T + 500, state: "sent" }]).map((r: any) => !!r.send)).toEqual([false, true]);
 });
 
-test("crew-terminal-access U5: the input wraps, a pasted multi-line message goes as one line, Shift+Enter sends nothing, a 2000-character counter", async () => {
+test("crew-terminal-access U5, U19: the input wraps, a multi-line message keeps its line breaks, Shift+Enter is a new line, a 2000-character counter", async () => {
   const p = panel();
   p.render();
   const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
   expect(nodes(p.render()).some((n) => n.strings.includes('<textarea class="chat-in" rows="1"'))).toBe(true);
   expect(at("maxLength")).toBe(2000);
-  at("onInput")({ target: { value: "a\nb\r\n\tc\u0085d" } });
+  expect(String(at("placeholder"))).toContain("Enter sends, Shift+Enter a new line");
+  at("onInput")({ target: { value: "a\nb\r\n\tc\u0085d\re\u0007f\n" } });
   let prevented = 0;
+  // Shift+Enter is left to the browser, which puts the line break in.
   await at("onKeyDown")({ key: "Enter", shiftKey: true, preventDefault: () => prevented++ });
-  expect(prevented).toBe(1);
+  expect(prevented).toBe(0);
   expect(p.posts).toEqual([]);
   await at("onKeyDown")({ key: "Enter", isComposing: true, preventDefault: () => prevented++ });
   expect(p.posts).toEqual([]);
   await at("onKeyDown")({ key: "Enter", preventDefault: () => prevented++ });
-  expect(p.posts).toEqual([["api/chat", { project: "p", topic: "one", wt: "/w/b 1", text: "a b c d" }]]);
+  expect(prevented).toBe(1);
+  expect(p.posts).toEqual([["api/chat", { project: "p", topic: "one", wt: "/w/b 1", text: "a\nb\n\tc d\ne f" }]]);
   const left = () => {
     const n = nodes(p.render()).find((n) => n.strings.includes(" left</span>"))!;
     const i = n.values.findIndex((v: any) => typeof v === "string" && v.startsWith("chat-left"));
@@ -245,6 +248,80 @@ test("crew-terminal-access U5: the input wraps, a pasted multi-line message goes
   // Only line breaks: nothing to send.
   at("onInput")({ target: { value: "\n\n" } });
   expect(attrAfter(p.render(), 'class="btn pri"', "disabled")).toBe(true);
+});
+
+test("U19: on a touch screen Enter is a new line and only Send sends", async () => {
+  const had = (globalThis as any).matchMedia;
+  (globalThis as any).matchMedia = (q: string) => ({ matches: q === "(pointer:coarse)" });
+  try {
+    const p = panel();
+    p.render();
+    const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
+    expect(String(at("placeholder"))).toContain("Send sends");
+    expect(at("enterkeyhint")).toBe("enter");
+    at("onInput")({ target: { value: "line one" } });
+    let prevented = 0;
+    await at("onKeyDown")({ key: "Enter", preventDefault: () => prevented++ });
+    expect([prevented, p.posts]).toEqual([0, []]);
+    at("onInput")({ target: { value: "line one\nline two" } });
+    await attrAfter(p.render(), 'class="btn pri"', "onClick")();
+    expect(p.posts).toEqual([["api/chat", { project: "p", topic: "one", wt: "/w/b 1", text: "line one\nline two" }]]);
+  } finally { (globalThis as any).matchMedia = had; }
+});
+
+// The key strip's buttons: [key, label, node] in order.
+const keyButtons = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && String(n.values[1]).includes("chat-key"))
+  .map((n) => [n.values[0], n.values[n.values.length - 1], n]);
+
+test("U19: the key strip posts one api/keys press per button, Esc reads Stop while the member works", async () => {
+  const p = panel();
+  p.render();
+  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: false });
+  const keys = keyButtons(p.render());
+  expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab", "1", "2", "3", "4", "5"]);
+  expect(keys[0][1]).toBe("Esc");
+  await fnIn(keys[0][2])();
+  expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
+  expect(p.h.states).toContain("pressed Esc");
+  await fnIn(keyButtons(p.render())[2][2])();
+  await fnIn(keyButtons(p.render())[6][2])();
+  expect(p.posts.slice(1)).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Down"] }], ["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]]);
+  // Mid-turn the Esc button is the red Stop.
+  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: true });
+  const stop = keyButtons(p.render())[0];
+  expect(stop[1]).toBe("■ Stop");
+  expect(String(stop[2].values[1])).toContain("stop");
+  await fnIn(stop[2])();
+  expect(p.posts.at(-1)).toEqual(["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]);
+});
+
+test("U19: a member with no transcript shows its live screen; a toggle switches between screen and chat", () => {
+  const screenOf = (root: any) => nodes(root).find((n) => n.strings.includes('class="chat-screen"'));
+  const toggle = (root: any) => nodes(root).find((n) => n.strings.includes('class="btn sm chat-scr"'));
+  const p = panel();
+  p.render();
+  p.setData({ agent: "muse", source: "screen", sends: [], turns: [{ role: "screen", text: "old", at: null }],
+    screen: { tail: "Pick one:\n❯ 1. Yes\n  2. No", at: T, age_s: 4 } });
+  let root = p.render();
+  expect(screenOf(root).values).toContain("Pick one:\n❯ 1. Yes\n  2. No");
+  expect(screenOf(root).values).toContain("read 4 s ago");
+  expect(toggle(root).values).toContain("Chat");
+  fnIn(toggle(root))();
+  root = p.render();
+  expect(screenOf(root)).toBeUndefined();
+  expect(rowsOf(root).map(cls)).toEqual(["chat-turn screen"]);
+  // A member with a transcript opens on the conversation, its screen one press away.
+  const q = panel();
+  q.render();
+  q.setData({ agent: "claude", source: "transcript", sends: [], turns: [{ role: "assistant", text: "hi", at: T }], screen: { tail: "x", at: T, age_s: 90 } });
+  root = q.render();
+  expect(screenOf(root)).toBeUndefined();
+  expect(toggle(root).values).toContain("Screen");
+  fnIn(toggle(root))();
+  expect(screenOf(q.render()).values).toContain("read 2 min ago");
+  // No screen read: no toggle.
+  q.setData({ agent: "claude", source: "transcript", sends: [], turns: [], screen: null });
+  expect(toggle(q.render())).toBeUndefined();
 });
 
 test("crew-terminal-access U5: the log follows the newest row, stays put once scrolled up, and ↓ jumps back", () => {

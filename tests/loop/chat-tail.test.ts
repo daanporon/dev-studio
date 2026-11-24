@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { capTurns, chatLine, MAX_BYTES, MAX_RUN_LIST, remark, toolTurn, type Turn } from "../../bin/loop/chat/turns.ts";
+import { capTurns, chatLine, MAX_BYTES, MAX_RUN_LIST, remark, textTurn, toolTurn, type Turn } from "../../bin/loop/chat/turns.ts";
 import { redact } from "../../bin/loop/chat/redact.ts";
 import { screenTurns } from "../../bin/loop/chat/screen.ts";
 import { parse as claudeParse } from "../../bin/loop/chat/claude.ts";
@@ -174,6 +174,14 @@ describe("redaction and caps", () => {
 const toolLine = (name: string, input: Record<string, unknown>, ts: string) =>
   `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t" + ts, name, input }] }, timestamp: ts })}\n`;
 const at = (m: number) => `2026-11-17T12:${String(m).padStart(2, "0")}:00Z`;
+
+test("U19: a multi-line board chat is the operator's line with its breaks, also when stored wrapped as a paste", () => {
+  const line = chatLine("first\nsecond\n\tthird");
+  expect(textTurn("user", line, 1)).toEqual({ role: "user", text: "first\nsecond\n\tthird", at: 1, from: "operator" });
+  expect(textTurn("user", `<pasted_content>\n${line}\n</pasted_content>`, 2)).toEqual({ role: "user", text: "first\nsecond\n\tthird", at: 2, from: "operator" });
+  // A paste the operator made in the terminal stays a terminal line.
+  expect(textTurn("user", "<pasted_content>\nsome log\n</pasted_content>", 3)).toMatchObject({ from: "operator", via: "terminal", text: "some log" });
+});
 
 describe("crew-terminal-access U5: a conversation, not a tool log", () => {
   test("an operator line stays in the window after 30 tool calls follow it, read over several ticks", () => {

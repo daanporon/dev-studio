@@ -51,9 +51,16 @@ export function capabilityMixes(): Capabilities[] {
 // pick). Anything else is a bad request.
 export const KEYS = ["Enter", "Escape", "Tab", "Backspace", "Up", "Down", "Left", "Right", "C-c", "C-d"] as const;
 export type Key = (typeof KEYS)[number] | string;
+export const keyOk = (v: unknown): v is Key => typeof v === "string" && ((KEYS as readonly string[]).includes(v) || /^[0-9a-z]$/.test(v));
+/** The bytes a named key types into a terminal (`keys native`; a digit or letter is itself). The Orca
+ *  adapter's `keys` verb and orca-lite type these; tmux and herdr name the keys their own way. */
+export const KEY_BYTES: Record<string, string> = {
+  Enter: "\r", Escape: "\x1b", Tab: "\t", Backspace: "\x7f", Up: "\x1b[A", Down: "\x1b[B", Right: "\x1b[C", Left: "\x1b[D", "C-c": "\x03", "C-d": "\x04",
+};
+export const keyBytes = (k: string): string => KEY_BYTES[k] ?? k;
 const key: Shape<Key> = {
   name: "a key",
-  check: (v, path) => (typeof v === "string" && ((KEYS as readonly string[]).includes(v) || /^[0-9a-z]$/.test(v))
+  check: (v, path) => (keyOk(v)
     ? null : `${path} must be one of ${KEYS.join("|")} or one digit or lowercase letter, got ${JSON.stringify(v)}`),
 };
 // A string-to-string map (a terminal's env).

@@ -28,7 +28,7 @@
 // is dropped on the next list.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { type AgentState, type Answer, type Backend, type Capabilities, type Op, type Request, type Terminal, fail, okAnswer } from "./contract.ts";
+import { type AgentState, type Answer, type Backend, type Capabilities, type Op, type Request, type Terminal, fail, keyBytes, okAnswer } from "./contract.ts";
 import { shell, type Orca, type Out } from "../loop/io/orca.ts";
 
 export const ORCA_LITE_CAPS: Capabilities = { parents: "native", state: "native", turn_confirm: "native", keys: "native" };
@@ -45,11 +45,8 @@ export type OrcaLiteOptions = {
 export type Kept = Terminal & { handle: string; pane: string; wt: string };
 type Row = { handle: string; wt: string; pane: string; out: number | null };
 
-/** The bytes a named key types into a terminal (`keys native`). */
-export const KEY_BYTES: Record<string, string> = {
-  Enter: "\r", Escape: "\x1b", Tab: "\t", Backspace: "\x7f", Up: "\x1b[A", Down: "\x1b[B", Right: "\x1b[C", Left: "\x1b[D", "C-c": "\x03", "C-d": "\x04",
-};
-export const keyBytes = (k: string): string => KEY_BYTES[k] ?? k;
+/** The bytes a named key types into a terminal (`keys native`), shared with the Orca adapter's keys. */
+export { KEY_BYTES, keyBytes } from "./contract.ts";
 
 /** Orca's agent state of a tab as the contract's: working, waiting (blocked on the operator), idle (done), else unknown. */
 export function stateOf(s: string): AgentState {
