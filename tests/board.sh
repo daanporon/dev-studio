@@ -1333,7 +1333,34 @@ jt "U4: after a clear the card is gone"               "$TMP/cr2.json" '[.needs_y
 jt "U4: after a clear the account row is plain"       "$TMP/cr2.json" '.accounts[] | select(.agent=="muse") | .credits == null and (.text | test("out of credits") | not)'
 jt "U4: after a clear the account is free again"      "$TMP/cr2.json" '.accounts_summary | .free == 2 and .credits == []'
 eq "U4 page: the account row links the billing page" "$(grep -cF 'href=${a.credits.link} target="_blank"' "$ROOT/web/board.html")" "1"
+
+# claude-login-ended U3: a login-ended card (login-card.ts files it) is Needs-you at once, with its two
+# answers; resolving it takes it away.
+"$ROOT/bin/lib/alerts.sh" "$CRA" add loop-login.card_claude_work-x "work: login ended" \
+  "work: login ended — run /login in the Studio's terminal (or \`claude /login\`). Stuck on it: the Studio. Press Logged in once it works, or Switch it off to disable the account and restart them." \
+  "" "" '{"kind":"login_ended","options":["Logged in","Switch it off"],"login":{"agent":"claude","account":"work"}}' >/dev/null
+HOSTST="$TMP/stcr" mkdb "$LBL"; render "$LBL" --json > "$TMP/lg.json"
+jt "login U3: one Needs-you card at once, no grace"   "$TMP/lg.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")] | length == 1 and (.[0].title == "work: login ended")'
+jt "login U3: the card offers Logged in and Switch it off" "$TMP/lg.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")][0] | [.choices[].label] == ["Logged in","Switch it off"]'
+"$ROOT/bin/lib/alerts.sh" "$CRA" resolve loop-login.card_claude_work-x >/dev/null
+HOSTST="$TMP/stcr" board "$LBL" > "$TMP/lg2.json"
+jt "login U3: after the answer the card is gone"      "$TMP/lg2.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")] | length == 0'
 rm -f "$CRA"
+
+# claude-login-ended U4: claude/system held by a live login hold: the row reads login ended with no
+# percentages, the Accounts tile counts it as not free; with the hold ended all three are back to normal.
+HOSTST="$TMP/stcr" mkdb "$LBL"
+dbw "INSERT INTO episodes (project, subject, kind, episode_key, state, started_at, ended_at, source, observed_at) VALUES ('', 'login|claude/system', 'account', 'screen', 'claude/system', $((NOWC-60)), $((NOWC+3600)), 'loop', $NOWC)"
+render "$LBL" --json > "$TMP/lg.json"
+jt "claude-login-ended U4: the row reads login ended"   "$TMP/lg.json" '.accounts[] | select(.agent=="claude") | .text == "claude:system login ended · run /login" and .login.notice == "login ended" and .login.where == "screen"'
+jt "claude-login-ended U4: the tile counts it, not free" "$TMP/lg.json" '.accounts_summary | .free == 1 and .total == 2 and (.login | map(.label)) == ["system"] and .level == "warn"'
+render "$LBL" > "$TMP/lg.txt"
+eq "claude-login-ended U4: the text board prints login ended" "$(grep -c 'login ended' "$TMP/lg.txt" | sed 's/^[1-9][0-9]*$/yes/')" "yes"
+dbw "UPDATE episodes SET ended_at = $((NOWC-5)) WHERE subject = 'login|claude/system'"
+render "$LBL" --json > "$TMP/lg2.json"
+jt "claude-login-ended U4: after the hold ends the row is plain" "$TMP/lg2.json" '.accounts[] | select(.agent=="claude") | .login == null and (.text | test("login ended") | not)'
+jt "claude-login-ended U4: after the hold ends the account is free" "$TMP/lg2.json" '.accounts_summary | .free == 2 and .login == []'
+eq "claude-login-ended U4 page: the row has a login ended badge" "$(grep -cF 'a.login ? html`<span class="bdg limited">login ended' "$ROOT/web/board.html")" "1"
 
 # needs-you-dismiss-only U2: a stopped review of a squad unit is a loop note on its squad's row (not Needs-you)
 # until it has lasted refusal_needs_min; one with no squad is Needs-you at once.
@@ -1522,17 +1549,18 @@ else
   eq "reask U1: the fixture has an open question" "none" "one"
 fi
 
-# ds-feedback-github-issues U4: the header's Feedback facts and the text board's FEEDBACK line. With no feedback_repo
+# ds-feedback-github-issues U4: the header's Feedback facts and the text board's FEEDBACK line. With Feedback off
 # the panel reads off but the notes still count; with one the draft count is the header number.
 dbw "INSERT INTO feedback_drafts (key, kind, title, body, leak, state, created_at, updated_at) VALUES ('fd:a', 'issue', 'T', 'B', 'ok', 'review', 1, 1), ('fd:b', 'issue', 'T2', 'B2', 'blocked', 'review', 1, 1), ('fd:c', 'issue', 'T3', 'B3', 'ok', 'filed', 1, 1)"
 dbw "INSERT INTO feedback_notes (key, project, text, source, state, at, updated_at) VALUES ('n1', 'p', 'one', 'cli', 'new', 1, 1), ('n2', 'p', 'two', 'cli', 'drafted', 1, 1), ('n3', 'p', 'three', 'cli', 'dismissed', 1, 1)"
 render "$LBL" --json > "$TMP/fb.json"
-jt "feedback U4: with no repo the header reads off and counts notes" "$TMP/fb.json" '.feedback.on == false and .feedback.repo == null and .feedback.notes == 3 and .feedback.review == 2'
+jt "feedback U4: with Feedback off the header reads off and counts notes" "$TMP/fb.json" '.feedback.on == false and .feedback.repo == null and .feedback.notes == 3 and .feedback.review == 2'
+dbw "INSERT INTO config (project, file, key, value, observed_at) VALUES ('', 'limits.conf', 'feedback', 'on', 1) ON CONFLICT (project, file, key) DO UPDATE SET value = 'on'"
 dbw "INSERT INTO config (project, file, key, value, observed_at) VALUES ('', 'limits.conf', 'feedback_repo', 'o/r', 1) ON CONFLICT (project, file, key) DO UPDATE SET value = 'o/r'"
 render "$LBL" --json > "$TMP/fb.json"
 jt "feedback U4: with a repo the header counts drafts to review" "$TMP/fb.json" '.feedback.on == true and .feedback.repo == "o/r" and .feedback.review == 2 and .feedback.blocked == 1 and .feedback.new == 1 and .feedback.dismissed == 1'
 has "feedback U4: the text board's FEEDBACK line" "$(render "$LBL")" "FEEDBACK  2 drafts to review (1 blocked by the leak check) · notes: 3 (1 new, 1 drafted, 0 filed, 0 fixed, 0 closed, 1 dismissed)"
-dbw "UPDATE config SET value = '-' WHERE key = 'feedback_repo'"
+dbw "UPDATE config SET value = 'off' WHERE key = 'feedback'; UPDATE config SET value = '-' WHERE key = 'feedback_repo'"
 
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

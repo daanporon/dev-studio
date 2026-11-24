@@ -1983,6 +1983,39 @@ describe("U3: a member out of credits moves, or is left alone until its account 
   });
 });
 
+describe("claude-login-ended U2: a member whose login ended moves like one out of credits", () => {
+  const LOGIN = readFileSync(join(import.meta.dir, "..", "fixtures", "login", "claude-login-ended.txt"), "utf8");
+  const tick = (s: Store, at: number) => makeLimits().run(ctx(s, at));
+  const mine = (a: Action[], wt: string) => a.filter((x) => x.member === wt);
+  function stuck(s: Store, wt: string, account: string, at = T) {
+    s.db.run("UPDATE members SET agent = 'claude', model = 'opus', account = ? WHERE wt = ?", [account, wt]);
+    s.upsert("observed_workers", { project: "fx", wt }, { state: "idle", tail: LOGIN, tail_at: at, since: at - 900, last_output_at: at - 900, limited: null, gone_at: null, suspect: 0, observed_at: at });
+    live(s, wt);
+  }
+
+  test("a Thinker on Claude's login line is stopped when idle, with no tell, and its account is out of the pick", async () => {
+    const s = imported();
+    stuck(s, THINKER, ACCT);
+    await tick(s, T);
+    expect(episode(s, THINKER, "limited")!.state).toBe("login");
+    expect(member(s, THINKER).limited_until).toBe(T + 3600);
+    const a = decided(s);
+    expect(stops(mine(a, THINKER))).toEqual([expect.objectContaining({ payload: expect.objectContaining({ stop: true, why: "limit" }) })]);
+    expect(tells(a)).toEqual([]);
+    expect(accountBlock(s, "claude", ACCT, T)).toBe("login");
+    expect((pickAccount(s, { project: "fx", role: "thinker", phase: "build" }, T) as Row).account).not.toBe(ACCT);
+  });
+
+  test("a member that moved off the cleared account is not told its login works again", async () => {
+    const s = imported();
+    stuck(s, BUILDER, ACCT);
+    await tick(s, T);
+    setAccountEnabled(s, { agent: "claude", account: ACCT, enabled: true, by: "test" }, T + 60);
+    s.db.run("UPDATE members SET account = 'acct-b' WHERE wt = ?", [BUILDER]);
+    expect(tells(mine(decided(s, T + 120), BUILDER))).toEqual([]);
+  });
+});
+
 describe("U5: a member on an account the operator switched off moves when idle", () => {
   const builderRow = (s: Store, value: string) => s.upsert("config", { project: "fx", file: "roles.conf", key: "builder" }, { value, observed_at: T });
   const mine = (a: Action[], wt: string) => a.filter((x) => x.member === wt);

@@ -1,6 +1,6 @@
 // reconcilers/feedback.ts — host scope (ds-feedback-github-issues U2): starts the Studio's feedback drafter.
 //
-// While `feedback_repo` names a repo and notes are due (feedback/draft.ts dueNotes: `new`, not dismissed,
+// While Feedback is on (`feedback`, repo from `feedbackRepo`) and notes are due (feedback/draft.ts dueNotes: `new`, not dismissed,
 // not kept within DS_FEEDBACK_REDRAFT_S):
 //   - with no leak word list (feedback/leak.ts hasWords): no pass; one Studio card on the first ticked
 //     project (spell `feedback-words`, subject `feedback.words`, alert `sweep-feedback.words-<n>`) says to
@@ -38,7 +38,7 @@ function wordsCard(ctx: TickCtx, project: string, missing: boolean): Action[] {
   const title = "Feedback drafter needs the leak word list";
   return alertAction(store, { project, squad: null, key: WORDS_KEY, episode: `words|${started}`, idEpisode: `words|${started}`, title,
     text: `${title}: ds-feedback notes are waiting, but ${wordsPath()} is missing or empty, so the drafter makes no drafts (a draft is checked against it before it can be posted). Add the words that must never reach GitHub, one per line; the card clears once the list holds a word.`,
-    option: "Seen", why: "feedback_repo is set and notes are due, but the leak word list is missing or empty" });
+    option: "Seen", why: "Feedback is on and notes are due, but the leak word list is missing or empty" });
 }
 
 export function feedback(ctx: TickCtx): Action[] {
