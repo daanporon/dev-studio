@@ -353,7 +353,7 @@ async function chatPost(req: Request) {
 
 // GET /api/feedback: the Feedback panel's drafts, notes and filed issues (board-data.ts feedbackJson).
 function feedbackGet() {
-  const r = feedbackJson();
+  const r = feedbackJson(undefined, scope.project);
   return r ? json(200, r) : json(503, NO_DB);
 }
 

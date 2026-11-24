@@ -20,7 +20,7 @@ import type { Action } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
 import { isRateLimit } from "../io/github-budget.ts";
 import { errOf } from "../io/orca.ts";
-import { feedbackRepo, finalText, gh as realGh, isOut, leakCheck as realLeak, type Gh, type LeakCheck, type Posted } from "../feedback/post.ts";
+import { feedbackOn, feedbackRepo, finalText, gh as realGh, isOut, leakCheck as realLeak, type Gh, type LeakCheck, type Posted } from "../feedback/post.ts";
 
 export const FEEDBACK_KINDS = ["feedback-post", "feedback-add-to", "feedback-edit", "feedback-dismiss", "feedback-restore"];
 const UNFILED = ["new", "drafted", "project-only", "already-fixed", "dismissed"];
@@ -84,6 +84,9 @@ export function feedback(opts: { gh?: Gh; leak?: LeakCheck } = {}): Fulfiller {
     if (target === null && d.kind === "issue" && !String(d.title ?? "").trim()) return refuse(x, a, `draft ${id} has no title`);
     const repo = feedbackRepo(s);
     if (!repo) return refuse(x, a, "Feedback is off (or this checkout has no GitHub origin): turn it on in Settings → Limits first");
+    const off = (s.db.query("SELECT DISTINCT COALESCE(project, '') AS project FROM feedback_notes WHERE draft_id = ?").all(id) as { project: string }[])
+      .map((r) => String(r.project)).filter((q) => !feedbackOn(s, q)).sort()[0];
+    if (off !== undefined) return refuse(x, a, `project ${off || "(none)"} has Feedback off`);
     if (inFlight.has(id)) return { wait: `draft ${id} is being posted by another request`, at: x.now + 30 };
     const out = target !== null ? { ...d, kind: "add-to", target } : d;
     const { title, body } = finalText(out);
