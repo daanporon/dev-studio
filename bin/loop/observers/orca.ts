@@ -25,6 +25,7 @@ import { redact } from "../core/redact.ts";
 import { adoptStudio, STUDIO_SQUAD, studioAgent } from "../squad/studio.ts";
 import { loopProjects } from "../settings/projects.ts";
 import { offOrca } from "../squad/backend.ts";
+import { KEYS_STALE_S } from "../chat/keys.ts";
 
 export type PsAgent = { state?: string; stateStartedAt?: number; lastAssistantMessage?: string };
 export type PsWorktree = { worktreeId: string; path?: string; branch?: string; displayName?: string; lastOutputAt?: number;
@@ -380,11 +381,11 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
       // A member with a board chat queued (fulfil/chat.ts) is re-read like the Studio below: once its
       // output moved past the last read and rested STUDIO_SETTLE_S, so memberReady() sees the prompt it settled on.
       const chatting = new Set((store.db.query("SELECT DISTINCT member FROM requests WHERE project = ? AND kind = 'chat' AND done_at IS NULL AND member IS NOT NULL").all(project) as Row[]).map((r) => String(r.member)));
-      // U19: a member the board pressed keys at within the last minute, or one whose chat panel shows its screen
+      // U19: a member the board pressed keys at within KEYS_STALE_S, or one whose chat panel shows its screen
       // (observed_chat source 'screen'), is re-read once its output moved past the last read, at most every SCREEN_EVERY_S,
       // so the panel's screen view follows a menu as it changes.
       const watched = new Set((store.db.query(`SELECT member AS wt FROM requests WHERE project = ? AND kind = 'keys' AND member IS NOT NULL AND created_at >= ?
-        UNION SELECT wt FROM observed_chat WHERE project = ? AND source = 'screen' AND gone_at IS NULL`).all(project, now - 60, project) as Row[]).map((r) => String(r.wt)));
+        UNION SELECT wt FROM observed_chat WHERE project = ? AND source = 'screen' AND gone_at IS NULL`).all(project, now - KEYS_STALE_S, project) as Row[]).map((r) => String(r.wt)));
       store.tx(() => {
         for (const w of mine) {
           const path = pathOf(w), d = byWt.get(w.worktreeId), state = workerState(w);
