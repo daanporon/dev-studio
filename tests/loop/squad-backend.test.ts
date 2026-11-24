@@ -28,7 +28,7 @@ function rig() {
   const limit = (key: string, value: string) => set(store, "p", "limits.conf", key, value, "test");
   // The loop has started the squad: its doc is written and it runs.
   const started = (topic: string) => store.db.run("UPDATE squads SET doc = '{}', status = 'running' WHERE project = 'p' AND topic = ?", [topic]);
-  return { store, spawn, spawnWith, row, limit, started };
+  return { store, spawn, spawnWith, row, limit, started, root };
 }
 
 // Every backend built and every binary present, so the provider rules can be checked on their own.
@@ -42,16 +42,15 @@ test("every existing squad reads orca on Orca's own worktrees", () => {
 });
 
 test("no flag: the squad gets the project's default_backend", async () => {
-  const { spawn, row, limit } = rig();
+  const { spawn, row } = rig();
   const a = await spawn("--topic", "plain");
   expect(a.code).toBe(0);
   expect(row("plain")).toMatchObject({ backend: "orca", backend_host: "local", worktree_provider: "orca", want: "running" });
   expect(JSON.parse(String(row("plain")!.want_payload))).toMatchObject({ backend: "orca", worktree_provider: "orca" });
-  limit("default_backend", "orca-lite");
-  const b = await spawn("--topic", "onlite");
-  expect(b.code).toBe(1);
-  expect(b.err).toContain("backend orca-lite (the project's default_backend) is not built yet");
-  expect(row("onlite")).toBeNull();
+  // Every shipped backend has an adapter now: an entry with none is refused, naming where it came from.
+  const unbuilt = { x: { ...BACKENDS.tmux, name: "x", adapter: null, trial: false } };
+  const b = chooseSquadBackend({ projectBackend: "x", registry: unbuilt, which: (n: string) => `/usr/bin/${n}` });
+  expect(b.ok ? "" : b.error).toContain("backend x (the project's default_backend) is not built yet");
 });
 
 test("U16b: tmux is on trial: it starts squads only in a project whose default_backend is tmux", async () => {
@@ -92,9 +91,9 @@ test("--backend wins over the project's default_backend", async () => {
   expect(row("flagged")).toMatchObject({ backend: "orca", worktree_provider: "orca" });
 });
 
-test("a backend not built, missing on the host or unknown is refused, never replaced by orca", async () => {
+test("a backend on trial elsewhere, missing on the host or unknown is refused, never replaced by orca", async () => {
   const { spawn, row } = rig();
-  for (const [b, says] of [["herdr", "backend herdr (--backend) is on trial: only a project whose default_backend is herdr starts squads on it"], ["orca-lite", "backend orca-lite (--backend) is not built yet"], ["screen", "backend 'screen' (--backend) is not one of orca, orca-lite, tmux, herdr"]]) {
+  for (const [b, says] of [["tmux", "backend tmux (--backend) is on trial: only a project whose default_backend is tmux starts squads on it"], ["herdr", "backend herdr (--backend) is on trial: only a project whose default_backend is herdr starts squads on it"], ["orca-lite", "backend orca-lite (--backend) is on trial: only a project whose default_backend is orca-lite starts squads on it"], ["screen", "backend 'screen' (--backend) is not one of orca, orca-lite, tmux, herdr"]]) {
     const r = await spawn("--topic", `t-${b}`, "--backend", b);
     expect(r.code).toBe(1);
     expect(r.err).toContain(says);
@@ -125,6 +124,41 @@ test("herdr: on trial outside its project; found by DS_HERDR_BIN or the pinned i
   expect(r.err).toBe("");
   expect(r.code).toBe(0);
   expect(row("onherdr")).toMatchObject({ backend: "herdr", worktree_provider: "git" });
+});
+
+test("a backend on trial starts squads only on a project whose default_backend names it (U16a)", async () => {
+  const which = (b: string) => `/usr/bin/${b}`;
+  expect(BACKENDS.orca.trial).toBe(false);
+  expect(BACKENDS["orca-lite"]).toMatchObject({ adapter: "bin/backend/orca-lite.ts", trial: true });
+  // The trial project: no flag, or the flag naming the same backend.
+  expect(chooseSquadBackend({ projectBackend: "orca-lite", which })).toMatchObject({ ok: true, backend: "orca-lite", provider: "orca", providerDefault: true });
+  expect(chooseSquadBackend({ flag: "orca-lite", projectBackend: "orca-lite", which })).toMatchObject({ ok: true, backend: "orca-lite" });
+  // Any other project, even through --backend, is refused; orca stays open to the trial project.
+  for (const projectBackend of [undefined, "orca", "tmux"])
+    expect(chooseSquadBackend({ flag: "orca-lite", projectBackend, which })).toEqual({ ok: false,
+      error: "backend orca-lite (--backend) is on trial: only a project whose default_backend is orca-lite starts squads on it; set default_backend orca-lite on the trial project" });
+  expect(chooseSquadBackend({ flag: "orca", projectBackend: "orca-lite", which })).toMatchObject({ ok: true, backend: "orca" });
+  // Through spawn-squad, with a stub `orca` first on PATH (the host's own is never reached): the project's
+  // default_backend set to orca-lite writes the wish; --backend orca-lite on another project writes none.
+  const { store, spawn, spawnWith, row, limit, root } = rig();
+  const bin = join(root, "stub-bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "orca"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const PATH = `${bin}:${process.env.PATH ?? ""}`;
+  const no = await spawnWith({ PATH }, "--topic", "elsewhere", "--backend", "orca-lite");
+  expect(no.code).toBe(1);
+  expect(no.err).toContain("backend orca-lite (--backend) is on trial");
+  expect(row("elsewhere")).toBeNull();
+  limit("default_backend", "orca-lite");
+  // The default builder row falls back to muse, which has no launch line off Orca: refused until the
+  // trial project's own row drops it (docs/backends/trial-orca-lite.md, step 1).
+  expect((await spawnWith({ PATH }, "--topic", "trial")).err).toContain("backend orca-lite can start only claude; the roster names builder: muse");
+  set(store, "p", "roles.conf", "builder", "claude opus ondemand - claude:sonnet", "test");
+  const a = await spawnWith({ PATH }, "--topic", "trial");
+  expect(a.err).toBe("");
+  expect(a.code).toBe(0);
+  expect(row("trial")).toMatchObject({ backend: "orca-lite", worktree_provider: "orca" });
+  expect((await spawn("--topic", "plain", "--backend", "orca")).code).toBe(0);
 });
 
 test("changing default_backend leaves a running squad alone; its backend is written once", async () => {

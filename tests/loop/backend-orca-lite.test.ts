@@ -23,7 +23,8 @@ function rig() {
   fake.wts.set(dir, { id: `R::${dir}`, path: dir, repo: root, branch: `b${k}`, parent: null });
   fake.wts.set(parent, { id: `R::${parent}`, path: parent, repo: root, branch: `l${k}`, parent: null });
   const keep = join(root, `keep${k}.json`);
-  return { fake, dir, parent, keep, b: checked(orcaLite({ orca: fake, keep })) };
+  let clock = 1000;   // every read of the clock a second later, so a list is after the create before it
+  return { fake, dir, parent, keep, b: checked(orcaLite({ orca: fake, keep, now: () => ++clock })) };
 }
 
 const shared = rig();
@@ -100,6 +101,41 @@ describe("orca-lite", () => {
     expect(l.ok && l.terminals).toEqual([]);
     expect(JSON.parse(readFileSync(keep, "utf8")).terminals).toEqual([]);
     expect(await b.call("terminal.close", { id })).toEqual({ ok: true, closed: false });
+  });
+
+  test("list keeps the facts of a terminal made at or after its pane read (a create it raced), until a later list", async () => {
+    const { fake, dir, keep } = rig();
+    const same = checked(orcaLite({ orca: fake, keep, now: () => 5000 }));
+    const a = await same.call("terminal.create", { cwd: dir, label: "x" });
+    const id = a.ok ? a.terminal.id : "";
+    fake.screens.delete(id);
+    const l = await same.call("terminal.list", {});
+    expect(l.ok && l.terminals).toEqual([]);
+    expect(JSON.parse(readFileSync(keep, "utf8")).terminals.map((t: { id: string }) => t.id)).toEqual([id]);
+    const later = checked(orcaLite({ orca: fake, keep, now: () => 5001 }));
+    await later.call("terminal.list", {});
+    expect(JSON.parse(readFileSync(keep, "utf8")).terminals).toEqual([]);
+  });
+
+  test("readOnly (the role scripts): reads follow a new handle in memory, the facts file is never written, create and close refuse", async () => {
+    const { fake, dir, keep, b } = rig();
+    const a = await b.call("terminal.create", { cwd: dir, label: "lead" });
+    const id = a.ok ? a.terminal.id : "";
+    const gone = await b.call("terminal.create", { cwd: dir, label: "gone" });
+    fake.screens.delete(gone.ok ? gone.terminal.id : "");
+    const sc = fake.screens.get(id)!;
+    fake.screens.delete(id);
+    fake.screens.set("term_moved", sc);
+    const before = readFileSync(keep, "utf8");
+    const ro = checked(orcaLite({ orca: fake, keep, readOnly: true }));
+    const l = await ro.call("terminal.list", {});
+    expect(l.ok && l.terminals.map((t) => t.id)).toEqual([id]);
+    expect(await ro.call("terminal.send", { id, text: "hi", submit: false })).toEqual({ ok: true, delivery: "accepted" });
+    expect(fake.of("terminal-type").at(-1)!.args[0]).toBe("term_moved");
+    expect(readFileSync(keep, "utf8")).toBe(before);
+    for (const c of [await ro.call("terminal.create", { cwd: dir, label: "y" }), await ro.call("terminal.close", { id })])
+      expect(c.ok ? "ok" : c.error.code).toBe("failed");
+    expect(fake.of("terminal-close")).toEqual([]);
   });
 
   test("agent.state reads worktree ps for the tab's pane", async () => {

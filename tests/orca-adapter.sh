@@ -2264,6 +2264,8 @@ ORCA_WT_OUT="{\"result\":{\"worktree\":$W}}" run wt-make /repo a1 feat/a1 main "
 has "wt-make with no parent is top-level" "$(cat "$ORCA_LOG")" "--no-parent --setup skip"
 rc=0; ORCA_WT_OUT='{"result":{"worktree":{}}}' run wt-make /repo a1 feat/a1 main 2>/dev/null || rc=$?; eq "wt-make: an answer with no worktree fails" "$rc" "1"
 eq "wt-show by path" "$(ORCA_WT_OUT="{\"result\":{\"worktree\":$W}}" run wt-show path:/w/a1 | jq -r .id)" "R::/w/a1"
+L='{"id":"R::/w/lead","path":"/w/lead","branch":"refs/heads/lead","head":"abc","parentWorktreeId":null,"childWorktreeIds":["R::/w/a1"],"displayName":"lead"}'
+eq "wt-show keeps Orca's childWorktreeIds (U16a)" "$(ORCA_WT_OUT="{\"result\":{\"worktree\":$L}}" run wt-show path:/w/lead | jq -c .childWorktreeIds)" '["R::/w/a1"]'
 rc=0; ORCA_WT_OUT='{"ok":false,"error":{"code":"selector_not_found"}}' ORCA_WT_RC=1 run wt-show path:/w/x 2>/dev/null || rc=$?; eq "wt-show: none is exit 3" "$rc" "3"
 rc=0; ORCA_WT_OUT='{"ok":false,"error":{"code":"runtime_busy"}}' ORCA_WT_RC=1 run wt-show path:/w/x 2>/dev/null || rc=$?; eq "wt-show: another failure is exit 1" "$rc" "1"
 M='{"id":"R::/repo","path":"/repo","branch":"refs/heads/main","isMainWorktree":true}'

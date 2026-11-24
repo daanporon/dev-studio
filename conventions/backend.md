@@ -162,7 +162,8 @@ Orca's terminals with no Run, task, dispatch or coordinator (orca-backend-altern
 the `orca` worktree provider makes (`bin/loop/io/providers/orca.ts`, its only provider). Every Orca call is
 an adapter verb of the Operations table below, through the loop's Orca runner (`bin/loop/io/orca.ts`), so
 the tick's shared reads, the in-process verbs and the fake Orca all apply. The actuator makes one per
-project on its own runner (`core/actuator.ts` `contracted`); the registry still refuses a spawn on it.
+project on its own runner (`core/actuator.ts` `contracted`). A spawn picks it only on its trial project
+(U16a, "Chosen at spawn" below; the runbook and record are `docs/backends/trial-orca-lite.md`).
 
 - **create.** `wt-show path:<cwd>` gives the worktree's Orca id; a folder Orca has no worktree at is
   `failed`. A `parent` other than the cwd is set with `wt-set-parent` when `wt-show` reads another
@@ -174,8 +175,11 @@ project on its own runner (`core/actuator.ts` `contracted`); the registry still 
   (`<state root>/<project>/loop/orca-lite-terminals.json`, written whole through a rename). The terminal id
   is the handle Orca gave at create. A restarted Orca hands out new handles for the same tabs: the entry
   keeps the tab's pane key (`tabId:leafId`) and follows it to the new handle. `terminal.list` lists only
-  the tabs of the file that `terminal-panes` still shows, and drops the others' entries; every other op on
-  such an id is `not_found` (a closed handle still reads `ok` in Orca, so liveness is the list).
+  the tabs of the file that `terminal-panes` still shows, and drops the others' entries (never one made at or
+  after its own pane read: a create it raced); every other op on such an id is `not_found` (a closed handle
+  still reads `ok` in Orca, so liveness is the list). Only the loop writes the file: the role scripts open the
+  backend `readOnly` (`bin/lib/contract-roles.ts`), follow a new handle in memory, and their create and close
+  refuse.
 - **send** is `terminal-type`: text as is, keys as their bytes (Enter `\r`, Escape `\x1b`, Backspace
   `\x7f`, arrows `\x1b[A`…, `C-c` `\x03`, `C-d` `\x04`), and with `submit` Enter through
   `--enter --wait-submit 10`. **read** is `terminal-read` (`--screen` for `screen`), **last_output** the
@@ -257,10 +261,9 @@ runs a squad on it through `projectHerdr` (U16c, below), on a trial project only
 Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
 lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
 `herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
-others, the first being its default). A spawn can pick `orca` anywhere, and `tmux` (U16b, below) or `herdr`
-(U16c) on their trial project; `orca-lite` is listed so a project can name it, and a spawn on it is
-refused with a line that says it is not built yet. The loop itself can run a squad on any contract
-backend (U11, "Started" below).
+others, the first being its default). A spawn can pick `orca` anywhere, and `tmux` (U16b, below),
+`herdr` (U16c) or `orca-lite` (U16a) on their trial project. The loop itself can run a squad on any
+contract backend (U11, "Started" below).
 
 - **On trial (U16).** A backend whose registry entry has `trial: true` (every one but `orca`) starts
   squads only in a project whose `default_backend` names it: `--backend tmux` (or the board's pick) on a
@@ -291,9 +294,8 @@ backend (U11, "Started" below).
   its roles; the actuator's contract seat (`core/actuator.ts` `contractSeat`) starts, pokes, stops and
   closes them with the contract driver (`drivers/contract.ts`). The actuator reaches `tmux` through
   `bin/backend/tmux.ts`, `orca-lite` through `bin/backend/orca-lite.ts` (U13) and `herdr` through
-  `projectHerdr` in `bin/backend/herdr.ts` (U16c). The registry gives `tmux` (U16b) and `herdr` (U16c)
-  their adapters, each trial-gated as above, and still marks `orca-lite` not built, so a spawn on it is
-  still refused. A test reaches this path through `LoopActuator`'s `backends` option and the
+  `projectHerdr` in `bin/backend/herdr.ts` (U16c). The registry gives `tmux` (U16b), `herdr` (U16c)
+  and `orca-lite` (U16a) their adapters, each trial-gated as above. A test reaches this path through `LoopActuator`'s `backends` option and the
   contract fake.
   - **Start.** The member's worktree comes from the squad's recorded `worktree_provider` through
     `io/worktrees.ts`, its parent the Lead's (the Lead's own is none while the Studio is on Orca); its `wt`

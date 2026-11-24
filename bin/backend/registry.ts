@@ -40,7 +40,7 @@ export type BackendEntry = {
 
 export const BACKENDS: Readonly<Record<BackendName, BackendEntry>> = {
   orca: { name: "orca", adapter: "bin/backend/orca.sh", bin: null, trial: false, providers: ["orca"], about: "Orca with Runs (today's path)" },
-  "orca-lite": { name: "orca-lite", adapter: null, bin: "orca", trial: true, providers: ["orca"], about: "Orca terminals, no Runs" },
+  "orca-lite": { name: "orca-lite", adapter: "bin/backend/orca-lite.ts", bin: "orca", trial: true, providers: ["orca"], about: "Orca terminals, no Runs" },
   tmux: { name: "tmux", adapter: "bin/backend/tmux.ts", bin: "tmux", trial: true, providers: ["git", "treehouse"], about: "tmux sessions" },
   herdr: { name: "herdr", adapter: "bin/backend/herdr.ts", bin: "herdr", find: () => herdrBin(), install: "bun bin/backend/herdr.ts install",
     trial: true, providers: ["git", "treehouse"], about: "herdr workspaces" },

@@ -237,7 +237,8 @@ export class FakeBackend implements Orca {
   }
 
   private wtLine(w: FakeWt): string {
-    return JSON.stringify({ id: w.id, path: w.path, branch: `refs/heads/${w.branch}`, head: null, parentWorktreeId: w.parent });
+    const childWorktreeIds = [...this.wts.values()].filter((c) => c.parent === w.id).map((c) => c.id);
+    return JSON.stringify({ id: w.id, path: w.path, branch: `refs/heads/${w.branch}`, head: null, parentWorktreeId: w.parent, childWorktreeIds });
   }
 
   async run(op: string, args: string[], via: Via = {}): Promise<Out> {
