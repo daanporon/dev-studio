@@ -5,7 +5,13 @@
 // already running (pid N)" to stdout and `events` and exits 0, the sweep's lock-skip. The lock goes
 // with the process, so a killed loop never leaves one behind. Then it writes loop.pid, the health
 // row, and ticks (bin/loop/core/tick.ts) until SIGTERM or SIGINT, finishing the tick it is in, or until
-// this file is gone from its checkout (the rollback, U18).
+// this file is gone from its checkout (the rollback, U18), or until the checkout's HEAD moves loop code
+// (core/code-watch.ts): between ticks, at most every 10 s, it reads HEAD again; a new commit whose diff
+// touches `bin/**/*.ts` (not tests, not fakes) or a migration drains the actuator, logs `loop_code_changed`
+// and exits 75, and systemd (Restart=on-failure) or the minutely `loop.sh --ensure` starts the new code.
+// A commit that changes only docs, tests, the page or roles is taken as the running rev, no restart. On by
+// default only on the live root (the checkout's own state/); DS_LOOP_CODE_WATCH=1 forces it on, =0 off,
+// DS_LOOP_CODE_ROOT (tests) names the repo to watch and DS_LOOP_CODE_CHECK_MS (tests) the interval.
 //
 // DS_LOOP_HANG=1 (tests only): take the lock and the pidfile and boot, then never tick — a live,
 // stalled loop.
@@ -14,6 +20,7 @@ import { dlopen, FFIType } from "bun:ffi";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { actuator } from "./core/actuator.ts";
+import { CODE_CHECK_MS, CodeWatch, codeWatchOn, headRev } from "./core/code-watch.ts";
 import { exportForRollback } from "./db/export-json.ts";
 import { stopAll } from "./fulfil/board.ts";
 import { migrateLoopFiles, reconcile } from "./db/migrate-host.ts";
@@ -63,15 +70,20 @@ writeFileSync(pidFile, `${process.pid}\n`);
 
 let stopping = false, busy = false;
 const store = open(root);
-function finish(): never {
+function finish(code = 0): never {
   try { if (readFileSync(pidFile, "utf8").trim() === String(process.pid)) rmSync(pidFile); } catch { /* gone already */ }
   store.close();
   closeSync(lock);
-  process.exit(0);
+  process.exit(code);
 }
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; markStopping(); if (!busy) finish(); });
 
-const git = Bun.spawnSync(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"], { stdout: "pipe", stderr: "ignore" });
+// The commit this process runs, in full; the health row keeps the short form it always had.
+const bootRev = headRev(ROOT);
+const codeRepo = process.env.DS_LOOP_CODE_ROOT || ROOT;
+const code = codeWatchOn(root, ROOT)
+  ? new CodeWatch(codeRepo, codeRepo === ROOT ? bootRev : headRev(codeRepo), Number(process.env.DS_LOOP_CODE_CHECK_MS) || CODE_CHECK_MS)
+  : null;
 // U248: what says a Run changed (its worktrees' terminals, its unread mail), read once at the start of a tick.
 async function signals() {
   const orca = shell(), [t, u] = await Promise.all([orca.run("loop-terminals", []), orca.run("inbox-unread-all", [])]);
@@ -82,8 +94,17 @@ async function signals() {
 if (process.env.DS_ORCA_CLIENT === "1") {
   try { (await import("../backend/orca-client.ts")).enableOrcaClient(true); } catch { /* no bin/backend: the CLI */ }
 }
+// Between ticks: true when the checkout's HEAD moved loop code and this process should end (exit 75).
+async function codeChanged(): Promise<boolean> {
+  const c = code?.check();
+  if (c?.kind !== "restart") return false;
+  // A start in flight records its worker first, as the rollback waits; bounded, so a hung one cannot hold it.
+  await Promise.race([actuator.drain(), Bun.sleep(ROLLBACK_DRAIN_MS)]);
+  store.fact("loop_code_changed", [], { payload: { from_rev: c.from, to_rev: c.to, files: c.files.slice(0, 10), count: c.files.length } });
+  return true;
+}
 const loop = new Loop(store, await loadAll(), actuator, { signals });
-loop.boot(undefined, git.exitCode === 0 ? git.stdout.toString().trim() : null);
+loop.boot(undefined, bootRev ? bootRev.slice(0, 7) : null);
 // Calls a crash cut short are settled with Orca before the first tick acts again.
 await actuator.boot(store, now());
 if (process.env.DS_LOOP_HANG === "1") {
@@ -107,6 +128,7 @@ if (process.env.DS_LOOP_HANG === "1") {
       await stopAll(store, now());
       break;
     }
+    if (await codeChanged()) finish(75);
     try { await loop.tick(); } catch (e) { store.event("tick_error", { payload: { error: (e as Error)?.message ?? String(e) } }); }
     busy = false;
     if (stopping) break;
@@ -116,3 +138,4 @@ if (process.env.DS_LOOP_HANG === "1") {
   }
   finish();
 }
+
