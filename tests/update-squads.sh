@@ -45,13 +45,13 @@ check rc 0 "$RC"; check wishes 0 "$(wishes)"; has summary "update-squads: [proj]
 check "marker moved" "$(git -C "$FX" rev-parse HEAD)" "$(rev rev)"; check "marker need" none "$(rev need)"
 has "briefs rewritten" "reassert proj" "$(cat "$CALLS")"
 
-echo "3. instructions: a reload wish per member"
+echo "3. instructions: a reload wish only for the members whose role file changed"
 commit roles/builder.md; commit bin/other.ts
 echo "{\"rev\":\"$(git -C "$FX" rev-parse HEAD~2)\"}" > "$MARK"
 upd proj --auto
-check wishes 2 "$(wishes)"; has summary "reload — code, instructions — 2 wish(es)" "$OUT"
-has "reload flag" "ds want member proj/a/lead --reload" "$(cat "$CALLS")"
+check wishes 1 "$(wishes)"; has summary "reload — code, instructions — roles: builder — 1 wish(es)" "$OUT"
 has "suffix member" "proj/a/builder/x --reload" "$(cat "$CALLS")"
+if grep -q 'proj/a/lead' "$CALLS"; then bad "lead woken by a builder.md change"; else good; fi
 if grep -q -- '--restart' "$CALLS"; then bad "restart wish on reload"; else good; fi
 
 echo "4. skills win: restart-once-idle wishes"
@@ -70,7 +70,7 @@ echo "5. a change to the brief's source raises code-only to reload"
 commit bin/lib/lib.ts
 echo "{\"rev\":\"$(git -C "$FX" rev-parse HEAD~1)\"}" > "$MARK"
 upd proj --auto
-has "reload" "reload — code — 2 wish(es)" "$OUT"
+has "reload" "reload — code — 2 wish(es)" "$OUT"  # a brief source reaches everyone
 
 echo "6. missing marker or unknown base: today's full restart"
 rm "$MARK"
@@ -107,7 +107,7 @@ DS_STATE_ROOT="$DS_STATE_ROOT" bun -e "
   const s = open(process.env.DS_STATE_ROOT);
   s.upsert('members', { project: 'proj', squad: '_studio', wt: 'id::/w/studio' }, { role: 'studio', suffix: '', status: 'running', handle: 'term_s', observed_at: 1, updated_at: 1 });
   s.close();"
-commit roles/lead.md
+commit AGENTS.md
 echo "{\"rev\":\"$(git -C "$FX" rev-parse HEAD~1)\"}" > "$MARK"
 upd proj --auto
 check wishes 3 "$(wishes)"; has summary "reload — instructions — 3 wish(es) (one a reload of the Studio)" "$OUT"
@@ -132,6 +132,28 @@ DS_STATE_ROOT="$DS_STATE_ROOT" bun -e "
 rm "$MARK"
 upd proj --auto
 check "a gone Studio gets no wish" 2 "$(wishes)"
+
+echo "7e. a Lead, a Thinker and a Builder: roles/builder.md alone wakes the Builder; conventions alone wake nobody; studio.md the Studio"
+echo '{"run_id":"r","members":[{"role":"thinker"}]}' > "$DS_STATE_ROOT/proj/squads/b.json"
+DS_STATE_ROOT="$DS_STATE_ROOT" bun -e "
+  const { open } = await import('$ROOT/bin/loop/core/store.ts');
+  const s = open(process.env.DS_STATE_ROOT); s.db.run(\"UPDATE members SET status = 'running' WHERE squad = '_studio'\"); s.close();"
+commit roles/builder.md
+echo "{\"rev\":\"$(git -C "$FX" rev-parse HEAD~1)\"}" > "$MARK"
+upd proj --auto
+check "builder only" 1 "$(wishes)"; has "wish" "ds want member proj/a/builder/x --reload" "$(cat "$CALLS")"
+has summary "reload — instructions — roles: builder — 1 wish(es)" "$OUT"
+commit conventions/backend.md
+echo "{\"rev\":\"$(git -C "$FX" rev-parse HEAD~1)\"}" > "$MARK"
+upd proj --auto
+check "conventions only: no wish" 0 "$(wishes)"; has summary "none — instructions — 0 wish(es)" "$OUT"
+check "marker advanced" "$(git -C "$FX" rev-parse HEAD)" "$(rev rev)"
+commit studio/studio.md
+echo "{\"rev\":\"$(git -C "$FX" rev-parse HEAD~1)\"}" > "$MARK"
+upd proj --auto
+check "studio only" 1 "$(wishes)"; has "wish" "ds want member proj/_studio/studio --reload" "$(cat "$CALLS")"
+has summary "roles: studio — 1 wish(es) (one a reload of the Studio)" "$OUT"
+rm "$DS_STATE_ROOT/proj/squads/b.json"
 
 echo "8. usage and unknown project"
 upd; check rc 2 "$RC"
