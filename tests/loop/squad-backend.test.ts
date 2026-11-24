@@ -47,11 +47,41 @@ test("no flag: the squad gets the project's default_backend", async () => {
   expect(a.code).toBe(0);
   expect(row("plain")).toMatchObject({ backend: "orca", backend_host: "local", worktree_provider: "orca", want: "running" });
   expect(JSON.parse(String(row("plain")!.want_payload))).toMatchObject({ backend: "orca", worktree_provider: "orca" });
-  limit("default_backend", "tmux");
-  const b = await spawn("--topic", "ontmux");
+  limit("default_backend", "orca-lite");
+  const b = await spawn("--topic", "onlite");
   expect(b.code).toBe(1);
-  expect(b.err).toContain("backend tmux (the project's default_backend) is not built yet");
-  expect(row("ontmux")).toBeNull();
+  expect(b.err).toContain("backend orca-lite (the project's default_backend) is not built yet");
+  expect(row("onlite")).toBeNull();
+});
+
+test("U16b: tmux is on trial: it starts squads only in a project whose default_backend is tmux", async () => {
+  const which = (b: string) => `/usr/bin/${b}`;
+  expect(BACKENDS.tmux).toMatchObject({ adapter: "bin/backend/tmux.ts", trial: true });
+  expect(BACKENDS.orca.trial).toBe(false);
+  expect(chooseSquadBackend({ flag: "tmux", which })).toEqual({ ok: false,
+    error: "backend tmux (--backend) is on trial: only a project whose default_backend is tmux starts squads on it; set default_backend tmux on the trial project" });
+  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "orca", which }).ok).toBe(false);
+  expect(chooseSquadBackend({ projectBackend: "tmux", which })).toMatchObject({ ok: true, backend: "tmux", provider: "git", providerDefault: true });
+  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", which })).toMatchObject({ ok: true, backend: "tmux" });
+  // The trial project may still start an orca squad.
+  expect(chooseSquadBackend({ flag: "orca", projectBackend: "tmux", which })).toMatchObject({ ok: true, backend: "orca" });
+  const { store, spawn, row, limit } = rig();
+  const a = await spawn("--topic", "flagonly", "--backend", "tmux");
+  expect(a.code).toBe(1);
+  expect(a.err).toContain("backend tmux (--backend) is on trial");
+  expect(row("flagonly")).toBeNull();
+  if (!Bun.which("tmux")) { console.log("skip: no tmux on PATH, the trial project's spawn is not run"); return; }
+  limit("default_backend", "tmux");
+  // The shipped builder row falls back to muse, which has no launch line off Orca: the trial project's
+  // roster drops it (docs/backends/trial-tmux.md, "Before the run").
+  const b0 = await spawn("--topic", "ontmux");
+  expect(b0.code).toBe(1);
+  expect(b0.err).toContain("backend tmux can start only claude; the roster names builder: muse");
+  set(store, "p", "roles.conf", "builder", "claude opus ondemand - claude:sonnet", "test");
+  const b = await spawn("--topic", "ontmux");
+  expect(b.err).toBe("");
+  expect(b.code).toBe(0);
+  expect(row("ontmux")).toMatchObject({ backend: "tmux", backend_host: "local", worktree_provider: "git", want: "running" });
 });
 
 test("--backend wins over the project's default_backend", async () => {

@@ -257,16 +257,19 @@ runs a squad on it through `projectHerdr` (U16c, below), on a trial project only
 Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
 lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
 `herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
-others, the first being its default). `orca` is the one a spawn picks by default. `herdr` (U16c) can be
-picked on a trial project; the others with no adapter yet are listed so a project can name them, and a
-spawn on one is refused with a line that says it is not built yet. The loop itself can run a squad on any
-contract backend (U11, "Started" below).
+others, the first being its default). A spawn can pick `orca` anywhere, and `tmux` (U16b, below) or `herdr`
+(U16c) on their trial project; `orca-lite` is listed so a project can name it, and a spawn on it is
+refused with a line that says it is not built yet. The loop itself can run a squad on any contract
+backend (U11, "Started" below).
 
-- **On trial (U16).** A backend marked `trial` (orca-lite, tmux, herdr) starts squads only in a project
-  whose `default_backend` names it: `--backend herdr` in any other project is refused (`is on trial: only
-  a project whose default_backend is herdr starts squads on it`), so a trial stays on its trial project.
-  An entry's `find` looks for its binary where PATH would not (herdr: `herdrBin()`), and `install` is
-  named when it is missing.
+- **On trial (U16).** A backend whose registry entry has `trial: true` (every one but `orca`) starts
+  squads only in a project whose `default_backend` names it: `--backend tmux` (or the board's pick) on a
+  project that defaults to anything else is refused with `backend tmux (--backend) is on trial: only a
+  project whose default_backend is tmux starts squads on it`, so a trial never leaks onto another
+  project. The trial project may still start an `orca` squad. An entry's `find` looks for its binary where
+  PATH would not (herdr: `herdrBin()`), and `install` is named when it is missing. The tmux trial's
+  runbook and record are `docs/backends/trial-tmux.md`; `ds tmux-drill` is its helper (the
+  version-change drill and the before/after snapshot).
 
 - **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
   pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
@@ -288,8 +291,9 @@ contract backend (U11, "Started" below).
   its roles; the actuator's contract seat (`core/actuator.ts` `contractSeat`) starts, pokes, stops and
   closes them with the contract driver (`drivers/contract.ts`). The actuator reaches `tmux` through
   `bin/backend/tmux.ts`, `orca-lite` through `bin/backend/orca-lite.ts` (U13) and `herdr` through
-  `projectHerdr` in `bin/backend/herdr.ts` (U16c). The registry marks tmux and orca-lite not built (their
-  `adapter` is null), so a spawn on one is still refused; herdr is on trial. A test reaches this path through `LoopActuator`'s `backends` option and the
+  `projectHerdr` in `bin/backend/herdr.ts` (U16c). The registry gives `tmux` (U16b) and `herdr` (U16c)
+  their adapters, each trial-gated as above, and still marks `orca-lite` not built, so a spawn on it is
+  still refused. A test reaches this path through `LoopActuator`'s `backends` option and the
   contract fake.
   - **Start.** The member's worktree comes from the squad's recorded `worktree_provider` through
     `io/worktrees.ts`, its parent the Lead's (the Lead's own is none while the Studio is on Orca); its `wt`

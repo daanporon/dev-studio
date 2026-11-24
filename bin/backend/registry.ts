@@ -11,10 +11,10 @@
 // to `orca`. An entry with a `bin` is refused when that binary is not on PATH (`find`, when set, looks
 // instead: herdr's pinned install, bin/backend/herdr-bin.ts). `orca` (Orca with Runs) is today's path: its worktrees
 // are made by Orca's own worker starts, so its only tool is `orca`.
-// Providers (the first is the backend's default): `orca` (Orca makes the worktree), `git`, `treehouse`.
-// This module reads nothing but PATH (and herdr's install folder), so the board and the CLI can import it.
 // A backend on `trial` (orca-backend-alternatives U16) starts squads only in a project whose
 // `default_backend` names it, so `--backend tmux` elsewhere is refused and the trial stays on the trial project.
+// Providers (the first is the backend's default): `orca` (Orca makes the worktree), `git`, `treehouse`.
+// This module reads nothing but PATH (and herdr's install folder), so the board and the CLI can import it.
 import { herdrBin } from "./herdr-bin.ts";
 
 export const BACKEND_NAMES = ["orca", "orca-lite", "tmux", "herdr"] as const;
@@ -30,10 +30,10 @@ export const LOCAL_HOST = "local";
 export type BackendEntry = {
   name: BackendName;
   adapter: string | null;           // the adapter the loop starts squads through (repo-relative); null = not built yet
+  trial: boolean;                   // on trial: only a project whose default_backend names it starts squads on it
   bin: string | null;               // a binary that must be on PATH at spawn; null = not checked here
   find?: (bin: string) => string | null;   // where `bin` is, when not (only) on PATH
   install?: string;                 // how to install `bin`, named when it is missing
-  trial: boolean;                   // on trial: only a project whose default_backend names it starts squads on it
   providers: readonly ProviderName[];   // the worktree tools it can use; the first is its default
   about: string;
 };
@@ -41,7 +41,7 @@ export type BackendEntry = {
 export const BACKENDS: Readonly<Record<BackendName, BackendEntry>> = {
   orca: { name: "orca", adapter: "bin/backend/orca.sh", bin: null, trial: false, providers: ["orca"], about: "Orca with Runs (today's path)" },
   "orca-lite": { name: "orca-lite", adapter: null, bin: "orca", trial: true, providers: ["orca"], about: "Orca terminals, no Runs" },
-  tmux: { name: "tmux", adapter: null, bin: "tmux", trial: true, providers: ["git", "treehouse"], about: "tmux sessions" },
+  tmux: { name: "tmux", adapter: "bin/backend/tmux.ts", bin: "tmux", trial: true, providers: ["git", "treehouse"], about: "tmux sessions" },
   herdr: { name: "herdr", adapter: "bin/backend/herdr.ts", bin: "herdr", find: () => herdrBin(), install: "bun bin/backend/herdr.ts install",
     trial: true, providers: ["git", "treehouse"], about: "herdr workspaces" },
 };
