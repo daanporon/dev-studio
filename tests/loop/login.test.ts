@@ -58,7 +58,7 @@ function on(s: Store, wt: string, tail: string, account = ACCT, at = T) {
   s.db.run("UPDATE members SET want = 'running', want_at = ?, want_result = 'fresh', status = 'running' WHERE wt = ?", [at - 60, wt]);
 }
 const probe = (s: Store, account: string, set: Row, at: number) =>
-  s.upsert("observed_accounts", { agent: "claude", account }, { session_pct: "-", weekly_pct: "-", note: "-", observed_at: at, ...set });
+  s.upsert("observed_accounts", { agent: "claude", account }, { session_pct: "-", weekly_pct: "-", note: "-", updated: String(at), observed_at: at, ...set });
 // The fixture's other Claude accounts (accounts.tsv acct-a, acct-b) held by the probe too: nowhere to go.
 const others = (s: Store, at: number) => { for (const a of ["acct-a", "acct-b"]) probe(s, a, { note: `login ended · CLAUDE_CONFIG_DIR=/home/user/.claude-${a}` }, at); };
 const ctx = (s: Store, at: number): TickCtx => ({ store: s, project: "fx", tick: 1, now: at, fired: [], poked: new Set<string>() });
@@ -170,7 +170,9 @@ describe("U2: an account whose login ended is held host-wide", () => {
     await tick(s, T);
     expect(clearLogin(s, "claude", ACCT, "operator", T + 120)).toMatchObject({ held: true, members_cleared: 1 });
     expect(cleared(s)[0].by).toBe("operator");
-    // The same line on screen and the probe's old reading: still cleared, nothing held.
+    // The same line on screen and the probe's old reading, its row confirmed again by the state observer
+    // (observed_at moves, updated does not): still cleared, nothing held.
+    s.db.run("UPDATE observed_accounts SET observed_at = ?", [T + 180]);
     await tick(s, T + 180);
     expect([episode(s, BUILDER)!.state, episode(s, BUILDER)!.ended_at]).toEqual(["cleared", T + 120]);
     unblocked(s, T + 180);

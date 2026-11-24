@@ -15,8 +15,9 @@
 // A clear (clearLogin) lifts every block of the account (account-lift.ts), ends the hold, marks each
 // member's open login episode `cleared` (the limits reconciler keeps it closed while that same line is on
 // its screen) and records one `account_login_cleared` event with `by`. After an operator clear only a
-// `login ended` reading observed after the clear holds the account again; after the probe's own clear a
-// note that comes back holds it at once.
+// `login ended` reading taken after the clear (its `updated`, the refresh's time: the state observer bumps
+// observed_at on every pass) holds the account again; after the probe's own clear a note that comes back
+// holds it at once.
 import type { Row, Store } from "../core/store.ts";
 import { liftAccount, type Lifted } from "./account-lift.ts";
 
@@ -93,13 +94,14 @@ const noteOf = (a: Row) => { const n = String(a.note ?? "").trim(); return n ===
 // The usage probes: a note `login ended` holds the account (renewed while it stands); an allowance after
 // it ends the hold. Rows that are only unknown, `expired` or `refused` neither hold nor clear.
 export function probeLogin(store: Store, project: string, t: number): void {
-  for (const a of store.db.query("SELECT agent, account, session_pct, weekly_pct, note, observed_at FROM observed_accounts").all() as Row[]) {
+  for (const a of store.db.query("SELECT agent, account, session_pct, weekly_pct, note, updated FROM observed_accounts").all() as Row[]) {
     const agent = String(a.agent), account = String(a.account), note = noteOf(a);
     const probe = store.get("episodes", probeKey(agent, account)), was = String(probe?.state ?? "");
     const set = (state: string) => { if (was !== state) store.upsert("episodes", probeKey(agent, account), { state, started_at: t, source: "loop", observed_at: t }); };
     if (note.startsWith(LOGIN_ENDED)) {
-      // An operator cleared it: only a reading taken after the clear holds it again.
-      if (was === "cleared" && Number(a.observed_at ?? 0) <= Number(probe?.started_at ?? 0)) continue;
+      // An operator cleared it: only a reading taken after the clear holds it again. `updated` is when the
+      // refresh read it; observed_at moves on every observer pass, so it cannot tell.
+      if (was === "cleared" && (Number(a.updated) || 0) <= Number(probe?.started_at ?? 0)) continue;
       set("out");
       holdLogin(store, { agent, account, from: "probe", project, notice: note }, t);
       continue;
