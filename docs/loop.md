@@ -366,6 +366,18 @@ member read as `unknown` got no act at all.
 dispatch on a member that is being closed, with a `member_drift_cleared` event,
 and tries a stop that did not take again, up to three times.
 
+**A removal skipped as stale** (archive-stuck-worktrees U1). After the stop, Orca
+can list the stopped agent's dispatch as live for about a minute, so `fulfil/close.ts`
+drops the remove as `stale: presence running` (its drop result names why: `view stopped`,
+`presence running` or `no worktree`). The claim never renews a dropped episode, so
+`removeRetry` in `close-drift.ts` gives the next try a new episode, `<episode>:retry<n>`:
+the first `DISPATCH_READ_MIN` + `WALK_MIN` (6 min) after the drop, then double the
+wait each time, at most 30 min, with no cap on tries. From the third stale drop on,
+while the squad is wanted gone, one Needs-you card `Archive slow: <topic>` (kind
+`archive_slow`, option Seen) names the worktree, the tries, the last reason and the
+next try; `alertGone` clears it once the member has no worktree or the squad is no
+longer closing. `tests/loop/close-remove-retry.test.ts`.
+
 ## The folders
 
 Everything the loop runs lives under `bin/loop/`. The tick reaches into the

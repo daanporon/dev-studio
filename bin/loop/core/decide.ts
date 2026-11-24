@@ -40,7 +40,7 @@ import { limitStuck, switchFacts, toldAlready, type Switch } from "../capacity/s
 import { loginWorksAgain, TELL, worksAgain } from "../squad/handoff.ts";
 import { HEADLESS } from "../observers/codex.ts";
 import { wtPath as wtDir } from "../observers/orca.ts";
-import { driftCleared, stopRetry } from "../squad/close-drift.ts";
+import { driftCleared, removeRetry, stopRetry, type RemoveRetry } from "../squad/close-drift.ts";
 import { wake } from "../pause/wake.ts";
 import { ask as askCheckpoint, owed, pendingWhy, sweep as sweepCheckpoints } from "../pause/stop-checkpoint.ts";
 import { seed } from "../db/seed.ts";
@@ -424,6 +424,24 @@ function stopCard(m: Row, tries: number, store: Store): Action {
       why: "its squad cannot close while the agent runs" } };
 }
 
+function closingSquad(store: Store, m: Row): boolean {
+  const sq = store.db.query("SELECT want FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(String(m.project), String(m.squad)) as Row | null;
+  return sq?.want === "gone";
+}
+
+// One card per member and close wish while its worktree removal keeps being skipped; the retries go on.
+// alertGone (kind archive_slow) clears it once the worktree is gone or the squad is no longer wanted gone.
+function removeCard(m: Row, r: RemoveRetry, store: Store): Action {
+  const tree = store.get("observed_worktrees", { project: m.project, wt: m.wt });
+  const path = tree?.path ? String(tree.path) : wtDir(String(m.wt ?? "")) ?? String(m.wt ?? "");
+  const next = r.next_at ? new Date(r.next_at * 1000).toISOString().replace(/\.\d+Z$/, "Z") : "now";
+  return { project: String(m.project), squad: String(m.squad), member: (m.wt as string | null) ?? null, subject: `member:${m.id}`, kind: "alert",
+    episode: `removeslow:${Number(m.want_at ?? 0)}`, payload: { title: `Archive slow: ${m.squad}`, card: "archive_slow",
+      text: `The ${who(m)}'s worktree (${path}) is still not removed: the removal was skipped ${r.tries} times, last as ${r.reason ?? "stale"}. The loop keeps trying (next try ${next}) and clears this card once the worktree is gone.`,
+      option: "Seen",
+      why: "its squad cannot archive while the worktree stands" } };
+}
+
 // U156: the reload instruction typed into an idle member's terminal. It carries the ack command
 // with its own address, so the member confirms from the terminal that received it.
 export function reloadText(store: Store, m: Row): string {
@@ -488,6 +506,13 @@ function decideNow(ctx: TickCtx): Action[] {
         const r = stopRetry(store, s.m, episode, now);
         if (r.wait) continue;
         if (r.card) { out.push(stopCard(s.m, r.tries, store)); continue; }
+        episode = r.episode;
+      } else {
+        // A remove close.ts dropped as stale (presence still read running) is tried again under a new
+        // episode, with backoff and no cap; from the third drop on, one card beside the retries.
+        const r = removeRetry(store, s.m, episode, now);
+        if (r.card && closingSquad(store, s.m)) out.push(removeCard(s.m, r, store));
+        if (r.wait) continue;
         episode = r.episode;
       }
       out.push({ project: String(s.m.project), squad: String(s.m.squad), member: (s.m.wt as string | null) ?? null, subject: `member:${s.m.id}`, kind: "member.close",

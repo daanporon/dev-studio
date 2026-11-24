@@ -80,7 +80,7 @@ export type Fulfiller = Reconciler & {
   kinds: string[];
   exec(a: Action, x: Exec): Result | Promise<Result>;
   ready?(a: Action, x: Exec): boolean | Promise<boolean>; // before claim: no room makes no action
-  stale?(a: Action, x: Exec): boolean;       // true: the reason for the action has gone, drop it
+  stale?(a: Action, x: Exec): boolean | string;   // true (or a reason: dropped `stale: <reason>`): the reason for the action has gone, drop it
   // The action given up for good; a truthy return: it told someone itself (its own card, or the
   // request it failed), so no refusal card.
   giveUp?(a: Action, x: Exec, why: string): unknown;
@@ -283,8 +283,9 @@ export class LoopActuator implements Actuator {
     const t0 = performance.now(), keys = this.bgKeys(a);
     try {
       const block = startBlock(store, a);
+      const stale = row?.ended_at != null || block ? false : f.stale?.(a, x);
       const skip: Result | null = row?.ended_at != null ? { dropped: "episode ended" } : block === "paused" ? { wait: "paused" }
-        : block ? { dropped: block } : f.stale?.(a, x) ? { dropped: "stale" } : null;
+        : block ? { dropped: block } : stale ? { dropped: typeof stale === "string" ? `stale: ${stale}` : "stale" } : null;
       if (skip) r = skip;
       else if (BACKGROUND_KINDS.has(a.kind) && this.bgCount < (this.opts.bgSlots ?? bgSlots()) && !keys.some((k) => this.bgBusy.has(k))) {
         // The call starts on the next microtask, so even its synchronous part is not the tick's.
