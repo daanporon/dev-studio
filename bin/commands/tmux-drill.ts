@@ -10,18 +10,20 @@
 //       pane, pane pid, label, gen, the agent processes under it) and the live `worktrees` rows of the
 //       project's squads on tmux. Run before and after each trial step and paste both into the record.
 // A second tmux build: `nix build --no-link --print-out-paths nixpkgs#tmux` prints a prefix holding bin/tmux.
-import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { parse } from "../loop/core/cli.ts";
 import { stateRoot } from "../lib/shared.ts";
 import { tmuxBackend } from "../backend/tmux.ts";
+import { serverAlive } from "../backend/server-unit.ts";
+import { readCmdline, scanProc, type Proc } from "../loop/io/proc.ts";
 
 export const help = "version --new <tmux> [--old <tmux>] | snapshot <project> [--json] — the tmux trial's version-change drill and before/after snapshot (U16b)";
 
 const USAGE = "usage: ds tmux-drill version --new <tmux> [--old <tmux>] [--json]\n       ds tmux-drill snapshot <project> [--json]\n";
-const REFUSED = /protocol version mismatch|server version is too old|client version is too old|version mismatch/i;
+const REFUSED = /version mismatch|version is too old/i;
 
 type Ran = { code: number; out: string; err: string };
 function tmux(bin: string, sock: string[], args: string[]): Ran {
@@ -34,10 +36,7 @@ const versionOf = (bin: string): string => {
   const r = Bun.spawnSync([bin, "-V"], { stdout: "pipe", stderr: "pipe" });
   return r.exitCode === 0 ? r.stdout.toString().trim() : `unknown (${r.stderr.toString().trim() || `exit ${r.exitCode}`})`;
 };
-const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const rssKb = (pid: number): number | null => {
-  try { const m = /^VmRSS:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, "utf8")); return m ? Number(m[1]) : null; } catch { return null; }
-};
+const rssKb = (procs: Proc[], pid: number): number | null => procs.find((p) => p.pid === pid)?.rss_kb ?? null;
 
 type Step = { op: string; ok: boolean; detail: string };
 
@@ -58,7 +57,7 @@ export async function versionDrill(o: { oldBin: string; newBin: string }) {
     let agentPid = 0;
     for (let t = 0; t < 5000 && !agentPid; t += 100) {
       const p = Number(tmux(o.oldBin, sock, ["display-message", "-p", "-t", id, "#{pane_pid}"]).out);
-      if (p && readFileSync(`/proc/${p}/cmdline`, "utf8").startsWith("sleep")) agentPid = p;
+      if (p && readCmdline("/proc", p)[0] === "sleep") agentPid = p;
       else await Bun.sleep(100);
     }
     if (!agentPid) throw new Error("old server: the stand-in agent never started");
@@ -82,11 +81,11 @@ export async function versionDrill(o: { oldBin: string; newBin: string }) {
       note("terminal.close", c);
     }
     const refused = steps.some((s) => !s.ok && REFUSED.test(s.detail));
-    const agentAlive = alive(agentPid);
+    const agentAlive = serverAlive(agentPid);
     const back = await old.call("terminal.list", {});
     return {
       old: { bin: o.oldBin, version: versionOf(o.oldBin) }, new: { bin: o.newBin, version: versionOf(o.newBin) },
-      server: { pid: serverPid, version: serverVersion, rss_kb: rssKb(serverPid) },
+      server: { pid: serverPid, version: serverVersion, rss_kb: rssKb(scanProc().procs, serverPid) },
       agent_pid: agentPid, steps, refused, failed: steps.filter((s) => !s.ok).length,
       agent_alive: agentAlive, old_client_after: back.ok ? `ok (${back.terminals.length} terminal(s))` : back.error.message,
     };
@@ -97,27 +96,23 @@ export async function versionDrill(o: { oldBin: string; newBin: string }) {
 }
 
 // The processes under a pane (its descendants), each `<pid> <cmdline, 80 chars>`.
-function descendants(root: number): string[] {
+function descendants(procs: Proc[], root: number): string[] {
   const kids = new Map<number, number[]>();
-  for (const e of readdirSync("/proc")) {
-    if (!/^\d+$/.test(e)) continue;
-    try {
-      const stat = readFileSync(`/proc/${e}/stat`, "utf8");
-      const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-      kids.set(ppid, [...(kids.get(ppid) ?? []), Number(e)]);
-    } catch { /* gone */ }
-  }
+  for (const p of procs) kids.set(p.ppid, [...(kids.get(p.ppid) ?? []), p.pid]);
   const out: string[] = [], todo = [...(kids.get(root) ?? [])];
   while (todo.length) {
-    const p = todo.shift()!;
-    try { out.push(`${p} ${readFileSync(`/proc/${p}/cmdline`, "utf8").replace(/\0/g, " ").trim().slice(0, 80)}`); } catch { continue; }
-    todo.push(...(kids.get(p) ?? []));
+    const pid = todo.shift()!;
+    const argv = readCmdline("/proc", pid);
+    if (!argv.length) continue;
+    out.push(`${pid} ${argv.join(" ").slice(0, 80)}`);
+    todo.push(...(kids.get(pid) ?? []));
   }
   return out;
 }
 
-export function snapshot(project: string, o: { root?: string; tmuxBin?: string } = {}) {
-  const sock = ["-L", `ds-${project.replace(/[^A-Za-z0-9_.-]/g, "-")}`], bin = o.tmuxBin ?? Bun.which("tmux") ?? "tmux";
+export function snapshot(project: string, o: { root?: string } = {}) {
+  const sock = ["-L", `ds-${project.replace(/[^A-Za-z0-9_.-]/g, "-")}`], bin = Bun.which("tmux") ?? "tmux";
+  const { procs } = scanProc();
   const at = new Date().toISOString();
   const srv = tmux(bin, sock, ["list-sessions", "-F", "#{pid} #{version}"]);
   const [pid, version] = srv.code === 0 ? (srv.out.split("\n")[0] ?? "").split(" ") : [];
@@ -127,7 +122,7 @@ export function snapshot(project: string, o: { root?: string; tmuxBin?: string }
       let m: { label?: string; gen?: string | null; cwd?: string } = {};
       try { m = JSON.parse(decodeURIComponent(meta ?? "")); } catch { /* not ours */ }
       return { session, pane, pane_pid: Number(panePid), label: m.label ?? null, gen: m.gen ?? null, cwd: m.cwd ?? null,
-        processes: descendants(Number(panePid)) };
+        processes: descendants(procs, Number(panePid)) };
     });
   const db = join(o.root ?? stateRoot(), "loop.db");
   let worktrees: unknown[] = [], members: unknown[] = [];
@@ -144,7 +139,7 @@ export function snapshot(project: string, o: { root?: string; tmuxBin?: string }
   }
   return {
     at, project, socket: sock[1],
-    server: srv.code === 0 ? { pid: Number(pid), version, rss_kb: rssKb(Number(pid)) } : { down: srv.err || `exit ${srv.code}` },
+    server: srv.code === 0 ? { pid: Number(pid), version, rss_kb: rssKb(procs, Number(pid)) } : { down: srv.err || `exit ${srv.code}` },
     windows, members, worktrees,
   };
 }

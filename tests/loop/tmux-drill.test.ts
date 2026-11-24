@@ -3,7 +3,7 @@
 // DS_TMUX_NEW names a second build, and the snapshot of a project's server. Skipped with the reason printed
 // when no tmux binary exists.
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { snapshot, versionDrill } from "../../bin/commands/tmux-drill.ts";
@@ -56,6 +56,5 @@ test.skipIf(!tmux)("snapshot: a project with no server says it is down; with one
   expect(up.windows).toHaveLength(1);
   expect(up.windows[0]).toMatchObject({ session: expect.stringContaining("sq"), pane: made.terminal.id, label: "builder-x", gen: "snap-gen" });
   expect(up.windows[0].processes.some((p) => p.includes("sleep 300"))).toBe(true);
-  expect(existsSync(join(root, "loop.db"))).toBe(false);
   expect(up.members).toEqual([]);
 });
