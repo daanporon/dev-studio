@@ -37,7 +37,8 @@ the newest code, run `git -C ~/.dev-studio fetch -q` and `git -C ~/.dev-studio s
 
 - Read your role file + this `AGENTS.md` when your session starts. After that, re-read them
   only when your `watch.sh` tick says **`INSTRUCTIONS: changed`** — it fingerprints the
-  instruction files and tells you when they differ from what this worktree last read.
+  instruction files and tells you when they differ from what this worktree last read
+  (`AGENTS.md` plus your own role file; a change to `conventions/*.md` alone does not trigger it).
   `unchanged` means skip the re-read (you already have the text; re-reading every tick
   only piles duplicate copies into your context).
 - When you receive a **`reload`** message in your Run inbox, re-read them immediately

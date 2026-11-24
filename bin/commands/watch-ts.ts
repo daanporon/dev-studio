@@ -11,7 +11,8 @@ import { settle } from "../loop/squad/squad-finish.ts";
 import { open, openReadOnly } from "../loop/core/store.ts";
 import { toplevel } from "../loop/squad/exposed.ts";
 import { ack, inbox, line, senderAt, waitingFor, waitingLines, type Addr, type Message } from "../loop/messages/messages.ts";
-import { whoAmI } from "../loop/core/whoami.ts";
+import { parseMember, whoAmI } from "../loop/core/whoami.ts";
+import { instructionFilesFor } from "../lib/update-classes";
 
 /** U276: whose message rows this tick reads on a loop root — `me`, else this worktree's member; null when
  *  loop.db can't tell (no db, no member: the Orca read stays). */
@@ -118,11 +119,21 @@ function expandWord(word: string): string[] {
   try { names = readdirSync(dir).filter((f) => !f.startsWith(".") && re.test(f)).sort(); } catch { /* no folder */ }
   return names.length ? names.map((f) => join(dir, f)) : [word];
 }
-/** `cksum` of the instruction files catted together (missing ones skipped). */
+/** The role this worktree's session is (DS_MEMBER, else loop.db's member for the folder); null when unknown. */
+function myRole(): string | null {
+  const id = parseMember(whoAmI().member);
+  if (id) return id.role;
+  if (!dsLoopOn()) return null;
+  let s: ReturnType<typeof openReadOnly> | null = null;
+  try { const f = senderAt((s = openReadOnly(stateRoot())), toplevel()); return f.role && f.role !== "unknown" ? f.role : null; }
+  catch { return null; } finally { s?.close(); }
+}
+/** `cksum` of the instruction files catted together (missing ones skipped): AGENTS.md plus the role's own file
+ *  (`studio/studio.md` for the Studio), not every conventions file; with no role known, all of them. */
 function instrHash(): string {
   const env = process.env.DS_INSTR_FILES;
   const words = env ? env.split(/\s+/).filter((w) => w !== "")
-    : [join(ROOT, "AGENTS.md"), join(ROOT, "roles", "*.md"), join(ROOT, "studio", "studio.md"), join(ROOT, "conventions", "*.md")];
+    : instructionFilesFor(myRole()).map((f) => join(process.env.DS_INSTR_ROOT || ROOT, f)); // DS_INSTR_ROOT: a test tree
   const parts: Buffer[] = [];
   for (const f of words.flatMap(expandWord)) { try { parts.push(readFileSync(f)); } catch { /* cat 2>/dev/null */ } }
   return cksum(Buffer.concat(parts));

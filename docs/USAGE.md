@@ -628,7 +628,7 @@ then propagate differently:
   restarts nothing.
 - **Instructions** (`roles/*.md`, `conventions/*.md`, `AGENTS.md`) — a running agent
   only picks them up when it **re-reads** the file. Agents self-refresh when their
-  `watch.sh` tick prints `INSTRUCTIONS: changed` (a fingerprint of the files), so they
+  `watch.sh` tick prints `INSTRUCTIONS: changed` (a fingerprint of `AGENTS.md` and their own role file), so they
   catch up on their own; to apply an update **immediately**, run
   **`/ds-reload`** in the Studio (or `bin/commands/notify-squads.sh <project>`), which
   writes a reload wish on every roster member; the loop delivers each one to its
