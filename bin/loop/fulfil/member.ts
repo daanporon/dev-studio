@@ -31,6 +31,8 @@ import { limitStuck, switchFacts, SWITCH_WHYS } from "../capacity/switches.ts";
 import { limitNum, RESERVE, reservationOf, sameModel } from "../capacity/pick.ts";
 import { phasePrompt, resumePrompt, revalidateNote } from "../reconcilers/pause-resume.ts";
 import { memberLabel } from "../core/whoami.ts";
+import { staleWorkingAt } from "../core/decide.ts";
+import { oldGoneEnv } from "../squad/old-gone.ts";
 
 type Wish = { why?: Why; prompt?: string; agent?: string; model?: string; effort?: string; account?: string; ctx?: number; request?: boolean; unit?: string; spec?: string; pauseResume?: string };
 const placements = new WeakMap<Action, Pick>();
@@ -158,7 +160,12 @@ const member: Fulfiller = {
       }
       return false;
     }
-    return !current(x.store, a, !!sentStart(x, a));
+    const sent = !!sentStart(x, a), r = current(x.store, a, sent);
+    if (!r) return true;
+    // U21c: a switch start waiting out `agent_busy` ends once U21a's rule reads the old agent gone: the
+    // decider's start for the same member takes over (with the fresh walk), so the two never both run.
+    const goneAt = !sent && a.episode.startsWith("switch:") ? staleWorkingAt(x.store, r) : null;
+    return goneAt != null && goneAt <= x.now;
   },
 
   async ready(a, x) {
@@ -291,7 +298,13 @@ const member: Fulfiller = {
       background: (async (): Promise<Result> => {
         try {
           const moved = { ...m, agent, model: h.model, effort, account: h.account };
-          const r = h.launch === "continue" ? await driver.resume(moved) : await driver.start(moved, h.model, h.account, h.context);
+          // U21c: Orca still shows the old agent working while U21a's rule reads it gone: a fresh walk of
+          // the worktree that finds no agent lets the guard close its terminals instead of refusing.
+          const mrow = store.get("members", { id });
+          const gone = mrow && !onContract(store, m.project, m.squad) ? await oldGoneEnv(store, x.act.orca, mrow, at) : undefined;
+          const used = gone ? x.act.seat(store, m.project, m.squad, key, m.wt, at, memberLabel(m), gone) : seat;
+          const d = gone ? x.act.driver(used, agent) : driver;
+          const r = h.launch === "continue" ? await d.resume(moved) : await d.start(moved, h.model, h.account, h.context);
           if (!r.ok && actionBlock(store, a)) return { wait: "activity changed during start" };
           if (!r.ok) {
             // U97: the backend guard's `agent_busy` refusal waits and retries, never force-closes.
@@ -306,7 +319,9 @@ const member: Fulfiller = {
                   { title: "Start blocked: old agent busy", fields: { kind: "agent_busy", wt: m.wt } });
                 if (o.code === 0) store.upsert("episodes", key, { state: "alerted", observed_at: at });
               }
-              return { wait: r.error, at: Math.min(first + DUPLICATE_CARD_AFTER, at + 60) };
+              // U21c: the try right after U21a's rule starts to read the old agent gone walks again and may pass the flag.
+              const stale = mrow ? staleWorkingAt(store, mrow) : null;
+              return { wait: r.error, at: Math.min(first + DUPLICATE_CARD_AFTER, at + 60, stale != null && stale > at ? stale : Infinity) };
             }
             return r.busy ? { wait: r.error } : { retry: r.error };
           }
@@ -326,7 +341,7 @@ const member: Fulfiller = {
             const seen = Number(store.get("observed_workers", { project: m.project, wt: r.wt })?.account_at ?? 0);
             settleReservation(store, m, { agent, model: h.model, account: h.account }, at);   // before placed_at moves
             // U4: the generation this start's terminal carries as DS_GEN (none for a start Orca types itself).
-            setMember(store, m, { status: "running", wt: r.wt, agent, model: h.model, effort, account: h.account, gen: seat.gen?.() ?? null,
+            setMember(store, m, { status: "running", wt: r.wt, agent, model: h.model, effort, account: h.account, gen: used.gen?.() ?? null,
               ...(sameWish ? { want_result: h.launch } : {}), placed_at: Math.max(at, seen), ...(w.request ? { since: isoAt(at), doc: requestDoc(row, w) } : {}) }, "member_started", at);
             // A start that is not the member's first: the decider's REBREAK_MIN reads it.
             if (Number(row.placed_at ?? 0) || row.started) store.upsert("episodes", { project: m.project, subject: `member:${m.id}`, kind: "restarted" },

@@ -3023,6 +3023,8 @@ async function dropNewTabs(ctx: Ctx, wt: string, before: string): Promise<void> 
  *  start only once they are gone. An agent mid-turn (its worktree's ps state is `working`) is never closed:
  *  refuse with exit 3 and `agent_busy` on stderr, so the caller can wait and retry. A close that fails, a
  *  terminal list that can't be read, or an agent still live afterwards also refuses (exit 1). No agent: no-op.
+ *  With DS_START_OLD_GONE=1 (U21c: the loop's fresh process walk found no agent) a `working` state is stale
+ *  and does not refuse: the terminals close as for an idle agent.
  *  A replay under a live retry id owns whatever its first attempt started: unless request-show says
  *  `absent`, defer to the start's own machinery (retryTab/runWorkerStart), which reuses that worker or
  *  refuses as `still pending`. */
@@ -3045,18 +3047,23 @@ async function guardFreshStart(ctx: Ctx, wt: string): Promise<number> {
   if (found.code !== 0) return refuse("could not parse the terminal list to check for a live agent");
   const handles = jqOut(found);
   if (!handles) return 0;
-  // Fail closed on busyness: an unparseable ps refuses rather than closing an agent that may be mid-turn.
-  const busy = jqOn(await psIns(ctx), (d, emit) => {
-    const states: unknown[] = [];
-    for (const w of each(idx(idx(d, "result"), "worktrees"))) {
-      if (idx(w, "worktreeId") === wt) for (const x of each(idx(w, "agents"))) states.push(idx(x, "state"));
+  // U21c: the loop walked this worktree right before the call and found no agent process while Orca still
+  // shows one working (a killed agent): DS_START_OLD_GONE skips the busy check and closes its terminals.
+  if (ctx.env.DS_START_OLD_GONE === "1") say(ctx, `orca adapter: worktree ${wt}: the loop found no agent process; closing the old agent terminals whatever Orca's state says`);
+  else {
+    // Fail closed on busyness: an unparseable ps refuses rather than closing an agent that may be mid-turn.
+    const busy = jqOn(await psIns(ctx), (d, emit) => {
+      const states: unknown[] = [];
+      for (const w of each(idx(idx(d, "result"), "worktrees"))) {
+        if (idx(w, "worktreeId") === wt) for (const x of each(idx(w, "agents"))) states.push(idx(x, "state"));
+      }
+      emit(jqIndex(states, "working") !== null);
+    });
+    if (busy.code !== 0) return refuse("could not read worktree ps to check for a mid-turn agent");
+    if (jqOut(busy) === "true") {
+      say(ctx, `orca adapter: agent_busy: worktree ${wt} has an agent mid-turn; refusing to start a second session`);
+      return 3;
     }
-    emit(jqIndex(states, "working") !== null);
-  });
-  if (busy.code !== 0) return refuse("could not read worktree ps to check for a mid-turn agent");
-  if (jqOut(busy) === "true") {
-    say(ctx, `orca adapter: agent_busy: worktree ${wt} has an agent mid-turn; refusing to start a second session`);
-    return 3;
   }
   for (const h of handles.split("\n")) {
     if (h && (await orca(ctx, ["terminal", "close", "--terminal", h], "drop")).code !== 0) return refuse(`could not close the old agent terminal ${h}`);
