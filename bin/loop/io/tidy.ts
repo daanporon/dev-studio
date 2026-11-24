@@ -14,7 +14,8 @@
 // Every root is a parameter so tests run on fixture trees; signalling needs the real /proc or an
 // injected `kill`.
 import { closeSync, mkdirSync, openSync, readdirSync, realpathSync } from "node:fs";
-import { lstat, opendir, readdir, realpath, rm, unlink } from "node:fs/promises";
+import { lstat, opendir, readdir, readlink, realpath, rm, unlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { Action } from "../core/plugins.ts";
 import type { Exec } from "../core/actuator.ts";
@@ -23,7 +24,8 @@ import { mangle } from "../observers/orca.ts";
 import { bootTime, CLK_TCK, PAGE_KB, parseStat, readCwdRaw, readFdTargets, readText, readUid } from "./proc.ts";
 import type { Store } from "../core/store.ts";
 import { spawn } from "./orca.ts";
-import { wtProbe } from "./wt-probe.ts";
+import { OURS, wtProbe } from "./wt-probe.ts";
+import { NOTE_DIRS } from "./rescue.ts";
 
 export type TProc = { pid: number; ppid: number; pgrp: number; start: number; state: string; rss_kb: number };
 export type Agent = { pid: number; started_at: number | null };
@@ -413,4 +415,123 @@ export async function targetRef(repo: string): Promise<string | null> {
     if (r.code === 0) return ref;
   }
   return null;
+}
+
+// archive-leftovers U1 — is every change in a leftover worktree already on the repo's default branch, byte for
+// byte? The paths a tree changes are those of its commits on no remote (`HEAD --not --remotes`; a merge adds
+// only what its combined diff `--cc` shows, so a plain merge of origin/main adds none), its tracked changes and
+// its untracked files, less dev-studio's own files (OURS) and the notes the close's rescue copies out first
+// (an untracked or ignored .html/.md under NOTE_DIRS). A path is equal when the tree's file has the bytes of
+// the same path on `target` (`git hash-object`, so the repo's filters apply), or is absent on both sides. Safe
+// when every path is equal; a tree that changes nothing is safe; with no target any change keeps it. `git
+// cherry` is not used: a squash merge defeats it. null when git fails. Ignored files are the caller's check.
+export type LeftoverCommit = { sha: string; title: string };
+export type LeftoverCheck = { safe: boolean; commits: LeftoverCommit[]; differ: string[]; n_differ: number; target: string | null; target_sha: string | null };
+export const DIFFER_CAP = 50, COMMITS_MAX = 1000;
+export const rescuedNote = (p: string) => NOTE_DIRS.some((d) => p.startsWith(`${d}/`)) && /\.(html|md)$/i.test(p);
+const git = (path: string, args: string[], ms = 60_000) => spawn(["git", "-C", path, "-c", "core.quotePath=false", ...args], {}, ms);
+
+// One fetch of the default branch per repo (its common git dir) per DS_LOOP_LIFECYCLE_RETRY_S; a failure is
+// noted on the result and never fatal: a stale local ref can only make a tree look less safe.
+const fetchedAt = new Map<string, number>();
+export async function fetchTarget(path: string, now = Date.now() / 1000): Promise<{ fetched: boolean; error?: string }> {
+  const common = await git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"], 30_000);
+  if (common.code !== 0) return { fetched: false, error: "not a git tree" };
+  const key = common.out.trim(), every = envNum("DS_LOOP_LIFECYCLE_RETRY_S", 600);
+  if (now - (fetchedAt.get(key) ?? -Infinity) < every) return { fetched: false };
+  fetchedAt.set(key, now);
+  const sym = await git(path, ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], 30_000);
+  const branch = sym.code === 0 && sym.out.trim().startsWith("origin/") ? sym.out.trim().slice(7) : "main";
+  const f = await spawn(["git", "-C", path, "fetch", "-q", "--no-tags", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+    { GIT_TERMINAL_PROMPT: "0" }, 60_000);
+  return f.code === 0 ? { fetched: true } : { fetched: false, error: (f.err.trim().split("\n").at(-1) ?? "").slice(0, 200) || `exit ${f.code}` };
+}
+
+async function chunks<T>(list: string[], n: number, run: (part: string[]) => Promise<T | null>): Promise<T[] | null> {
+  const out: T[] = [];
+  for (let i = 0; i < list.length; i += n) { const r = await run(list.slice(i, i + n)); if (r == null) return null; out.push(r); }
+  return out;
+}
+
+export async function leftoverCheck(path: string): Promise<LeftoverCheck | null> {
+  const target = await targetRef(path);
+  const [st, log, ts] = await Promise.all([
+    git(path, ["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"]),
+    git(path, ["log", "--no-renames", "--cc", "--name-only", `--max-count=${COMMITS_MAX + 1}`, "--format=%x01%H%x02%s", "HEAD", "--not", "--remotes"], 120_000),
+    target ? git(path, ["rev-parse", "--verify", "-q", target], 30_000) : Promise.resolve(null),
+  ]);
+  if (st.code !== 0 || log.code !== 0) return null;
+  const paths = new Set<string>();
+  for (const e of st.out.split("\0").filter(Boolean)) {
+    if (OURS.test(e)) continue;
+    const p = e.slice(3);
+    if (e.startsWith("?? ") && rescuedNote(p)) continue;
+    paths.add(p);
+  }
+  const commits: (LeftoverCommit & { paths: string[] })[] = [];
+  for (const block of log.out.split("\x01").filter(Boolean)) {
+    const [head, ...rest] = block.split("\n");
+    const [sha, title = ""] = head.split("\x02");
+    const ps = rest.filter(Boolean);
+    commits.push({ sha, title, paths: ps });
+    for (const p of ps) paths.add(p);
+  }
+  const all = [...paths].sort();
+  const differ = new Set<string>();
+  // A name git had to quote (a control character) cannot be read back: it is never called equal.
+  for (const p of all) if (p.startsWith('"')) differ.add(p);
+  const plain = all.filter((p) => !differ.has(p));
+  if (!target) for (const p of plain) differ.add(p);
+  else if (plain.length) {
+    // Each side as `<mode> <blob>`: main's tree, HEAD's, the index and the working file. The working file
+    // must equal main, mode included; so must the index wherever it differs from HEAD (staged content a forced
+    // removal would lose: HEAD's own content stays on the branch, which the removal keeps).
+    const entries = async (args: string[], at: number) => {
+      const out = await chunks(plain, 500, async (part) => { const r = await git(path, [...args, "--", ...part]); return r.code === 0 ? r.out : null; });
+      if (!out) return null;
+      const m = new Map<string, string>();
+      for (const e of out.join("").split("\0").filter(Boolean)) { const [meta, p] = e.split("\t"); const f = meta.split(" "); m.set(p, `${f[0]} ${f[at]}`); }
+      return m;
+    };
+    const [theirs, head, staged, fm] = await Promise.all([entries(["ls-tree", "-r", "-z", target], 2), entries(["ls-tree", "-r", "-z", "HEAD"], 2),
+      entries(["ls-files", "-s", "-z"], 1), git(path, ["config", "--bool", "core.fileMode"], 30_000)]);
+    if (!theirs || !head || !staged) return null;
+    const fileMode = fm.out.trim() !== "false";
+    for (const [p, e] of staged) if (e !== head.get(p) && e !== theirs.get(p)) differ.add(p);
+    const files: string[] = [], links: string[] = [], exec = new Map<string, string>();
+    for (const p of plain) {
+      const s = await lstat(join(path, p)).catch(() => null);
+      if (!s) { if (theirs.has(p)) differ.add(p); }   // absent here: equal only when absent there too
+      else if (s.isSymbolicLink()) links.push(p);
+      else if (s.isFile()) { files.push(p); exec.set(p, s.mode & 0o100 ? "100755" : "100644"); }
+      else differ.add(p);                              // a folder (a nested repo, a submodule): never equal
+    }
+    const hashed = await chunks(files, 500, async (part) => { const r = await git(path, ["hash-object", "--", ...part], 120_000); return r.code === 0 ? r.out.split("\n").filter(Boolean) : null; });
+    if (!hashed) return null;
+    for (const [i, h] of hashed.flat().entries()) {
+      const p = files[i], [mode, blob] = (theirs.get(p) ?? " ").split(" ");
+      // With core.fileMode false git keeps the index's mode, which the staged check above compared.
+      if (blob !== h || !["100644", "100755"].includes(mode) || (fileMode && mode !== exec.get(p))) differ.add(p);
+    }
+    if (links.length) {
+      const fmt = await git(path, ["rev-parse", "--show-object-format"], 30_000);
+      const algo = fmt.code === 0 && fmt.out.trim() === "sha256" ? "sha256" : "sha1";
+      for (const p of links) {
+        const id = await linkBlob(join(path, p), algo);
+        if (id == null || theirs.get(p) !== `120000 ${id}`) differ.add(p);
+      }
+    }
+  }
+  const list = [...differ].sort();
+  const shown = commits.slice(0, COMMITS_MAX).filter((c) => c.paths.some((p) => differ.has(p))).map(({ sha, title }) => ({ sha, title }));
+  return { safe: list.length === 0 && commits.length <= COMMITS_MAX, commits: shown, differ: list.slice(0, DIFFER_CAP), n_differ: list.length,
+    target, target_sha: ts && ts.code === 0 ? ts.out.trim() : null };
+}
+
+// The object id git gives a symlink's text, in the repo's own hash (sha1 or sha256).
+async function linkBlob(file: string, algo: string): Promise<string | null> {
+  try {
+    const text = Buffer.from(await readlink(file));
+    return createHash(algo).update(`blob ${text.length}\0`).update(text).digest("hex");
+  } catch { return null; }
 }

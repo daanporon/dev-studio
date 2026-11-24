@@ -373,6 +373,14 @@ export function gateBlock(store: Store, gate: ActivityGate): string | null {
   if (gate.targets.some((t) => paused(store, t)) && !(gate.resume && resumeAction(store, gate.resume))) return "paused";
   return !gate.mail && JSON.stringify(gate.targets.map((t) => version(store, t))) !== gate.version ? "generation changed" : null;
 }
+// Every member row on the worktree has retired for good: status gone, want gone and no cancel payload.
+export function retiredTree(store: Store, project: string, wt: string): boolean {
+  const ms = wt ? store.db.query("SELECT status, want, want_payload FROM members WHERE project = ? AND wt = ?").all(project, wt) as Row[] : [];
+  return ms.length > 0 && ms.every((m) => {
+    let cancel; try { cancel = JSON.parse(String(m.want_payload ?? "{}"))?.cancel; } catch {}
+    return m.status === "gone" && m.want === "gone" && !cancel;
+  });
+}
 export function actionBlock(store: Store, a: Action): "paused" | "generation changed" | null {
   if (a.kind === "pause-control") return pauseControlBlock(store, a) ? "generation changed" : null;
   // U232: matched on the payload's stable `card`, never on the display title.
@@ -381,7 +389,10 @@ export function actionBlock(store: Store, a: Action): "paused" | "generation cha
   if (controls.has(a.kind) && !activityAlert) return null;
   const targets = actionTargets(store, a);
   const retiring = (a.kind === "role" && store.get("members", { id: (a.payload as Row | undefined)?.id })?.want === "gone")
-    || a.kind === "member.close";   // U155: the close is the retirement itself, not a rival of it
+    || a.kind === "member.close"    // U155: the close is the retirement itself, not a rival of it
+    // archive-leftovers U1: a leftover's removal comes after its member retired, so a retired member (gone,
+    // want gone, no cancel) is no rival of it; a live or restarting member on the tree still is.
+    || (a.kind === "worktree.remove" && retiredTree(store, a.project, String((a.payload as Row | null)?.wt ?? "")));
   // U158: a suspended member's close-remove is the pause flow's own last step, so the
   // squad's pause intent must not block it (its stop phase stays the pause flow's).
   if (a.kind === "member.close" && (a.payload as Row | undefined)?.phase === "remove") return null;
