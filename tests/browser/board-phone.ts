@@ -223,6 +223,32 @@ for (const size of SIZES) for (const v of VIEWS) {
   }
 }
 
+// The chat title keeps its leading "Chat ·" on one unbroken line at 390 and 320 px (a squad member's and the Studio's).
+const TITLE = `(() => { const lead = document.querySelector(".chat .mhd .chat-lead"); if (!lead) return null;
+  const hd = lead.closest(".mhd"), cs = getComputedStyle(lead), r = (e) => e && e.getBoundingClientRect();
+  const probe = document.createElement("span"); probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;font:" + cs.font; probe.textContent = lead.textContent.replace(/\\s+$/, ""); hd.appendChild(probe);
+  const alone = r(probe).width, aloneH = r(probe).height; probe.remove();
+  const sub = hd.querySelector(".chat-sub"), close = hd.querySelector(".mclose");
+  return { text: lead.textContent, h: r(lead).height, lh: aloneH, w: r(lead).width, alone, closeMid: r(close).top + r(close).height / 2, leadMid: r(lead).top + r(lead).height / 2, subEllipsis: !sub || getComputedStyle(sub).textOverflow === "ellipsis" || sub.scrollWidth <= sub.clientWidth + 1, hdH: r(hd).height }; })()`;
+for (const w of [390, 320]) for (const who of ["member", "studio"]) {
+  const key = `${w}/chat-title-${who}`;
+  const ctx = await browser.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  const p = await ctx.newPage();
+  await p.route("**/api/**", (r: any) => (r.request().method() === "GET" ? r.continue() : r.abort()));
+  await p.goto(url!, { waitUntil: "networkidle" }); await p.waitForTimeout(1200);
+  const opened = who === "member" ? (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) : (await click(p, "button", /Studio/)) && (await p.locator(".chat").count()) > 0;
+  const t = opened ? await p.evaluate(TITLE) : null;
+  await ctx.close();
+  if (!t) { if (who === "member") breaks.push(`${key}: the chat did not open`); else console.log(`skip ${key}: no Studio chat in this fixture`); continue; }
+  if (who === "studio" && !t.text.startsWith("Chat · Studio")) { console.log(`skip ${key}: opened ${t.text}`); continue; }
+  const need = (ok: boolean, why: string) => { if (!ok) breaks.push(`${key}: ${why} ${JSON.stringify(t)}`); };
+  need(Math.abs(t.h - t.lh) <= 1, "the Chat · title is not one line");
+  need(t.w >= t.alone - 1, "the Chat · title is narrower than its own text");
+  need(Math.abs(t.closeMid - t.leadMid) <= 4, "the ✕ is not on the title's row");
+  need(t.subEllipsis, "the .chat-sub neither fits nor ends in an ellipsis");
+  console.log(`ok   ${key}: title ${Math.round(t.w)}x${Math.round(t.h)}`);
+}
+
 writeFileSync(join(OUT, "report.json"), JSON.stringify(report, null, 1));
 await browser.close(); fixture?.kill();
 for (const [k, r] of Object.entries<any>(report)) if (!k.includes("@")) console.log(`${r.opened ? "ok  " : "skip"} ${k}${r.kb ? `  keyboard: sheet=${r.kb.popup?.h} send=${r.kb.primary ? r.kb.primary.y + r.kb.primary.h : "-"} field=${r.kb.field ? r.kb.field.y + r.kb.field.h : "-"} kb-open=${r.kb.kb} · closed: sheet=${r.back.popup?.h}` : ""}${r.m ? `  popup=${r.m.popup ? r.m.popup.w + "x" + r.m.popup.h : "-"} small-inputs=${r.m.small}/${r.m.inputs} tiny-buttons=${r.m.tiny}/${r.m.btns} out=${r.m.out.length}` : ""}`);
