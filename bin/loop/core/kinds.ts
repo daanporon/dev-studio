@@ -169,6 +169,8 @@ export const FACTS = {
   worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
   worktree_gone: obj({ path: str, provider: str, why: str }),
   // U10 (squad/shadow.ts): the shadow signals.
+  // chat-multiline-send-fails U1 (core/code-watch.ts): the checkout's HEAD moved loop code; the loop exits 75.
+  loop_code_changed: obj({ from_rev: str, to_rev: str, files: arr(str), count: num }),
   shadow_started: obj({}),
   shadow_disagree: obj({ point: str, old: str, new: str, member: str, id: opt(num), gen: opt(str), wt: opt(str), transient: bool, ticks: num, first_at: num }),
   shadow_explained: obj({ event: num, why: str, by: opt(str) }),
