@@ -1335,6 +1335,21 @@ jt "U4: after a clear the account is free again"      "$TMP/cr2.json" '.accounts
 eq "U4 page: the account row links the billing page" "$(grep -cF 'href=${a.credits.link} target="_blank"' "$ROOT/web/board.html")" "1"
 rm -f "$CRA"
 
+# claude-login-ended U4: claude/system held by a live login hold: the row reads login ended with no
+# percentages, the Accounts tile counts it as not free; with the hold ended all three are back to normal.
+HOSTST="$TMP/stcr" mkdb "$LBL"
+dbw "INSERT INTO episodes (project, subject, kind, episode_key, state, started_at, ended_at, source, observed_at) VALUES ('', 'login|claude/system', 'account', 'screen', 'claude/system', $((NOWC-60)), $((NOWC+3600)), 'loop', $NOWC)"
+render "$LBL" --json > "$TMP/lg.json"
+jt "claude-login-ended U4: the row reads login ended"   "$TMP/lg.json" '.accounts[] | select(.agent=="claude") | .text == "claude:system login ended · run /login" and .login.notice == "login ended" and .login.where == "screen"'
+jt "claude-login-ended U4: the tile counts it, not free" "$TMP/lg.json" '.accounts_summary | .free == 1 and .total == 2 and (.login | map(.label)) == ["system"] and .level == "warn"'
+render "$LBL" > "$TMP/lg.txt"
+eq "claude-login-ended U4: the text board prints login ended" "$(grep -c 'login ended' "$TMP/lg.txt" | sed 's/^[1-9][0-9]*$/yes/')" "yes"
+dbw "UPDATE episodes SET ended_at = $((NOWC-5)) WHERE subject = 'login|claude/system'"
+render "$LBL" --json > "$TMP/lg2.json"
+jt "claude-login-ended U4: after the hold ends the row is plain" "$TMP/lg2.json" '.accounts[] | select(.agent=="claude") | .login == null and (.text | test("login ended") | not)'
+jt "claude-login-ended U4: after the hold ends the account is free" "$TMP/lg2.json" '.accounts_summary | .free == 2 and .login == []'
+eq "claude-login-ended U4 page: the row has a login ended badge" "$(grep -cF 'a.login ? html`<span class="bdg limited">login ended' "$ROOT/web/board.html")" "1"
+
 # needs-you-dismiss-only U2: a stopped review of a squad unit is a loop note on its squad's row (not Needs-you)
 # until it has lasted refusal_needs_min; one with no squad is Needs-you at once.
 "$ROOT/bin/lib/alerts.sh" "$CRA" add review-stopped:u2-sq "Reviews stopped: plq-sq U1" "Reviews stopped for u2-sq" \
