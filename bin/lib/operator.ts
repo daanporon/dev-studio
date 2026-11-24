@@ -140,6 +140,7 @@ export function limitValueProblem(key: string, val: string): string {
   if (key === "base_update" && !["merge", "rebase"].includes(val)) return `${key} must be merge or rebase (got '${val}')`;
   if (key === "feedback" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
   if (key === "builder_host_brake" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
+  if (key === "debrief" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
   if (key === "unblock_first" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
   if (key === "default_backend" && !(BACKEND_NAMES as readonly string[]).includes(val)) return `${key} must be ${BACKEND_NAMES.join(", ")} (got '${val}')`;
   if (key === "worktree_provider" && !(PROVIDER_SETTINGS as readonly string[]).includes(val)) return `${key} must be ${PROVIDER_SETTINGS.join(", ")} (got '${val}')`;

@@ -181,6 +181,17 @@ describe("ds briefing-input", () => {
     expect(md).not.toContain("New morning brief");
   });
 
+  test("debrief off: the brief names no debrief for a squad without one", () => {
+    const prev = process.env.DS_LIMIT_DEBRIEF;
+    process.env.DS_LIMIT_DEBRIEF = "off";
+    try {
+      const md = render(facts()).join("\n");
+      expect(md).toMatch(/closed-bare \(closed [^)]+\)$/m);
+      expect(md).not.toContain("no debrief");
+      expect(md).not.toContain("debrief at archive");
+      expect(md).not.toContain("the debrief is written at close");
+    } finally { if (prev === undefined) delete process.env.DS_LIMIT_DEBRIEF; else process.env.DS_LIMIT_DEBRIEF = prev; }
+  });
   test("a squad finished in the window shows its debrief, or `no debrief`; one finished earlier is absent", () => {
     const f = facts();
     expect(f.finished.map((x) => [x.squad, x.how, x.debrief?.split("\n")[0] ?? null])).toEqual([

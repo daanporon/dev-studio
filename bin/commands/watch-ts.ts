@@ -9,6 +9,7 @@ import { repoSlug } from "../lib/lib";
 import { cksum } from "./rewake-hook-ts";
 import { settle } from "../loop/squad/squad-finish.ts";
 import { open, openReadOnly } from "../loop/core/store.ts";
+import { debriefOn } from "../loop/squad/archive-debrief.ts";
 import { toplevel } from "../loop/squad/exposed.ts";
 import { ack, inbox, line, senderAt, waitingFor, waitingLines, type Addr, type Message } from "../loop/messages/messages.ts";
 import { parseMember, whoAmI } from "../loop/core/whoami.ts";
@@ -544,7 +545,9 @@ export async function run(argv: string[]): Promise<number> {
       const roles = join_(jqSort(each(jget(st, "members")).map((m) => jget(m, "role"))), ",");
       tok = cksum(`${RUN}|${slugs}|${roles}\n`);
     } catch { tok = cksum(""); }
-    writeOut(`  ★ finished\t${TOPIC}\t${tok}\twrapping up — every unit done or cancelled, nothing held and no Tester left: do the testability handoff, check the Try it page is current, then set-status done and tell the operator /ds-close-squad ${TOPIC} (no debrief now: the loop asks for it at archive)\n`);
+    let debrOff = false;
+    try { const w = openReadOnly(SR); try { debrOff = !debriefOn(w, LABEL); } finally { w.close(); } } catch { /* no db: on */ }
+    writeOut(`  ★ finished\t${TOPIC}\t${tok}\twrapping up — every unit done or cancelled, nothing held and no Tester left: do the testability handoff, check the Try it page is current, then set-status done and tell the operator /ds-close-squad ${TOPIC} ${debrOff ? "(debriefs are off for this project: write none)" : "(no debrief now: the loop asks for it at archive)"}\n`);
   }
 
   // OPEN QUESTIONS: the waiting_on_you queue, every tick, so none can rot unseen.

@@ -518,7 +518,7 @@ Needs-you row on it) and tell the operator, in your terminal, the exact Studio p
 
 ### Final debrief at archive
 
-The debrief is written only here. When the operator archives the squad while you run, the loop keeps
+The debrief is written only here, and only when the project has debriefs on (`debrief`, default on; with `debrief off` the archive sends no message and you write none). When the operator archives the squad while you run, the loop keeps
 you up for up to `archive_debrief_min` minutes (default 10) and types one message: write the debrief.
 Cover **every** unit, each named with its PR, in six short parts in plain words, from your journal and
 the unit rows:

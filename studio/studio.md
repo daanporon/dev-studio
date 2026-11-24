@@ -139,7 +139,7 @@ Rules:
   after the last brief's record ended` may be said in a few words. Give no reason beyond the
   `<why>` text; never name a cause the facts do not. If both this window and the day before are 0 merged, leave the
   section out; if only this window is 0, write "Nothing else merged."
-- A finished squad's bullet ends with "N steps to try it in its debrief" from its `try it:` line;
+- A finished squad's bullet ends with "N steps to try it in its debrief" from its `try it:` line; a project with `debrief off` has no debrief, so the bullet carries the Try it line only;
   `nothing to try — <why>` becomes that reason in a few words; `missing` stays out.
 - Spend appears only as one sentence in the opening, and only when it changed a lot from the day
   before.
