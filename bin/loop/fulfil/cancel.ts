@@ -54,7 +54,7 @@ const cancel: Fulfiller = {
       return prNumber(u.pr) !== Number(p.pr) || cancellationRepository(x.store, u) !== p.repo || sharedPr(x.store, u) || pr?.state !== "OPEN" || pr.gone_at != null;
     }
     if (String(u.builder_wt ?? "") !== String(p.wt) || sharedBuilder(x.store, u)) return true;
-    const reality = cancellationReality(x.store, a.project, String(p.wt));
+    const reality = cancellationReality(x.store, a.project, String(p.wt), u);
     return a.kind === "cancel.remove" ? !reality.present || !reality.tree || reality.live : !reality.live;
   },
   exec: (a, x) => ({ background: cleanup(a, x) }),
