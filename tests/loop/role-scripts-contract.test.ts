@@ -85,13 +85,14 @@ test("contractLive and contractStates read the contract: the newest terminal of 
   expect((await contractLive(state, "fx", { make: () => null })).blind).toEqual(["tmux: no adapter"]);
 });
 
-test("makeBackend: the role scripts read tmux and orca-lite (U16a) as the loop makes them; herdr has no adapter", async () => {
+test("makeBackend: the role scripts read tmux, herdr and orca-lite (U16a) as the loop makes them; orca has none", async () => {
   const make = makeBackend("/nonexistent-state");
   for (const name of ["tmux", "orca-lite"]) {
     const info = await make(name, "fx")!.call("backend.info", {});
     expect(info.ok && info.name).toBe(name);
   }
-  expect(make("herdr", "fx")).toBeNull();
+  expect(make("herdr", "fx")).not.toBeNull();
+  expect(make("orca", "fx")).toBeNull();
 });
 
 test("contract.sh: current is the member's local:: worktree, ping writes nothing and answers 0, an Orca-only verb exits 2; no Orca call", () => {

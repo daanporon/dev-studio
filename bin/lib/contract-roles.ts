@@ -1,7 +1,7 @@
 // contract-roles.ts — what the role scripts read of a squad on a contract backend (orca-backend-alternatives
 // U11b; conventions/backend.md, "Role scripts off Orca"). Such a squad has no Run and no Orca worktree:
 // its members' worktrees are `local::<path>` (bin/loop/drivers/contract.ts LOCAL) and its terminals live on
-// the squad's backend (squads.backend; tmux today). Liveness and agent state come from the contract
+// the squad's backend (squads.backend; tmux, herdr or orca-lite). Liveness and agent state come from the contract
 // (`terminal.list`, `agent.state`, `terminal.last_output`), which backend a squad runs on from loop.db,
 // read-only. Only orca-lite's reads reach Orca (its adapter verbs, no Run); tmux's never do.
 //
@@ -12,17 +12,20 @@ import { basename, join } from "node:path";
 import { checked, type Backend } from "../backend/contract.ts";
 import { projectTmux } from "../backend/tmux.ts";
 import { orcaLite } from "../backend/orca-lite.ts";
+import { projectHerdr } from "../backend/herdr.ts";
 import { projectContracts } from "./contract-here.ts";
 
 export const LOCAL = "local::";   // as bin/loop/drivers/contract.ts, without its imports
 export const isLocalWt = (wt: string | null | undefined): boolean => !!wt && wt.startsWith(LOCAL);
 
 /** The contract backend `name` of a project, as the loop makes it (core/actuator.ts contracted,
- *  squad/contracts.ts): tmux, and orca-lite on the adapter with the loop's facts file (U16a). A read never
- *  starts a tmux server (bin/backend/tmux.ts starts one on create only). */
+ *  squad/contracts.ts): tmux, herdr, and orca-lite on the adapter with the loop's facts file (U16a),
+ *  read-only (only the loop writes that file). A read never starts a server (tmux and herdr start one on
+ *  create only). */
 export type MakeBackend = (name: string, project: string) => Backend | null;
 export const makeBackend = (root: string): MakeBackend => (name, project) => {
   if (name === "tmux") return checked(projectTmux(project, { stateRoot: root }));
+  if (name === "herdr") return checked(projectHerdr(project, { stateRoot: root }));
   if (name === "orca-lite") return checked(orcaLite({ keep: join(root, project, "loop", "orca-lite-terminals.json"), readOnly: true }));
   return null;
 };
