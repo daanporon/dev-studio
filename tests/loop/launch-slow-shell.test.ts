@@ -1,5 +1,5 @@
 // orca-backend-alternatives U20a: on a real tmux pane whose shell sleeps 2 s before its prompt, the short
-// typed line (`exec sh <file>`) still runs the full ~9,000-byte launch line. Typed whole into a shell still
+// typed line (`exec bash <file>`) still runs the full ~9,000-byte launch line. Typed whole into a shell still
 // in line mode, such a line is cut at 4,095 bytes. Skipped with the reason printed when no tmux is on PATH.
 import { afterAll, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

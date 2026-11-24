@@ -2,7 +2,7 @@
 // The full line (the --settings skill list and the brief) is about 9,500 bytes. A shell that has no
 // prompt up yet is still in line mode, which keeps at most 4,095 bytes of one line, so a long line is
 // cut and the next typed text runs as a second command. So the loop writes the line to a file (one per
-// generation, mode 0600, under the project's state folder) and types only `exec sh <file>`.
+// generation, mode 0600, under the project's state folder) and types only `exec bash <file>`.
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -21,7 +21,7 @@ export function writeLaunch(root: string, project: string, member: string, gen: 
   writeFileSync(path, `${line}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
   for (const f of readdirSync(dir)) if (join(dir, f) !== path) rmSync(join(dir, f), { force: true });
-  return `exec sh ${sq(path)}`;
+  return `exec bash ${sq(path)}`;
 }
 
 // The member's terminal closed: its launch files go.

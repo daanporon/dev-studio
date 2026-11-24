@@ -311,7 +311,7 @@ contract backend (U11, "Started" below).
     terminal ends with it: a poke never types into a bare shell) sent once with `submit`. The line is about 9,500 bytes, and a shell
     with no prompt yet keeps at most 4,095 bytes of one line, so (U20a) the loop writes it to
     `<state>/<project>/loop/launch/<folder>/<generation>.sh` (`squad/launch-file.ts`, mode 0600, the next generation's start or the
-    terminal's close removes it) and types only `exec sh '<file>'`, under 512 bytes. Only Claude has a launch
+    terminal's close removes it) and types only `exec bash '<file>'`, under 512 bytes. Only Claude has a launch
     line: `spawn-squad` refuses a non-Orca squad whose roster names Codex or Muse (primary or fallback).
   - **Ledger.** Starts and closes are `orca_calls` rows with the contract verb as `op` (`terminal.create`,
     `terminal.close`), in `LOCK_OPS`, `stopOpen()` and `startInFlight()`. A start lists the terminals

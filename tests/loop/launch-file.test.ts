@@ -3,6 +3,7 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { bashQ } from "../../bin/loop/drivers/claude-launch.ts";
 import { launchDir, launchPath, removeLaunch, writeLaunch } from "../../bin/loop/squad/launch-file.ts";
 
 const root = mkdtempSync(join(tmpdir(), "zzlaunch-"));
@@ -13,7 +14,7 @@ test("a line over 4,096 bytes: the typed text is the short line and the file hol
   expect(long.length).toBeGreaterThan(9000);
   const typed = writeLaunch(root, "realp", "/w/builder-u1", "gen-1", long);
   expect(Buffer.byteLength(typed)).toBeLessThan(512);
-  expect(typed).toBe(`exec sh '${launchPath(root, "realp", "/w/builder-u1", "gen-1")}'`);
+  expect(typed).toBe(`exec bash '${launchPath(root, "realp", "/w/builder-u1", "gen-1")}'`);
   const file = launchPath(root, "realp", "/w/builder-u1", "gen-1");
   expect(readFileSync(file, "utf8")).toBe(`${long}\n`);
   expect(statSync(file).mode & 0o777).toBe(0o600);
@@ -36,4 +37,13 @@ test("the next generation removes the old file; a replay of one generation keeps
 test("a path with a quote is quoted for sh", () => {
   const typed = writeLaunch(join(root, "it's"), "realp", "m", "g", "echo hi");
   expect(typed).toContain(`it'\\''s`);
+});
+
+test("the typed line runs the file under bash with a multi-line brief holding an apostrophe, unmangled", () => {
+  const brief = "line one\nit's two\n$HOME `x`";
+  const q = bashQ(brief, true);
+  const typed = writeLaunch(root, "realp", "/w/exec", "g", `printf '%s' ${q} > ${join(root, "out")}`);
+  const r = Bun.spawnSync(["bash", "-c", typed]);
+  expect(r.exitCode).toBe(0);
+  expect(readFileSync(join(root, "out"), "utf8")).toBe(brief);
 });

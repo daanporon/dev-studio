@@ -70,9 +70,9 @@ export async function rig(caps: Partial<Capabilities> = {}, o: { extra?: Reconci
   // The host's agents: one in each terminal the launch line went into, until killed.
   const killed = new Set<string>(), pids = new Map<string, number>();
   let walks = 0;
-  // U20a: the typed line is `exec sh '<file>'`; the file holds the launch line.
+  // U20a: the typed line is `exec bash '<file>'`; the file holds the launch line.
   const ranClaude = (l: string): boolean => {
-    const f = /^(?:\$ )?exec sh '(.*)'$/.exec(l)?.[1];
+    const f = /^(?:\$ )?exec bash '(.*)'$/.exec(l)?.[1];
     return l.includes("claude --") || (!!f && existsSync(f) && readFileSync(f, "utf8").includes("claude --"));
   };
   const walk = async (): Promise<LiveAccount[]> => {
