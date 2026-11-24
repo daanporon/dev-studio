@@ -1,7 +1,7 @@
 # Shadow drill and exit (orca-backend-alternatives U10b)
 
-**Status: drill run 2026-11-24 (U21), rerun the same day (U21b): 5 of 5 crashes met.** Steps 2 to 5 ran on a throwaway squad. The finishes are in; the forced
-crashes did not register (see the Record). The earliest exit is 2026-11-30 and needs a fix for crash detection first (U22 follows up).
+**Status: drill run 2026-11-24 (U21), rerun the same day (U21b): 5 of 5 crashes met.** Steps 2 to 5 ran on a throwaway squad. The first drill's forced
+crashes did not register; after the U21a and U21c fixes the rerun met 5 of 5 (see the Record). The earliest exit is 2026-11-30 and still needs 20 finishes, 7 days and 0 unexplained disagreements.
 
 ## Exit numbers
 
