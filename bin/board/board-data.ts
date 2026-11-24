@@ -2324,7 +2324,7 @@ export function brakeText(br: any): string | null {
 // the drafts waiting for review (`blocked` of them with a leak hit) and the notes by state. Host-wide, so a
 // project board shows the same numbers; an older loop.db without the tables reads as none.
 export function feedbackSummary(db: Db | null) {
-  const none = { on: false, repo: null as string | null, review: 0, blocked: 0, notes: 0, new: 0, drafted: 0, filed: 0, fixed: 0, dismissed: 0 };
+  const none = { on: false, repo: null as string | null, review: 0, blocked: 0, notes: 0, new: 0, drafted: 0, filed: 0, fixed: 0, closed: 0, dismissed: 0 };
   if (!db) return none;
   try {
     const repo = feedbackRepo(db.s);
@@ -2333,13 +2333,13 @@ export function feedbackSummary(db: Db | null) {
     for (const r of db.all("SELECT state, COUNT(*) AS n FROM feedback_notes GROUP BY state")) by[String(r.state)] = Number(r.n);
     const sum = Object.values(by).reduce((a, b) => a + b, 0);
     return { on: repo != null, repo, review: Number(d?.n ?? 0), blocked: Number(d?.b ?? 0), notes: sum, new: by.new ?? 0, drafted: by.drafted ?? 0,
-      filed: by.filed ?? 0, fixed: (by.fixed ?? 0) + (by.closed ?? 0), dismissed: by.dismissed ?? 0 };
+      filed: by.filed ?? 0, fixed: by.fixed ?? 0, closed: by.closed ?? 0, dismissed: by.dismissed ?? 0 };
   } catch { return none; }
 }
 export function feedbackLine(f: ReturnType<typeof feedbackSummary> | undefined): string | null {
   if (!f || (!f.on && f.notes === 0)) return null;
   const head = f.on ? `${f.review} draft${f.review === 1 ? "" : "s"} to review${f.blocked ? ` (${f.blocked} blocked by the leak check)` : ""}` : "off (feedback_repo is -)";
-  return `FEEDBACK  ${head} · notes: ${f.notes} (${f.new} new, ${f.drafted} drafted, ${f.filed} filed, ${f.fixed} fixed, ${f.dismissed} dismissed)`;
+  return `FEEDBACK  ${head} · notes: ${f.notes} (${f.new} new, ${f.drafted} drafted, ${f.filed} filed, ${f.fixed} fixed, ${f.closed} closed, ${f.dismissed} dismissed)`;
 }
 
 // GET /api/feedback: what the Feedback panel shows. `review` = drafts in review (or posting) with the notes they

@@ -149,6 +149,7 @@ export function noteCounts(s: Store): Record<string, number> {
 export function noteLine(r: Row): string {
   const who = r.squad ? `${r.squad}/${r.role ?? "?"}` : String(r.role ?? "-");
   const text = String(r.text).split("\n")[0].slice(0, 100);
-  const state = r.state === "fixed" ? `fixed${r.fix_pr != null ? ` in #${r.fix_pr}` : ""}${r.fix_here ? " (in your version)" : ""}` : r.state;
+  const state = r.state === "fixed" ? `fixed${r.fix_pr != null ? ` in #${r.fix_pr}` : ""}${r.fix_here ? " (in your version)" : ""}`
+    : (r.state === "filed" || r.state === "closed") && r.issue != null ? `${r.state} #${r.issue}` : r.state;
   return `#${r.id}  ${stamp(Number(r.at))}  ${r.project}  ${who}  ${state}  ${text}`;
 }
