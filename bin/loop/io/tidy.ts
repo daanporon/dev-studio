@@ -498,9 +498,13 @@ export async function leftoverCheck(path: string): Promise<LeftoverCheck | null>
     const hashed = await chunks(files, 500, async (part) => { const r = await git(path, ["hash-object", "--", ...part], 120_000); return r.code === 0 ? r.out.split("\n").filter(Boolean) : null; });
     if (!hashed) return null;
     hashed.flat().forEach((h, i) => { if (theirs.get(files[i]) !== h) differ.add(files[i]); });
-    for (const p of links) {
-      const id = await linkBlob(path, p);
-      if (id == null || theirs.get(p) !== id) differ.add(p);
+    if (links.length) {
+      const fmt = await git(path, ["rev-parse", "--show-object-format"], 30_000);
+      const algo = fmt.code === 0 && fmt.out.trim() === "sha256" ? "sha256" : "sha1";
+      for (const p of links) {
+        const id = await linkBlob(join(path, p), algo);
+        if (id == null || theirs.get(p) !== id) differ.add(p);
+      }
     }
   }
   const list = [...differ].sort();
@@ -509,12 +513,10 @@ export async function leftoverCheck(path: string): Promise<LeftoverCheck | null>
     target, target_sha: ts && ts.code === 0 ? ts.out.trim() : null };
 }
 
-// The object id git gives a symlink's text, in the repo's own hash.
-async function linkBlob(path: string, p: string): Promise<string | null> {
-  const fmt = await git(path, ["rev-parse", "--show-object-format"], 30_000);
-  const algo = fmt.code === 0 && fmt.out.trim() === "sha256" ? "sha256" : "sha1";
+// The object id git gives a symlink's text, in the repo's own hash (sha1 or sha256).
+async function linkBlob(file: string, algo: string): Promise<string | null> {
   try {
-    const text = Buffer.from(await readlink(join(path, p)));
+    const text = Buffer.from(await readlink(file));
     return createHash(algo).update(`blob ${text.length}\0`).update(text).digest("hex");
   } catch { return null; }
 }

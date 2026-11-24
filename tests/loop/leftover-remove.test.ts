@@ -148,6 +148,22 @@ describe("leftover rule (archive-leftovers U1)", () => {
     removed(r);
   });
 
+  test("a symlink counts as equal only when main has the same link", async () => {
+    const g = repos(), r = rig("wtx", g.wt);
+    g.commit({ "t.txt": "t\n" });
+    symlinkSync("a.txt", join(g.wt, "same"));
+    symlinkSync("t.txt", join(g.wt, "other"));
+    g.land({ "t.txt": "t\n" });
+    git(join(g.wt, "..", "seed"), "pull", "-q", "--ff-only", "origin", "main");
+    symlinkSync("a.txt", join(g.wt, "..", "seed", "same"));
+    symlinkSync("a.txt", join(g.wt, "..", "seed", "other"));
+    git(join(g.wt, "..", "seed"), "add", ".");
+    git(join(g.wt, "..", "seed"), "commit", "-qm", "links");
+    git(join(g.wt, "..", "seed"), "push", "-q", "origin", "main");
+    await r.send();
+    kept(r, "left: 0 commits, 1 file not on main");
+  });
+
   test("(f) an untracked .env is kept", async () => {
     const g = repos(), r = rig("wtx", g.wt);
     writeFileSync(join(g.wt, ".env"), "SECRET=1\n");
