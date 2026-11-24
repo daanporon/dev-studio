@@ -196,7 +196,8 @@ const close: Fulfiller = {
       const squadArchived = effective(x.store, r).why === "squad";   // the decider's own test (pause.ts effective)
       return closeBusy(x.store, r) && !["stopped", "gone"].includes(String(r.want ?? "")) && !squadArchived;
     }
-    if (phase === "remove") return v === "stopped" || presence(x, r) === "running" || !r.wt;
+    // A remove names why it is stale (`stale: <reason>` in the drop); the decider retries it (close-drift removeRetry).
+    if (phase === "remove") return v === "stopped" ? "view stopped" : presence(x, r) === "running" ? "presence running" : !r.wt ? "no worktree" : false;
     return true;
   },
 

@@ -10,7 +10,7 @@ export type Place = "needs" | "note" | "later";
 export type CardLike = { subject?: unknown; squad?: unknown; id?: unknown; kind?: unknown; title?: unknown; since?: unknown; reason?: unknown; text?: unknown; question?: unknown };
 
 // Kept by `kind` where the card has one, else by the id prefix or the title it had before kinds.
-const NEEDS_KINDS = new Set(["out_of_credits", "login_ended", "agent_broken", "restart_failed", "review_stopped", "loop_refusal", "cancel_failed", "account_skills", "studio_move_up", "questions_dropped"]);
+const NEEDS_KINDS = new Set(["out_of_credits", "login_ended", "agent_broken", "restart_failed", "review_stopped", "loop_refusal", "cancel_failed", "account_skills", "studio_move_up", "questions_dropped", "archive_slow"]);
 const NEEDS_ID = /^(loop|sweep)-studio\.(ctx|limit)-|^sweep-(account-skills|disk-pressure|tick-alarm|feedback)\.|^sweep-studio\.adopt-/;
 const NEEDS_TITLE = /(^|[ :·])(studio\.ctx|studio\.limit|Studio out of credits|Studio's account removed|Agent broken|Agent broke again|Agent presence unknown|Restart failed|Reviews? stopped|Loop action refused|Cancellation failed|Lifecycle failed)$/;
 // Cards that heal by themselves: they need the operator only if they last.
