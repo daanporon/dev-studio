@@ -162,7 +162,8 @@ Orca's terminals with no Run, task, dispatch or coordinator (orca-backend-altern
 the `orca` worktree provider makes (`bin/loop/io/providers/orca.ts`, its only provider). Every Orca call is
 an adapter verb of the Operations table below, through the loop's Orca runner (`bin/loop/io/orca.ts`), so
 the tick's shared reads, the in-process verbs and the fake Orca all apply. The actuator makes one per
-project on its own runner (`core/actuator.ts` `contracted`); the registry still refuses a spawn on it.
+project on its own runner (`core/actuator.ts` `contracted`). A spawn picks it only on its trial project
+(U16a, "Chosen at spawn" below; the runbook and record are `docs/backends/trial-orca-lite.md`).
 
 - **create.** `wt-show path:<cwd>` gives the worktree's Orca id; a folder Orca has no worktree at is
   `failed`. A `parent` other than the cwd is set with `wt-set-parent` when `wt-show` reads another
@@ -241,16 +242,18 @@ does not use it yet.
 Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
 lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
 `herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
-others, the first being its default). Only `orca` is one a spawn can pick today (herdr's v2 adapter,
-above, is not wired to squad starts yet); the rest are listed so a project can name them, and a spawn on
-one is refused with a line that says it is not built yet. The loop itself can run a squad on any contract
-backend (U11, "Started" below).
+others, the first being its default). `orca` and `orca-lite` have an adapter a spawn can start a squad
+on; the rest (herdr's v2 adapter, above, is not wired to squad starts yet) are listed so a project can name
+them, and a spawn on one is refused with a line that says it is not built yet. Every backend but `orca` is
+on **trial** (U16a): it starts squads only on a project whose `default_backend` names it, so a `--backend`
+flag on any other project is refused (`… is on trial: …`) and a trial stays on its trial project. The loop
+itself can run a squad on any contract backend (U11, "Started" below).
 
 - **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
   pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
   project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
-  refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet and a
-  binary missing on PATH; a refused spawn writes no wish and never falls back to `orca`.
+  refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet, a
+  backend on trial outside its trial project and a binary missing on PATH; a refused spawn writes no wish and never falls back to `orca`.
 - **Written once.** The squad's row keeps `backend`, `backend_host` (`local`; the machine it runs on) and
   `worktree_provider` (migration 0054; every existing squad reads `orca`/`local`/`orca`). Once the loop
   has started the squad the columns cannot change (a table trigger), and `spawn-squad` refuses a different

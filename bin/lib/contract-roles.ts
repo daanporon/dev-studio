@@ -3,24 +3,29 @@
 // its members' worktrees are `local::<path>` (bin/loop/drivers/contract.ts LOCAL) and its terminals live on
 // the squad's backend (squads.backend; tmux today). Liveness and agent state come from the contract
 // (`terminal.list`, `agent.state`, `terminal.last_output`), which backend a squad runs on from loop.db,
-// read-only, and nothing here reaches Orca.
+// read-only. Only orca-lite's reads reach Orca (its adapter verbs, no Run); tmux's never do.
 //
 // bin/backend/contract.sh answers the adapter verbs the role scripts call through $BACKEND with these
 // (`ds contract-backend`); the phone book and the team listing call them in process for the contract
 // squads of a project that also has squads on Orca. Imports no shared.ts; shared.ts imports only contract-here.ts.
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { checked, type Backend } from "../backend/contract.ts";
 import { projectTmux } from "../backend/tmux.ts";
+import { orcaLite } from "../backend/orca-lite.ts";
 import { projectContracts } from "./contract-here.ts";
 
 export const LOCAL = "local::";   // as bin/loop/drivers/contract.ts, without its imports
 export const isLocalWt = (wt: string | null | undefined): boolean => !!wt && wt.startsWith(LOCAL);
 
-/** The contract backend `name` of a project, as the loop makes it (core/actuator.ts contracted): only
- *  tmux has an adapter. A read never starts its server (bin/backend/tmux.ts starts one on create only). */
+/** The contract backend `name` of a project, as the loop makes it (core/actuator.ts contracted,
+ *  squad/contracts.ts): tmux, and orca-lite on the adapter with the loop's facts file (U16a). A read never
+ *  starts a tmux server (bin/backend/tmux.ts starts one on create only). */
 export type MakeBackend = (name: string, project: string) => Backend | null;
-export const makeBackend = (root: string): MakeBackend => (name, project) =>
-  (name === "tmux" ? checked(projectTmux(project, { stateRoot: root })) : null);
+export const makeBackend = (root: string): MakeBackend => (name, project) => {
+  if (name === "tmux") return checked(projectTmux(project, { stateRoot: root }));
+  if (name === "orca-lite") return checked(orcaLite({ keep: join(root, project, "loop", "orca-lite-terminals.json") }));
+  return null;
+};
 
 export { contractHere, contractProjects, projectContracts, squadContract } from "./contract-here.ts";
 

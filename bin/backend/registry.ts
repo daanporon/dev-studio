@@ -8,7 +8,9 @@
 // `spawn-squad --backend <name>` (and the board's Start squad dialog) override the backend for one squad.
 //
 // An entry with no adapter is not built yet (herdr's v2 adapter, bin/backend/herdr.ts, is not wired to
-// squad starts): spawn refuses it with a line that says so, never falls back to `orca`. An entry with a
+// squad starts): spawn refuses it with a line that says so, never falls back to `orca`. An entry on
+// `trial` (orca-backend-alternatives U16) starts squads only on a project whose `default_backend` names
+// it, so a `--backend` flag elsewhere is refused and the trial stays on the trial project. An entry with a
 // `bin` is refused when that binary is not on PATH. `orca` (Orca with Runs) is today's path: its worktrees
 // are made by Orca's own worker starts, so its only tool is `orca`.
 // Providers (the first is the backend's default): `orca` (Orca makes the worktree), `git`, `treehouse`.
@@ -29,13 +31,14 @@ export type BackendEntry = {
   bin: string | null;               // a binary that must be on PATH at spawn; null = not checked here
   providers: readonly ProviderName[];   // the worktree tools it can use; the first is its default
   about: string;
+  trial: boolean;                   // on trial: only a project whose default_backend names it starts squads on it
 };
 
 export const BACKENDS: Readonly<Record<BackendName, BackendEntry>> = {
-  orca: { name: "orca", adapter: "bin/backend/orca.sh", bin: null, providers: ["orca"], about: "Orca with Runs (today's path)" },
-  "orca-lite": { name: "orca-lite", adapter: null, bin: "orca", providers: ["orca"], about: "Orca terminals, no Runs" },
-  tmux: { name: "tmux", adapter: null, bin: "tmux", providers: ["git", "treehouse"], about: "tmux sessions" },
-  herdr: { name: "herdr", adapter: null, bin: "herdr", providers: ["git", "treehouse"], about: "herdr workspaces" },
+  orca: { name: "orca", adapter: "bin/backend/orca.sh", bin: null, providers: ["orca"], about: "Orca with Runs (today's path)", trial: false },
+  "orca-lite": { name: "orca-lite", adapter: "bin/backend/orca-lite.ts", bin: "orca", providers: ["orca"], about: "Orca terminals, no Runs", trial: true },
+  tmux: { name: "tmux", adapter: null, bin: "tmux", providers: ["git", "treehouse"], about: "tmux sessions", trial: true },
+  herdr: { name: "herdr", adapter: null, bin: "herdr", providers: ["git", "treehouse"], about: "herdr workspaces", trial: true },
 };
 
 export const isBackend = (v: unknown): v is BackendName => typeof v === "string" && (BACKEND_NAMES as readonly string[]).includes(v);
@@ -64,6 +67,7 @@ export function chooseSquadBackend(o: { flag?: string; projectBackend?: string; 
   if (!e.providers.includes(provider))
     return { ok: false, error: `backend ${e.name} cannot use worktree_provider ${provider} (the project's setting): ${e.name} uses ${e.providers.join(" or ")}; set worktree_provider auto, or pick another backend` };
   if (!e.adapter) return { ok: false, error: `backend ${e.name} (${from}) is not built yet: the loop cannot start a squad on it; start the squad on another backend` };
+  if (e.trial && project !== e.name) return { ok: false, error: `backend ${e.name} (${from}) is on trial: only a project whose default_backend is ${e.name} starts squads on it; set default_backend ${e.name} on the trial project` };
   if (e.bin && !which(e.bin)) return { ok: false, error: `backend ${e.name} (${from}) needs '${e.bin}', which is not on PATH on this host` };
   return { ok: true, backend: e.name, host: LOCAL_HOST, provider, providerDefault: provider === e.providers[0] };
 }

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { open } from "../../bin/loop/core/store.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { fakeContract } from "../../bin/loop/fakes/contract.ts";
-import { contractHere, contractLive, contractStates } from "../../bin/lib/contract-roles.ts";
+import { contractHere, contractLive, contractStates, makeBackend } from "../../bin/lib/contract-roles.ts";
 import { runWith } from "../../bin/commands/directory-ts.ts";
 import { projectTmux } from "../../bin/backend/tmux.ts";
 
@@ -83,6 +83,15 @@ test("contractLive and contractStates read the contract: the newest terminal of 
   expect([wt, name]).toEqual([lead, "ds-dev-studio-lead-demo"]);
   expect(["working", "waiting", "idle", "unknown"]).toContain(s);
   expect((await contractLive(state, "fx", { make: () => null })).blind).toEqual(["tmux: no adapter"]);
+});
+
+test("makeBackend: the role scripts read tmux and orca-lite (U16a) as the loop makes them; herdr has no adapter", async () => {
+  const make = makeBackend("/nonexistent-state");
+  for (const name of ["tmux", "orca-lite"]) {
+    const info = await make(name, "fx")!.call("backend.info", {});
+    expect(info.ok && info.name).toBe(name);
+  }
+  expect(make("herdr", "fx")).toBeNull();
 });
 
 test("contract.sh: current is the member's local:: worktree, ping writes nothing and answers 0, an Orca-only verb exits 2; no Orca call", () => {
