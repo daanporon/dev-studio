@@ -1,7 +1,7 @@
 // U116: a pause holds back only its own target. One paused role must not stop project-wide notices,
 // role reassertion, or the Studio's close/suspend; each fan-out recipient is checked on its own.
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LoopActuator } from "../../bin/loop/core/actuator.ts";
@@ -57,14 +57,9 @@ test("Studio close and suspend run on a paused squad and project; restart stays 
 });
 
 function runScript(script: string, s: Store, root: string, a: Action, args: string[]) {
-  const copy = join(root, "copy"), bin = join(copy, "bin"), dir = join(root, "p/squads"); // the scripts read DS_STATE_ROOT (U253), which is root
-  mkdirSync(bin, { recursive: true }); mkdirSync(dir, { recursive: true });
+  const dir = join(root, "p/squads"); // the scripts read DS_STATE_ROOT (U253), which is root
+  mkdirSync(dir, { recursive: true });
   const folder: Record<string, string> = { "notify-squads.sh": "commands", "reassert-roles.sh": "hooks" };
-  for (const [name, dir] of Object.entries(folder)) { mkdirSync(join(bin, dir), { recursive: true }); cpSync(join(repo, "bin", dir, name), join(bin, dir, name)); }
-  cpSync(join(repo, "bin/hooks/arm-picker.sh"), join(bin, "hooks/arm-picker.sh"));
-  cpSync(join(repo, "bin/ds"), join(bin, "ds")); cpSync(join(repo, "bin/ds.ts"), join(bin, "ds.ts"));
-  symlinkSync(join(repo, "bin/loop"), join(bin, "loop"));
-  for (const f of readdirSync(join(repo, "bin/commands")).filter((x) => x.endsWith(".ts"))) symlinkSync(join(repo, "bin/commands", f), join(bin, "commands", f));
   for (const squad of ["one", "two"]) writeFileSync(join(dir, `${squad}.json`), JSON.stringify({ run_id: `run_${squad}`, lead_wt: `wt-${squad}-lead`,
     members: [{ role: "lead", suffix: "", wt: `wt-${squad}-lead` }, { role: "builder", suffix: "task", wt: `wt-${squad}-builder` }] }));
   const backend = join(root, "backend.sh"), log = join(root, "backend.log");
@@ -72,7 +67,7 @@ function runScript(script: string, s: Store, root: string, a: Action, args: stri
   const act = new LoopActuator({ fulfillers: [] });
   // U156: notify-squads.sh writes its reload wishes with bin/ds, so the fixture's state root
   // (which holds the members) rides along as DS_STATE_ROOT.
-  const r = Bun.spawnSync([join(bin, folder[script] ?? "", script), ...args], { env: { ...process.env, ...act.childActivity(s, a), DS_LOOP_CHILD: "1", BACKEND: backend, DS_STATE_ROOT: root }, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync([join(repo, "bin", folder[script] ?? "", script), ...args], { env: { ...process.env, ...act.childActivity(s, a), DS_LOOP_CHILD: "1", BACKEND: backend, DS_STATE_ROOT: root }, stdout: "pipe", stderr: "pipe" });
   let calls = ""; try { calls = readFileSync(log, "utf8"); } catch {}
   return { r, out: r.stdout.toString(), calls };
 }
@@ -84,9 +79,9 @@ function wished(s: Store) {
     .map((m) => [m.squad, m.role, m.suffix, m.reload_by].join("/"));
 }
 
-// U218: notify-squads.sh runs a cold `bun` (bin/ds) once per roster member, about 1 s each alone
-// but over bun test's 5 s default in the full parallel CI run. These two get an explicit 30 s;
-// the global timeout stays.
+// The scripts run from the checkout: a bun started from a script under a large /tmp cost ~1 s
+// each on this host (reassert-roles starts four). notify-squads still starts one bun per roster
+// member, so these two keep an explicit 30 s as a load margin; the global timeout stays.
 const COLD_BUN_FANOUT_MS = 30_000;
 
 test("notify-squads writes every roster member a reload wish, even the paused Lead; no backend call", () => {
