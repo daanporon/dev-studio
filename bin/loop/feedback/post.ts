@@ -1,7 +1,8 @@
 // post.ts — what a reviewed feedback draft becomes on GitHub (ds-feedback-github-issues U3). Only a
 // draft's own columns ever leave the host (title, body, area, label): never a note's raw text.
 //
-//   feedbackRepo   the host-level `feedback_repo` (owner/name), or null while it is `-` (posting off)
+//   feedbackOn     the host-level `feedback` switch (off|on, last one written wins)
+//   feedbackRepo   null while off, else the `feedback_repo` override (owner/name), else the checkout's origin
 //   finalText      the title and body exactly as posted: the drafter's body with any marker lines it
 //                  carried dropped, then the marker line the label workflow reads and the `ds-key` line
 //   leakCheck      U2's check (feedback/leak.ts) on the final title and body together: the host word
@@ -11,7 +12,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Row, type Store } from "../core/store.ts";
+import { spawnSync } from "node:child_process";
+import { ROOT, type Row, type Store } from "../core/store.ts";
 import { limitEnv } from "../settings/limits.ts";
 import { spawn, type Out } from "../io/orca.ts";
 import { leakCheck as checkText } from "./leak.ts";
@@ -20,18 +22,44 @@ import { RESET_GRACE_S } from "../io/github-budget.ts";
 
 const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
-/** The repo feedback is posted to: the env var, else the default row, else the first project row (by
- *  label) that names one; null while it is `-` or unset (posting off). Host-level like disk_watch_paths. */
+/** Is Feedback on: the env var, else the `feedback` row (default or any project's) written last by
+ *  `observed_at`, so the last switch flipped anywhere wins (it is host-wide); off when none. */
+export function feedbackOn(store: Store): boolean {
+  const ev = process.env[limitEnv("feedback")]?.trim();
+  if (ev) return ev === "on";
+  const r = store.db.query("SELECT value FROM config WHERE file = 'limits.conf' AND key = 'feedback' AND TRIM(COALESCE(value, '')) != '' ORDER BY observed_at DESC, project = '' ASC LIMIT 1")
+    .get() as { value: string | null } | null;
+  return String(r?.value ?? "").trim().split(/\s+/)[0] === "on";
+}
+/** owner/name of a github.com remote URL (`https://github.com/o/n(.git)`, `git@github.com:o/n(.git)`, `ssh://git@github.com/o/n`), else null. */
+export function parseOrigin(url: string): string | null {
+  const m = /^(?:https?:\/\/(?:[^@/]+@)?|ssh:\/\/git@|git@)github\.com[/:]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+let originMemo: string | null | undefined;
+/** The dev-studio checkout's `origin` as owner/name, read once per process (`DS_FEEDBACK_ORIGIN` stands in for the URL in tests); null for a missing or non-GitHub origin. */
+export function checkoutOrigin(): string | null {
+  const stub = process.env.DS_FEEDBACK_ORIGIN;
+  if (stub !== undefined) return parseOrigin(stub);
+  if (originMemo === undefined) {
+    const r = spawnSync("git", ["-C", ROOT, "remote", "get-url", "origin"], { encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 5000 });
+    originMemo = r.status === 0 ? parseOrigin(String(r.stdout)) : null;
+  }
+  return originMemo;
+}
+/** The repo feedback is posted to: null while Feedback is off; else the `feedback_repo` override (env, else the
+ *  default row, else the first project row by label) when it names owner/name; else the checkout's origin
+ *  (null, with the board saying why, when that is missing or not GitHub). Host-level like disk_watch_paths. */
 export function feedbackRepo(store: Store): string | null {
+  if (!feedbackOn(store)) return null;
   const ok = (v: unknown): string | null => { const t = String(v ?? "").trim(); return REPO.test(t) ? t : null; };
   const ev = process.env[limitEnv("feedback_repo")]?.trim();
-  if (ev) return ok(ev);
+  if (ev) return ok(ev) ?? (ev === "-" ? checkoutOrigin() : null);
   const rows = store.db.query("SELECT project, value FROM config WHERE file = 'limits.conf' AND key = 'feedback_repo' ORDER BY project = '' DESC, project")
     .all() as { project: string; value: string | null }[];
   for (const r of rows) { const v = ok(r.value); if (v) return v; }
-  return null;
+  return checkoutOrigin();
 }
-
 // The words the label workflow (.github/scripts/feedback-labels.mjs) takes in prompt.ts's marker line, and
 // the hidden key line an add-to comment ends with (an issue gets it from prompt.ts finalBody).
 export const WORD = /^[a-z0-9][a-z0-9-]{0,31}$/;

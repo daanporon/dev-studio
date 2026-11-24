@@ -45,7 +45,7 @@
 //   disk-pressure U3, a low disk   (`sweep-disk-pressure.<path>-<n>`, reconcilers/disk-pressure.ts):
 //            gone once the disk's spell closed (free space above disk_card_free_pct + 5 points, the limit 0, or the disk unlisted).
 //   ds-feedback-github-issues U2, no leak word list   (`sweep-feedback.words-<n>`, reconcilers/feedback.ts):
-//            gone once the spell closed (the list holds a word, feedback_repo is -, or no note is due).
+//            gone once the spell closed (the list holds a word, Feedback is off, or no note is due).
 import { existsSync, readFileSync } from "node:fs";
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";

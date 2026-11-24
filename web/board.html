@@ -3307,7 +3307,7 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
     ${filed ? html`<div class="fb-filed">${d.url ? html`<a href=${d.url} target="_blank" rel="noopener">#${d.issue}</a>` : d.issue != null ? "#" + d.issue : d.state} <span class="mut">${d.state}${d.fix_pr != null ? " · fixed in #" + d.fix_pr : ""}</span></div>`
       : html`<div class="fb-actions">
         <button class="btn sm pri fb-post" disabled=${!!busy || !on || d.leak === "blocked" || d.state === "posting"}
-          title=${!on ? "feedback_repo is not set: name the repo in Settings first" : d.leak === "blocked" ? "the leak check blocked this draft: edit it first" : "Send this to " + summary.repo}
+          title=${!on ? "Feedback is off: turn it on in Settings → Limits first" : d.leak === "blocked" ? "the leak check blocked this draft: edit it first" : "Send this to " + summary.repo}
           onClick=${() => act("post" + d.id, { action: "post", draft: d.id }, "posting draft " + d.id)}>Post</button>
         <button class="btn sm fb-edit-btn" disabled=${!!busy} onClick=${() => setEdit({ id: d.id, ...(d.kind === "issue" ? { title: d.title || "" } : {}), body: d.body })}>Edit</button>
         <button class="btn sm fb-dismiss-draft" disabled=${!!busy} onClick=${() => act("dismiss" + d.id, { action: "dismiss", draft: d.id }, "dismissed draft " + d.id)}>Dismiss</button>
@@ -3331,7 +3331,7 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
       <div class="set-tabs">${FB_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab fb-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l} ${counts[k] > 0 ? "(" + counts[k] + ")" : ""}</button>`)}</div>
       <div class="set-body fb-body-wrap">
         ${err && html`<div class="bad fb-err">${err}</div>`}
-        ${!on && html`<div class="mut fb-off">Posting is off: set <code>feedback_repo</code> to owner/name in Settings → Limits to get drafts. Notes are still kept on this host.</div>`}
+        ${!on && html`<div class="mut fb-off">Posting is off: turn <code>feedback</code> on in Settings → Limits to get drafts (they go to the repo this checkout was cloned from). Notes are still kept on this host.</div>`}
         ${!data && !err && html`<div class="mut">loading…</div>`}
         ${data && tab === "review" && (data.review.length ? data.review.map((d) => draftCard(d, false)) : html`<div class="mut fb-none">no drafts to review</div>`)}
         ${data && tab === "filed" && (data.filed.length ? data.filed.map((d) => draftCard(d, true)) : html`<div class="mut fb-none">nothing filed yet</div>`)}
@@ -3504,7 +3504,7 @@ function LimitsPane({ project, toast }) {
           <td><code>${l.key}</code></td>
           <td>${env ? l.value
             : l.fileOnly
-              ? html`<code>${l.value || "-"}</code><div class="set-note">set with ds config export / import --project ${project}</div>`
+              ? html`<code>${l.value || "-"}</code><div class="set-note">${l.key === "feedback_repo" ? html`${l.hint}; an override, set with <code>ds config set</code> or the env` : "set with ds config export / import --project " + project}</div>`
             : l.allowed
               ? html`<select value=${cur} onChange=${(e) => setDraft((d) => ({ ...d, [l.key]: e.target.value }))}>${l.allowed.map((a) => html`<option key=${a}>${a}</option>`)}</select>`
               : html`<input type=${l.list || l.hint ? "text" : "number"} placeholder=${l.hint || ""} min="0" step="1" value=${cur} onInput=${(e) => setDraft((d) => ({ ...d, [l.key]: e.target.value }))} onKeyDown=${(e) => { if (e.key === "Enter") save(l.key, e.target.value); }} />`}
@@ -4020,7 +4020,7 @@ function App() {
         !data.gh.ok && html`<span class="stale-dot" title="the loop's GitHub observer has no PR rows yet">no PR status yet</span>`].filter(Boolean).map((x, k) => html`<${React.Fragment} key=${k}>${k ? " · " : ""}${x}</${React.Fragment}>`)}</span>
       <span class="sp"></span>
       ${studioBtns}
-      ${(() => { const F = data.feedback || {}; return html`<button class="btn sm fb-btn" title=${F.on ? "Review the drafted GitHub issues for dev-studio (" + F.repo + ")" : "feedback_repo is not set: posting is off; the notes are still kept"}
+      ${(() => { const F = data.feedback || {}; return html`<button class="btn sm fb-btn" title=${F.on ? "Review the drafted GitHub issues for dev-studio (" + F.repo + ")" : "Feedback is off: turn it on in Settings → Limits; the notes are still kept"}
         onClick=${() => setFeedbackOpen(true)}>Feedback${F.on ? (F.review > 0 ? html`<span class="msg-badge" title=${F.review + " drafts to review"}>${F.review}</span>` : "") : " off"}</button>`; })()}
       ${data.project && html`<button class="btn sm" title="Limits and roles for ${data.project}" onClick=${() => setSettings(true)}>⚙ Settings</button>`}
     </div>
