@@ -127,3 +127,10 @@ test("the page installs it and sizes the phone sheet by the variables", () => {
   expect(page.match(/enterkeyhint="send"/g)?.length).toBe(1);
   expect(page).toContain('enterkeyhint=${chatTouch() ? "enter" : "send"}');
 });
+
+// mobile-chat-keyboard-gap U2: the chat title's leading "Chat · " (the Studio's "Chat · Studio · <project>") is its own element
+// that never shrinks or breaks, so the member label and .chat-sub give way first.
+test("the chat title's lead is a no-shrink, no-wrap element", () => {
+  expect(page).toMatch(/\.chat-lead\{flex:none;white-space:nowrap\}/);
+  expect(page).toContain('<span class="chat-lead">${topic === "_studio" ? "Chat · Studio · " + project : "Chat · "}</span>');
+});
