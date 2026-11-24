@@ -71,7 +71,13 @@ function review(pos: string[], opt: Record<string, string | undefined>, flag: Se
   try {
     const draft = flag.has("draft");
     const what = draft ? "draft" : "note";
-    if (!s.get(draft ? "feedback_drafts" : "feedback_notes", { id })) { console.error(`ds feedback: no feedback ${what} ${id}`); return 1; }
+    const found = s.get(draft ? "feedback_drafts" : "feedback_notes", { id }) as { state?: string } | null | undefined;
+    if (!found) { console.error(`ds feedback: no feedback ${what} ${id}`); return 1; }
+    // Refuse early as the board does (board-server.ts), so a doomed request is never filed.
+    const st = String(found.state);
+    if (draft && verb === "dismiss" && st !== "review") { console.error(`ds feedback: draft ${id} is ${st}, not in review`); return 1; }
+    if (!draft && verb === "restore" && st !== "dismissed") { console.error(`ds feedback: note ${id} is ${st}, not dismissed`); return 1; }
+    if (!draft && verb === "dismiss" && ["filed", "fixed", "closed", "dismissed"].includes(st)) { console.error(`ds feedback: note ${id} is ${st}`); return 1; }
     const by = process.env.DS_WHO || "ds";
     const { row, created } = verb === "dismiss"
       ? s.request("feedback-dismiss", { ...(draft ? { draft: id } : { note: id }), ...(opt.why?.trim() ? { why: opt.why.trim() } : {}) }, { by })
