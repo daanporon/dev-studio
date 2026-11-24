@@ -155,6 +155,13 @@ test("auto gives the backend's default worktree tool", () => {
   expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "treehouse", ...all })).toMatchObject({ ok: true, provider: "treehouse", providerDefault: false });
 });
 
+test("treehouse needs its binary at spawn: DS_TREEHOUSE_BIN, else on PATH", () => {
+  const none = { registry: built, which: (b: string) => (b === "treehouse" ? null : `/usr/bin/${b}`) };
+  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "treehouse", ...none })).toEqual({ ok: false,
+    error: "worktree_provider treehouse needs 'treehouse' (DS_TREEHOUSE_BIN, else on PATH), which this host lacks; install treehouse (github.com/kunchenguid/treehouse) or set worktree_provider auto" });
+  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "git", ...none })).toMatchObject({ ok: true, provider: "git" });
+});
+
 test("a worktree tool the backend cannot use is refused, naming both", async () => {
   expect(chooseSquadBackend({ flag: "orca-lite", providerSetting: "treehouse", ...all })).toEqual({ ok: false,
     error: "backend orca-lite cannot use worktree_provider treehouse (the project's setting): orca-lite uses orca; set worktree_provider auto, or pick another backend" });

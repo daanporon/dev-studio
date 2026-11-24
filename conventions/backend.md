@@ -269,13 +269,16 @@ backend (U11, "Started" below).
   project. The trial project may still start an `orca` squad. An entry's `find` looks for its binary where
   PATH would not (herdr: `herdrBin()`), and `install` is named when it is missing. The tmux trial's
   runbook and record are `docs/backends/trial-tmux.md`; `ds tmux-drill` is its helper (the
-  version-change drill and the before/after snapshot).
+  version-change drill and the before/after snapshot). The treehouse trial (U16e: a tmux squad with `worktree_provider
+  treehouse`) is `docs/backends/trial-treehouse.md`, with `ds treehouse-drill` (start to first test, pooled
+  against fresh, and the lease check).
 
 - **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
   pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
   project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
   refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet, a
-  backend on trial outside its trial project and a binary missing on PATH; a refused spawn writes no wish and never falls back to `orca`.
+  backend on trial outside its trial project and a binary missing on PATH (the backend's, or treehouse's
+  for `worktree_provider treehouse`: `DS_TREEHOUSE_BIN`, else on PATH); a refused spawn writes no wish and never falls back to `orca`.
 - **Written once.** The squad's row keeps `backend`, `backend_host` (`local`; the machine it runs on) and
   `worktree_provider` (migration 0054; every existing squad reads `orca`/`local`/`orca`). Once the loop
   has started the squad the columns cannot change (a table trigger), and `spawn-squad` refuses a different
@@ -323,7 +326,7 @@ backend (U11, "Started" below).
     removal). The provider keeps the branch (an unmerged one always); a dirty or unpushed tree is kept as
     a leftover as on Orca. Before the provider runs, the removal checks the fence Orca's `worktree-rm`
     checks (`pause.ts` `gateBlock` on the action's `childActivity` gate; blocked answers 75, a wait), and
-    a `terminal.close` that fails keeps the tree, since no backend drops a terminal with its folder. A cancel reads the tree from the `worktrees` row when Orca has none. Squads on
+    a `terminal.close` that fails keeps the tree, since no backend drops a terminal with its folder. A cancel reads the tree from the `worktrees` row when Orca has none, and such a row decides whether the tree is still there (a returned treehouse slot keeps its folder, U16e). Squads on
     `orca` keep `terminal-close-worktree` and `worktree-rm` by id. `tests/loop/contract-removal.test.ts`.
   - **Observed (U12).** `observers/contract.ts` reads these members, not the Orca observer (whose known
     worktrees and gone sweeps skip every worktree and folder of a squad off Orca): per member the newest

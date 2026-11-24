@@ -16,6 +16,7 @@
 // Providers (the first is the backend's default): `orca` (Orca makes the worktree), `git`, `treehouse`.
 // This module reads nothing but PATH (and herdr's install folder), so the board and the CLI can import it.
 import { herdrBin } from "./herdr-bin.ts";
+import { existsSync } from "node:fs";
 
 export const BACKEND_NAMES = ["orca", "orca-lite", "tmux", "herdr"] as const;
 export type BackendName = (typeof BACKEND_NAMES)[number];
@@ -53,10 +54,19 @@ export const defaultProvider = (b: BackendName): ProviderName => BACKENDS[b].pro
 export type Choice = { backend: BackendName; host: string; provider: ProviderName; providerDefault: boolean };
 export type Chosen = ({ ok: true } & Choice) | { ok: false; error: string };
 
+/** The treehouse binary as the provider finds it (`treehouseBin` in bin/loop/io/providers/treehouse.ts):
+ *  DS_TREEHOUSE_BIN, else on PATH. A test's `which` answers instead. */
+function treehouseFound(which?: (bin: string) => string | null): boolean {
+  if (which) return !!which("treehouse");
+  const given = process.env.DS_TREEHOUSE_BIN;
+  return given ? existsSync(given) : !!Bun.which("treehouse");
+}
+
 /** The backend, host and worktree tool a new squad starts on. `flag` is `--backend` (wins), else the
  *  project's `default_backend`; the tool is the project's `worktree_provider` (`auto`, empty: the
  *  backend's default). Refused, with a line naming why: an unknown name, a tool the backend cannot use,
- *  an adapter not built yet, a backend on trial outside its trial project, a binary missing on PATH. `registry` and `which` are for tests. */
+ *  an adapter not built yet, a backend on trial outside its trial project, a binary missing on PATH (the
+ *  backend's, or treehouse's for that tool). `registry` and `which` are for tests. */
 export function chooseSquadBackend(o: { flag?: string; projectBackend?: string; providerSetting?: string;
   registry?: Readonly<Record<string, BackendEntry>>; which?: (bin: string) => string | null }): Chosen {
   const reg: Readonly<Record<string, BackendEntry>> = o.registry ?? BACKENDS;
@@ -76,5 +86,8 @@ export function chooseSquadBackend(o: { flag?: string; projectBackend?: string; 
   const which = o.which ?? e.find ?? ((bin: string) => Bun.which(bin));
   if (e.bin && !which(e.bin))
     return { ok: false, error: `backend ${e.name} (${from}) needs '${e.bin}', which is not on PATH on this host${e.install ? `; install it with: ${e.install}` : ""}` };
+  // The tool's binary too (U16e): without it the squad's first member start would be the one to fail.
+  if (provider === "treehouse" && !treehouseFound(o.which))
+    return { ok: false, error: "worktree_provider treehouse needs 'treehouse' (DS_TREEHOUSE_BIN, else on PATH), which this host lacks; install treehouse (github.com/kunchenguid/treehouse) or set worktree_provider auto" };
   return { ok: true, backend: e.name, host: LOCAL_HOST, provider, providerDefault: provider === e.providers[0] };
 }

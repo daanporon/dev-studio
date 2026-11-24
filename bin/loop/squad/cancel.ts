@@ -46,7 +46,7 @@ export function stopping(store: Store, project: string, wt: string): boolean {
 function treeOf(store: Store, project: string, wt: string): Row | null {
   const orca = wt ? store.get("observed_worktrees", { project, wt }) : null;
   const r = !orca && wt.startsWith("local::") ? store.get("worktrees", { host: "local", path: wt.slice("local::".length) }) : null;
-  return orca ?? (r ? { path: r.path, gone_at: r.gone_at, observed_at: r.created_at, doc: null } : null);
+  return orca ?? (r ? { path: r.path, gone_at: r.gone_at, observed_at: r.created_at, doc: null, provider: r.provider } : null);
 }
 export function cancellationReality(store: Store, project: string, wt: string) {
   const tree = treeOf(store, project, wt);
@@ -55,7 +55,8 @@ export function cancellationReality(store: Store, project: string, wt: string) {
   let agents = 0; try { agents = Number(JSON.parse(String(tree?.doc ?? "{}")).agents ?? 0); } catch {}
   const live = tabs.length > 0 || (tree?.gone_at == null && agents > 0) || (worker?.gone_at == null && ["working", "waiting"].includes(String(worker?.state)));
   const path = String(tree?.path ?? (wt.includes("::") ? wt.split("::").at(-1) : "") ?? "");
-  const present = !!wt && ((!!tree && tree.gone_at == null) || (!!path && existsSync(path)));
+  // A provider's row is the truth for its tree: a pooled one (treehouse) keeps its folder once returned.
+  const present = !!wt && (tree?.provider ? tree.gone_at == null : (!!tree && tree.gone_at == null) || (!!path && existsSync(path)));
   const seen = Math.max(...tabs.map(t => Number(t.observed_at)), Number(tree?.observed_at ?? 0), Number(worker?.observed_at ?? 0));
   return { tree, live, path, present, seen };
 }
