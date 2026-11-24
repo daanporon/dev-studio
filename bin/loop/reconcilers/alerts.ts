@@ -377,6 +377,13 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
     if (!m || ["gone", "closed"].includes(String(m.status ?? "")) || m.want === "gone") return "its member no longer exists";
     return recovered(store, project, String(a.member), "exited", since) ? "its member runs again" : false;
   }
+  // archive-stuck-worktrees U1: Archive slow clears once the member's worktree is removed or its squad is no longer closing.
+  if (a.kind === "archive_slow") {
+    const m = store.db.query("SELECT status, wt FROM members WHERE project = ? AND wt = ? ORDER BY id DESC").get(project, String(a.member ?? "")) as Row | null;
+    if (!m || !m.wt || ["gone", "closed"].includes(String(m.status ?? ""))) return "its worktree is removed";
+    const sq = store.db.query("SELECT want FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, String(a.squad ?? "")) as Row | null;
+    return sq?.want === "gone" ? false : "its squad is no longer closing";
+  }
   // U4: the loop no longer raises Loop-stalled cards; the board's loop line shows restarts.
   if (/^loop-stall-\d+$/.test(id)) return "loop stalls are shown on the board's loop line now";
   // U232: a poke-capped card clears once the member did what the poke asked.
