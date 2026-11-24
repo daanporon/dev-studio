@@ -17,17 +17,18 @@ function rig() {
   const root = tempRoot("squad-backend-");
   const store: Store = open(root); onTestEnd(() => store.close());
   store.upsert("projects", { label: "p" }, { home_repo: "path:/fake", observed_at: 1 });
-  const spawn = async (...args: string[]) => {
+  const spawnWith = async (env: Record<string, string>, ...args: string[]) => {
     const p = Bun.spawn([join(ROOT, "bin/commands/spawn-squad.sh"), "--repo", "p", ...args],
-      { env: { ...process.env, DS_STATE_ROOT: root, DS_NOW: "1800000000" }, stdout: "pipe", stderr: "pipe" });
+      { env: { ...process.env, DS_STATE_ROOT: root, DS_NOW: "1800000000", ...env }, stdout: "pipe", stderr: "pipe" });
     const [out, err] = [await new Response(p.stdout).text(), await new Response(p.stderr).text()];
     return { code: await p.exited, out, err };
   };
+  const spawn = (...args: string[]) => spawnWith({}, ...args);
   const row = (topic: string) => store.db.query("SELECT * FROM squads WHERE project = 'p' AND topic = ?").get(topic) as Row | null;
   const limit = (key: string, value: string) => set(store, "p", "limits.conf", key, value, "test");
   // The loop has started the squad: its doc is written and it runs.
   const started = (topic: string) => store.db.run("UPDATE squads SET doc = '{}', status = 'running' WHERE project = 'p' AND topic = ?", [topic]);
-  return { store, spawn, row, limit, started };
+  return { store, spawn, spawnWith, row, limit, started };
 }
 
 // Every backend built and every binary present, so the provider rules can be checked on their own.
@@ -63,15 +64,37 @@ test("--backend wins over the project's default_backend", async () => {
 
 test("a backend not built, missing on the host or unknown is refused, never replaced by orca", async () => {
   const { spawn, row } = rig();
-  for (const [b, says] of [["herdr", "backend herdr (--backend) is not built yet"], ["orca-lite", "backend orca-lite (--backend) is not built yet"], ["screen", "backend 'screen' (--backend) is not one of orca, orca-lite, tmux, herdr"]]) {
+  for (const [b, says] of [["herdr", "backend herdr (--backend) is on trial: only a project whose default_backend is herdr starts squads on it"], ["orca-lite", "backend orca-lite (--backend) is not built yet"], ["screen", "backend 'screen' (--backend) is not one of orca, orca-lite, tmux, herdr"]]) {
     const r = await spawn("--topic", `t-${b}`, "--backend", b);
     expect(r.code).toBe(1);
     expect(r.err).toContain(says);
     expect(row(`t-${b}`)).toBeNull();
   }
-  expect(chooseSquadBackend({ flag: "tmux", registry: built, which: () => null }))
+  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", registry: built, which: () => null }))
     .toEqual({ ok: false, error: "backend tmux (--backend) needs 'tmux', which is not on PATH on this host" });
-  expect(chooseSquadBackend({ flag: "tmux", ...all })).toMatchObject({ ok: true, backend: "tmux" });
+  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", ...all })).toMatchObject({ ok: true, backend: "tmux" });
+});
+
+test("herdr: on trial outside its project; found by DS_HERDR_BIN or the pinned install, else refused with how to install", async () => {
+  const rigged = rig(), { spawnWith, row, limit } = rigged;
+  expect(chooseSquadBackend({ flag: "herdr", projectBackend: "orca", ...all })).toEqual({ ok: false,
+    error: "backend herdr (--backend) is on trial: only a project whose default_backend is herdr starts squads on it; set default_backend herdr on the trial project" });
+  const herdr = BACKENDS.herdr;
+  expect(chooseSquadBackend({ projectBackend: "herdr", registry: { herdr: { ...herdr, find: () => null } } })).toEqual({ ok: false,
+    error: "backend herdr (the project's default_backend) needs 'herdr', which is not on PATH on this host; install it with: bun bin/backend/herdr.ts install" });
+  expect(chooseSquadBackend({ projectBackend: "herdr", registry: { herdr: { ...herdr, find: () => "/opt/herdr" } } })).toMatchObject({ ok: true, backend: "herdr", provider: "git" });
+  // spawn-squad end to end: the project's default_backend is herdr, the binary named by DS_HERDR_BIN,
+  // and a roster with Claude alone (off Orca only Claude starts).
+  const { store } = rigged;
+  limit("default_backend", "herdr");
+  for (const role of ["builder", "builder-review", "builder-review-standard"])
+    set(store, "p", "roles.conf", role, "claude opus ondemand - claude:sonnet", "test");
+  const fake = join(tempRoot("squad-backend-herdr-"), "herdr");
+  writeFileSync(fake, "#!/bin/sh\n", { mode: 0o755 });
+  const r = await spawnWith({ DS_HERDR_BIN: fake }, "--topic", "onherdr");
+  expect(r.err).toBe("");
+  expect(r.code).toBe(0);
+  expect(row("onherdr")).toMatchObject({ backend: "herdr", worktree_provider: "git" });
 });
 
 test("changing default_backend leaves a running squad alone; its backend is written once", async () => {
@@ -97,9 +120,9 @@ test("changing default_backend leaves a running squad alone; its backend is writ
 
 test("auto gives the backend's default worktree tool", () => {
   expect(chooseSquadBackend({ flag: "orca", providerSetting: "auto", ...all })).toMatchObject({ ok: true, provider: "orca", providerDefault: true });
-  expect(chooseSquadBackend({ flag: "tmux", providerSetting: "auto", ...all })).toMatchObject({ ok: true, provider: "git", providerDefault: true });
+  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "auto", ...all })).toMatchObject({ ok: true, provider: "git", providerDefault: true });
   expect(chooseSquadBackend({ projectBackend: "herdr", ...all })).toMatchObject({ ok: true, backend: "herdr", provider: "git" });
-  expect(chooseSquadBackend({ flag: "tmux", providerSetting: "treehouse", ...all })).toMatchObject({ ok: true, provider: "treehouse", providerDefault: false });
+  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "treehouse", ...all })).toMatchObject({ ok: true, provider: "treehouse", providerDefault: false });
 });
 
 test("a worktree tool the backend cannot use is refused, naming both", async () => {

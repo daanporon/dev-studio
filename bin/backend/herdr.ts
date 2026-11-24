@@ -34,17 +34,23 @@
 //
 //   bun bin/backend/herdr.ts caller <bin> <dir> <name> [home]   start a server through startHerdr, create one
 //        terminal (label and DS_GEN `survivor`), print `ready <server pid> <via> <terminal id>`, wait forever.
+//   bun bin/backend/herdr.ts install   download the pinned release into herdrPinnedDir() (herdr-bin.ts),
+//        where the loop finds it; nothing else is touched (no `herdr integration install`, no PATH entry).
+//
+// projectHerdr() is the loop's backend for a project (U16c): the server started on the first create.
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type AgentState, type Answer, type Backend, type Capabilities, type ErrorCode, type Key, type Op, type Request, type Terminal,
   fail, okAnswer,
 } from "./contract.ts";
 import { type ServerHandle, defaultEnv, startServer, stopServer } from "./server-unit.ts";
+import { HERDR_VERSION, herdrBin, herdrPinnedDir } from "./herdr-bin.ts";
 
-export const HERDR_VERSION = "0.9.5";
+export { HERDR_VERSION, herdrBin, herdrPinnedDir };
 export const HERDR_PROTOCOL = 22;
 export const HERDR_CAPS: Capabilities = { parents: "groups", state: "native", turn_confirm: "none", keys: "native" };
 
@@ -325,6 +331,57 @@ export async function startHerdr(o: { bin: string; dir: string; name: string; ho
   throw new Error(`herdr: the server never answered on ${socket} (log ${log})`);
 }
 
+// ---- the loop's backend for a project (U16c) -------------------------------------------------------
+
+// `ensureServer` starts the server when none answers (null: one already did); `server` is the last one
+// this client started.
+export type ProjectHerdr = Backend & { dir: string; socket: string; ensureServer(): Promise<HerdrServer | null>; server(): HerdrServer | null };
+
+// The project's herdr backend, as the loop makes it (bin/loop/squad/contracts.ts): its server is the unit
+// ds-herdr-<project>, its files (config.toml, herdr.sock, server.log) in <stateRoot>/<project>/loop/herdr/,
+// or in a short folder under the runtime dir when that socket path would pass 100 bytes. The server is
+// started on a terminal.create only, never by a read: with no server a list is empty, a close closes
+// nothing and any other op on a terminal is not_found. A server a previous loop process started is
+// used as it is. The binary is `bin`, else herdrBin(); `home`, `shell` and `maxRuntimeS` are for tests.
+export function projectHerdr(project: string, o: { stateRoot: string; bin?: string; home?: string; shell?: string; timeoutMs?: number; maxRuntimeS?: number }): ProjectHerdr {
+  const safe = project.replace(/[^A-Za-z0-9_.-]/g, "-");
+  let dir = join(o.stateRoot, project, "loop", "herdr");
+  if (Buffer.byteLength(join(dir, "herdr.sock")) > 100)
+    dir = join(process.env.XDG_RUNTIME_DIR || tmpdir(), `ds-herdr-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}`);
+  const socket = join(dir, "herdr.sock");
+  const fresh = () => herdrBackend(socket, { timeoutMs: o.timeoutMs });   // checks the server's protocol again
+  let inner = fresh();
+  let starting: Promise<HerdrServer | null> | null = null, last: HerdrServer | null = null;
+
+  async function startIt(): Promise<HerdrServer | null> {
+    if (await herdrUp(socket)) return null;
+    const bin = o.bin ?? herdrBin();
+    if (!bin) throw new Error(`herdr: no herdr binary (DS_HERDR_BIN, the pinned ${HERDR_VERSION} install in ${herdrPinnedDir()} or herdr on PATH); install it with: bun bin/backend/herdr.ts install`);
+    const s = await startHerdr({ bin, dir, name: `herdr-${safe}`, home: o.home, shell: o.shell, maxRuntimeS: o.maxRuntimeS });
+    inner = fresh();
+    return (last = s);
+  }
+  // One start at a time: two creates racing on a dead socket start one server.
+  const ensureServer = (): Promise<HerdrServer | null> => (starting ??= startIt().finally(() => { starting = null; }));
+
+  return {
+    dir, socket, ensureServer, server: () => last,
+    async call<O extends Op>(op: O, req: Request<O>): Promise<Answer<O>> {
+      if (op === "terminal.create") {
+        try { await ensureServer(); } catch (e) { return fail("failed", e instanceof Error ? e.message : String(e)) as Answer<O>; }
+        return inner.call(op, req);
+      }
+      const a = await inner.call(op, req);
+      if (a.ok || a.error.code !== "failed" || await herdrUp(socket)) return a;
+      inner = fresh();
+      if (op === "terminal.list") return okAnswer("terminal.list", { terminals: [] }) as Answer<O>;
+      if (op === "terminal.close") return okAnswer("terminal.close", { closed: false }) as Answer<O>;
+      if (op === "backend.info") return a;
+      return fail("not_found", `no herdr server on ${socket}`) as Answer<O>;
+    },
+  };
+}
+
 // Fetch the pinned herdr release binary into `dir` (sha256 checked), or say why not. DS_HERDR_BIN
 // names a binary to use instead (its protocol is still checked on the first call); DS_HERDR_FETCH=0
 // fetches nothing (a test then skips).
@@ -332,6 +389,11 @@ export async function fetchHerdr(dir: string, timeoutMs = 120_000): Promise<{ bi
   const given = process.env.DS_HERDR_BIN;
   if (given) return existsSync(given) ? { bin: given } : { skip: `DS_HERDR_BIN=${given} does not exist` };
   if (process.env.DS_HERDR_FETCH === "0") return { skip: "DS_HERDR_FETCH=0" };
+  return downloadHerdr(dir, timeoutMs);
+}
+
+// Download the pinned release binary into `dir` as `herdr` (sha256 checked; a failed check writes nothing).
+export async function downloadHerdr(dir: string, timeoutMs = 120_000): Promise<{ bin: string } | { skip: string }> {
   const a = ASSETS[`${process.platform}-${process.arch}`];
   if (!a) return { skip: `no pinned herdr ${HERDR_VERSION} binary for ${process.platform}-${process.arch}` };
   let bytes: Uint8Array;
@@ -358,8 +420,25 @@ if (import.meta.main) {
     if (!a.ok) { console.error(`caller: ${a.error.message}`); process.exit(1); }
     console.log(`ready ${s.handle.pid} ${s.handle.via} ${a.terminal.id}`);
     setInterval(() => {}, 1 << 30); // stay up until killed
+  } else if (cmd === "install") {
+    const into = herdrPinnedDir(), have = join(into, "herdr");
+    if (existsSync(have)) { console.log(`herdr ${HERDR_VERSION} is installed: ${have}`); process.exit(0); }
+    const r = await downloadHerdr(into);
+    if ("skip" in r) { console.error(`install: ${r.skip}`); process.exit(1); }
+    console.log(`herdr ${HERDR_VERSION} installed: ${r.bin}`);
+  } else if (cmd === "states" && bin && dir) {
+    // The trial's sampler (docs/backends/trial-herdr.md): what herdr says each of a project's terminals is
+    // doing, read only (no server is started).
+    const [stateRoot, project] = [bin, dir];
+    const b = projectHerdr(project, { stateRoot });
+    const l = await b.call("terminal.list", {});
+    if (!l.ok) { console.error(`states: ${l.error.message}`); process.exit(1); }
+    for (const t of l.terminals) {
+      const st = await b.call("agent.state", { id: t.id });
+      console.log([new Date().toISOString(), t.id, `${t.group ?? "-"}/${t.label}`, t.gen ?? "-", st.ok ? st.state : `error ${st.error.code}`].join("\t"));
+    }
   } else {
-    console.error("usage: herdr.ts caller <bin> <dir> <name> [home]");
+    console.error("usage: herdr.ts caller <bin> <dir> <name> [home] | herdr.ts install | herdr.ts states <state root> <project>");
     process.exit(2);
   }
 }
