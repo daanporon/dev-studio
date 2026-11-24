@@ -65,10 +65,9 @@ function recordLeftover(store: Store, r: Row, wt: string, path: string, branch: 
   const doc = JSON.parse(String(squad.doc)) as Row;
   const left = (Array.isArray(doc.leftovers) ? doc.leftovers as Row[] : []).filter((l) => l.wt !== wt);
   const unit = r.role === "builder" && r.suffix ? store.get("units", { project: r.project, squad: r.squad, slug: r.suffix }) : null;
-  const waits = unit?.pr ? `PR #${unit.pr} merged — inspect, then close-squad --force or remove by hand` : "the Lead/operator decision";
-  doc.leftovers = [...left, { wt, path, branch, reason, waits_on: waits, files: files.slice(0, 20), n_files: n, unpushed, ...(unit ? { unit: String(unit.slug) } : {}) }];
+  doc.leftovers = [...left, { wt, path, branch, reason, waits_on: null, files: files.slice(0, 20), n_files: n, unpushed, ...(unit ? { unit: String(unit.slug) } : {}) }];
   store.db.run("UPDATE squads SET doc = ? WHERE project = ? AND topic = ?", [JSON.stringify(doc), String(r.project), String(r.squad)]);
-  store.event("leftover_recorded", { project: String(r.project), squad: String(r.squad), member: wt, payload: { wt, path, branch, reason, waits_on: waits, ...extra } });
+  store.event("leftover_recorded", { project: String(r.project), squad: String(r.squad), member: wt, payload: { wt, path, branch, reason, waits_on: null, ...extra } });
 }
 
 async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
@@ -108,7 +107,7 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
     const lines = probe.out.split("\n"), [d, u] = lines[0].split("\t");
     const dirty = Number(d || 0), unpushed = Number(u || 0), files = lines.slice(1).filter(Boolean);
     if (dirty > 0 || unpushed > 0) {
-      const reason = dirty > 0 && unpushed > 0 ? "both" : dirty > 0 ? "uncommitted changes" : "unpushed commits";
+      const reason = `kept: ${dirty} uncommitted, ${unpushed} unpushed`;
       recordLeftover(store, r, wt, path, branch || "unknown", tidied ? `${reason} (after cleanup_on_close)` : reason, files, dirty, unpushed, extra);
       finish("leftover kept");
       return { done: true, result: dirty > 0 ? "left: dirty" : "left: unpushed" };

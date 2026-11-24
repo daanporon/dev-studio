@@ -653,3 +653,35 @@ test("a squad off orca shows its backend chip, with the worktree tool only when 
     expect(r.errors).toEqual([]);
   } finally { await r.window.happyDOM.close(); }
 });
+
+// ---- archive-leftovers U3: a leftover shows its check: look first with the commits and files, safe, or not checked.
+test("a squad's Leftovers block shows look first with commits, files and Keep it; a safe one and an unchecked one", async () => {
+  const lo = (wt: string, check: any) => ({ wt, path: "/w/" + wt, branch: "work-" + wt, n_files: 0, files: [], unpushed: 0, reason: "kept: 1 uncommitted, 2 unpushed", waits_on: "old text", unit: "u1", pr: "12", age_min: 5, check });
+  const check = (over: any) => ({ at: now - 120, safe: false, commits: [{ sha: "aaaa1111bbbb", title: "first change" }, { sha: "cccc2222dddd", title: "second change" }], differ: ["src/only-here.ts"], n_differ: 1, target: "origin/main", target_sha: "e".repeat(40), head: "f".repeat(40), fingerprint: "fp1", checked_age_s: 180, ...over });
+  const squad = { label: "fixture", topic: "one", type: "feature", autonomy: "orchestration", ship_mode: "ce-pipeline", display_status: "working", display_key: "working", phase: "build", status: "active", members: [], units: [], questions: [],
+    leftovers: [lo("look", check({})), lo("safe", check({ safe: true, commits: [], differ: [], n_differ: 0 })), lo("none", null)] };
+  const r = await mount({ ...board, squads: [squad] });
+  try {
+    const doc = r.window.document;
+    const until = async (f: () => any) => { for (let k = 0; k < 40 && !f(); k++) await new Promise((res) => setTimeout(res, 25)); };
+    await until(() => doc.querySelector(".row.squad"));
+    doc.querySelector(".row.squad").dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await until(() => doc.querySelector(".lo"));
+    const rows = [...doc.querySelectorAll(".lo")].map((e: any) => e.textContent as string);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain("look first");
+    expect(rows[0]).toContain("first change");
+    expect(rows[0]).toContain("second change");
+    expect(rows[0]).toContain("src/only-here.ts");
+    expect(rows[0]).toContain("PR #12");
+    expect(rows[0]).toContain("checked 3m ago");
+    expect(rows[0]).toContain("Keep it");
+    expect(rows[1]).toContain("safe, removing on the next check");
+    expect(rows[2]).toContain("not checked yet");
+    expect(doc.querySelector(".box h3")!.parentElement!.textContent).not.toContain("waits on");
+    const keep = [...doc.querySelectorAll(".lo a")].find((a: any) => /Keep it/.test(a.textContent)) as any;
+    expect(keep.getAttribute("title")).toContain("git -C /w/look push origin HEAD:refs/heads/work-look");
+    expect(keep.getAttribute("title")).toContain("git -C /w/look diff --binary HEAD > ~/.dev-studio/state/fixture/pages/one/leftovers/look.patch");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});

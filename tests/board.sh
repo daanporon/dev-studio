@@ -1562,5 +1562,16 @@ jt "feedback U4: with a repo the header counts drafts to review" "$TMP/fb.json" 
 has "feedback U4: the text board's FEEDBACK line" "$(render "$LBL")" "FEEDBACK  2 drafts to review (1 blocked by the leak check) · notes: 3 (1 new, 1 drafted, 0 filed, 0 fixed, 0 closed, 1 dismissed)"
 dbw "UPDATE config SET value = 'off' WHERE key = 'feedback'; UPDATE config SET value = '-' WHERE key = 'feedback_repo'"
 
+# archive-leftovers U3: a kept worktree shows the loop's check of it: look first, two commits, one differing file.
+cat > "$SD/lo-sq.json" <<'JSON'
+{"run_id":"lo","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"dispatched","pr":"12"}],
+ "leftovers":[{"wt":"w1::/tmp/wt-look","path":"/tmp/wt-look","branch":"br-look","reason":"kept: 1 uncommitted, 2 unpushed","waits_on":null,"unit":"u1","files":["a.ts"],"n_files":1,"unpushed":2,"recorded_at":"2026-10-08T09:00:00Z"}]}
+JSON
+mkdb "$LBL"
+dbw "INSERT INTO episodes (project, squad, subject, kind, state, episode_key, source, observed_at, result) VALUES ('$LBL', 'lo-sq', 'w1::/tmp/wt-look', 'leftover-check', 'look-first', 'fp1', 'loop', $(date +%s), '{\"at\":1,\"safe\":false,\"commits\":[{\"sha\":\"aaaa1111\",\"title\":\"first\"},{\"sha\":\"bbbb2222\",\"title\":\"second\"}],\"differ\":[\"a.ts\"],\"n_differ\":1,\"target\":\"origin/main\",\"target_sha\":\"x\",\"head\":\"y\",\"fingerprint\":\"fp1\"}')"
+render "$LBL" --json > "$TMP/lo.json"
+jt "leftover U3: the board JSON carries the check" "$TMP/lo.json" '.squads[] | select(.topic=="lo-sq") | .leftovers[0].check | .safe==false and (.commits|length)==2 and .differ==["a.ts"] and .n_differ==1'
+hasre "leftover U3: the text line says look first" "$(render "$LBL" 2>/dev/null)" '⚑ /tmp/wt-look  \(br-look\) — look first: 2 commits, 1 file not on main · checked '
+
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

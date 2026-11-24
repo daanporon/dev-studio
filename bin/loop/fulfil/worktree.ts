@@ -28,7 +28,7 @@ import type { Exec, Fulfiller, Result } from "../core/actuator.ts";
 import { spawn } from "../io/orca.ts";
 import { ROOT } from "../core/store.ts";
 import { actionBlock } from "../pause/pause.ts";
-import { closeTidy, fetchTarget, leftoverCheck, rescuedNote, type LeftoverCheck } from "../io/tidy.ts";
+import { closeTidy, fetchTarget, leftoverCheck, leftoverFingerprint, rescuedNote, type LeftoverCheck } from "../io/tidy.ts";
 import { NOTE_DIRS, rescuePages } from "../io/rescue.ts";
 import { removalHold } from "../squad/exposed.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
@@ -66,10 +66,26 @@ async function stray(path: string, status: string): Promise<boolean | null> {
 
 const leftText = (c: LeftoverCheck) => `left: ${c.commits.length} commit${c.commits.length === 1 ? "" : "s"}, ${c.n_differ} file${c.n_differ === 1 ? "" : "s"} not on main`;
 
+// archive-leftovers U3: the check's result, one episode per leftover (kind `leftover-check`, subject the worktree).
+// `result` holds it and `episode_key` its fingerprint; both are written only when the fingerprint changes, so
+// `observed_at` (bumped on every probe) says when the tree was last looked at. It goes with the tree.
+async function record(a: Action, x: Exec, p: P, path: string, check: LeftoverCheck): Promise<void> {
+  const fingerprint = await leftoverFingerprint(path, check);
+  if (!fingerprint) return;
+  const key = { project: a.project, subject: p.wt!, kind: "leftover-check" };
+  const old = x.store.get("episodes", key);
+  if (old && old.episode_key === fingerprint) { x.store.upsert("episodes", key, { observed_at: x.now }); return; }
+  const head = await spawn(["git", "-C", path, "rev-parse", "-q", "--verify", "HEAD"], {}, 30_000);
+  const result = { at: x.now, safe: check.safe, commits: check.commits, differ: check.differ, n_differ: check.n_differ,
+    target: check.target, target_sha: check.target_sha, head: head.code === 0 ? head.out.trim() : null, fingerprint };
+  x.store.upsert("episodes", key, { squad: a.squad ?? null, state: check.safe ? "safe" : "look-first", source: "loop",
+    episode_key: fingerprint, result: JSON.stringify(result), observed_at: x.now });
+}
 // The check: a reason to leave the tree, or the check itself when it is safe to remove.
 async function safe(a: Action, x: Exec, p: P, path: string): Promise<Result | { check: LeftoverCheck }> {
   const check = await leftoverCheck(path);
   if (!check) return note(a, x, p, "probe-failed", `leftover ${path} (${p.unit ?? ""}): worktree probe failed — left as is`);
+  await record(a, x, p, path, check);
   if (!check.safe) return { done: true, result: leftText(check) };
   const ignored = await spawn(["git", "-C", path, "status", "--porcelain", "--ignored=matching"], {}, 60_000);
   if (ignored.code !== 0) return { done: true, result: "left: ignored files unknown" };
@@ -116,7 +132,7 @@ async function remove(a: Action, x: Exec, p: P): Promise<Result> {
   const rm = contract ? await contractRemoveTree(a, x, w, true) : await x.act.orca.run("worktree-rm", [`id:${wt}`, "force"], { env: x.act.childActivity(x.store, a) });
   if (rm.code !== 0) return note(a, x, p, "rm-refused", `leftover ${path} still refused by worktree-rm — left as is`);
   await closeTidy.after(a, x, path, tidy);
-  x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, "leftover-note"]);
+  for (const kind of ["leftover-note", "leftover-check"]) x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, kind]);
   // The tree is gone either way: a record this could not drop, the reconciler drops as gone.
   const state = join(x.store.root, a.project, "squads", `${p.topic}.json`);
   await spawn([join(ROOT, "bin", "role", "squad-state.sh"), state, "drop-leftover", wt], { DS_STATE_ROOT: x.store.root }, 30_000);

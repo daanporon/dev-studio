@@ -14,7 +14,7 @@
 // Every root is a parameter so tests run on fixture trees; signalling needs the real /proc or an
 // injected `kill`.
 import { closeSync, mkdirSync, openSync, readdirSync, realpathSync } from "node:fs";
-import { lstat, opendir, readdir, readlink, realpath, rm, unlink } from "node:fs/promises";
+import { lstat, opendir, readdir, readFile, readlink, realpath, rm, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { Action } from "../core/plugins.ts";
@@ -528,6 +528,24 @@ export async function leftoverCheck(path: string): Promise<LeftoverCheck | null>
     target, target_sha: ts && ts.code === 0 ? ts.out.trim() : null };
 }
 
+// archive-leftovers U3 — what the operator looked at: a hash of HEAD, the status lines and the bytes of every
+// differing file (a link by its target, an absent file as such). It changes whenever the tree does, so a
+// later action on the check can tell the tree moved. null when git fails.
+export async function leftoverFingerprint(path: string, check: LeftoverCheck): Promise<string | null> {
+  const [head, st] = await Promise.all([git(path, ["rev-parse", "-q", "--verify", "HEAD"], 30_000),
+    git(path, ["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"])]);
+  if (st.code !== 0) return null;
+  const h = createHash("sha256").update(`head ${head.code === 0 ? head.out.trim() : "-"}\0`).update(st.out);
+  for (const p of check.differ) {
+    h.update(`\0file ${p}\0`);
+    const s = await lstat(join(path, p)).catch(() => null);
+    if (!s) h.update("absent");
+    else if (s.isSymbolicLink()) h.update("link ").update(await readlink(join(path, p)).catch(() => ""));
+    else if (s.isFile()) h.update(await readFile(join(path, p)).catch(() => Buffer.alloc(0)));
+    else h.update("other");
+  }
+  return h.digest("hex").slice(0, 24);
+}
 // The object id git gives a symlink's text, in the repo's own hash (sha1 or sha256).
 async function linkBlob(file: string, algo: string): Promise<string | null> {
   try {

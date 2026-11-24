@@ -111,7 +111,7 @@ describe("the remove phase copies pages and notes out first (lavish-docs-not-sto
     for (const rel of Object.keys(BYTES)) expect(copied(r.dest, rel)).toBe(BYTES[rel]);
     expect(r.orca.of("worktree-rm")).toEqual([]);
     expect(r.leftovers()).toHaveLength(1);
-    expect(r.leftovers()[0]).toMatchObject({ reason: "uncommitted changes" });
+    expect(r.leftovers()[0]).toMatchObject({ reason: expect.stringMatching(/^kept: [0-9]+ uncommitted, [0-9]+ unpushed$/) });
     expect(r.events("leftover_recorded").at(-1)).toMatchObject({ rescued: r.dest });
     expect(r.events("pages_rescued")[0]).toMatchObject({ count: 4 });
     expect(existsSync(join(r.wt, ".lavish", "p.html"))).toBe(true);
