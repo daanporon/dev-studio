@@ -969,7 +969,10 @@ describe("feedback issues", () => {
     return { run, queries };
   }
   function seed(s: Store, nums: number[], repo: string | null = "acme/app") {
-    if (repo) s.upsert("config", { project: "", file: "limits.conf", key: "feedback_repo" }, { value: repo, observed_at: T });
+    if (repo) {
+      s.upsert("config", { project: "", file: "limits.conf", key: "feedback" }, { value: "on", observed_at: T });
+      s.upsert("config", { project: "", file: "limits.conf", key: "feedback_repo" }, { value: repo, observed_at: T });
+    }
     for (const n of nums) {
       s.upsert("feedback_drafts", { key: `fd:${n}` }, { kind: "issue", title: `t${n}`, body: "b", state: "filed", repo: "acme/app", issue: n, created_at: T, updated_at: T });
       const id = Number((s.get("feedback_drafts", { key: `fd:${n}` }) as Row).id);
@@ -1040,6 +1043,7 @@ describe("feedback issues", () => {
   test("feedback issues, project row only: the fi<N> field is in the query", async () => {
     const s = imported();
     seed(s, [41], null);
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "feedback" }, { value: "on", observed_at: T });
     s.upsert("config", { project: "fx", file: "limits.conf", key: "feedback_repo" }, { value: "acme/app", observed_at: T });
     const g = withIssues(new Map([[41, issue(41, "CLOSED", "COMPLETED")]]));
     await obs(g.run).run(ctx(s, T));

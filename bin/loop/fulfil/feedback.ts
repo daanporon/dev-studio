@@ -7,7 +7,7 @@
 //   feedback-dismiss {draft} | {note} [why]   a draft and its drafted notes, or one note not yet filed
 //   feedback-restore {note}           a dismissed note back to `new` (its old draft stays dismissed)
 //
-// A post refuses while `feedback_repo` is `-`, and runs tests/leak-guard.sh --text on the final title and
+// A post refuses while Feedback is off (`feedback`) or has no repo, and runs tests/leak-guard.sh --text on the final title and
 // body (bin/loop/feedback/post.ts): a hit marks the draft `blocked` and refuses with no GitHub call. Then
 // the draft reads `posting` before the first call, so a replay after a crash looks first: it searches the
 // repo's issues (or the target's comments) made since the draft for the body's `ds-key:<key>` line and
@@ -83,7 +83,7 @@ export function feedback(opts: { gh?: Gh; leak?: LeakCheck } = {}): Fulfiller {
     if (target === null && d.kind === "add-to" && !(Number(d.target) > 0)) return refuse(x, a, `draft ${id} is an add-to with no issue number: use Add to #N`);
     if (target === null && d.kind === "issue" && !String(d.title ?? "").trim()) return refuse(x, a, `draft ${id} has no title`);
     const repo = feedbackRepo(s);
-    if (!repo) return refuse(x, a, "feedback_repo is - (posting is off): name the repo in Settings first");
+    if (!repo) return refuse(x, a, "Feedback is off (or this checkout has no GitHub origin): turn it on in Settings → Limits first");
     if (inFlight.has(id)) return { wait: `draft ${id} is being posted by another request`, at: x.now + 30 };
     const out = target !== null ? { ...d, kind: "add-to", target } : d;
     const { title, body } = finalText(out);
