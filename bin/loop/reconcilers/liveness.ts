@@ -152,7 +152,7 @@ function noOpenPr(store: Store, project: string, u: { pr: string | null; hold: n
 // U267 (1): the Builder's own worker_done for its current dispatch, as Run mail the loop relayed at
 // least DONE_GRACE_S ago (finish-unit records the PR just before it sends, so a PR seen late is no report).
 // Its outcome and the first lines of its body, for the Lead's report.
-const DONE_GRACE_S = 120;
+export const DONE_GRACE_S = 120;
 export function workerDone(store: Store, project: string, squad: string, dispatch: unknown, now: number): { outcome: string; text: string } | null {
   if (!dispatch) return null;
   const r = store.db.query(`SELECT subject, body, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.outcome') END AS outcome FROM relayed

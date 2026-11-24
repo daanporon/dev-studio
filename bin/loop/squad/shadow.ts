@@ -18,10 +18,10 @@
 import { effective, paused } from "../pause/pause.ts";
 import { memberUnit } from "../pause/pause-conditions.ts";
 import { STANDING } from "../drivers/types.ts";
-import { reality, walkReality } from "../core/decide.ts";
+import { goneMinS, noAgentSince, reality, walkReality } from "../core/decide.ts";
 import { finishOf, nameOf } from "./finish-read.ts";
 import { lastStart, view } from "./member-state.ts";
-import { turnEnded, workerDone } from "../reconcilers/liveness.ts";
+import { DONE_GRACE_S, turnEnded, workerDone } from "../reconcilers/liveness.ts";
 import { runWorkers, type RunWorker } from "./run-reads.ts";
 import { stopping } from "./cancel.ts";
 import { settledTask } from "../reconcilers/members.ts";
@@ -64,18 +64,37 @@ export function newView(store: Store, m: Row): string | null {
 /** reality() read from the process walk alone (the live dispatch no longer holds a member running). */
 export const newReality = walkReality;
 
-// The decider's input: the view when it is not running, else the reality ("none" = it would start it).
+// Two known lags agree, the new side taking the old one's value:
+//   - running against starting (U21a pattern F): a start placed this minute that no walk has read yet,
+//     while Orca already lists its dispatch; the decider does nothing for either;
+//   - running against none while the old side's GONE_MIN clock runs (U21a): Orca still reads a dead
+//     agent working, and the old side reads it gone GONE_MIN after the walk first found none.
 export function startPair(store: Store, m: Row, now: number): Pair {
   const ov = view(store, m), nv = newView(store, m);
-  return pair("start", m, ov === "running" ? reality(store, m, now) : String(ov), nv === "running" ? newReality(store, m, now) : String(nv));
+  const old = ov === "running" ? reality(store, m, now) : String(ov);
+  const nw = nv === "running" ? newReality(store, m, now) : String(nv);
+  return pair("start", m, old, startLag(store, m, old, nw, now) ? old : nw);
+}
+function startLag(store: Store, m: Row, old: string, nw: string, now: number): boolean {
+  if (old === nw) return false;
+  if ([old, nw].every((x) => x === "running" || x === "starting")) return true;
+  if (old !== "running" || nw !== "none") return false;
+  const w = worker(store, m), since = w ? noAgentSince(store, m, w, lastStart(m)) : null;
+  return since != null && now - since < goneMinS(store, String(m.project));
 }
 
 // ---------------------------------------------------------------- finished
 const doneSide = (failed: boolean) => (failed ? "failed" : "ok");
 
+// A Builder whose unit records a PR is left out (U21a pattern B): it sends worker_done when it opens the
+// PR, the loop ignores that report (liveness idleBuilder), and its finish row comes later from the babysit
+// generation the phase restart starts, so the two signals answer different questions there.
+const hasPr = (store: Store, m: Row) => m.role === "builder" && !!memberUnit(store, { project: String(m.project), squad: String(m.squad),
+  role: "builder", suffix: String(m.suffix ?? ""), member: String(m.wt) })?.pr;
+
 /** Is a one-shot or Builder finished, and how: "no", "ok" or "failed". Standing roles never finish. */
-export function finishedPair(store: Store, m: Row): Pair | null {
-  if (STANDING.has(String(m.role))) return null;
+export function finishedPair(store: Store, m: Row, now: number): Pair | null {
+  if (STANDING.has(String(m.role)) || hasPr(store, m)) return null;
   const w = worker(store, m);
   // workerDone with no grace: the old signal as soon as the relay has it.
   const done = w?.dispatch_id ? workerDone(store, String(m.project), String(m.squad), w.dispatch_id, Number.MAX_SAFE_INTEGER) : null;
@@ -85,7 +104,10 @@ export function finishedPair(store: Store, m: Row): Pair | null {
   else if (m.role === "tester" && store.db.query(`SELECT 1 FROM events WHERE kind = 'tester_pass_done' AND project = ? AND squad = ? AND member = ? AND at >= ? LIMIT 1`)
     .get(String(m.project), String(m.squad), String(m.wt), lastStart(m))) old = "ok";
   const f = finishOf(store, m);
-  return pair("finished", m, old, f ? doneSide(f.outcome === "failed") : "no");
+  // finish-unit writes the row just before worker_done (U21a pattern A): the relay's lag is no
+  // disagreement while the row is younger than the grace the loop gives a report.
+  const nw = !f || (old === "no" && Number(f.at) > now - DONE_GRACE_S) ? "no" : doneSide(f.outcome === "failed");
+  return pair("finished", m, old, nw);
 }
 
 // ---------------------------------------------------------------- retire
@@ -101,7 +123,10 @@ function prState(store: Store, m: Row, u: Row): string | null {
 }
 
 /** Would the loop retire it: "retire" or "keep". A Builder and a feature squad's Tester; paused members are left out. */
+// A member the loop already wants gone was retired (U21a pattern D): the new side reads its agent's
+// end a tick or two after the loop acted, which is no disagreement.
 export function retirePair(store: Store, m: Row, workers: RunWorker[] | null): Pair | null {
+  if (m.want === "gone") return null;
   if (paused(store, { project: String(m.project), squad: String(m.squad), member: String(m.wt) })) return null;
   if (m.role === "builder") {
     const u = memberUnit(store, { project: String(m.project), squad: String(m.squad), role: "builder", suffix: String(m.suffix ?? ""), member: String(m.wt) });
@@ -128,13 +153,18 @@ export function retirePair(store: Store, m: Row, workers: RunWorker[] | null): P
 // not live with that task and is left alone: a member.
 const reported = (m: Row, w: RunWorker) => (w.status === "completed" || w.reported === true) && !STANDING.has(String(m.role));
 
+// A phase switch since its start (U21a pattern E): the stop and fresh start are in flight, Orca has
+// already dropped the old dispatch, and member_stopped is logged only once the stop completes.
+const phaseStop = (store: Store, m: Row) => !!store.db.query("SELECT 1 FROM events WHERE kind = 'member_phase' AND project = ? AND member = ? AND at >= ? LIMIT 1")
+  .get(String(m.project), String(m.wt), lastStart(m));
+
 /** Is it a member: "member" or "absent", per worktree. Members leaving, paused or not running are left out. */
 export function memberPairs(store: Store, project: string, squad: string, workers: RunWorker[], members: Row[], now: number): Pair[] {
   const out: Pair[] = [];
   for (const m of members) {
     const wt = String(m.wt);
-    if (m.squad !== squad || m.want === "gone" || newReality(store, m, now) !== "running"
-      || stopping(store, project, wt) || paused(store, { project, squad, member: wt })) continue;
+    if (m.squad !== squad || m.want === "gone" || effective(store, m).state !== "running" || phaseStop(store, m)
+      || newReality(store, m, now) !== "running" || stopping(store, project, wt) || paused(store, { project, squad, member: wt })) continue;
     const w = workers.find((x) => x.wt === wt);
     const bound = !!w?.task && STANDING.has(String(m.role)) && settledTask(store, project, squad, wt, w.task);
     if (w?.live || bound) out.push(pair("member", m, "member", "member"));
@@ -157,7 +187,7 @@ export function pairs(store: Store, project: string, tick: number, now: number):
   const members = tracked(store, project), out: Pair[] = [];
   for (const m of members) {
     out.push(startPair(store, m, now));
-    const f = finishedPair(store, m);
+    const f = finishedPair(store, m, now);
     if (f) out.push(f);
     const r = retirePair(store, m, runWorkers(project, String(m.squad), tick));
     if (r) out.push(r);

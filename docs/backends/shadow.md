@@ -50,3 +50,29 @@ shadow dev-studio-public since 2026-11-24T09:05:32.000Z (0.1 days)
   finishes 13 (7 no-PR or failed), crashes 3
 exit: not met - 10 unexplained, 13 of 20 finishes, 3 of 5 crashes, 0.1 of 7 days
 ```
+
+## Patterns (U21a)
+
+The unexplained disagreements `ds shadow report --since 2026-11-24T09:05:32Z` listed after the drill fall into these patterns. Each one that would come back every day is now paired so that it agrees (`bin/loop/squad/shadow.ts`); each has a case in `tests/loop/shadow.test.ts` ("U21a patterns agree").
+
+| Pattern | Events | Cause | Fix |
+|---|---|---|---|
+| A. `finished`, old no, new ok | 609490, 610135, 611117 | `finish-unit` writes the finish row just before it sends `worker_done`, and the relay reads the Run mail a tick or more later. | While the finish row is younger than the loop's report grace (`DONE_GRACE_S`, 120 s) and the old side reads no, the new side reads no. |
+| B. `finished`, old ok, new no, a Builder | 608822, 609602, 609788, 610773, 610803 | The Builder sends `worker_done` when it opens its PR. The loop ignores that report while the unit has a PR (liveness `idleBuilder`), restarts the Builder on babysit, and the finish row comes later from the new generation. | No `finished` pair for a Builder whose unit records a PR. The PR's merge (the `retire` point) decides there. |
+| C. `finished`, old ok, new no, a Tester | 610433 | The Tester sent `worker_done` without `ds finish --outcome verdict` first. This is a role gap, not a lag. | None in code. It is still flagged, and `roles/tester.md` already asks for the verdict row. |
+| D. `retire`, old retire, new keep | 608981, 609983, 610434 | The loop had already set the member's want to gone (unit done and merged, or `tester pass finished`). The new side reads the agent's end a tick or two later. | No `retire` pair for a member the loop wants gone. |
+| E. `member`, old absent, new member | 608885, 609444, 608943 (phase); 609147, 610644 (archive) | Right after a `member_phase` babysit switch, Orca has dropped the old dispatch while the stop is still in flight (`member_stopped` is logged once it completes). Or the squad was archived and the member closed, while its want still reads running. | No `member` pair for a member with a `member_phase` event since its last start, or whose effective wish is not running (`effective()`). |
+| F. `start`, old running, new starting | 609098, 610055 | A start placed 15 to 27 s earlier that no walk has read yet, while Orca already lists its dispatch. The decider does nothing for either value. | Running against starting agrees. |
+
+### Why the hung restart did not fire on the drill's killed Builders
+
+`builder-drill-6`, `-7` and `-8` each died with a tool call open (an assistant `tool_use` with no result). An open step stretches the hung wait to `long_step_min` (60) plus `HUNG_MIN` (30), 90 minutes in all, and the squad was archived before that. This is intended: a long build or test step must not be cut. The dead agent is now caught by its own rule instead.
+
+A member Orca still reads `working` (presence `running`) is read gone when all of these hold:
+
+- every successful process walk since a time after its last start found no agent in its worktree, for at least `gone_min` (3 minutes; `DS_SWEEP_GONE_MIN`);
+- its transcript has not grown since;
+- it has no finish row of its generation;
+- the loop did not stop it.
+
+The time is the Orca observer's `observed_workers.walk_none_at` (migration 0058). A failed or split walk keeps it, and a walk that finds the agent clears it. The decider then starts the member through the usual restart rules, and the shadow counts the generation change as a crash. While the `gone_min` clock runs, the `start` pair agrees: the old side reads the agent running and the new side reads none, which is a known lag.

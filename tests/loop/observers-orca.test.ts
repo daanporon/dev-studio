@@ -10,7 +10,7 @@ import { importJson } from "../../bin/loop/db/import-json.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { since } from "../../bin/loop/core/events.ts";
 import { FakeOrca } from "../../bin/loop/fakes/orca.ts";
-import { mangle, orcaObserver, parseAgentAccounts } from "../../bin/loop/observers/orca.ts";
+import { mangle, orcaObserver, parseAgentAccounts, walkNoneAt } from "../../bin/loop/observers/orca.ts";
 import { codexObserver, scanRollouts } from "../../bin/loop/observers/codex.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -422,6 +422,33 @@ describe("U149: the main agent's presence, kind, process and live model", () => 
     s.db.run("UPDATE observed_workers SET dispatch = 'dispatched' WHERE wt = ?", [BUILDER]);
     await l.tick(T + 45);
     expect(main(s, BUILDER).presence).toBe("running");
+  });
+
+  test("U21a walk_none_at: set by the first walk that finds no agent, kept by later ones and by a failed walk, cleared by one that finds it", async () => {
+    const s = imported(), o = FakeOrca.recorded(RECORDED), l = loopOf(s, o);
+    const at = () => s.get("observed_workers", { project: "fx", wt: LEAD })!.walk_none_at;
+    o.procs = FakeOrca.accounts(ACCOUNTS);
+    await l.tick(T);
+    expect(at()).toBeNull();
+    o.procs = FakeOrca.accounts(ACCOUNTS).filter((p) => !p.cwd.endsWith("ds-dev-studio-lead-demo"));
+    await l.tick(T + 30);
+    expect(at()).toBe(T + 30);
+    await l.tick(T + 60);
+    expect(at()).toBe(T + 30);
+    o.procs = null;                                     // a failed walk proves nothing: the time is kept
+    await l.tick(T + 90);
+    expect(at()).toBe(T + 30);
+    o.procs = FakeOrca.accounts(ACCOUNTS);
+    await l.tick(T + 120);
+    expect(at()).toBeNull();
+  });
+
+  test("U21a walkNoneAt: a spell begun at or before the member's last start starts again", () => {
+    expect(walkNoneAt("none", null, 100, 500)).toBe(500);
+    expect(walkNoneAt("none", 200, 100, 500)).toBe(200);
+    expect(walkNoneAt("none", 100, 100, 500)).toBe(500);
+    expect(walkNoneAt("unknown", 200, 100, 500)).toBe(200);
+    expect(walkNoneAt("running", 200, 100, 500)).toBeNull();
   });
 
   test("two mains that disagree read unknown; in the Studio worktree only the Studio's agent counts", async () => {
