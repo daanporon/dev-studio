@@ -187,6 +187,34 @@ describe("leftover rule (archive-leftovers U1)", () => {
     kept(r, "left: ignored files");
   });
 
+  // The removal is forced, so these exemptions are all that keeps an ignored file from going with the tree.
+  const ignoreNotes = (wt: string) => writeFileSync(join(wt, ".git", "info", "exclude"), "docs/plans/\n.scratch/*.md\n");
+
+  test("ignored notes under the rescue's folders are copied out and the tree removed", async () => {
+    const g = repos(), r = rig("wtx", g.wt);
+    ignoreNotes(g.wt);
+    mkdirSync(join(g.wt, "docs", "plans", "sub"), { recursive: true });
+    writeFileSync(join(g.wt, "docs", "plans", "plan.md"), "# plan\n");
+    writeFileSync(join(g.wt, "docs", "plans", "sub", "view.html"), "<p>v</p>");
+    mkdirSync(join(g.wt, ".scratch"));
+    writeFileSync(join(g.wt, ".scratch", "note.md"), "note\n");
+    await r.send();
+    removed(r);
+    const rescued = join(r.s.root, "fx", "pages", "t1", "rescued", "builder-u1");
+    expect(readFileSync(join(rescued, "docs", "plans", "sub", "view.html"), "utf8")).toBe("<p>v</p>");
+    expect(readFileSync(join(rescued, ".scratch", "note.md"), "utf8")).toBe("note\n");
+  });
+
+  test("an ignored note folder holding anything but notes is kept", async () => {
+    const g = repos(), r = rig("wtx", g.wt);
+    ignoreNotes(g.wt);
+    mkdirSync(join(g.wt, "docs", "plans"), { recursive: true });
+    writeFileSync(join(g.wt, "docs", "plans", "plan.md"), "# plan\n");
+    writeFileSync(join(g.wt, "docs", "plans", "data.json"), "{}\n");
+    await r.send();
+    kept(r, "left: ignored files");
+  });
+
   test("(g) a retired member's removal passes both later gates and the child gate", async () => {
     const g = repos(), r = rig("wtb", g.wt);
     r.s.db.run("UPDATE members SET status = 'gone', want = 'gone', want_payload = NULL WHERE wt = 'wtb'");
