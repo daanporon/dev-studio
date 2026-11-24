@@ -16,6 +16,7 @@ import { decide, reality } from "../../bin/loop/core/decide.ts";
 import { stopRetry } from "../../bin/loop/squad/close-drift.ts";
 import { dispatchRuns, presence } from "../../bin/loop/observers/orca.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
+import { rmRefusal } from "../../bin/loop/fulfil/close.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
 
 const T = 1_800_000_000;
@@ -276,6 +277,33 @@ describe("close tidies the worktree (host-disk-cleanup U1)", () => {
     expect(r.orca.of("worktree-rm")).toHaveLength(1);
     expect(existsSync(r.temp)).toBe(true);
     expect(r.kinds()).toEqual([]);
+  });
+
+  // orca-worktree-cleanup U1.
+  test("(f) a .scratch file the close-time tidy writes is copied by the second rescue, and the tree goes with force", async () => {
+    const r = tidyRig(() => "mkdir -p .scratch && printf 'late\\n' > .scratch/late.txt");
+    await r.close();
+    const dest = join(r.s.root, "fx", "pages", "t1", "rescued", "builder-u1");
+    expect(readFileSync(join(dest, ".scratch", "late.txt"), "utf8")).toBe("late\n");
+    expect(r.orca.of("worktree-rm").map((c) => c.args)).toEqual([["id:wtb", "force"]]);
+    expect(r.leftovers()).toEqual([]);
+    expect(events(r.s, "pages_rescued")).toEqual([expect.objectContaining({ count: 1, pass: 2, files: [".scratch/late.txt"] })]);
+  });
+
+  test("(h) a refused worktree-rm records Orca's own message, not the adapter's line", async () => {
+    const r = tidyRig(null);
+    r.orca.fail("worktree-rm", { code: 1, out: "", err: '{"ok":false,"error":{"code":"worktree_busy","message":"files in use"}}\norca adapter: worktree rm failed for id:wtb (see error above)\n' });
+    await r.close();
+    expect(r.leftovers()).toHaveLength(1);
+    expect(r.leftovers()[0].reason).toBe("worktree-rm refused: worktree_busy: files in use");
+  });
+
+  test("rmRefusal: JSON error, else the last line not the adapter's own, else no detail; at most 300 characters", () => {
+    expect(rmRefusal("", '{"ok":false,"error":{"message":"gone"}}\norca adapter: worktree rm failed for id:x (see error above)')).toBe("gone");
+    expect(rmRefusal("fatal: busy\n", "orca adapter: worktree rm failed for id:x (see error above)\n")).toBe("fatal: busy");
+    expect(rmRefusal("", "orca adapter: worktree rm failed for id:x (see error above)")).toBe("no detail from backend");
+    expect(rmRefusal("", "")).toBe("no detail from backend");
+    expect(rmRefusal("", "e".repeat(500))).toHaveLength(300);
   });
 
   test("worktree.remove: the leftover sweep runs the same tidy, in the same order", async () => {

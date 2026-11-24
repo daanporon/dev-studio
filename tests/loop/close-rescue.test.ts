@@ -2,6 +2,8 @@
 // (archive and suspend), the pages a Lavish session names and the working notes under .lavish/,
 // .scratch/, docs/plans/ and docs/brainstorms/ are copied to state/<label>/pages/<topic>/rescued/<role>/.
 // Copy only, never overwrite, idempotent; a failed copy keeps the worktree as a leftover.
+// orca-worktree-cleanup U1: everything under .scratch/ and .lavish/ is copied (one budget per worktree), and a
+// tree whose only extra files are those copies is removed, with force.
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +17,7 @@ import { rescuePages } from "../../bin/loop/io/rescue.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 
 const T = 1_800_000_000;
-const ENV = ["DS_CLOSE_ROLE", "BACKEND", "FAKE_LOG", "DS_CLAUDE_TMP_ROOT", "DS_TIDY_WAIT_MS", "DS_RESCUE_FOLDER_MB"];
+const ENV = ["DS_CLOSE_ROLE", "BACKEND", "FAKE_LOG", "DS_CLAUDE_TMP_ROOT", "DS_TIDY_WAIT_MS", "DS_RESCUE_FOLDER_MB", "DS_RESCUE_SCRATCH_MB"];
 const saved = new Map(ENV.map((k) => [k, process.env[k]]));
 const roots: string[] = [], stores: Store[] = [];
 afterEach(() => {
@@ -40,18 +42,19 @@ const BYTES: Record<string, string> = {
 
 // A pushed git worktree with a tracked file, a gitignored .scratch/ page folder and notes, and a
 // Lavish session naming .scratch/a/board.html; the builder u1 of squad t1 wished gone (archived).
-function rig(o: { lavish?: boolean; suspend?: boolean } = {}) {
+// `files` replaces BYTES; `tracked` leaves .scratch/ out of .gitignore, so its files are untracked (git status sees them).
+function rig(o: { lavish?: boolean; suspend?: boolean; files?: Record<string, string>; tracked?: boolean } = {}) {
   const t = mkdtempSync(join(tmpdir(), "u3-rescue-")); roots.push(t);
   const S = join(t, "state"), wt = join(t, "wt"), bare = join(t, "remote.git");
   for (const f of ["bin", "conventions", "roles", "AGENTS.md"]) symlinkSync(join(REPO, f), join(t, f));
   mkdirSync(join(S, "fx", "squads"), { recursive: true }); mkdirSync(bare); mkdirSync(wt);
   gitIn(bare, "init", "-q", "--bare"); gitIn(wt, "init", "-q", "-b", "work");
-  writeFileSync(join(wt, ".gitignore"), "CLAUDE.local.md\n.scratch/\n");
+  writeFileSync(join(wt, ".gitignore"), o.tracked ? "CLAUDE.local.md\n" : "CLAUDE.local.md\n.scratch/\n");
   mkdirSync(join(wt, "docs", "plans"), { recursive: true });
   writeFileSync(join(wt, "README.md"), "tracked\n"); writeFileSync(join(wt, "docs", "plans", "tracked.md"), "tracked plan\n");
   gitIn(wt, "add", "."); gitIn(wt, "commit", "-qm", "one");
   gitIn(wt, "remote", "add", "origin", bare); gitIn(wt, "push", "-q", "origin", "work");
-  for (const [rel, body] of Object.entries(BYTES)) {
+  for (const [rel, body] of Object.entries(o.files ?? BYTES)) {
     if (rel.startsWith(".lavish/") && !o.lavish) continue;
     mkdirSync(join(wt, rel, ".."), { recursive: true }); writeFileSync(join(wt, rel), body);
   }
@@ -83,7 +86,8 @@ function rig(o: { lavish?: boolean; suspend?: boolean } = {}) {
   const dest = join(S, "fx", "pages", "t1", "rescued", "builder-u1");
   const events = (kind: string) => (s.db.query("SELECT payload FROM events WHERE kind = ? ORDER BY id").all(kind) as { payload: string }[]).map((e) => JSON.parse(e.payload));
   const leftovers = () => (JSON.parse(String(s.get("squads", { project: "fx", topic: "t1" })!.doc)).leftovers ?? []) as Row[];
-  return { s, t, S, wt, dest, orca, close, events, leftovers, member: () => s.get("members", { id: b.id })! };
+  const rmArgs = () => orca.of("worktree-rm").map((c) => c.args);
+  return { s, t, S, wt, dest, orca, close, events, leftovers, rmArgs, member: () => s.get("members", { id: b.id })! };
 }
 const copied = (dest: string, rel: string) => existsSync(join(dest, rel)) ? readFileSync(join(dest, rel), "utf8") : null;
 
@@ -94,7 +98,8 @@ describe("the remove phase copies pages and notes out first (lavish-docs-not-sto
     for (const rel of [".scratch/a/board.html", ".scratch/a/style.css", ".scratch/notes.md"]) expect(copied(r.dest, rel)).toBe(BYTES[rel]);
     expect(copied(r.dest, "README.md")).toBeNull();
     expect(copied(r.dest, "docs/plans/tracked.md")).toBeNull();
-    expect(r.orca.of("worktree-rm")).toHaveLength(1);
+    // The scratch notes are ignored, so git sees nothing: an unforced removal, as before U1.
+    expect(r.rmArgs()).toEqual([["id:wtb"]]);
     expect(r.leftovers()).toEqual([]);
     const ev = r.events("pages_rescued");
     expect(ev).toHaveLength(1);
@@ -105,16 +110,14 @@ describe("the remove phase copies pages and notes out first (lavish-docs-not-sto
     for (const rel of [".scratch/a/board.html", ".scratch/a/style.css", ".scratch/notes.md"]) expect(readFileSync(join(r.wt, rel), "utf8")).toBe(BYTES[rel]);
   });
 
-  test("an untracked .lavish page: the worktree is kept as a leftover and all four files are copied anyway", async () => {
+  test("an untracked .lavish page: all four files are copied and the worktree is removed with force (orca-worktree-cleanup U1)", async () => {
     const r = rig({ lavish: true });
     await r.close();
     for (const rel of Object.keys(BYTES)) expect(copied(r.dest, rel)).toBe(BYTES[rel]);
-    expect(r.orca.of("worktree-rm")).toEqual([]);
-    expect(r.leftovers()).toHaveLength(1);
-    expect(r.leftovers()[0]).toMatchObject({ reason: expect.stringMatching(/^kept: [0-9]+ uncommitted, [0-9]+ unpushed$/) });
-    expect(r.events("leftover_recorded").at(-1)).toMatchObject({ rescued: r.dest });
+    expect(r.rmArgs()).toEqual([["id:wtb", "force"]]);
+    expect(r.leftovers()).toEqual([]);
     expect(r.events("pages_rescued")[0]).toMatchObject({ count: 4 });
-    expect(existsSync(join(r.wt, ".lavish", "p.html"))).toBe(true);
+    expect(r.events("wish_done").at(-1)).toMatchObject({ result: "archived: worktree removed", rescued: r.dest });
   });
 
   test("a suspend copies too, and names the folder on member_suspended", async () => {
@@ -162,25 +165,39 @@ describe("rescuePages", () => {
     expect(copied(r.dest, ".scratch/a/board.2.html")).toBeNull();
   });
 
-  test("the folder cap: the page is always copied, a neighbour over the cap is counted, not copied", async () => {
+  test("the folder cap: the page is always copied, a neighbour over both caps is counted once, not copied", async () => {
     const r = rig();
     writeFileSync(join(r.wt, ".scratch", "a", "big.png"), "x".repeat(4096));
     process.env.DS_RESCUE_FOLDER_MB = String(1024 / (1024 * 1024));   // 1 KB
+    process.env.DS_RESCUE_SCRATCH_MB = String(1024 / (1024 * 1024));   // 1 KB
     const one = await rescuePages(r.s, "fx", "t1", "builder-u1", r.wt);
     expect(one.capped).toBe(1);
+    expect(one.secured).not.toContain(".scratch/a/big.png");
     expect(copied(r.dest, ".scratch/a/board.html")).toBe(BYTES[".scratch/a/board.html"]);
     expect(copied(r.dest, ".scratch/a/style.css")).toBe(BYTES[".scratch/a/style.css"]);
     expect(existsSync(join(r.dest, ".scratch", "a", "big.png"))).toBe(false);
   });
 
-  test("node_modules, symlinks, other extensions under the note folders and pages of other worktrees are skipped", async () => {
+  test("a neighbour over the folder cap still fits the scratch budget: copied, not capped", async () => {
+    const r = rig();
+    writeFileSync(join(r.wt, ".scratch", "a", "big.png"), "x".repeat(4096));
+    process.env.DS_RESCUE_FOLDER_MB = String(1024 / (1024 * 1024));   // 1 KB
+    const one = await rescuePages(r.s, "fx", "t1", "builder-u1", r.wt);
+    expect(one.capped).toBe(0);
+    expect(copied(r.dest, ".scratch/a/big.png")).toBe("x".repeat(4096));
+    expect(one.secured).toContain(".scratch/a/big.png");
+  });
+
+  test("node_modules, symlinks, other extensions under docs/plans and pages of other worktrees are skipped; other extensions under .scratch are copied", async () => {
     const r = rig();
     mkdirSync(join(r.wt, ".scratch", "node_modules", "x"), { recursive: true });
     writeFileSync(join(r.wt, ".scratch", "node_modules", "x", "readme.md"), "dep\n");
     writeFileSync(join(r.wt, ".scratch", "log.txt"), "log\n");
+    writeFileSync(join(r.wt, "docs", "plans", "log.txt"), "plan log\n");
     symlinkSync("/etc/hostname", join(r.wt, ".scratch", "link.md"));
     const one = await rescuePages(r.s, "fx", "t1", "builder-u1", r.wt);
-    expect(one.files.sort()).toEqual([".scratch/a/board.html", ".scratch/a/style.css", ".scratch/notes.md"]);
+    expect(one.files.sort()).toEqual([".scratch/a/board.html", ".scratch/a/style.css", ".scratch/log.txt", ".scratch/notes.md"]);
+    expect(one.secured.sort()).toEqual(one.files.sort());
     expect(existsSync(join(r.S, "fx", "pages", "t1", "rescued", "builder-u1", "other.html"))).toBe(false);
   });
 
@@ -191,5 +208,63 @@ describe("rescuePages", () => {
     r.s.upsert("observed_sessions", { project: "", file: join(r.wt, "top.html") }, { url: null, status: "running", observed_at: T });
     const one = await rescuePages(r.s, "fx", "t1", "builder-u1", r.wt);
     expect(one.files.sort()).toEqual([".scratch/a/board.html", ".scratch/a/style.css", ".scratch/notes.md", "top.html"]);
+  });
+});
+
+// orca-worktree-cleanup U1: untracked scratch files (git status sees them) stop keeping the tree once copied.
+const DRILL = { ".scratch/drill-1.txt": "drill one\n", ".scratch/data/x.json": '{"x":1}\n' };
+describe("scratch files copied whole stop keeping a closed worktree (orca-worktree-cleanup U1)", () => {
+  test("(a) only untracked .scratch files: both copied byte for byte, the tree removed with force", async () => {
+    const r = rig({ tracked: true, files: DRILL });
+    await r.close();
+    for (const [rel, body] of Object.entries(DRILL)) expect(copied(r.dest, rel)).toBe(body);
+    expect(r.rmArgs()).toEqual([["id:wtb", "force"]]);
+    expect(r.leftovers()).toEqual([]);
+    expect(r.events("wish_done").at(-1)).toMatchObject({ result: "archived: worktree removed", rescued: r.dest });
+  });
+
+  test("(b) the same plus an unpushed commit: kept as a leftover, nothing removed", async () => {
+    const r = rig({ tracked: true, files: DRILL });
+    writeFileSync(join(r.wt, "README.md"), "changed\n"); gitIn(r.wt, "commit", "-qam", "local");
+    await r.close();
+    expect(r.rmArgs()).toEqual([]);
+    expect(r.leftovers()[0]).toMatchObject({ reason: "kept: 0 uncommitted, 1 unpushed", unpushed: 1 });
+    for (const [rel, body] of Object.entries(DRILL)) expect(copied(r.dest, rel)).toBe(body);
+  });
+
+  test("(c) the same plus a modified tracked file: kept, only that file named", async () => {
+    const r = rig({ tracked: true, files: DRILL });
+    writeFileSync(join(r.wt, "README.md"), "changed\n");
+    await r.close();
+    expect(r.rmArgs()).toEqual([]);
+    expect(r.leftovers()[0]).toMatchObject({ reason: "kept: 1 uncommitted, 0 unpushed", files: ["README.md"] });
+  });
+
+  test("(d) a .scratch file over DS_RESCUE_SCRATCH_MB: not copied, counted in capped, the tree kept", async () => {
+    const r = rig({ tracked: true, files: { ...DRILL, ".scratch/big.bin": "x".repeat(4096) } });
+    process.env.DS_RESCUE_SCRATCH_MB = String(1024 / (1024 * 1024));   // 1 KB
+    await r.close();
+    expect(existsSync(join(r.dest, ".scratch", "big.bin"))).toBe(false);
+    expect(r.events("pages_rescued")[0]).toMatchObject({ capped: 1 });
+    expect(r.rmArgs()).toEqual([]);
+    expect(r.leftovers()[0]).toMatchObject({ reason: "kept: 1 uncommitted, 0 unpushed", files: [".scratch/big.bin"] });
+  });
+
+  test("(e) .scratch/.env: not copied, the tree kept", async () => {
+    const r = rig({ tracked: true, files: { ...DRILL, ".scratch/.env": "SECRET=1\n" } });
+    await r.close();
+    expect(existsSync(join(r.dest, ".scratch", ".env"))).toBe(false);
+    expect(r.rmArgs()).toEqual([]);
+    expect(r.leftovers()[0]).toMatchObject({ reason: "kept: 1 uncommitted, 0 unpushed", files: [".scratch/.env"] });
+  });
+
+  test("a symlink and a name git quotes stay dirty", async () => {
+    const r = rig({ tracked: true, files: { ...DRILL, ".scratch/caf\u00e9.txt": "odd name\n" } });
+    symlinkSync("/etc/hostname", join(r.wt, ".scratch", "link.txt"));
+    await r.close();
+    expect(r.rmArgs()).toEqual([]);
+    const left = r.leftovers()[0];
+    expect(left).toMatchObject({ reason: "kept: 2 uncommitted, 0 unpushed" });
+    expect((left.files as string[]).sort()).toEqual(['".scratch/caf\\303\\251.txt"', ".scratch/link.txt"]);
   });
 });
