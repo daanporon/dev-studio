@@ -14,6 +14,7 @@ import { importJson } from "../../bin/loop/db/import-json.ts";
 import { DIRS, load, type Action, type Reconciler } from "../../bin/loop/core/plugins.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { rescuePages } from "../../bin/loop/io/rescue.ts";
+import { oursLine, wtProbe } from "../../bin/loop/io/wt-probe.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 
 const T = 1_800_000_000;
@@ -266,5 +267,28 @@ describe("scratch files copied whole stop keeping a closed worktree (orca-worktr
     const left = r.leftovers()[0];
     expect(left).toMatchObject({ reason: "kept: 2 uncommitted, 0 unpushed" });
     expect((left.files as string[]).sort()).toEqual(['".scratch/caf\\303\\251.txt"', ".scratch/link.txt"]);
+  });
+});
+
+describe("wtProbe and oursLine with secured paths (orca-worktree-cleanup U1)", () => {
+  test("oursLine: only an untracked, unquoted name under .scratch/ or .lavish/ that the set holds", () => {
+    const set = new Set([".scratch/a.txt", ".lavish/p.html", "src/x.ts", '".scratch/q.txt"']);
+    expect(oursLine("?? CLAUDE.local.md")).toBe(true);
+    expect(oursLine("?? .scratch/a.txt")).toBe(false);
+    expect(oursLine("?? .scratch/a.txt", set)).toBe(true);
+    expect(oursLine("?? .lavish/p.html", set)).toBe(true);
+    expect(oursLine("?? .scratch/b.txt", set)).toBe(false);
+    expect(oursLine(" M .scratch/a.txt", set)).toBe(false);
+    expect(oursLine("?? src/x.ts", set)).toBe(false);
+    expect(oursLine('?? ".scratch/q.txt"', set)).toBe(false);
+  });
+
+  test("wtProbe: two fields with no opts, a third (the secured count) with opts", async () => {
+    const r = rig({ tracked: true, files: DRILL });
+    writeFileSync(join(r.wt, ".scratch", "other.txt"), "o\n");
+    expect((await wtProbe(r.wt, 10_000)).out.split("\n")[0]).toBe("3\t0");
+    const got = await wtProbe(r.wt, 10_000, { secured: [".scratch/drill-1.txt", ".scratch/data/x.json"] });
+    expect(got.out).toBe("1\t0\t2\n.scratch/other.txt\n");
+    expect((await wtProbe(r.wt, 10_000, {})).out.split("\n")[0]).toBe("3\t0\t0");
   });
 });
