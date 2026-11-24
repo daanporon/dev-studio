@@ -1333,6 +1333,18 @@ jt "U4: after a clear the card is gone"               "$TMP/cr2.json" '[.needs_y
 jt "U4: after a clear the account row is plain"       "$TMP/cr2.json" '.accounts[] | select(.agent=="muse") | .credits == null and (.text | test("out of credits") | not)'
 jt "U4: after a clear the account is free again"      "$TMP/cr2.json" '.accounts_summary | .free == 2 and .credits == []'
 eq "U4 page: the account row links the billing page" "$(grep -cF 'href=${a.credits.link} target="_blank"' "$ROOT/web/board.html")" "1"
+
+# claude-login-ended U3: a login-ended card (login-card.ts files it) is Needs-you at once, with its two
+# answers; resolving it takes it away.
+"$ROOT/bin/lib/alerts.sh" "$CRA" add loop-login.card_claude_work-x "work: login ended" \
+  "work: login ended — run /login in the Studio's terminal (or \`claude /login\`). Stuck on it: the Studio. Press Logged in once it works, or Switch it off to disable the account and restart them." \
+  "" "" '{"kind":"login_ended","options":["Logged in","Switch it off"],"login":{"agent":"claude","account":"work"}}' >/dev/null
+HOSTST="$TMP/stcr" mkdb "$LBL"; render "$LBL" --json > "$TMP/lg.json"
+jt "login U3: one Needs-you card at once, no grace"   "$TMP/lg.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")] | length == 1 and (.[0].title == "work: login ended")'
+jt "login U3: the card offers Logged in and Switch it off" "$TMP/lg.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")][0] | [.choices[].label] == ["Logged in","Switch it off"]'
+"$ROOT/bin/lib/alerts.sh" "$CRA" resolve loop-login.card_claude_work-x >/dev/null
+HOSTST="$TMP/stcr" board "$LBL" > "$TMP/lg2.json"
+jt "login U3: after the answer the card is gone"      "$TMP/lg2.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")] | length == 0'
 rm -f "$CRA"
 
 # claude-login-ended U4: claude/system held by a live login hold: the row reads login ended with no

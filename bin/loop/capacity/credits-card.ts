@@ -33,7 +33,7 @@ const CARD = "credits.card|", MOVED = "credits.moved|";
 type On = { w: Worker; stuck: boolean };
 
 // Is the crew member stuck on its held account: the picker finds no other place (or it is pinned there)?
-function stuck(ctx: TickCtx, pick: Picker, w: Worker, h: Hold): boolean {
+export function stuck(ctx: TickCtx, pick: Picker, w: Worker, h: { agent: string; account: string; until: number }): boolean {
   const { store, project: P } = ctx;
   if (overrideOf(store, w.m)) return true;
   const unit = store.db.query("SELECT tier FROM units WHERE project = ? AND squad = ? AND slug = ?").get(P, w.squad, w.suffix) as Row | null;

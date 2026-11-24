@@ -103,6 +103,8 @@ describe("deciding a Studio move (limits.ts)", () => {
 
   test("claude-login-ended U2: auto, a Studio whose login ended is moved off the held account; ask names it on the card", async () => {
     const login = readFileSync(join(ROOT, "tests", "fixtures", "login", "claude-login-ended.txt"), "utf8");
+    // U3 adds the login-ended card (login-card.ts); only the Studio's own cards are asserted here.
+    const own = (x: { cards(): Action[] }) => x.cards().filter((c) => !c.subject.startsWith("login."));
     const s = rig(), d = decider(s, OTHER);
     s.upsert("observed_workers", { project: "fx", wt: STUDIO }, { tail: login });
     await d.loop.tick(T);
@@ -110,14 +112,14 @@ describe("deciding a Studio move (limits.ts)", () => {
     expect(s.get("episodes", { project: "", subject: "login|claude/acct-a", kind: "account" })?.ended_at).toBe(T + 3600);
     expect(d.moves()).toHaveLength(1);
     expect(d.moves()[0]).toMatchObject({ subject: MOVE, member: STUDIO, payload: { handle: "term_s", account: "acct-b", from: "claude:acct-a" } });
-    expect(d.cards()).toEqual([]);
+    expect(own(d)).toEqual([]);
     const a = rig(), e = decider(a, OTHER);
     conf(a, "studio_move", "ask");
     a.upsert("observed_workers", { project: "fx", wt: STUDIO }, { tail: login });
     await e.loop.tick(T);
     expect(e.moves()).toEqual([]);
-    expect(e.cards()[0]!.payload).toMatchObject({ title: "Studio's login ended", option: "move it" });
-    expect(String((e.cards()[0]!.payload as Row).text)).toStartWith("Studio's account claude/acct-a: login ended");
+    expect(own(e)[0]!.payload).toMatchObject({ title: "Studio's login ended", option: "move it" });
+    expect(String((own(e)[0]!.payload as Row).text)).toStartWith("Studio's account claude/acct-a: login ended");
   });
 
   test("U267: the loop's own picker on a project roster without a studio row moves it on the default row", async () => {

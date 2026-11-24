@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { LoopActuator, type Fulfiller } from "../../bin/loop/core/actuator.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
 import { creditsHold, holdCredits } from "../../bin/loop/capacity/credits.ts";
+import { holdLogin, loginHold } from "../../bin/loop/capacity/login.ts";
 import { FakeBackend as FakeOrca } from "../../bin/loop/fakes/orca.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
@@ -458,6 +459,24 @@ describe("studio", () => {
       expect(s.get("accounts", { agent: "muse", account: "default" })?.state ?? null).toBe(state);
       if (answer === "Fixed") expect(result(s, id)).toMatchObject({ account: "muse/default", enabled: true, cleared: true });
       expect(s.db.query("SELECT 1 FROM observed_alerts WHERE project = 'fx' AND id = ?").get(ids[0])).toBeNull();
+    }
+  });
+  test("claude-login-ended U3: a login-ended card answered Logged in ends the hold, Switch it off disables the account, Dismiss only clears", async () => {
+    for (const [answer, held, state] of [["Logged in", false, null], [" switch it off ", true, "disabled"], [undefined, true, null]] as const) {
+      const s = imported(), { tick } = rig(s);
+      holdLogin(s, { agent: "claude", account: "work", from: "screen" }, T);
+      s.upsert("accounts", { agent: "claude", account: "work" }, { observed_at: T });
+      const doc = { kind: "login_ended", login: { agent: "claude", account: "work" }, options: ["Logged in", "Switch it off"] };
+      const aid = "loop-login.card_claude_work-k";
+      s.upsert("observed_alerts", { project: "fx", id: aid }, { doc: JSON.stringify({ id: aid, title: "work: login ended", ...doc }), observed_at: T });
+      const alerts = join(s.root, "fx", "alerts.json");
+      writeFileSync(alerts, JSON.stringify({ alerts: [{ id: aid, title: "work: login ended", status: "open", ...doc }] }));
+      const id = board(s, "dismiss", { id: aid, ...(answer ? { answer } : {}) }, { project: "fx" });
+      await tick();
+      expect(result(s, id)).toMatchObject({ done: true, ok: true, dismissed: aid });
+      expect(loginHold(s, "claude", "work", T) !== null).toBe(held);
+      expect(s.get("accounts", { agent: "claude", account: "work" })?.state ?? null).toBe(state);
+      expect(s.db.query("SELECT 1 FROM observed_alerts WHERE project = 'fx' AND id = ?").get(aid)).toBeNull();
     }
   });
 });
