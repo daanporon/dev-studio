@@ -36,6 +36,7 @@ import { DEFAULTS as BRIEFING_DEFAULTS, gaveUp as briefingGaveUp, localDate, nex
 import { limit } from "../loop/settings/limits.ts";
 import { ANSWERED, ANSWERED_BY, ENDED, RECEIVER_RUNNING, UNREAD, WAITING } from "../loop/messages/messages.ts";
 import { creditsNotice, liveHolds } from "../loop/capacity/credits.ts";
+import { LOGIN_ENDED, liveLoginHolds } from "../loop/capacity/login.ts";
 import { approvedPlans, readyLine } from "../loop/reconcilers/ready.ts";
 import { canonPath } from "../loop/squad/plan-approved.ts";
 import { unitWishes } from "../loop/squad/queued-builder.ts";
@@ -966,6 +967,8 @@ function accounts(db: Db, now = NOW()) {
   const off = new Set(db.all("SELECT agent, account FROM accounts WHERE state = 'disabled'").map((r) => `${r.agent}/${r.account}`));
   // provider-billing-fallback U4: a live credits hold (credits.ts) reads `out of credits`, with the provider's link.
   const holds = new Map(liveHolds(db.s, now).map((h) => [`${h.agent}/${h.account}`, h]));
+  // claude-login-ended U4: a live login hold (login.ts) reads `login ended · run /login`, no percentages.
+  const logins = new Map(liveLoginHolds(db.s, now).map((h) => [`${h.agent}/${h.account}`, h]));
   const multi = new Set(rows.map((c) => c.agent)).size > 1;
   const lastReset = resetsUsed(db, now), pending = resetsPending(db);
   const dash = (v: unknown) => (typeof v === "string" && v && v !== "-" ? v : null);
@@ -977,7 +980,10 @@ function accounts(db: Db, now = NOW()) {
     const name = (multi ? `${agent}:${account}` : account) + (plan ? ` (${plan})` : "");
     const hold = holds.get(`${agent}/${account}`);
     const credits = hold ? { until: hold.until, ...creditsNotice(db.s, agent, account, hold.started - 60) } : null;
+    const lh = logins.get(`${agent}/${account}`);
+    const login = lh && !credits ? { until: lh.until, notice: LOGIN_ENDED, where: lh.from } : null;
     const text = credits ? `${name} out of credits${credits.link ? ` · ${credits.link}` : ""}`
+      : login ? `${name} ${LOGIN_ENDED} · run /login`
       : limited ? `${name} limited · resets ${clock(limitedUntil!)}`
       : [`${name} ${session == null ? "?" : session + "%"}`, reset != null && reset > now ? `resets ${clock(reset)}` : "",
         weekly == null ? "" : `wk ${weekly}%`].filter(Boolean).join(" · ");
@@ -985,7 +991,7 @@ function accounts(db: Db, now = NOW()) {
     const sk = dash(c.skills), skills = sk && sk !== "ok" ? sk : null;
     const resets = resetsOf(c.resets);
     return { disabled: off.has(`${agent}/${account}`), plan, resets, reset_last: lastReset.get(`${agent}/${account}`) ?? null, reset_pending: pending.get(`${agent}/${account}`) ?? null, agent, account, session_pct: session, session_reset: reset, weekly_pct: weekly,
-      weekly_reset: epochOf(c.weekly_reset), note: dash(c.note), label: dash(c.label) ?? account, limited_until: limited ? limitedUntil : null, limited, credits,
+      weekly_reset: epochOf(c.weekly_reset), note: dash(c.note), label: dash(c.label) ?? account, limited_until: limited ? limitedUntil : null, limited, credits, login,
       skills, text: `${text}${resets.state === "reported" ? ` · free resets ${resets.count}` : ""}${skills ? ` · skills ${skills}` : ""}` };
   });
 }
@@ -998,13 +1004,14 @@ function accountsSummary(db: Db | null, label: string, accts: any[], now = NOW()
   const live = accts.filter((a) => !a.disabled);
   const day = (e: number) => new Date(e * 1000).toDateString();
   const resetText = (e: number) => (day(e) === day(now) ? clock(e) : new Date(e * 1000).toLocaleDateString("en-US", { weekday: "short" }));
-  const limited = live.filter((a) => a.limited && !a.credits).map((a) => ({ account: a.account, agent: a.agent, label: a.label, until: a.limited_until, reset: resetText(a.limited_until) }));
+  const limited = live.filter((a) => a.limited && !a.credits && !a.login).map((a) => ({ account: a.account, agent: a.agent, label: a.label, until: a.limited_until, reset: resetText(a.limited_until) }));
   // U4: out of credits is not free either; it has no reset, only the provider's link.
   const credits = live.filter((a) => a.credits).map((a) => ({ account: a.account, agent: a.agent, label: a.label, link: a.credits.link ?? null }));
-  const near = live.filter((a) => !a.limited && !a.credits && ((a.session_pct != null && a.session_pct > sMax) || (a.weekly_pct != null && a.weekly_pct > wMax)))
+  const login = live.filter((a) => a.login).map((a) => ({ account: a.account, agent: a.agent, label: a.label }));
+  const near = live.filter((a) => !a.limited && !a.credits && !a.login && ((a.session_pct != null && a.session_pct > sMax) || (a.weekly_pct != null && a.weekly_pct > wMax)))
     .map((a) => ({ account: a.account, agent: a.agent, label: a.label, session_pct: a.session_pct, weekly_pct: a.weekly_pct }));
-  const free = live.length - limited.length - credits.length;
-  return { total: live.length, free, limited, credits, near, level: live.length && free === 0 ? "crit" : limited.length || credits.length || near.length ? "warn" : "ok" };
+  const free = live.length - limited.length - credits.length - login.length;
+  return { total: live.length, free, limited, credits, login, near, level: live.length && free === 0 ? "crit" : limited.length || credits.length || login.length || near.length ? "warn" : "ok" };
 }
 
 // The Machine tile, section and text line (plan U4, KTD1/KTD6): the host sample the loop's machine
