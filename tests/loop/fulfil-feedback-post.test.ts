@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { LoopActuator } from "../../bin/loop/core/actuator.ts";
 import { FakeBackend as FakeOrca } from "../../bin/loop/fakes/orca.ts";
 import { feedback } from "../../bin/loop/fulfil/feedback.ts";
-import { feedbackOn, feedbackRepo, finalText } from "../../bin/loop/feedback/post.ts";
+import { feedbackOn, feedbackProjects, feedbackRepo, finalText } from "../../bin/loop/feedback/post.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 
@@ -195,6 +195,22 @@ describe("feedback-post", () => {
     expect(d(s, id).leak).toBe("blocked");
   });
 
+  test("a draft holding a note of a project that is off now is refused with no gh call", async () => {
+    const { s, tick } = rig();
+    delete process.env.DS_LIMIT_FEEDBACK;
+    s.upsert("config", { project: "", file: "limits.conf", key: "feedback" }, { value: "off", observed_at: T });
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "feedback" }, { value: "on", observed_at: T });
+    s.upsert("config", { project: "other", file: "limits.conf", key: "feedback" }, { value: "on", observed_at: T });
+    const id = draft(s);
+    note(s, id);
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "feedback" }, { value: "off", observed_at: T + 1 });
+    const req = file(s, "feedback-post", { draft: id });
+    await tick();
+    expect(request(s, req)).toMatchObject({ ok: false, error: expect.stringContaining("project fx has Feedback off") });
+    expect(calls()).toEqual([]);
+    expect(d(s, id).state).toBe("review");
+  });
+
   test("Feedback off refuses and leaves the draft in review", async () => {
     const { s, tick } = rig();
     process.env.DS_LIMIT_FEEDBACK = "off";
@@ -206,35 +222,32 @@ describe("feedback-post", () => {
     expect(d(s, id).state).toBe("review");
   });
 
-  test("feedbackOn: off by default; the env var, else the newest change by a person, not observed_at", () => {
+  test("feedbackOn: per project: the env var, else the project's row, else the default row", () => {
     const { s } = rig();
     delete process.env.DS_LIMIT_FEEDBACK;
+    delete process.env.DS_LIMIT_FEEDBACK_REPO;
     process.env.DS_FEEDBACK_ORIGIN = "https://github.com/o/n.git";
-    // a Settings change: the row, its history entry at `at`; the observer's sweep rewrites observed_at only
-    const row = (project: string, value: string, at: number) => {
-      s.upsert("config", { project, file: "limits.conf", key: "feedback" }, { value, observed_at: at });
-      s.db.query("INSERT INTO config_history (project, file, key, old_value, new_value, actor, at) VALUES (?, 'limits.conf', 'feedback', NULL, ?, 'board', ?)").run(project, value, at);
-    };
-    const sweep = (project: string, at: number) => s.db.query("UPDATE config SET observed_at = ? WHERE project = ? AND file = 'limits.conf' AND key = 'feedback'").run(at, project);
-    expect(feedbackOn(s)).toBe(false);
+    const row = (project: string, value: string) => s.upsert("config", { project, file: "limits.conf", key: "feedback" }, { value, observed_at: T });
+    expect(feedbackOn(s, "a")).toBe(false);
     expect(feedbackRepo(s)).toBeNull();
-    row("", "off", T);
-    expect(feedbackOn(s)).toBe(false);
-    row("a", "on", T + 10);
-    expect(feedbackOn(s)).toBe(true);
-    sweep("", T + 500); // the observer rewrites the default row with a newer observed_at
-    expect(feedbackOn(s)).toBe(true);
-    row("b", "off", T + 20);
-    expect(feedbackOn(s)).toBe(false);
+    row("", "off");
+    row("a", "on");
+    expect(feedbackOn(s, "a")).toBe(true);
+    expect(feedbackOn(s, "b")).toBe(false);
+    expect(feedbackProjects(s)).toEqual(["a"]);
+    expect(feedbackRepo(s)).toBe("o/n");
+    row("a", "off");
+    expect(feedbackProjects(s)).toEqual([]);
     expect(feedbackRepo(s)).toBeNull();
-    s.db.query("DELETE FROM config WHERE project = 'b' AND key = 'feedback'").run(); // b reset: back to a's on
-    expect(feedbackOn(s)).toBe(true);
-    s.db.query("DELETE FROM config WHERE project = 'a' AND key = 'feedback'").run(); // no project rows: the default
-    expect(feedbackOn(s)).toBe(false);
-    process.env.DS_LIMIT_FEEDBACK = "on";
-    expect(feedbackOn(s)).toBe(true);
+    row("", "on"); // the default row: every project without its own row, and notes with no project
+    expect(feedbackOn(s, "b")).toBe(true);
+    expect(feedbackOn(s, "a")).toBe(false);
+    expect(feedbackProjects(s)).toContain("");
     process.env.DS_LIMIT_FEEDBACK = "off";
-    expect(feedbackOn(s)).toBe(false);
+    expect(feedbackOn(s, "b")).toBe(false);
+    process.env.DS_LIMIT_FEEDBACK = "on";
+    expect(feedbackOn(s, "a")).toBe(true);
+    expect(feedbackProjects(s)).toContain("a");
   });
 
   test("feedback_repo: on takes the checkout's origin, an override beats it, a non-GitHub origin gives null", () => {

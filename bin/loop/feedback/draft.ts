@@ -2,8 +2,8 @@
 //
 //   (the repo itself comes from post.ts `feedbackRepo`, the one reader the board, drafter, observer and posts share)
 //   hostProject(store)        the project the drafter's pick and the Studio card belong to: the first
-//                             project the loop ticks (feedback is host-level; any project's board shows it)
-//   dueNotes(store, now, n)   the oldest `n` notes the drafter should see: `new`, and either never kept
+//                             project the loop ticks (the drafter is host-level; any project's board shows it)
+//   dueNotes(store, now, n)   the oldest `n` notes the drafter should see: from a project whose Feedback is on, `new`, and either never kept
 //                             or kept longer than DS_FEEDBACK_REDRAFT_S (a day) ago. A dismissed note,
 //                             or any other state, is never sent.
 //   draftKey(...)             a draft's idempotency key (`fd:` + 16 hex): its kind, target and notes
@@ -19,6 +19,7 @@ import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { discoverProjects, loopProjects } from "../settings/projects.ts";
 import type { Leak } from "./leak.ts";
+import { feedbackProjects } from "./post.ts";
 import type { Verdict } from "./prompt.ts";
 
 export function hostProject(store: Store): string | null {
@@ -29,9 +30,11 @@ export const redraftS = () => envInt("DS_FEEDBACK_REDRAFT_S", 86_400);
 const DUE = "state = 'new' AND (reason IS NULL OR updated_at <= ?)";
 
 export function dueNotes(store: Store, now: number, n: number, keys?: string[]): Row[] {
-  const args: (string | number)[] = [now - redraftS()];
-  let only = "";
-  if (keys) { only = ` AND key IN (${keys.map(() => "?").join(", ") || "NULL"})`; args.push(...keys); }
+  const on = feedbackProjects(store);
+  if (!on.length) return [];
+  const args: (string | number)[] = [now - redraftS(), ...on];
+  let only = ` AND COALESCE(project, '') IN (${on.map(() => "?").join(", ")})`;
+  if (keys) { only += ` AND key IN (${keys.map(() => "?").join(", ") || "NULL"})`; args.push(...keys); }
   return store.db.query(`SELECT * FROM feedback_notes WHERE ${DUE}${only} ORDER BY at, id LIMIT ?`).all(...args, n) as Row[];
 }
 

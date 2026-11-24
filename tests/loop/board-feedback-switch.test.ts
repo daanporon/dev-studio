@@ -4,7 +4,7 @@ import { afterAll, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { feedbackLine, feedbackSummary, limitsJson } from "../../bin/board/board-data.ts";
+import { feedbackJson, feedbackLine, feedbackSummary, limitsJson } from "../../bin/board/board-data.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import { open } from "../../bin/loop/core/store.ts";
 
@@ -41,4 +41,17 @@ test("limitsJson: feedback is an off|on select, feedback_repo is read-only and s
 test("the header facts and text line say why Feedback is not posting", () => {
   expect(feedbackLine({ ...feedbackSummary(null), notes: 2 })).toContain("off (turn Feedback on in Settings → Limits)");
   expect(feedbackLine({ ...feedbackSummary(null), switch: true, notes: 2 })).toContain("origin is not a GitHub repo");
+});
+
+test("per project: A's board reads on and B's reads off with A on; the select and the header agree on each", () => {
+  process.env.DS_FEEDBACK_ORIGIN = "https://github.com/example-org/dev-studio.git";
+  const { state, s } = rig();
+  s.upsert("config", { project: "a", file: "limits.conf", key: "feedback" }, { value: "on", observed_at: 5_000_000_000 });
+  const sel = (p: string) => (limitsJson(p, state).limits as any[]).find((l) => l.key === "feedback").value;
+  for (const [p, want] of [["a", true], ["b", false]] as const) {
+    const f = feedbackJson(state, p)!;
+    expect([f.switch, f.on, sel(p)]).toEqual([want, want, want ? "on" : "off"]);
+    expect(f.on).toBe(want);
+  }
+  s.close();
 });

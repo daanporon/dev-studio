@@ -237,3 +237,29 @@ test("parseAnswer: an add-to to an unknown issue, an already-fixed with no evide
   ]);
   expect(() => parseAnswer("I think these are fine.", input)).toThrow("not JSON");
 });
+
+// U10: the switch is per project: a project's notes are drafted only while its own switch is on.
+const sw = (f: ReturnType<typeof fixture>, project: string, value: string | null) => {
+  if (value === null) f.s.db.query("DELETE FROM config WHERE project = ? AND file = 'limits.conf' AND key = 'feedback'").run(project);
+  else f.s.upsert("config", { project, file: "limits.conf", key: "feedback" }, { value, observed_at: T });
+};
+const noteOf = (f: ReturnType<typeof fixture>, project: string, text: string, at: number) => String(addNote(f.s, { ...NOBODY, project, role: "builder" }, text, at).row.key);
+const keysOf = (acts: Action[]) => ((drafts(acts)[0]?.payload as { keys?: string[] } | undefined)?.keys ?? []).sort();
+
+test("A on and B off drafts only A's notes; env on drafts both", () => {
+  const f = fixture();
+  sw(f, "", "off"); sw(f, "pa", "on"); sw(f, "pb", "off");
+  const a = noteOf(f, "pa", "a snag", T - 20), b = noteOf(f, "pb", "b snag", T - 10);
+  expect(keysOf(reconciler.run(f.ctx()))).toEqual([a]);
+  process.env.DS_LIMIT_FEEDBACK = "on";
+  try { expect(keysOf(reconciler.run(f.ctx()))).toEqual([a, b].sort()); } finally { delete process.env.DS_LIMIT_FEEDBACK; }
+});
+
+test("a note with project '' follows the default row", () => {
+  const f = fixture();
+  sw(f, "", "off"); sw(f, "pa", "on");
+  const n = noteOf(f, "", "no project", T - 10);
+  expect(drafts(reconciler.run(f.ctx()))).toEqual([]);
+  sw(f, "", "on");
+  expect(keysOf(reconciler.run(f.ctx()))).toEqual([n]);
+});
