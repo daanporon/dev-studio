@@ -1,9 +1,8 @@
 # Trial: tmux (orca-backend-alternatives U16b)
 
-**Status: not run.** This page is the runbook and the empty record for the live trial. The live run waits for
-two things: the shadow exit (`docs/backends/shadow.md`, earliest 2026-11-30) and the operator's go for the trial
-project and the loop restart (the board question `trial-live-go`). Only the version-change drill below has run.
-Nothing under "Record" is filled in yet.
+**Status: partial (steps 1-5 run, step 6 skipped, step 7 not reached).** The live trial ran on 2026-11-24 with the operator's go.
+The crash and loop-restart steps passed; the trial squad's Builder never started, so no PR merged and Builder
+retirement was not exercised. See "Record" below.
 
 What this unit shipped so the trial can run:
 
@@ -116,16 +115,16 @@ The same trial as orca-lite (U16a), on plain git worktrees.
    - the backend calls per tick and tick times: `loop.sh --status`, and `ds events --kind tick_slow` over the run;
    - each failed contract call: `ds events` and the Studio cards.
 
-## Record (fill in when run)
+## Record (run 2026-11-24, partial)
 
-- Trial project and squad: _
-- Merged PR: _
-- Forced crash: time, member, restart event id (`member_started`), `shadow_crash` event id: _
-- Builder retirement (`want` event id, `gone`, `unit <slug> done`) and its time against the merge: _
-- Agent pids before and after the loop restart (from the two snapshots): _
-- Sessions and windows per squad (the tmux view of `orca worktree show`: `ds tmux-drill snapshot` → `windows`): _
-- `worktrees` rows before and after the upgrade: _
-- tmux version on the live server before and after the upgrade, and the client version after: _
-- Memory (tmux server RSS), backend calls per tick, tick times: _
-- Failures (contract calls, cards) and the fix or follow-up unit for each: _
-- Version-change result: see "Version-change drill" above; the live upgrade's outcome: _
+- Trial project and squad: dev-studio-public, squad `backend-pick-guide` (id 134, task: a "Which backend to pick" section in `docs/USAGE.md`), spawned 09:50:30Z on tmux (socket `-L ds-dev-studio-public`, server pid 2044300). Only that squad ran on tmux; `default_backend` went to `tmux` and back to `orca` in the same second. The roster was overridden to claude-only for the trial; U26 restores it.
+- Merged PR: none. The squad's one Builder (`u1-docs-usage-add-a`) never started work, so the squad produced no PR (step 7 not reached).
+- Forced crash: 10:42:33Z, member `thinker`; the loop restarted it (`member_started` #610666) and logged `shadow_crash` #610668.
+- Builder retirement (`want` event id, `gone`, `unit <slug> done`) and its time against the merge: not reached. No merge happened. The Builder window was `gone` twice within 30 minutes and the loop stopped restarting it (see Failures).
+- Agent pids before and after the loop restart (from the two snapshots): loop restart 10:44:17-10:45:02Z. Tmux server pid 2044300 and agent pids 2044334 (thinker), 2044367 (lead) and 3038652 were identical before and after. The agents survived the loop restart.
+- Sessions and windows per squad (the tmux view of `orca worktree show`: `ds tmux-drill snapshot` → `windows`): one session `backend-pick-guide` with windows `thinker`, `lead`, `builder-u1-docs-usage-add-a` (live check 14:50Z).
+- `worktrees` rows before and after the upgrade: not run (no live upgrade).
+- tmux version on the live server before and after the upgrade, and the client version after: 3.4 server and client; no upgrade was done.
+- Memory (tmux server RSS), backend calls per tick, tick times: server RSS about 7.9 MB (8.3 MB earlier); no `tick_slow` events from the trial squad; backend calls per tick not measured.
+- Failures (contract calls, cards) and the fix or follow-up unit for each: the Builder window of `backend-pick-guide` held a bare `bash` (pid 1729923) instead of `claude`. The loop's brief was typed into that shell and bash answered `syntax error near unexpected token '('`, so the Builder never started. The loop reported it was "sent its brief 2 times and never started", then "gone again within 30 min of a restart; the loop does not restart it again". The thinker and lead windows (claude) were healthy. Finding: on tmux a Builder window whose agent launch fails falls back to a shell and still looks alive to the backend, so the loop pastes the brief into a shell. Not restarted by hand, per the Lead. Follow-up for the Thinker: find why the Builder launch left a shell, and make the tmux backend report a pane whose foreground command is a shell as agent-gone.
+- Version-change result: see "Version-change drill" above; the live upgrade's outcome: not run.
