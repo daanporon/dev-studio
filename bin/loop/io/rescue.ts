@@ -6,7 +6,13 @@
 //     `DS_RESCUE_FOLDER_MB` (20) per folder; a page at the worktree's top takes only its top-level siblings;
 //   - each untracked or ignored `*.html` / `*.md` under `.lavish/`, `.scratch/`, `docs/plans/` and
 //     `docs/brainstorms/` (`git ls-files --others`, which lists ignored files too; `node_modules`, `.env*` and
-//     `CLAUDE.local.md` skipped). A file gone between the listing and its copy is skipped.
+//     `CLAUDE.local.md` skipped). A file gone between the listing and its copy is skipped;
+//   - (orca-worktree-cleanup U1) every other untracked or ignored file under `.scratch/` and `.lavish/`, whatever
+//     its extension, with the same skips (and symlinks, and anything not a regular file), sharing one budget per
+//     worktree, `DS_RESCUE_SCRATCH_MB` (64); a file that does not fit is counted in `capped`, not copied.
+// `secured` lists the paths under `.scratch/` and `.lavish/` whose bytes are now at the destination (copied this
+// time or already there, under the name or a numbered twin): wt-probe.ts counts those as ours, so close.ts can
+// remove a tree whose only extra files were these copies.
 // Copy only: nothing in the worktree is deleted or edited, and nothing at the destination is overwritten:
 // the same content already there (under its name or a numbered one) is skipped, different content is
 // written as `<name>.<n>.<ext>` (through a temp file and a hard link, so a replay never sees half a file).
@@ -20,6 +26,8 @@ import type { Store } from "../core/store.ts";
 
 export const NOTE_DIRS = [".lavish", ".scratch", "docs/plans", "docs/brainstorms"];
 const NOTE_EXT = /\.(html|md)$/i;
+/** The agent folders copied whole (orca-worktree-cleanup U1). */
+export const SCRATCH_DIRS = [".lavish", ".scratch"];
 // Never copied: dependencies, env files (secrets) and the role brief.
 const SKIP = ["node_modules/**", "**/node_modules/**", ".env", ".env.*", "**/.env", "**/.env.*", "CLAUDE.local.md", "**/CLAUDE.local.md"]
   .map((g) => `:(exclude,glob)${g}`);
@@ -27,6 +35,7 @@ const SKIP = ["node_modules/**", "**/node_modules/**", ".env", ".env.*", "**/.en
 export type Rescued = {
   ok: boolean; why?: string; dest: string;
   count: number; bytes: number; same: number; capped: number; listed: boolean; files: string[];
+  secured: string[];
 };
 
 export const rescueDest = (root: string, project: string, squad: string, label: string): string =>
@@ -42,10 +51,12 @@ export function sessionFiles(store: Store, path: string): string[] {
 
 const folderOf = (rel: string): string => rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
 const under = (rel: string, dir: string): boolean => dir === "" ? !rel.includes("/") : rel.startsWith(`${dir}/`);
-const capBytes = (): number => {
-  const v = Number(process.env.DS_RESCUE_FOLDER_MB);
-  return (Number.isFinite(v) && v > 0 ? v : 20) * 1024 * 1024;
+const mb = (env: string | undefined, dflt: number): number => {
+  const v = Number(env);
+  return (Number.isFinite(v) && v > 0 ? v : dflt) * 1024 * 1024;
 };
+const capBytes = (): number => mb(process.env.DS_RESCUE_FOLDER_MB, 20);
+const scratchBytes = (): number => mb(process.env.DS_RESCUE_SCRATCH_MB, 64);
 
 /** The size of a regular file (no symlink, no folder), or null. */
 async function sizeOf(p: string): Promise<number | null> {
@@ -80,14 +91,14 @@ async function place(src: string, dst: string): Promise<"copied" | "same"> {
 
 export async function rescuePages(store: Store, project: string, squad: string, label: string, path: string): Promise<Rescued> {
   const dest = rescueDest(store.root, project, squad, label);
-  const out: Rescued = { ok: true, dest, count: 0, bytes: 0, same: 0, capped: 0, listed: true, files: [] };
+  const out: Rescued = { ok: true, dest, count: 0, bytes: 0, same: 0, capped: 0, listed: true, files: [], secured: [] };
   const pages = sessionFiles(store, path);
   const folders = [...new Set(pages.map(folderOf))];
   const listed = await others(path, [...NOTE_DIRS, ...folders]);
   if (!listed) out.listed = false;
   const loose = listed ?? [];
   // The plan: per page folder the page itself always, then its untracked neighbours while under the cap.
-  const plan: { rel: string; size: number }[] = [], seen = new Set<string>(), cap = capBytes();
+  const plan: { rel: string; size: number }[] = [], seen = new Set<string>(), capped = new Set<string>(), cap = capBytes();
   for (const dir of folders) {
     let used = 0;
     for (const rel of pages.filter((p) => folderOf(p) === dir)) {
@@ -99,7 +110,7 @@ export async function rescuePages(store: Store, project: string, squad: string, 
       if (seen.has(rel)) continue;
       const size = await sizeOf(join(path, rel));
       if (size == null) continue;
-      if (used + size > cap) { out.capped++; continue; }
+      if (used + size > cap) { capped.add(rel); continue; }
       seen.add(rel); plan.push({ rel, size }); used += size;
     }
   }
@@ -107,18 +118,30 @@ export async function rescuePages(store: Store, project: string, squad: string, 
     if (seen.has(rel)) continue;
     const size = await sizeOf(join(path, rel));
     if (size == null) continue;
-    if (size > cap) { out.capped++; continue; }
-    seen.add(rel); plan.push({ rel, size });
+    if (size > cap) { capped.add(rel); continue; }
+    capped.delete(rel); seen.add(rel); plan.push({ rel, size });
   }
+  // The rest of the agent folders, any extension, under one budget for the worktree.
+  let left = scratchBytes();
+  for (const rel of loose.filter((f) => SCRATCH_DIRS.some((d) => under(f, d))).sort()) {
+    if (seen.has(rel)) continue;
+    const size = await sizeOf(join(path, rel));
+    if (size == null) continue;
+    if (size > left) { capped.add(rel); continue; }
+    capped.delete(rel); seen.add(rel); plan.push({ rel, size }); left -= size;
+  }
+  out.capped = capped.size;
+  const securable = (rel: string) => SCRATCH_DIRS.some((d) => under(rel, d));
   for (const { rel, size } of plan) {
     try {
-      if (await place(join(path, rel), join(dest, rel)) === "same") { out.same++; continue; }
+      if (await place(join(path, rel), join(dest, rel)) === "same") { out.same++; if (securable(rel)) out.secured.push(rel); continue; }
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err.code === "ENOENT" && !existsSync(join(path, rel))) continue;   // gone since the listing: nothing to keep
       return { ...out, ok: false, why: `${err.code ?? "error"} on ${rel}: ${String(err.message ?? e).split("\n")[0]}`.slice(0, 200) };
     }
     out.count++; out.bytes += size; out.files.push(rel);
+    if (securable(rel)) out.secured.push(rel);
   }
   return out;
 }
