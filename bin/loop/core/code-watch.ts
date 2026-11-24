@@ -9,6 +9,7 @@
 // that changes no loop code (docs, tests, the page, roles) is adopted with no restart. A failed git read
 // skips the check until the next one and never exits. Edits without a commit are not seen, on purpose:
 // roles never edit the host checkout.
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const CODE_CHECK_MS = 10_000;
@@ -20,6 +21,17 @@ export function codeWatchOn(stateRoot: string, root: string, env: Record<string,
   if (env.DS_LOOP_CODE_WATCH === "1") return true;
   if (env.DS_LOOP_CODE_WATCH === "0") return false;
   return resolve(stateRoot) === resolve(join(root, "state"));
+}
+
+// bin/commands/update-host-ts.ts holds the checkout while it runs (reset, install, maybe a reset back): no
+// restart then, so a failed install's rollback never finds a loop already on (and migrated to) the new commit.
+// update-host restarts the loop itself when it is done. A hold whose pid is gone counts for nothing.
+export function hostUpdateHold(stateRoot: string): string { return join(stateRoot, "loop", "host-update.hold"); }
+export function hostUpdateRunning(stateRoot: string): boolean {
+  let pid: number;
+  try { pid = Number(JSON.parse(readFileSync(hostUpdateHold(stateRoot), "utf8")).pid); } catch { return false; }
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as { code?: string }).code === "EPERM"; }
 }
 
 function git(repo: string, args: string[]): string | null {
@@ -58,7 +70,8 @@ export type CodeCheck =
 
 export class CodeWatch {
   private last: number;
-  constructor(readonly repo: string, public rev: string | null, readonly everyMs = CODE_CHECK_MS, at = Date.now()) {
+  constructor(readonly repo: string, public rev: string | null, readonly everyMs = CODE_CHECK_MS, at = Date.now(),
+    readonly held: () => boolean = () => false) {
     this.last = at;
   }
 
@@ -66,6 +79,7 @@ export class CodeWatch {
   check(at = Date.now()): CodeCheck | null {
     if (at - this.last < this.everyMs) return null;
     this.last = at;
+    if (this.held()) return { kind: "skip", why: "host update running" };
     const head = headRev(this.repo);
     if (!head) return { kind: "skip", why: "HEAD unreadable" };
     if (head === this.rev) return { kind: "same" };

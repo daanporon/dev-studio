@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CodeWatch, codeWatchOn, headRev, isLoopCode, loopCodeChanges } from "../../bin/loop/core/code-watch.ts";
+import { CodeWatch, codeWatchOn, headRev, hostUpdateHold, hostUpdateRunning, isLoopCode, loopCodeChanges } from "../../bin/loop/core/code-watch.ts";
 
 const MAIN = join(import.meta.dir, "..", "..", "bin", "loop", "main.ts");
 const dirs: string[] = [];
@@ -81,6 +81,28 @@ describe("code-watch", () => {
     const lost = new CodeWatch(r, "0".repeat(40), 10, 0);
     expect(lost.check(20)).toEqual({ kind: "skip", why: "diff failed" });
     expect(new CodeWatch(tmp("norepo"), boot, 10, 0).check(20)).toEqual({ kind: "skip", why: "HEAD unreadable" });
+  });
+});
+
+describe("host-update hold", () => {
+  test("a live update-host holds the restart; a hold whose pid is gone does not", () => {
+    const state = tmp("hold"), hold = hostUpdateHold(state);
+    expect(hostUpdateRunning(state)).toBe(false);
+    mkdirSync(join(state, "loop"), { recursive: true });
+    writeFileSync(hold, JSON.stringify({ pid: process.pid }));
+    expect(hostUpdateRunning(state)).toBe(true);
+    const r = repo(), boot = headRev(r)!;
+    let held = true;
+    const w = new CodeWatch(r, boot, 10, 0, () => held);
+    commit(r, { "bin/loop/x.ts": "export const x = 9;\n" });
+    expect(w.check(20)).toEqual({ kind: "skip", why: "host update running" });
+    held = false;
+    expect(w.check(40)?.kind).toBe("restart");
+    const dead = Bun.spawnSync(["true"]).pid;
+    writeFileSync(hold, JSON.stringify({ pid: dead }));
+    expect(hostUpdateRunning(state)).toBe(false);
+    writeFileSync(hold, "not json");
+    expect(hostUpdateRunning(state)).toBe(false);
   });
 });
 

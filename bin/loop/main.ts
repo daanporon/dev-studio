@@ -9,6 +9,7 @@
 // (core/code-watch.ts): between ticks, at most every 10 s, it reads HEAD again; a new commit whose diff
 // touches `bin/**/*.ts` (not tests, not fakes) or a migration drains the actuator, logs `loop_code_changed`
 // and exits 75, and systemd (Restart=on-failure) or the minutely `loop.sh --ensure` starts the new code.
+// Never while update-host holds the checkout (`loop/host-update.hold`): it restarts the loop itself.
 // A commit that changes only docs, tests, the page or roles is taken as the running rev, no restart. On by
 // default only on the live root (the checkout's own state/); DS_LOOP_CODE_WATCH=1 forces it on, =0 off,
 // DS_LOOP_CODE_ROOT (tests) names the repo to watch and DS_LOOP_CODE_CHECK_MS (tests) the interval.
@@ -20,7 +21,7 @@ import { dlopen, FFIType } from "bun:ffi";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { actuator } from "./core/actuator.ts";
-import { CODE_CHECK_MS, CodeWatch, codeWatchOn, headRev } from "./core/code-watch.ts";
+import { CODE_CHECK_MS, CodeWatch, codeWatchOn, headRev, hostUpdateRunning } from "./core/code-watch.ts";
 import { exportForRollback } from "./db/export-json.ts";
 import { stopAll } from "./fulfil/board.ts";
 import { migrateLoopFiles, reconcile } from "./db/migrate-host.ts";
@@ -82,7 +83,8 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stoppi
 const bootRev = headRev(ROOT);
 const codeRepo = process.env.DS_LOOP_CODE_ROOT || ROOT;
 const code = codeWatchOn(root, ROOT)
-  ? new CodeWatch(codeRepo, codeRepo === ROOT ? bootRev : headRev(codeRepo), Number(process.env.DS_LOOP_CODE_CHECK_MS) || CODE_CHECK_MS)
+  ? new CodeWatch(codeRepo, codeRepo === ROOT ? bootRev : headRev(codeRepo), Number(process.env.DS_LOOP_CODE_CHECK_MS) || CODE_CHECK_MS,
+    Date.now(), () => hostUpdateRunning(root))
   : null;
 // U248: what says a Run changed (its worktrees' terminals, its unread mail), read once at the start of a tick.
 async function signals() {
