@@ -37,6 +37,9 @@
 //   naming the next pick or wait, cleared when it clears.
 // U4 (provider-billing-fallback): an account out of credits with a member stuck on it (nowhere else to
 // go) gets one Needs-you card per account, from the workers looked at here (credits-card.ts).
+// claude-login-ended U2: an account whose login ended (login.ts: the probe's `login ended` note, or
+// Claude's `· Please run /login` line on a screen, kind `login`) is held host-wide; every member on it,
+// the Studio too, reads limited (kind `login`, no reset) while the hold lives, and moves like one.
 // The episode rows replace the sweep's .limit/.switch markers; loop/limited.json is
 // exported from them every tick for the board.
 import { alertId, alertPrefix } from "../core/actuator.ts";
@@ -55,6 +58,7 @@ import { liveAccount, liveOf } from "./record.ts";
 import { liveSquads } from "./liveness.ts";
 import { MOVE, STUDIO_SQUAD, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
 import { creditsHoldS, holdCredits, probeCredits } from "../capacity/credits.ts";
+import { heldNotice, holdLogin, isLoginKey, loginHold, LOGIN_HOLD_S, loginTold, probeLogin } from "../capacity/login.ts";
 import { creditsCards } from "../capacity/credits-card.ts";
 import { accountDisabled } from "../capacity/accounts.ts";
 
@@ -81,7 +85,8 @@ const hhmm = (t: number) => { const d = new Date(t * 1000); return `${String(d.g
 
 export type Worker = { m: Row | null; wt: string; state: string; since: number | null; lastOutput: number | null; tail: string; ow: Row;
   squad: string; role: string; suffix: string; who: string; key: string; agent: string; account: string; model: string; expired?: boolean; cleared?: boolean };
-type Limit = { reset: number | null; notice: string; dialog: boolean; kind: string; link?: string };
+// `probe`: a login limit read off the account's hold, not off this worker's screen (loginOf).
+type Limit = { reset: number | null; notice: string; dialog: boolean; kind: string; link?: string; probe?: true };
 export type Listed = { wt: string; who: string; topic: string; line: string; since: number; wait_until?: number; switching?: true };
 
 export function makeLimits(opts: { pick?: Picker } = {}): Reconciler {
@@ -103,6 +108,8 @@ function run(ctx: TickCtx, pick: Picker): Action[] {
   const actions: Action[] = [], listed: Listed[] = [], running: { w: Worker; studio: boolean }[] = [];
   // U2: an account whose usage probe notes `out of credits` is held before any member fails on it.
   try { probeCredits(store, P, t); } catch (e) { store.event("plugin_error", { project: P, payload: { plugin: "limits", at: "credits-probe", error: (e as Error)?.message ?? String(e) } }); }
+  // claude-login-ended U2: and one whose probe notes `login ended`.
+  try { probeLogin(store, P, t); } catch (e) { store.event("plugin_error", { project: P, payload: { plugin: "limits", at: "login-probe", error: (e as Error)?.message ?? String(e) } }); }
   const proj = store.get("projects", { label: P });
   const studioWt = (proj?.studio_wt as string) || "";
   const members = store.db.query(`SELECT * FROM members WHERE project = ? AND wt IS NOT NULL AND wt != '' AND COALESCE(status, '') != 'gone'
@@ -189,7 +196,7 @@ export function usageFor(store: Store, w: Worker, max: number, t: number, silent
 }
 
 function kindOf(r: LimitRow): string {
-  return r.kind === "credits" ? "credits" : r.dialog ? "dialog" : /429|cooling down/i.test(r.notice) ? "pool" : /weekly/i.test(r.notice) ? "weekly" : "notice";
+  return r.kind === "credits" || r.kind === "login" ? r.kind : r.dialog ? "dialog" : /429|cooling down/i.test(r.notice) ? "pool" : /weekly/i.test(r.notice) ? "weekly" : "notice";
 }
 
 // The notices accounts-refresh.sh's skip list calls the pool's, not the account's. Not kindOf's
@@ -211,9 +218,10 @@ function limitOf(ctx: TickCtx, w: Worker, S: { limitPct: number; silentMin: numb
   }
   if (r) {
     const lim = { ...r, kind: kindOf(r) };
-    if (lim.kind === "credits") {
+    if (lim.kind === "credits" || lim.kind === "login") {
       // U2: the operator (or the probe) cleared this account while the notice is still on screen: the
-      // old notice stays cleared; a new billing line (another request_id) opens a new episode.
+      // old notice stays cleared; a new billing line (another request_id) opens a new episode. Same for
+      // an ended login's line (claude-login-ended U2).
       const ep = store.get("episodes", { project: ctx.project, subject: w.wt, kind: "limited" });
       if (ep?.source === "loop" && ep.state === "cleared" && ep.episode_key === `${w.agent}/${w.account}|${lim.notice}`) { w.cleared = true; return null; }
       return lim;
@@ -252,6 +260,23 @@ function goneOf(ctx: TickCtx, w: Worker): Limit | null {
   return w.state !== "working" && w.state !== "waiting" && onRemoved(ctx.store, w, ctx.now) ? { reset: null, notice: `account ${w.m!.account} is no longer listed`, dialog: false, kind: "gone" } : null;
 }
 
+// claude-login-ended U2: the account it runs on has a live login hold (login.ts) and its own screen shows
+// no login line: it reads limited all the same, with no reset, so it moves off the account.
+function loginOf(ctx: TickCtx, w: Worker): Limit | null {
+  const account = w.m ? liveAccount(w.ow, w.m, ctx.now) : w.account;
+  if (!account || account === "-" || loginHold(ctx.store, w.agent, account, ctx.now) === null) return null;
+  return { reset: null, notice: heldNotice(w.agent, account), dialog: false, kind: "login", probe: true };
+}
+
+// A login episode cleared (login.ts clearLogin) whose "works again" tell has not gone out yet is kept
+// `cleared` for an hour, so the decider can send it (switches.ts okKey); the screen keeps one with its
+// line on screen anyway (limitOf).
+function keepLoginCleared(ctx: TickCtx, w: Worker): void {
+  const ep = ctx.store.get("episodes", { project: ctx.project, subject: w.wt, kind: "limited" });
+  if (ep?.state === "cleared" && isLoginKey(ep.episode_key) && ctx.now - Number(ep.ended_at ?? 0) < LOGIN_HOLD_S
+    && !loginTold(ctx.store, ctx.project, w.wt, ep)) w.cleared = true;
+}
+
 // provider-billing-fallback U5: the Studio's account is switched off (accounts.ts). Read like `gone`:
 // no reset and no stamp, so the account is held only by its switch, and it ends when it is switched on.
 function disabledOf(ctx: TickCtx, w: Worker): Limit | null {
@@ -269,15 +294,22 @@ const accountLimitKey = (agent: string, account: string) => ({ project: "", subj
 // not accounts-refresh's one-hour guess), host-wide as `credits|<agent>/<account>` (credits.ts). A later
 // billing line on the same member, while its credits episode is open, is the same hold: the episode
 // takes the new notice and keeps its start.
+// claude-login-ended U2: an ended login (kind login) holds the account through login.ts, renewed while its
+// line stays on screen (a limit read off the hold, `probe`, renews nothing); the episode's until is the
+// hold's end. Its line and the hold's notice on the same account are one episode, as for credits.
 function open(ctx: TickCtx, w: Worker, lim: Limit, S: { limitS: number; creditsS: number }): { until: number; first: number } {
   const { store, project: P, now: t } = ctx;
   const key = { project: P, subject: w.wt, kind: "limited" }, ek = `${w.agent}/${w.account}|${lim.notice}`;
   const ep = store.get("episodes", key);
-  const credits = lim.kind === "credits";
+  const credits = lim.kind === "credits", login = lim.kind === "login";
   const same = ep && ep.state !== "closed" && ep.state !== "expired" && ep.state !== "cleared"
-    && (ep.episode_key === ek || (credits && ep.state === "credits" && Number(ep.ended_at ?? 0) > t && String(ep.episode_key ?? "").startsWith(`${w.agent}/${w.account}|`)));
+    && (ep.episode_key === ek || ((credits || login) && ep.state === lim.kind && Number(ep.ended_at ?? 0) > t && String(ep.episode_key ?? "").startsWith(`${w.agent}/${w.account}|`)));
   const first = same ? Number(ep.started_at ?? t) : t;
-  const until = credits ? first + S.creditsS : accountUntil(store, w.wt, lim.notice) ?? lim.reset ?? first + S.limitS;
+  const acct = w.account && w.account !== "-" ? w.account : null;
+  if (login && !lim.probe && acct) holdLogin(store, { agent: w.agent, account: acct, from: "screen", project: P, notice: lim.notice }, t);
+  const until = credits ? first + S.creditsS
+    : login ? (acct ? loginHold(store, w.agent, acct, t) : null) ?? t + LOGIN_HOLD_S
+    : accountUntil(store, w.wt, lim.notice) ?? lim.reset ?? first + S.limitS;
   if (same && ep.episode_key !== ek) store.upsert("episodes", key, { episode_key: ek, observed_at: t });
   if (!same) {
     store.fact("limited", [{ table: "episodes", key, set: { squad: w.squad || null, started_at: t, ended_at: until, count: 1, state: lim.kind, episode_key: ek, source: "loop", observed_at: t, picked: null } }],
@@ -288,9 +320,10 @@ function open(ctx: TickCtx, w: Worker, lim: Limit, S: { limitS: number; creditsS
   const stamp = POOL_NOTICE.test(lim.notice) || lim.kind === "gone" || lim.kind === "disabled" ? null : until;
   // A worker moving away does not reset the account's allowance. Keep the block host-wide,
   // even if usage becomes unknown and the member's limited episode closes on its new account.
+  // An ended login is held by login.ts (above), not by a stamp here.
   if (credits && stamp > t && w.account && w.account !== "-") {
     holdCredits(store, { agent: w.agent, account: w.account, until: stamp, from: "screen", project: P, notice: lim.notice, link: lim.link }, t);
-  } else if (stamp && stamp > t && lim.kind !== "pool" && w.account && w.account !== "-") {
+  } else if (!login && stamp && stamp > t && lim.kind !== "pool" && w.account && w.account !== "-") {
     const acctKey = accountLimitKey(w.agent, w.account);
     const prev = store.get("episodes", acctKey);
     if (!prev || stamp > Number(prev.ended_at ?? 0)) {
@@ -342,8 +375,9 @@ function switching(store: Store, P: string, m: Row | null): boolean {
 }
 
 function member(ctx: TickCtx, w: Worker, S: Settings, actions: Action[], listed: Listed[]): void {
-  const lim = limitOf(ctx, w, S) ?? (S.live.has(w.squad) ? goneOf(ctx, w) : null);
+  const lim = limitOf(ctx, w, S) ?? (S.live.has(w.squad) ? goneOf(ctx, w) ?? loginOf(ctx, w) : null);
   if (!lim) {
+    keepLoginCleared(ctx, w);
     close(ctx, w);
     actions.push(...endWait(ctx, w));
     return;
@@ -387,7 +421,7 @@ function endWait(ctx: TickCtx, w: Worker): Action[] {
 
 function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Action[], listed: Listed[]): void {
   const { store, project: P, now: t } = ctx;
-  const lim = limitOf(ctx, w, S) ?? goneOf(ctx, w) ?? disabledOf(ctx, w);
+  const lim = limitOf(ctx, w, S) ?? goneOf(ctx, w) ?? disabledOf(ctx, w) ?? loginOf(ctx, w);
   // The sweep's .alerted memory (imported) holds the episodes it already alerted on.
   const alerted = (subject: string, episode: string) => {
     const a = store.get("episodes", { project: P, subject, kind: "alerted" });
@@ -444,8 +478,10 @@ function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Act
   // The held card's episode is this one plus "|held" (below), so strip that to keep one episode per limit.
   const last = previous?.replace(/\|held$/, "") ?? null;
   const ep = last?.startsWith(`${base}|`) && !cleared ? last : `${base}|${first}`;
-  const text = lim.kind === "gone" || lim.kind === "disabled" ? `Studio's ${lim.notice}` : `Studio is out of credits on ${w.agent}/${w.account || "-"} (${lim.notice})`;
-  const title = lim.kind === "gone" ? "Studio's account removed" : lim.kind === "disabled" ? "Studio's account switched off" : "Studio out of credits";
+  const text = lim.kind === "gone" || lim.kind === "disabled" ? `Studio's ${lim.notice}`
+    : lim.kind === "login" ? `Studio's account ${w.agent}/${w.account || "-"}: login ended`
+    : `Studio is out of credits on ${w.agent}/${w.account || "-"} (${lim.notice})`;
+  const title = lim.kind === "gone" ? "Studio's account removed" : lim.kind === "disabled" ? "Studio's account switched off" : lim.kind === "login" ? "Studio's login ended" : "Studio out of credits";
   const p = pick({ project: P, squad: "", role: "studio", suffix: "", limited: { agent: w.agent, account: w.account, until } }, ctx);
   if (p && "wait" in p) {
     alert("studio.limit", ep, { kind: "out_of_credits", title, text: `${text} — every account is out until ${hhmm(p.wait)}; the loop does not restart the Studio`,

@@ -10,7 +10,9 @@
 //             Out of credits (episode state `credits`, provider-billing-fallback U3) with nowhere
 //             to go -> no tell: "carry on" would be false, its next call fails the same way. Once
 //             the hold is cleared (credits.ts clearCredits: the probe or the operator) while it
-//             still runs on that account -> one "works again" tell (okKey).
+//             still runs on that account -> one "works again" tell (okKey). An ended login (state
+//             `login`, claude-login-ended U2) is the same: no tell while held, one "login works again"
+//             tell (key `login-ok|…`) once login.ts clearLogin ends the hold.
 //   account   (provider-billing-fallback U5) its live account is switched off (accounts.ts) and the
 //             pick, which leaves a disabled account out, lands elsewhere -> stop when idle. One stop
 //             per `account_disabled` event (the key carries its id): switching it off again later
@@ -41,6 +43,7 @@ import type { Target } from "../pause/pause.ts";
 import { accountDisabled } from "./accounts.ts";
 import { lastStart, view } from "../squad/member-state.ts";
 import type { Row, Store } from "../core/store.ts";
+import { isLoginKey, loginOkKey } from "./login.ts";
 
 export type SwitchWhy = "limit" | "account" | "fallback" | "phase" | "pin";
 export const SWITCH_WHYS: readonly string[] = ["limit", "account", "fallback", "phase", "pin"];
@@ -99,8 +102,9 @@ function flagged(m: Row): boolean {
 // (tellKey) carries the one "carry on". A pinned member is never moved by a limit.
 function limitFacts(store: Store, m: Row, w: Worker, ep: Row, now: number): Facts {
   const project = String(m.project);
-  // U3: an account out of credits gets no "carry on": nothing changes until its hold is cleared.
-  const tell = ep.state === "credits" ? null : tellKey(ep);
+  // U3: an account out of credits gets no "carry on": nothing changes until its hold is cleared. Nor
+  // one whose login ended (claude-login-ended U2).
+  const tell = ep.state === "credits" || ep.state === "login" ? null : tellKey(ep);
   if (overrideOf(store, m)) return { stop: null, tell, ok: null };
   const until = Number(ep.ended_at);
   const { tier, phase } = tierPhase(store, project, m);
@@ -124,11 +128,16 @@ function tellKey(ep: Row): string {
 // and the member still runs on that account. A member that moved, or wrote on (closed), gets none;
 // nor one already told, so a told member's act never holds back a due start, reload or clear. The
 // key carries the episode's start: Claude's and Codex's notices have no request id, so a second
-// 402 on the same account repeats the episode key.
+// 402 on the same account repeats the episode key. A cleared login episode (claude-login-ended U2) gets
+// the `login-ok|…` key instead (decide.ts tells "your account's login works again").
 function okKey(store: Store, m: Row, w: Worker): string | null {
   const wt = String(m.wt), ep = store.get("episodes", { project: m.project, subject: wt, kind: "limited" });
   if (ep?.state !== "cleared" || ep.source !== "loop" || !w.account) return null;
   if (!String(ep.episode_key ?? "").startsWith(`${w.agent}/${w.account}|`)) return null;
+  if (isLoginKey(ep.episode_key)) {
+    const key = loginOkKey(ep);
+    return toldAlready(store, String(m.project), wt, key, "login-ok") ? null : key;
+  }
   const key = `credits-ok|${String(ep.episode_key)}@${Number(ep.started_at)}`;
   return toldAlready(store, String(m.project), wt, key, "credits-ok") ? null : key;
 }
@@ -255,7 +264,8 @@ export function limitStuck(store: Store, m: Row, now: number): boolean {
   return dialog || silent;
 }
 
-// The tell key's wake row already told it: the tell went out once (`reason` credits-ok: U3's).
+// The tell key's wake row already told it: the tell went out once (`reason` credits-ok: U3's; login-ok:
+// claude-login-ended U2's).
 export function toldAlready(store: Store, project: string, wt: string, key: string, reason = "limit"): boolean {
   return store.get("episodes", { project, subject: wt, kind: `wake:${reason}` })?.episode_key === key;
 }

@@ -188,6 +188,7 @@ export const FACTS = {
   service_starting: obj({ ...svc, pid: opt(num) }),
   service_stopped: obj({ ...svc, gone: opt(bool) }),
   account_credits_held: obj({ agent: str, account: str, until: opt(num), from: opt(str), notice: opt(str), link: opt(str) }),
+  account_login_ended: obj({ agent: str, account: str, from: opt(str), notice: opt(str) }),
   spend: obj({ squads: opt(num) }),
   squad_run: obj({ id: num, run_id: str }),
   squad_state: obj({ cmd: opt(str), args: opt(arr(any)) }),
