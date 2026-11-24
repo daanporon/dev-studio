@@ -49,9 +49,10 @@
 //                 shared activity state, answered 200; the loop owns checkpoint/close/start
 //   /api/poke     {project, topic}  `poke`: a wake-up line typed into a quiet Lead's terminal
 //   GET /api/feedback, POST /api/feedback {action: post|add-to|edit|dismiss|restore, draft|note, …}  the Feedback panel (U4)
+//   /api/keys     {project, topic, wt, keys}  `keys`: 1-8 named keys pressed in the member's terminal, even while it works (409: paused, or a press still open)
 //   /api/chat-cancel, /api/chat-now  {project, id}  `chat-cancel`/`chat-now` of an open chat request (409: already typed)
-//   /api/chat     {project, topic, wt, text, files?}  `chat`: one line (no newline or control character, at most
-//                 2000 characters) the loop types into that live, unpaused member's terminal once it is ready;
+//   /api/chat     {project, topic, wt, text, files?}  `chat`: a message of at most 2000 characters, line breaks and
+//                 tabs allowed (CR LF read as LF; no other control character, U19) the loop types into that live, unpaused member's terminal once it is ready;
 //                 `files` names up to 4 stored chat images (text may then be empty; a gone one is 409)
 //   /api/chat-file?project=&topic=&wt=  the raw bytes of one PNG/JPEG/WebP/GIF (Content-Type the image's, at
 //                 most 5 MiB, magic bytes checked) for a live member (topic `_start` and no wt: for a squad
@@ -81,6 +82,7 @@ import { isTestProject } from "../loop/settings/projects.ts";
 import { BACKEND_NAMES } from "../backend/registry.ts";
 import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
+import { KEYS, KEYS_MAX, keyOk } from "../loop/chat/keys.ts";
 import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
 import { skillsJson } from "./skills-data.ts";
@@ -321,14 +323,15 @@ function chatGet(url: URL) {
 
 // POST /api/chat {project, topic, wt, text}: one `chat` request; the loop types
 // `dev-studio board, the operator says: <text>` into the member's own agent terminal once it is ready
-// (fulfil/chat.ts). One line only: a newline or control character is refused, never flattened.
+// (fulfil/chat.ts). U19: the text may span lines (CR LF and CR become LF, tabs kept; the backend pastes
+// it as one message); any other control character is refused, never flattened.
 async function chatPost(req: Request) {
   const pr = await readPost(req);
   if ("r" in pr) return pr.r;
   const t = chatTarget(pr.b.project, pr.b.topic, pr.b.wt);
   if ("error" in t) return json(t.status, { error: t.error });
-  const raw = pr.b.text;
-  if (typeof raw !== "string" || /[\x00-\x1f\x7f-\x9f]/.test(raw)) return json(400, { error: "one line of text, no newlines or control characters" });
+  const raw = typeof pr.b.text === "string" ? pr.b.text.replace(/\r\n?/g, "\n") : null;
+  if (raw === null || /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(raw)) return json(400, { error: "text, no control characters but line breaks and tabs" });
   const files = pr.b.files ?? [];
   if (!Array.isArray(files) || files.length > CHAT_FILES_PER_SEND || new Set(files).size !== files.length
     || files.some((f) => typeof f !== "string" || !CHAT_FILE_NAME.test(f)))
@@ -389,6 +392,26 @@ async function feedbackPost(req: Request) {
     if (action === "edit") { if (title !== undefined) payload.title = title; if (body !== undefined) payload.body = body; }
     if (action === "dismiss" && why?.trim()) payload.why = why.trim();
     return board(s, kind, payload, { project });
+  });
+}
+
+// POST /api/keys {project, topic, wt, keys} (U19): one `keys` request pressing 1 to KEYS_MAX named keys
+// (contract.ts KEYS, or one digit or lowercase letter) in the member's terminal with no Enter added; the
+// loop presses them even while the member works (fulfil/keys.ts), so Escape stops a turn and Up/Down/Enter
+// or a digit picks in a menu. 409 for a paused member and while an earlier press for it is still open.
+async function keysPost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const t = chatTarget(pr.b.project, pr.b.topic, pr.b.wt);
+  if ("error" in t) return json(t.status, { error: t.error });
+  const keys = pr.b.keys;
+  if (!Array.isArray(keys) || !keys.length || keys.length > KEYS_MAX || !keys.every(keyOk))
+    return json(400, { error: `keys: 1 to ${KEYS_MAX} of ${KEYS.join(", ")}, or one digit or lowercase letter` });
+  return write((s) => {
+    const m = chatMember(s, t.project, t.topic, t.wt) ?? no(404, noMember(t));
+    if (t.topic !== "_studio" && paused(s, m as { project: string })) no(409, "this member is paused or resuming");
+    if (one(s, "SELECT id FROM requests WHERE kind = 'keys' AND project = ? AND member = ? AND done_at IS NULL", t.project, t.wt)) no(409, "an earlier key press is still on its way");
+    return board(s, "keys", { keys, via: "board" }, { project: t.project, squad: t.topic, member: t.wt });
   });
 }
 
@@ -1210,6 +1233,7 @@ async function handle(req: Request) {
   if (path === "/api/settings-import" && req.method === "POST") return settingsImportPost(req);
   if (path === "/api/chat" && req.method === "POST") return chatPost(req);
   if (path === "/api/feedback" && req.method === "POST") return feedbackPost(req);
+  if (path === "/api/keys" && req.method === "POST") return keysPost(req);
   if (path === "/api/chat-cancel" && req.method === "POST") return chatControl(req, "chat-cancel");
   if (path === "/api/chat-now" && req.method === "POST") return chatControl(req, "chat-now");
   if (req.method !== "GET" && req.method !== "HEAD") return text(405, "GET only\n");

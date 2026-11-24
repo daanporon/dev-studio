@@ -3041,8 +3041,10 @@ function chatCrew(db: Db, project: string, topic: string) {
 }
 
 // GET /api/chat: one member's recent turns (observed_chat, redacted and capped by the loop) and its last
-// 10 chat requests, newest last. Nothing else: no transcript, file or screen is read here. null: no
-// loop.db; {missing: true}: no such live member.
+// 10 chat requests, newest last. U19: `screen` {tail, at, age_s} is the loop's newest screen read (redacted
+// by the loop): observed_workers.tail by worktree, the Studio's observed_terminals.tail by its adopted handle;
+// null when none. Nothing else: no transcript, file or terminal is read here. null: no loop.db;
+// {missing: true}: no such live member.
 export function chatJson(o: { project: string; topic: string; wt: string }, root = stateRoot()) {
   return withDb((db) => {
     const m = chatMember(db, o.project, o.topic, o.wt);
@@ -3055,12 +3057,16 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     const firstQueued = sends.find((x) => x.state === "queued");
     if (firstQueued) firstQueued.first = true;
     // Mid-turn, as the board's crew row reads it (observed_workers.state), for the panel's "Working…" line.
-    const w = db.one("SELECT state, gone_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
+    const w = db.one("SELECT state, gone_at, tail, tail_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
+    const t = o.topic === "_studio" ? db.one(`SELECT t.tail, t.tail_at FROM observed_terminals t JOIN members m ON m.project = t.project AND m.handle = t.handle
+      WHERE t.project = ? AND t.gone_at IS NULL AND m.squad = '_studio' AND m.role = 'studio' ORDER BY m.id DESC`, o.project) : w?.gone_at == null ? w : null;
+    const now = Math.floor(Date.now() / 1000), tailAt = t?.tail_at == null ? null : Number(t.tail_at);
     return {
       crew: chatCrew(db, o.project, o.topic),
       agent: (c?.agent as string | null) ?? (m.agent as string | null) ?? null, source: (c?.source as string | null) ?? null,
       turns: c && c.gone_at == null ? (parse(String(c.turns ?? "[]")) ?? []) : [], updated_at: c?.updated_at == null ? null : Number(c.updated_at),
       working: w?.gone_at == null && w?.state === "working", sends,
+      screen: t && t.tail != null ? { tail: String(t.tail), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
     };
   }, root);
 }

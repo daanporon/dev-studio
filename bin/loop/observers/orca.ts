@@ -299,6 +299,7 @@ export const mangle = (p: string) => p.replace(/[^A-Za-z0-9]/g, "-");
 export const prefix = () => process.env.DS_PREFIX || "ds-";
 const TAILS = 8; // screen reads in flight at once
 const STUDIO_SETTLE_S = 5; // the Studio's screen is re-read once its output has rested this long
+const SCREEN_EVERY_S = 3; // U19: a watched member's screen (board keys, a screen-only chat) is re-read at most this often
 
 // The project's worktree ids besides its directory rows: members, the Studio, and the name prefix.
 // A worktree belongs to one project: a name that also starts with a longer label's prefix
@@ -379,6 +380,11 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
       // A member with a board chat queued (fulfil/chat.ts) is re-read like the Studio below: once its
       // output moved past the last read and rested STUDIO_SETTLE_S, so memberReady() sees the prompt it settled on.
       const chatting = new Set((store.db.query("SELECT DISTINCT member FROM requests WHERE project = ? AND kind = 'chat' AND done_at IS NULL AND member IS NOT NULL").all(project) as Row[]).map((r) => String(r.member)));
+      // U19: a member the board pressed keys at within the last minute, or one whose chat panel shows its screen
+      // (observed_chat source 'screen'), is re-read once its output moved past the last read, at most every SCREEN_EVERY_S,
+      // so the panel's screen view follows a menu as it changes.
+      const watched = new Set((store.db.query(`SELECT member AS wt FROM requests WHERE project = ? AND kind = 'keys' AND member IS NOT NULL AND created_at >= ?
+        UNION SELECT wt FROM observed_chat WHERE project = ? AND source = 'screen' AND gone_at IS NULL`).all(project, now - 60, project) as Row[]).map((r) => String(r.wt)));
       store.tx(() => {
         for (const w of mine) {
           const path = pathOf(w), d = byWt.get(w.worktreeId), state = workerState(w);
@@ -392,7 +398,8 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
           const prev = store.get("observed_workers", { project, wt: w.worktreeId });
           const out = secs(w.lastOutputAt) ?? 0;
           if (!prev || prev.tail_at == null || prev.gone_at != null || prev.state !== state || prev.tokens !== tokens || prev.suspect
-            || (chatting.has(w.worktreeId) && out >= Number(prev.tail_at) && now - out >= STUDIO_SETTLE_S)) tails.push(w.worktreeId);
+            || (chatting.has(w.worktreeId) && out >= Number(prev.tail_at) && now - out >= STUDIO_SETTLE_S)
+            || (watched.has(w.worktreeId) && out > Number(prev.tail_at) && now - Number(prev.tail_at) >= SCREEN_EVERY_S)) tails.push(w.worktreeId);
           // The main agent (U149) and its sub-agents refresh on the walk's cadence and are kept when a
           // read fails; sub_agents is NULL once none are live, so a sub line never overwrites `account`.
           let ran: Row = procs === "failed" ? { walk: "unknown" } : {};

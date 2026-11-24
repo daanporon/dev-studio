@@ -22,7 +22,8 @@ test("an unknown request kind and a wrong payload are refused naming kind and fi
   const s = mk();
   expect(() => s.requestAny("no-such-kind", {}, { project: "fx" })).toThrow(/unknown request kind 'no-such-kind'/);
   expect(() => s.requestAny("keys", { text: 5 }, { project: "fx" })).toThrow(/request kind 'keys'.*payload\.text must be a string/);
-  expect(() => s.requestAny("keys", {}, { project: "fx" })).toThrow(/payload\.text is required/);
+  expect(() => s.requestAny("poke", {}, { project: "fx" })).toThrow(/payload\.text is required/);
+  expect(() => s.requestAny("keys", { keys: ["Escape", 1] }, { project: "fx" })).toThrow(/payload\.keys\[1\] must be a string/);
   expect(n(s, "requests")).toBe(0);
   expect(n(s, "events")).toBe(0);
 });

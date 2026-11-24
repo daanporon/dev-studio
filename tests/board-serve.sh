@@ -1058,11 +1058,15 @@ eq "chat: a Studio chat row"           "$(reqrow "$(rid)" | jq -c '[.member, .sq
 N1=$(crows)
 eq "chat: foreign Origin is 403"       "$(post -H 'Origin: http://evil.example' -H "$CT" -d "$(cbody wTh hi)" "$C")" "403"
 eq "chat: not JSON is 415"             "$(post -H "$O" -H 'Content-Type: text/plain' -d "$(cbody wTh hi)" "$C")" "415"
-eq "chat: two lines are 400"           "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'one\ntwo')")" "$C")" "400"
-eq "chat: a control character is 400"  "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\tb')")" "$C")" "400"
+eq "chat: a control character is 400"  "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\ab')")" "$C")" "400"
+eq "chat: an escape character is 400"  "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\033[2Jb')")" "$C")" "400"
 eq "chat: blank is 400"                "$(post -H "$O" -H "$CT" -d "$(cbody wTh '   ')" "$C")" "400"
 eq "chat: 2001 characters are 400"     "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(head -c 2001 /dev/zero | tr '\0' x)")" "$C")" "400"
 eq "chat: 2000 characters are fine"    "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'é%.0s' $(seq 2000))")" "$C")" "202"
+N1=$((N1 + 1))
+# board chat U19: a message may span lines (CR LF and CR read as LF) and hold tabs; the loop pastes it whole.
+eq "chat: two lines with a tab are 202" "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'one\r\n\ttwo\rthree')")" "$C")" "202"
+eq "chat: kept with its line breaks"   "$(reqrow "$(rid)" | jq -c '.payload.text')" '"one\n\ttwo\nthree"'
 N1=$((N1 + 1))
 eq "chat: an unknown member is 404"    "$(post -H "$O" -H "$CT" -d "$(cbody nope hi)" "$C")" "404"
 eq "chat: a bad squad name is 400"     "$(post -H "$O" -H "$CT" -d "$(cbody wTh hi '../x')" "$C")" "400"
@@ -1071,7 +1075,7 @@ eq "chat: a gone member is 404"        "$(post -H "$O" -H "$CT" -d "$(cbody wRev
 eq "chat: pause the researcher"        "$(post -H "$O" -H "$CT" -d "{\"scope\":\"member\",\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wResearcher\"}" "http://127.0.0.1:$PORT/api/pause")" "200"
 eq "chat: a paused member is 409"      "$(post -H "$O" -H "$CT" -d "$(cbody wResearcher hi)" "$C")" "409"
 eq "chat: no refused POST wrote a row" "$(crows)" "$N1"
-eq "chat: rows written: three plus the 2000-char one" "$((N1 - N0))" "4"
+eq "chat: rows written: three, the 2000-char one and the multi-line one" "$((N1 - N0))" "5"
 # studio-chat-queued-busy U4: /api/chat-cancel and /api/chat-now name an open chat request; a send carries its age and clock.
 CX="http://127.0.0.1:$PORT/api/chat-cancel"; CN="http://127.0.0.1:$PORT/api/chat-now"
 cid(){ jq -nc --arg p "$LBL" --argjson i "$1" '{project: $p, id: $i}'; }
@@ -1088,6 +1092,32 @@ eq "chat-cancel: a typed chat is 409"   "$(post -H "$O" -H "$CT" -d "$(cid "$CH"
 eq "chat-now: a typed chat is 409"      "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CN")" "409"
 eq "chat-now: no such request is 404"   "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CN")" "404"
 eq "chat-now: a bad id is 400"          "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"id\":\"x\"}" "$CN")" "400"
+# board chat U19: POST /api/keys files one `keys` request {keys, via: "board"} for a live member, one open per member;
+# GET /api/chat carries the member's newest screen read as `screen`.
+K="http://127.0.0.1:$PORT/api/keys"
+kbody(){ jq -nc --arg p "$LBL" --arg t "${3:-ans}" --arg w "$1" --argjson k "$2" '{project: $p, topic: $t, wt: $w, keys: $k}'; }
+krows(){ dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'keys'" | jq '.[0].n'; }
+K0=$(krows)
+eq "keys: Escape to a live member is 202" "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Escape"]')" "$K")" "202"
+KR=$(rid)
+eq "keys: one keys row with member and squad" "$(reqrow "$KR" | jq -c '[.kind, .member, .squad, .payload.keys, .payload.via]')" '["keys","wTh","ans",["Escape"],"board"]'
+eq "keys: a second press while one is open is 409" "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Down"]')" "$K")" "409"
+dbw "UPDATE requests SET done_at = 1 WHERE id = $KR"
+eq "keys: arrows, Enter and a digit are 202" "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Down","Down","Enter"]')" "$K")$(post -H "$O" -H "$CT" -d "$(kbody wStudio '["2"]' _studio)" "$K")" "202202"
+dbw "UPDATE requests SET done_at = 1 WHERE kind = 'keys' AND done_at IS NULL"
+K1=$(krows)
+eq "keys: an unknown key is 400"       "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Delete"]')" "$K")" "400"
+eq "keys: two characters are 400"      "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["12"]')" "$K")" "400"
+eq "keys: none is 400"                 "$(post -H "$O" -H "$CT" -d "$(kbody wTh '[]')" "$K")" "400"
+eq "keys: nine are 400"                "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Up","Up","Up","Up","Up","Up","Up","Up","Up"]')" "$K")" "400"
+eq "keys: a string is 400"             "$(post -H "$O" -H "$CT" -d "$(kbody wTh '"Escape"')" "$K")" "400"
+eq "keys: an unknown member is 404"    "$(post -H "$O" -H "$CT" -d "$(kbody nope '["Escape"]')" "$K")" "404"
+eq "keys: a paused member is 409"      "$(post -H "$O" -H "$CT" -d "$(kbody wResearcher '["Escape"]')" "$K")" "409"
+eq "keys: foreign Origin is 403"       "$(post -H 'Origin: http://evil.example' -H "$CT" -d "$(kbody wTh '["Escape"]')" "$K")" "403"
+eq "keys: no refused POST wrote a row" "$(krows)$((K0 + 3))" "$K1$K1"
+eq "chat: no screen read yet is null"  "$(cq ans wTh)$(jq -c '.screen' "$TMP/chat.out")" "200null"
+dbw "UPDATE observed_workers SET tail = 'Pick one:' || char(10) || '❯ 1. Yes', tail_at = CAST(strftime('%s','now') AS INTEGER) - 3 WHERE project = '$LBL' AND wt = 'wTh'"
+jt "chat: the screen read with its age" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '.screen.tail == "Pick one:\n❯ 1. Yes" and .screen.age_s >= 3 and .screen.age_s < 60 and .screen.at > 0'
 # ds-feedback-github-issues U4: GET /api/feedback lists drafts and notes; POST /api/feedback files one request per action.
 FBU="http://127.0.0.1:$PORT/api/feedback"
 dbw "INSERT INTO feedback_drafts (id, key, kind, title, body, leak, state, created_at, updated_at) VALUES (901, 'fd:s1', 'issue', 'Serve one', 'Body', 'ok', 'review', 1, 1), (902, 'fd:s2', 'issue', 'Serve two', 'Body', 'ok', 'filed', 1, 1)"

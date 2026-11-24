@@ -326,13 +326,93 @@ describe("chat fulfiller", () => {
     expect(s.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'chat'").get()).toEqual({ n: 0 });
   });
 
-  test("multi-line text is refused and the request fails", async () => {
+  test("U19: a multi-line chat is typed whole in one poke, the crew line flattened; another control character fails", async () => {
     const s = imported(), { orca, tick } = rig(s);
     idleAt(s, B, T);
-    const id = chat(s, "two\nlines");
+    const id = chat(s, "two\nlines\n\tindented");
     await tick(T);
-    expect(orca.of("poke").length).toBe(0);
+    expect(typed(orca)).toEqual([`${SAYS}two\nlines\n\tindented`]);
+    expect(result(s, id)).toMatchObject({ ok: true });
+    expect(crewLog(s)).toContain("operator → demo/builder-u1-spike-loop-as-coordinator: two ↵ lines ↵ indented\n");
+    const bad = chat(s, "bell\u0007", B, T + 1);
+    await tick(T + 2);
+    expect(typed(orca)).toHaveLength(1);
+    expect(result(s, bad)).toMatchObject({ ok: false });
+  });
+});
+
+// U19: the board's key strip. A `keys` request {keys, via: "board"} presses named keys with no Enter added,
+// through the member's driver (the adapter's `keys` by worktree) or the Studio's adopted handle, even while
+// the member works; a stale press or a gone terminal fails at once, never retried; a paused member's waits.
+describe("board keys", () => {
+  function press(s: Store, keys: string[], member = B, at = T, squad = "demo"): number {
+    const id = Number(s.request("keys", { keys, via: "board" }, { project: "fx", squad, member }).row.id);
+    s.db.run("UPDATE requests SET created_at = ? WHERE id = ?", [at, id]);
+    return id;
+  }
+
+  test("Escape reaches a working member at once as its byte, with no Enter", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    working(s, B, T);
+    const id = press(s, ["Escape"]);
+    await tick(T);
+    expect(orca.of("keys").map((c) => c.args)).toEqual([[B, "\x1b"]]);
+    expect(result(s, id)).toEqual({ ok: true, state: "sent", keys: ["Escape"] });
+    expect(req(s, id).done_at).toBe(T);
+  });
+
+  test("arrows and a digit pick in a menu, in order, in one send", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    idleAt(s, B, T);
+    press(s, ["Down", "Down", "Enter"]);
+    await tick(T);
+    press(s, ["2"], B, T + 1);
+    await tick(T + 1);
+    expect(orca.of("keys").map((c) => c.args[1])).toEqual(["\x1b[B\x1b[B\r", "2"]);
+  });
+
+  test("a press filed over a minute ago or to a gone terminal fails; one to a paused member waits and goes stale; nothing is pressed", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    idleAt(s, B, T);
+    const stale = press(s, ["Escape"], B, T - 61);
+    await tick(T);
+    expect(result(s, stale)).toEqual({ ok: false, error: "not pressed: filed 61 s ago" });
+    pause(s, { scope: "squad", project: "fx", squad: "demo" }, {}, T);
+    const held = press(s, ["Escape"], B, T + 1);
+    await tick(T + 1);
+    expect(req(s, held).done_at).toBeNull();
+    resume(s, { scope: "squad", project: "fx", squad: "demo" }, T + 2);
+    await tick(T + 70);
+    expect(result(s, held)).toEqual({ ok: false, error: "not pressed: filed 69 s ago" });
+    s.upsert("observed_workers", { project: "fx", wt: B }, { gone_at: T + 70 });
+    const gone = press(s, ["Escape"], B, T + 71);
+    await tick(T + 71);
+    expect(result(s, gone)).toEqual({ ok: false, error: "no live terminal" });
+    expect(orca.of("keys")).toHaveLength(0);
+  });
+
+  test("a refused press fails once with the adapter's error and is not pressed again", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    working(s, B, T);
+    orca.fail("keys", { code: 1, out: "", err: "no such terminal" });
+    const id = press(s, ["Escape"]);
+    await tick(T);
+    await tick(T + 5);
+    expect(orca.of("keys")).toHaveLength(1);
     expect(result(s, id)).toMatchObject({ ok: false });
+    expect(String(result(s, id).error)).toContain("no such terminal");
+  });
+
+  test("the Studio's keys go to its adopted handle, also while it works", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    s.db.run("UPDATE requests SET done_at = ? WHERE project = 'fx' AND key LIKE 'file:fx/_studio/%'", [T]);
+    s.upsert("members", { project: "fx", squad: "_studio", wt: STUDIO }, { role: "studio", suffix: "", agent: "claude", handle: "term_s1", status: "running", observed_at: T, updated_at: T });
+    s.upsert("observed_terminals", { project: "fx", handle: "term_s1" }, { wt: STUDIO, title: "claude", tail: "│ ❯ │\n  esc to interrupt\n", tail_at: T,
+      doc: JSON.stringify({ agent: true, identity: "claude", last_output_at: T, unread: 0 }), observed_at: T, gone_at: null });
+    const id = press(s, ["Escape"], STUDIO, T, "_studio");
+    await tick(T);
+    expect(orca.of("keys").map((c) => c.args)).toEqual([["term_s1", "\x1b"]]);
+    expect(result(s, id)).toMatchObject({ ok: true, state: "sent" });
   });
 });
 

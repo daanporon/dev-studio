@@ -62,6 +62,17 @@ describe("memberReady", () => {
     }
   });
 
+  test("U19: `interrupt` (board keys) needs only a live terminal: every other guard lets it through", () => {
+    const s = idle();
+    set(s, { state: "working", last_output_at: T - 1, tail: "Running…\n  esc to interrupt\n", tail_at: T - 20, unread: 3 });
+    s.request("poke", { text: "hi" }, { project: "fx", squad: "demo", member: B });
+    expect(ready(s)).toEqual({ ready: false, why: "busy: working" });
+    expect(ready(s, { interrupt: true, quietS: 0 })).toEqual({ ready: true, why: "live terminal" });
+    set(s, { gone_at: T - 5 });
+    expect(ready(s, { interrupt: true })).toEqual({ ready: false, why: "no live terminal" });
+    expect(ready(s, { interrupt: true, handle: "term_none" })).toEqual({ ready: false, why: "terminal term_none is gone" });
+  });
+
   test("a closed picker, an answered question and another member's rows do not block", () => {
     const s = idle();
     s.db.run("INSERT INTO questions (id, project, squad, asker, status, doc) VALUES ('q1', 'fx', 'demo', ?, 'open', ?)", [B, JSON.stringify({ tool_use_id: "toolu_1" })]);

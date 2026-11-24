@@ -2,7 +2,7 @@
 // --continue` in the member's worktree (backend worker-resume), on the account the handoff chose.
 import { ROOT } from "../core/store.ts";
 import { HOSTING_ROLES, RESTART_HOSTING_NOTE } from "../squad/handoff.ts";
-import { failed, pokeVia, standingNote, startVia, stopVia, windowOf, type Driver, type DriverModule, type Seat } from "./types.ts";
+import { failed, keysVia, pokeVia, standingNote, startVia, stopVia, windowOf, type Driver, type DriverModule, type Seat } from "./types.ts";
 
 // Menus Claude Code stops on, and the key that answers each: the usage-limit dialog ("1. Stop and
 // wait" — the loop moves the session itself) and the folder-trust prompt ("1. Yes, proceed").
@@ -30,6 +30,7 @@ export const claude: DriverModule = {
         return o.code === 0 ? { ok: true, wt: m.wt } : failed(o, "worker-resume");
       },
       poke: (m, text) => pokeVia(seat, m, text),
+      keys: (m, keys) => keysVia(seat, m, keys),
       stop: (make, m, run, keep) => stopVia(make, m, run, keep),
       answerMenu,
     };

@@ -2,12 +2,13 @@
 //   start(member, model, account, prompt)   a fresh session with this model on this account
 //   resume(member)                          the same conversation again (only where `resumes`)
 //   poke(member, text)                      type text and wait for the turn to start (--wait-submit)
+//   keys(member, keys)                      press named keys (Escape, Up, a digit…) with no Enter added
 //   answerMenu(screen)                      the keys that answer a menu the agent is known to show
 // A driver acts through a Seat: the squad's Run, a mutating call that carries a retry id and the
 // loop's sender terminal, and a plain backend op. The shared mechanics live here; claude.ts,
 // muse.ts and codex.ts say what differs.
 import { busy, errOf, type Out } from "../io/orca.ts";
-import type { Answer, Capabilities, Op, Request, Terminal } from "../../backend/contract.ts";
+import { keyBytes, type Answer, type Capabilities, type Op, type Request, type Terminal } from "../../backend/contract.ts";
 
 export type Member = {
   id: number; project: string; squad: string; wt: string | null; role: string; suffix: string;
@@ -40,11 +41,13 @@ export type ContractSeat = {
 export type Started = { ok: true; wt: string } | { ok: false; error: string; busy?: boolean };
 // started: Orca saw the turn start; accepted: the text landed but no turn yet; failed: not sent.
 export type Poked = "started" | "accepted" | "failed";
+export type Keyed = { ok: true } | { ok: false; error: string };
 
 export interface Driver {
   start(m: Member, model: string, account: string | null, prompt: string): Promise<Started>;
   resume(m: Member): Promise<Started>;
   poke(m: Member, text: string): Promise<Poked>;
+  keys(m: Member, keys: string[]): Promise<Keyed>;
   stop(makeSeat: (op: string) => Seat, m: Member, run: string, keep: string): Promise<{ ok: boolean; error?: string }>;
   answerMenu(screen: string): string | null;
 }
@@ -124,4 +127,12 @@ export async function pokeVia(seat: Seat, m: Member, text: string): Promise<Poke
   if (!m.wt) return "failed";
   const o = await seat.send("poke", [m.wt, text]);
   return o.code === 0 ? "started" : o.code === 3 ? "accepted" : "failed";
+}
+
+// The backend's keys: the keys' bytes (contract.ts keyBytes) typed as one send with no Enter added
+// (`orca terminal send --text`, which hands control bytes to the terminal as they are).
+export async function keysVia(seat: Seat, m: Member, keys: string[]): Promise<Keyed> {
+  if (!m.wt) return { ok: false, error: "no worktree" };
+  const o = await seat.send("keys", [m.wt, keys.map(keyBytes).join("")]);
+  return o.code === 0 ? { ok: true } : { ok: false, error: errOf(o, "keys") };
 }

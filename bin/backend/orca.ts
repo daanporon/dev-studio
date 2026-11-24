@@ -1943,6 +1943,13 @@ async function liveAgent(ctx: Ctx, verb: string, wt: string): Promise<string> {
   return h;
 }
 
+/** Is <handle> a live AGENT terminal (agent_terminal's selector)? A plain shell would run typed text as a command. */
+async function agentHandle(ctx: Ctx, handle: string): Promise<boolean> {
+  const l = await orca(ctx, LIST, "drop");
+  const j = jq(l.out, (d, emit) => emit(terminalsOf(d).filter((t) => idx(t, "handle") === handle && isAgent(t)).length > 0));
+  return pipe(l.code, jqE(j)) === 0;
+}
+
 /** The terminal verbs (U225). */
 const TERMINALS: Record<string, Verb> = {
   /** <worktree_id> <title> [command] -> "<handle>\t<pane key>" of a new plain shell terminal: the loop's sender
@@ -2248,9 +2255,7 @@ const TERMINALS: Record<string, Verb> = {
   async "poke-terminal"(ctx, a) {
     if (!a[0]) { ctx.err("orca adapter: poke-terminal: needs a terminal handle\n"); return 1; }
     // Only a live AGENT terminal (agent_terminal's selector): a plain shell would run the line as a command.
-    const l = await orca(ctx, LIST, "drop");
-    const j = jq(l.out, (d, emit) => emit(terminalsOf(d).filter((t) => idx(t, "handle") === a[0] && isAgent(t)).length > 0));
-    if (pipe(l.code, jqE(j)) !== 0) { ctx.err(`orca adapter: poke-terminal: ${a[0]} is not a live agent terminal\n`); return 1; }
+    if (!(await agentHandle(ctx, a[0]))) { ctx.err(`orca adapter: poke-terminal: ${a[0]} is not a live agent terminal\n`); return 1; }
     if (!need(ctx, a, 2)) return 1;
     const r = await orca(ctx, ["terminal", "send", "--terminal", a[0], "--text", a[1], "--enter", "--json"], "drop");
     if (r.code !== 0) { ctx.err(`orca adapter: poke-terminal: terminal send failed for ${a[0]}\n`); return 1; }
@@ -2260,10 +2265,16 @@ const TERMINALS: Record<string, Verb> = {
    *  `enter` is given: a digit picks that option of a live AskUserQuestion picker at once (an Enter would
    *  select whichever option is highlighted). `enter` is a separate send: Orca refuses text + Enter in one
    *  send while a picker shows (agent_prompt_blocked). The board answers picker entries with it
-   *  (bin/loop/fulfil/answer.ts). Exit 1 = no agent terminal / failed. */
+   *  (bin/loop/fulfil/answer.ts). A `term_…` handle instead of a worktree types into that terminal when it is
+   *  a live agent terminal (the Studio's adopted one; board chat U19 sends Escape, arrows and digits through it).
+   *  Exit 1 = no agent terminal / failed. */
   async keys(ctx, a) {
     if (!need(ctx, a, 1)) return 1;
-    const h = await liveAgent(ctx, "keys", a[0]);
+    let h: string;
+    if (a[0].startsWith("term_")) {
+      if (!(await agentHandle(ctx, a[0]))) { ctx.err(`orca adapter: keys: ${a[0]} is not a live agent terminal\n`); return 1; }
+      h = a[0];
+    } else h = await liveAgent(ctx, "keys", a[0]);
     if (!h) return 1;
     if (!need(ctx, a, 2)) return 1;
     if ((await orca(ctx, ["terminal", "send", "--terminal", h, "--text", a[1], "--json"], "drop")).code !== 0) {
