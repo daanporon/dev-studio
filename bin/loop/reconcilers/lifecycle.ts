@@ -781,7 +781,7 @@ export function run(ctx: TickCtx): Action[] {
       continue;
     }
     const ep = `done|${topic}|${done.map((u) => `${u.slug}#${u.pr}`).sort().join(",")}`;
-    const text = `dev-studio loop: every unit of your squad is done (PR merged) or cancelled, and none is held. Do the testability handoff to your Thinker (skip it for docs-only or one-unit squads), write the debrief (squad-state.sh <state> set-debrief), then set-status done and tell the operator to run /ds-close-squad ${topic}. The loop never closes a squad.`;
+    const text = `dev-studio loop: every unit of your squad is done (PR merged) or cancelled, and none is held. Do the testability handoff to your Thinker (skip it for docs-only or one-unit squads), check the Try it page is current, then set-status done and tell the operator to run /ds-close-squad ${topic}. Write no debrief now: the loop asks for it when the operator archives. The loop never closes a squad.`;
     out.push(...wake(ctx, lead, text, "all-done", ep).actions);
   }
   out.push(...updateQueue(store, project, t, updates, onTrack));

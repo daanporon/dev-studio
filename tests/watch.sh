@@ -111,7 +111,9 @@ for hk in '"hold":true' '"hold":true,"hold_by":"plan"' '"hold":true,"hold_by":"p
 done
 has   "the close-out line also shows on --poll"         "$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}' --poll)" "$FL"
 has   "the close-out line names the close command"      "$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}')" "/ds-close-squad fz"
-has   "the close-out line asks for the debrief first"  "$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}')" "write the debrief (set-debrief), then set-status done"
+CO="$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}')"
+has   "the close-out line asks for no debrief"  "$CO" "check the Try it page is current, then set-status done"
+hasnt "the close-out line has no set-debrief"  "$CO" "set-debrief"
 hasnt "the line no longer skips the testability handoff" "$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}')" "skip it for docs-only"
 hasnt "a tester member holds the line back"             "$(fin fy '{"run_id":"r","members":[{"role":"lead"},{"role":"tester"}],"units":[{"slug":"a","status":"done"}]}')" '★ finished'
 T_AB="$(ftok fz '{"run_id":"r","units":[{"slug":"a","status":"done"},{"slug":"b","status":"done"}]}')"

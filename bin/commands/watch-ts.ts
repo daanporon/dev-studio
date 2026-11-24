@@ -533,7 +533,7 @@ export async function run(argv: string[]): Promise<number> {
       const roles = join_(jqSort(each(jget(st, "members")).map((m) => jget(m, "role"))), ",");
       tok = cksum(`${RUN}|${slugs}|${roles}\n`);
     } catch { tok = cksum(""); }
-    writeOut(`  ★ finished\t${TOPIC}\t${tok}\twrapping up — every unit done or cancelled, nothing held and no Tester left: do the testability handoff, write the debrief (set-debrief), then set-status done and tell the operator /ds-close-squad ${TOPIC}\n`);
+    writeOut(`  ★ finished\t${TOPIC}\t${tok}\twrapping up — every unit done or cancelled, nothing held and no Tester left: do the testability handoff, check the Try it page is current, then set-status done and tell the operator /ds-close-squad ${TOPIC} (no debrief now: the loop asks for it at archive)\n`);
   }
 
   // OPEN QUESTIONS: the waiting_on_you queue, every tick, so none can rot unseen.
