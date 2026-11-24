@@ -80,7 +80,7 @@ test("Settings groups unblock_first under Agents & nudges, with on/off as its va
   expect(limitGroup("unblock_first")).toBe("Agents & nudges");
   const row = limitsJson("p", root).limits.find((l: any) => l.key === "unblock_first");
   expect(row.allowed).toEqual(["on", "off"]);
-  expect(readFileSync(join(REPO, "bin/commands/limits-ts.ts"), "utf8")).toContain('key === "unblock_first") return ["on", "off"]');
+  expect(readFileSync(join(REPO, "bin/commands/limits-ts.ts"), "utf8")).toContain('key === "unblock_first" || key === "debrief") return ["on", "off"]');
 });
 
 test("the mounted page: ⬆3 on the root's Flow card and row, none on the leaf, and the Runs on line", async () => {
