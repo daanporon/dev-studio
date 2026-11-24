@@ -4131,7 +4131,7 @@ function App() {
               <${SpentCell} r=${a.spent_since} />
               <span class="c-menu"></span>
             </div>
-            ${isOpen && html`<div class="detail"><${Docs} s=${a} onPlan=${setPlan} closed=${true} /><div class="item">${a.prs.map((p) => html`<${PrChip} key=${p.num} pr=${p} />`)}</div></div>`}
+            ${isOpen && html`<div class="detail"><${Docs} s=${a} onPlan=${setPlan} closed=${true} />${(a.leftovers || []).length > 0 && html`<${LeftoversBox} ...${{ s: a }} />`}<div class="item">${a.prs.map((p) => html`<${PrChip} key=${p.num} pr=${p} />`)}</div></div>`}
           </${React.Fragment}>`; })}</${React.Fragment}>`}
     </div>
     </details>
