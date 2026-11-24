@@ -206,20 +206,32 @@ describe("feedback-post", () => {
     expect(d(s, id).state).toBe("review");
   });
 
-  test("feedbackOn: off by default; the env var, else the row written last from any project", () => {
+  test("feedbackOn: off by default; the env var, else the newest change by a person, not observed_at", () => {
     const { s } = rig();
     delete process.env.DS_LIMIT_FEEDBACK;
     process.env.DS_FEEDBACK_ORIGIN = "https://github.com/o/n.git";
-    const row = (project: string, value: string, at: number) => s.upsert("config", { project, file: "limits.conf", key: "feedback" }, { value, observed_at: at });
+    // a Settings change: the row, its history entry at `at`; the observer's sweep rewrites observed_at only
+    const row = (project: string, value: string, at: number) => {
+      s.upsert("config", { project, file: "limits.conf", key: "feedback" }, { value, observed_at: at });
+      s.db.query("INSERT INTO config_history (project, file, key, old_value, new_value, actor, at) VALUES (?, 'limits.conf', 'feedback', NULL, ?, 'board', ?)").run(project, value, at);
+    };
+    const sweep = (project: string, at: number) => s.db.query("UPDATE config SET observed_at = ? WHERE project = ? AND file = 'limits.conf' AND key = 'feedback'").run(at, project);
     expect(feedbackOn(s)).toBe(false);
     expect(feedbackRepo(s)).toBeNull();
     row("", "off", T);
+    expect(feedbackOn(s)).toBe(false);
     row("a", "on", T + 10);
+    expect(feedbackOn(s)).toBe(true);
+    sweep("", T + 500); // the observer rewrites the default row with a newer observed_at
     expect(feedbackOn(s)).toBe(true);
     row("b", "off", T + 20);
     expect(feedbackOn(s)).toBe(false);
     expect(feedbackRepo(s)).toBeNull();
-    row("b", "on", T + 30);
+    s.db.query("DELETE FROM config WHERE project = 'b' AND key = 'feedback'").run(); // b reset: back to a's on
+    expect(feedbackOn(s)).toBe(true);
+    s.db.query("DELETE FROM config WHERE project = 'a' AND key = 'feedback'").run(); // no project rows: the default
+    expect(feedbackOn(s)).toBe(false);
+    process.env.DS_LIMIT_FEEDBACK = "on";
     expect(feedbackOn(s)).toBe(true);
     process.env.DS_LIMIT_FEEDBACK = "off";
     expect(feedbackOn(s)).toBe(false);
