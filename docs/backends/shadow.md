@@ -1,7 +1,7 @@
 # Shadow drill and exit (orca-backend-alternatives U10b)
 
-**Status: drill run 2026-11-24 (U21), crashes not met.** Steps 2 to 5 ran on a throwaway squad. The finishes are in; the forced
-crashes did not register (see the Record). The earliest exit is 2026-11-30 and needs a fix for crash detection first (U22 follows up).
+**Status: drill run 2026-11-24 (U21), rerun the same day (U21b): 5 of 5 crashes met.** Steps 2 to 5 ran on a throwaway squad. The first drill's forced
+crashes did not register; after the U21a and U21c fixes the rerun met 5 of 5 (see the Record). The earliest exit is 2026-11-30 and still needs 20 finishes, 7 days and 0 unexplained disagreements.
 
 ## Exit numbers
 
@@ -50,6 +50,30 @@ shadow dev-studio-public since 2026-11-24T09:05:32.000Z (0.1 days)
   finishes 13 (7 no-PR or failed), crashes 3
 exit: not met - 10 unexplained, 13 of 20 finishes, 3 of 5 crashes, 0.1 of 7 days
 ```
+
+### Rerun (U21b, after the U21a and U21c fixes)
+
+- Drill squad: `shadow-drill-u21b` (project `dev-studio-public`, backend `orca`), spawned 2026-11-24T13:38:22Z; units `drill-1..5`, later `drill-6`, `drill-7`.
+- Forced crashes, 5 of 5 with a `shadow_crash` event (kill time, member, event id, signal):
+  - 13:45:12Z `builder-drill-3` (KILL), `shadow_crash` 613379 at 13:48:44Z. The loop read it dead at 13:48:33Z (U21a works).
+  - 13:45:12 to 13:45:18Z `builder-drill-2` (KILL), `-4` (TERM), `-1` (KILL): their restart stuck on `orca adapter: agent_busy ... agent mid-turn` (events 613373 to 613375) until the host had U21c. Then `shadow_crash` 614020 (`drill-2`, 14:13:57Z), 614061 (`drill-4`, 14:14:57Z), 614088 (`drill-1`, 14:16:00Z).
+  - 15:08:44Z `builder-drill-6` (KILL, mid-work, no finish row): restart `member_started` 614860 at 15:12:12Z, `shadow_crash` 614862 at 15:12:14Z.
+- Finding: before U21c a restart of a killed agent that Orca still showed working failed with `agent_busy`; with U21c the restart lands (14:44:11, 14:45:36 and 14:45:50Z for a second kill of finished drill-2, -4, -1 at 14:41:44Z, restarted; those are not crashes, the units had finished `--no-pr`).
+- Not tried: killing the pane's whole process group. `drill-7` was added but not killed (the fifth crash was met first).
+- Disagreements: 614497, 614513, 614520 (`finished`, old ok, new no) explained with `ds shadow explain` (my 14:41:44Z kill of Builders already finished; the new generation has no finish row). Two `start` disagreements, 613257 and 614304 (`ds-feedback-github-issues/tester-feedback3`, old running, new unknown), are another squad's and not explained here.
+- `ds shadow report --since 2026-11-24T13:38:00Z` after the rerun (crashes counts every squad):
+
+```
+shadow dev-studio-public since 2026-11-24T13:38:00.000Z (0.1 days)
+  start     2 unexplained, 0 explained, 0 transient
+  finished  0 unexplained, 3 explained, 0 transient
+  retire    0 unexplained, 0 explained, 1 transient
+  member    0 unexplained, 0 explained, 0 transient
+  finishes 11 (7 no-PR or failed), crashes 10
+exit: not met — 2 unexplained, 11 of 20 finishes, 0.1 of 7 days
+```
+
+The 5 forced crashes are met; the exit still waits for 20 finishes and 7 days.
 
 ## Patterns (U21a)
 
