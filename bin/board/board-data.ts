@@ -2268,7 +2268,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const update = updateSummary(db, label);
   const disk = diskSummary(db, label);
   const header = headerSummary(db, label, squads, out.needs_you, loop);
-  return { ...out, ...(update ? { update } : {}), ...(disk.length ? { disk } : {}), feedback: feedbackSummary(db), accounts_summary: accountsSummary(db, label, accts), header, flow: { ...flowFor(db, labels, squads), brake: header.brake ?? null }, ...(machine ? { machine, as_of: { ...out.as_of, machine: machine.observed_at } } : {}) };
+  return { ...out, ...(update ? { update } : {}), ...(disk.length ? { disk } : {}), feedback: feedbackSummary(db, label), accounts_summary: accountsSummary(db, label, accts), header, flow: { ...flowFor(db, labels, squads), brake: header.brake ?? null }, ...(machine ? { machine, as_of: { ...out.as_of, machine: machine.observed_at } } : {}) };
 }
 
 // The open disk-pressure spells of this project (disk-pressure U3): the episodes, the machine row's disk and the
@@ -2394,16 +2394,16 @@ export function brakeText(br: any): string | null {
 // The Feedback panel's header facts (ds-feedback-github-issues U4): the repo drafts go to (null: posting off),
 // the drafts waiting for review (`blocked` of them with a leak hit) and the notes by state. Host-wide, so a
 // project board shows the same numbers; an older loop.db without the tables reads as none.
-export function feedbackSummary(db: Db | null) {
+export function feedbackSummary(db: Db | null, project = "") {
   const none = { on: false, switch: false, repo: null as string | null, review: 0, blocked: 0, notes: 0, new: 0, drafted: 0, filed: 0, fixed: 0, closed: 0, dismissed: 0 };
   if (!db) return none;
   try {
-    const repo = feedbackRepo(db.s), sw = feedbackOn(db.s);
+    const repo = feedbackRepo(db.s), sw = feedbackOn(db.s, project);
     const d = db.one("SELECT COUNT(*) AS n, COALESCE(SUM(leak = 'blocked'), 0) AS b FROM feedback_drafts WHERE state IN ('review', 'posting')");
     const by: Record<string, number> = {};
     for (const r of db.all("SELECT state, COUNT(*) AS n FROM feedback_notes GROUP BY state")) by[String(r.state)] = Number(r.n);
     const sum = Object.values(by).reduce((a, b) => a + b, 0);
-    return { on: repo != null, switch: sw, repo, review: Number(d?.n ?? 0), blocked: Number(d?.b ?? 0), notes: sum, new: by.new ?? 0, drafted: by.drafted ?? 0,
+    return { on: sw && repo != null, switch: sw, repo, review: Number(d?.n ?? 0), blocked: Number(d?.b ?? 0), notes: sum, new: by.new ?? 0, drafted: by.drafted ?? 0,
       filed: by.filed ?? 0, fixed: by.fixed ?? 0, closed: by.closed ?? 0, dismissed: by.dismissed ?? 0 };
   } catch { return none; }
 }
@@ -2417,7 +2417,7 @@ export function feedbackLine(f: ReturnType<typeof feedbackSummary> | undefined):
 // GET /api/feedback: what the Feedback panel shows. `review` = drafts in review (or posting) with the notes they
 // came from, `filed` = drafts already sent (newest 100), `notes` = every note, newest first (at most 500), each
 // with its draft's issue when it has one. null: no loop.db.
-export function feedbackJson(root = stateRoot()) {
+export function feedbackJson(root = stateRoot(), project = "") {
   return withDb((db) => {
     const notes = db.all(`SELECT n.id, n.project, n.squad, n.role, n.text, n.source, n.state, n.draft_id, n.evidence, n.reason, n.at,
         d.issue, d.url, d.fix_pr, d.fix_here FROM feedback_notes n LEFT JOIN feedback_drafts d ON d.id = n.draft_id ORDER BY n.id DESC LIMIT 500`)
@@ -2430,7 +2430,7 @@ export function feedbackJson(root = stateRoot()) {
       fix_pr: r.fix_pr == null ? null : Number(r.fix_pr), fix_here: r.fix_here === 1, created_at: Number(r.created_at),
       notes: notes.filter((n) => n.draft === Number(r.id)).sort((a, b) => a.id - b.id) });
     return {
-      ...feedbackSummary(db),
+      ...feedbackSummary(db, project),
       review: db.all("SELECT * FROM feedback_drafts WHERE state IN ('review', 'posting') ORDER BY id").map(draft),
       filed: db.all("SELECT * FROM feedback_drafts WHERE state IN ('filed', 'fixed', 'closed') ORDER BY updated_at DESC, id DESC LIMIT 100").map(draft),
       notes,
@@ -2623,7 +2623,7 @@ export function limitsJson(project: string, root = stateRoot()) {
       const first = (v: unknown) => fileOnly ? String(v ?? "").trim() : String(v ?? "").trim().split(/\s+/)[0] ?? "";
       const [value, source] = process.env[env] ? [process.env[env]!, "env"]
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
-      const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
+      const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
       return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : key === "default_backend" ? [...BACKEND_NAMES] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });

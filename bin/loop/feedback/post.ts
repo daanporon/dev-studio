@@ -1,8 +1,9 @@
 // post.ts — what a reviewed feedback draft becomes on GitHub (ds-feedback-github-issues U3). Only a
 // draft's own columns ever leave the host (title, body, area, label): never a note's raw text.
 //
-//   feedbackOn     the host-level `feedback` switch (off|on, last one written wins)
-//   feedbackRepo   null while off, else the `feedback_repo` override (owner/name), else the checkout's origin
+//   feedbackOn     the `feedback` switch of one project (env, then its row, then the default row)
+//   feedbackProjects  the projects that are on (env `on`: all), `''` counted when the default row is on
+//   feedbackRepo   null while no project is on, else the `feedback_repo` override (owner/name), else the checkout's origin
 //   finalText      the title and body exactly as posted: the drafter's body with any marker lines it
 //                  carried dropped, then the marker line the label workflow reads and the `ds-key` line
 //   leakCheck      U2's check (feedback/leak.ts) on the final title and body together: the host word
@@ -14,7 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { ROOT, type Row, type Store } from "../core/store.ts";
-import { limitEnv } from "../settings/limits.ts";
+import { limit, limitEnv } from "../settings/limits.ts";
+import { discoverProjects, loopProjects } from "../settings/projects.ts";
 import { spawn, type Out } from "../io/orca.ts";
 import { leakCheck as checkText } from "./leak.ts";
 import { finalBody } from "./prompt.ts";
@@ -22,21 +24,20 @@ import { RESET_GRACE_S } from "../io/github-budget.ts";
 
 const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
-/** Is Feedback on: the env var, else the newest change by a person: of the project rows (`project != ''`) of
- *  `limits.conf` `feedback` that hold a value, the one whose newest `config_history` entry (same project, file,
- *  key) is latest, ties by project label. The last change from any project's Settings wins (it is host-wide).
- *  With no such project row, the default row; off when none. `observed_at` is not used: the config observer
- *  rewrites it on every sweep. */
-export function feedbackOn(store: Store): boolean {
-  const ev = process.env[limitEnv("feedback")]?.trim();
-  if (ev) return ev === "on";
-  const pick = (r: { value: string | null } | null) => String(r?.value ?? "").trim().split(/\s+/)[0] === "on";
-  const r = store.db.query(`SELECT c.value FROM config c WHERE c.file = 'limits.conf' AND c.key = 'feedback' AND c.project != '' AND TRIM(COALESCE(c.value, '')) != ''
-      ORDER BY COALESCE((SELECT MAX(h.at) FROM config_history h WHERE h.project = c.project AND h.file = c.file AND h.key = c.key), 0) DESC, c.project ASC LIMIT 1`)
-    .get() as { value: string | null } | null;
-  if (r) return pick(r);
-  return pick(store.db.query("SELECT value FROM config WHERE file = 'limits.conf' AND key = 'feedback' AND project = '' AND TRIM(COALESCE(value, '')) != '' LIMIT 1")
-    .get() as { value: string | null } | null);
+/** Is Feedback on for `project`: `limits.conf` `feedback` read like every limit (`settings/limits.ts`): the env var,
+ *  then the project's row, then the default row; off when none. */
+export function feedbackOn(store: Store, project: string): boolean {
+  return limit(store, project, "feedback") === "on";
+}
+/** The projects whose Feedback is on, `''` (a note with no project) counted when the default row is on. The env var
+ *  `on` turns every project on. Candidates: the projects with a limits row, the ticked and discovered ones, and the
+ *  ones a note names. */
+export function feedbackProjects(store: Store): string[] {
+  const all = new Set<string>([""]);
+  for (const r of store.db.query("SELECT DISTINCT project FROM config WHERE file = 'limits.conf'").all() as { project: string }[]) all.add(String(r.project ?? ""));
+  for (const r of store.db.query("SELECT DISTINCT project FROM feedback_notes").all() as { project: string | null }[]) all.add(String(r.project ?? ""));
+  for (const l of [...loopProjects(store.root), ...discoverProjects(store.root)]) all.add(l);
+  return [...all].filter((p) => feedbackOn(store, p)).sort();
 }
 /** owner/name of a github.com remote URL (`https://github.com/o/n(.git)`, `git@github.com:o/n(.git)`, `ssh://git@github.com/o/n`), else null. */
 export function parseOrigin(url: string): string | null {
@@ -54,11 +55,11 @@ export function checkoutOrigin(): string | null {
   }
   return originMemo;
 }
-/** The repo feedback is posted to: null while Feedback is off; else the `feedback_repo` override (env, else the
+/** The repo feedback is posted to: null while no project has Feedback on; else the `feedback_repo` override (env, else the
  *  default row, else the first project row by label) when it names owner/name; else the checkout's origin
- *  (null, with the board saying why, when that is missing or not GitHub). Host-level like disk_watch_paths. */
+ *  (null, with the board saying why, when that is missing or not GitHub). The repo itself is host-level like disk_watch_paths. */
 export function feedbackRepo(store: Store): string | null {
-  if (!feedbackOn(store)) return null;
+  if (!feedbackProjects(store).length) return null;
   const ok = (v: unknown): string | null => { const t = String(v ?? "").trim(); return REPO.test(t) ? t : null; };
   const ev = process.env[limitEnv("feedback_repo")]?.trim();
   if (ev) return ok(ev) ?? (ev === "-" ? checkoutOrigin() : null);
