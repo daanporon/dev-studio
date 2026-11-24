@@ -162,6 +162,10 @@ CRED="model failed: API error 402 [request_id=r]: Billing verification failed"
 eq "member with account: billing error -> no limit stamped" "$(lim "wt-acct${T}-${T}$CRED${T}-${T}credits")" "- - "
 eq "billing error keeps a timing-only episode" "$(cut -f2-4 "$TMP/lim-state/.accounts.episodes" | tr '\t' ' ')" "1003600 - -"
 eq "the same row without the credits kind would stamp" "$(lim "wt-acct${T}-${T}$CRED")" "- 1003600 "
+# an ended login (5th field login) names no account either: no limited_until, and a timing-only episode
+LOGIN="Invalid API key · Please run /login"
+eq "member with account: ended login -> no limit stamped" "$(lim "wt-acct${T}-${T}$LOGIN${T}-${T}login")" "- - "
+eq "ended login keeps a timing-only episode" "$(cut -f2-4 "$TMP/lim-state/.accounts.episodes" | tr '\t' ' ')" "1003600 - -"
 
 # timing-only episode for a skipped notice: recorded without an account, blocks nothing
 lim "wt-noacct${T}-${T}$RESET" >/dev/null

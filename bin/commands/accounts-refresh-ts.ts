@@ -91,10 +91,10 @@ export async function run(argv: string[]): Promise<number> {
       seen.add(key);
       const old = epiLines.find((e) => e.split("\t")[0] === key);
       if (old) { fresh.push(old); continue; }
-      // Not a limit on a known account (pool 429, ended limit, no recorded account, a billing error): the
+      // Not a limit on a known account (pool 429, ended limit, no recorded account, a billing error, an ended login): the
       // episode still records its timing so the sweep can bound a dialog on it, but names no account.
       let who = memberOf(root, wt) || "-\t-";
-      if (kind === "credits" || POOL.test(notice)) who = "-\t-";
+      if (kind === "credits" || kind === "login" || POOL.test(notice)) who = "-\t-";
       const until = isInt(reset) ? reset : String(Number(now) + fallback);
       fresh.push(`${key}\t${until}\t${who}`);
     }

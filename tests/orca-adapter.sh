@@ -846,6 +846,32 @@ got="$(FAKE_USAGE_CODE=401 FAKE_USAGE_BODY='{}' "$ADAPTER" account-usage 2>/dev/
 has "account-usage: a window reset since the good figures is blanked" "$(printf '%s\n' "$got" | grep '^claude	system	')" "$(printf -- '-\t-\t20\t1900000000\trefused@')"
 got="$(FAKE_USAGE_CODE=200 FAKE_USAGE_BODY='{"five_hour":{"utilization":10,"resets_at":1900000000}}' usage)"
 eq  "account-usage: 200 -> no expired note"       "$got" "$(printf 'claude\tsystem\t10\t1900000000\t-\t-')"
+# An ended login (credentials file: loginEnded, or both tokens empty) is its own row, read before the cache:
+# no usage call, no stale figures; a token again (even with a fresh cached ended row) fetches at once.
+usage_keep() { : > "$CURL_LOG"; "$ADAPTER" account-usage 2>/dev/null || true; }
+WANT_ENDED="$(printf 'claude\tsystem\t-\t-\t-\t-\tlogin ended · default config')"
+usage >/dev/null; : > "$CURL_LOG"
+printf '{"claudeAiOauth":{"accessToken":"tok-secret","refreshToken":"ref-secret","loginEnded":"time_limit"}}' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: loginEnded -> login ended row, no stale figures" "$(usage_keep)" "$WANT_ENDED"
+eq  "account-usage: loginEnded -> no usage request" "$(cat "$CURL_LOG")" ""
+has "account-usage: the cache holds the ended row" "$(cat "$DS_USAGE_CACHE/claude-system.tsv")" "login ended"
+printf '{"claudeAiOauth":{"accessToken":"","refreshToken":""}}' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: empty tokens -> login ended" "$(usage)" "$WANT_ENDED"
+eq  "account-usage: empty tokens -> no usage request" "$(cat "$CURL_LOG")" ""
+creds $(( ($(date +%s) + 3600) * 1000 ))
+got="$(usage_keep)"
+eq  "account-usage: a token again with a fresh cached ended row -> fetched now" "$got" "$(printf 'claude\tsystem\t72\t1893510000\t41\t1900000000')"
+has "account-usage: a token again -> the endpoint was called" "$(cat "$CURL_LOG")" "https://api.anthropic.com/api/oauth/usage"
+printf '{"claudeAiOauth":{"accessToken":"t","refreshToken":""}}' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: an access token and no refresh token is not ended" "$(usage | cut -f1,2)" "$(printf 'claude\tsystem')"
+has "account-usage: ... and the endpoint was called" "$(cat "$CURL_LOG")" "oauth/usage"
+printf '{"other":1}' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: no claudeAiOauth -> unknown, not ended" "$(usage | grep -c 'login ended')" "0"
+printf 'not json' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: an unreadable file -> not ended" "$(usage | grep -c 'login ended')" "0"
+rm -f "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: a missing file -> not ended" "$(usage | grep -c 'login ended')" "0"
+
 rm -f "$DS_CLAUDE_HOME/.credentials.json"
 eq  "account-usage: missing token -> unknown"     "$(usage)" "$(printf 'claude\tsystem\t-\t-\t-\t-')"
 eq  "account-usage: missing token -> no call"     "$(wc -c < "$CURL_LOG" | tr -d ' ')" "0"
@@ -1155,6 +1181,14 @@ ORCA_SCREEN="$(cat "$CRD/claude-402.txt")"; export ORCA_SCREEN
 eq "credits: Claude 402 -> credits row" "$(lim idle $since | cut -f2,4,5)" "$(printf -- '-\t-\tcredits')"
 ORCA_SCREEN="$(cat "$CRD/claude-quoted.txt")"; export ORCA_SCREEN
 eq "credits: a grep result quoting the 402 line -> nothing" "$(lim idle $since)" ""
+ORCA_SCREEN="$(cat "$CRD/claude-login.txt")"; export ORCA_SCREEN
+eq "login: Claude '· Please run /login' -> login row, no reset" "$(lim idle $since | cut -f2,4,5)" "$(printf -- '-\t-\tlogin')"
+ORCA_SCREEN="$(cat "$CRD/claude-login-after.txt")"; export ORCA_SCREEN
+eq "login: output after the line -> nothing" "$(lim idle $since)" ""
+lim_as muse
+ORCA_SCREEN="$(cat "$CRD/claude-login.txt")"; export ORCA_SCREEN
+eq "login: a Claude login line on a muse worker -> nothing" "$(lim idle $since)" ""
+lim_as claude
 lim_as codex
 ORCA_SCREEN="$(cat "$CRD/codex-quota.txt")"; export ORCA_SCREEN
 eq "credits: Codex insufficient_quota -> credits row" "$(lim idle $since | cut -f2,4,5)" "$(printf -- '-\t-\tcredits')"
