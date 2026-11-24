@@ -39,6 +39,8 @@ import { ROOT, type Row } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { setAccountEnabled } from "../capacity/accounts.ts";
 import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
+import { LOGGED_IN } from "../capacity/login-card.ts";
+import { clearLogin } from "../capacity/login.ts";
 import { MOVE, RESTART_APPROVED, RESTART_STUDIO, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
 import { memberLabel, startIdentity } from "../core/whoami.ts";
 
@@ -193,7 +195,7 @@ const studio: Fulfiller = {
       const card = store.db.query("SELECT doc FROM observed_alerts WHERE project = ? AND id = ?").get(a.project, p.id) as Row | null;
       // A move card (studio_move ask) approves the move only when answered with its own suggestion
       // ("move it"); Dismiss (an empty answer) or any other text, e.g. after restarting it by hand, only clears it.
-      let askMove = false, moveUp = false, restart: string | null = null, credits: { agent: string; account: string; enabled: boolean } | null = null;
+      let askMove = false, moveUp = false, restart: string | null = null, credits: { agent: string; account: string; enabled: boolean } | null = null, loggedIn: { agent: string; account: string } | null = null;
       const said = (p.answer ?? "").trim().toLowerCase();
       try {
         const doc = JSON.parse(String(card?.doc ?? "{}"));
@@ -205,11 +207,18 @@ const studio: Fulfiller = {
         const c = doc?.credits, fixed = said === FIXED.toLowerCase();
         if (c && typeof c.agent === "string" && typeof c.account === "string" && (fixed || said === SWITCH_OFF.toLowerCase()))
           credits = { agent: c.agent, account: c.account, enabled: fixed };
+        // claude-login-ended U3: a login-ended card (login-card.ts) answered Logged in ends the hold, Switch it off disables the account.
+        const l = doc?.login;
+        if (l && typeof l.agent === "string" && typeof l.account === "string") {
+          if (said === LOGGED_IN.toLowerCase()) loggedIn = { agent: l.agent, account: l.account };
+          else if (said === SWITCH_OFF.toLowerCase()) credits = { agent: l.agent, account: l.account, enabled: false };
+        }
       } catch { /* not a move card */ }
       const o = await spawn([join(ROOT, "bin", "lib", "alerts.sh"), join(store.root, a.project, "alerts.json"), "resolve", p.id], {}, 30_000);
       if (o.code !== 0) return { retry: errOf(o, "alerts.sh") };
       store.db.run("DELETE FROM observed_alerts WHERE project = ? AND id = ?", [a.project, p.id]);
       const acct = credits ? setAccountEnabled(store, { ...credits, by: "board" }, at) : null;
+      if (loggedIn) clearLogin(store, loggedIn.agent, loggedIn.account, "board", at);
       // U3: the move-up card (fields.move_up, limits.ts backUp) records its own approval, so neither path clears the other's.
       if (askMove) store.fact("studio_move_approved", [{ table: "episodes", key: { project: a.project, subject: MOVE, kind: moveUp ? "studio:up-approved" : "studio:approved" },
         set: { episode_key: p.id, state: "approved", started_at: at, ended_at: null, source: "board", observed_at: at } }], { project: a.project, squad: "_studio", payload: { alert: p.id, ...(moveUp ? { why: "back-up" } : {}) } });

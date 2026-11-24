@@ -60,6 +60,7 @@ import { MOVE, STUDIO_SQUAD, studioReady, studioRestartCmd, studioView } from ".
 import { creditsHoldS, holdCredits, probeCredits } from "../capacity/credits.ts";
 import { heldNotice, holdLogin, isLoginKey, loginHold, LOGIN_HOLD_S, loginTold, probeLogin } from "../capacity/login.ts";
 import { creditsCards } from "../capacity/credits-card.ts";
+import { loginCards } from "../capacity/login-card.ts";
 import { accountDisabled } from "../capacity/accounts.ts";
 
 export type Place = { plan?: string | null; agent: string; model: string; effort: string; account: string; fallback: boolean; rung?: number; reason?: string; why?: string };
@@ -139,6 +140,8 @@ function run(ctx: TickCtx, pick: Picker): Action[] {
   });
   // U4: one Needs-you card per account out of credits that still has a member stuck on it (credits-card.ts).
   guarded("credits-card", () => { actions.push(...creditsCards(ctx, pick, running)); });
+  // claude-login-ended U3: one Needs-you card per account whose login ended with a member on it (login-card.ts).
+  guarded("login-card", () => { actions.push(...loginCards(ctx, pick, running)); });
   guarded("limited.json", () => exportLimited(store.root, P, listed));
   return actions;
 }

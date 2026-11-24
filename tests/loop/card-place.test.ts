@@ -78,6 +78,12 @@ describe("cardPlace", () => {
     expect(cardPlace({ kind: "credits_moved", id: "loop-credits.moved_muse_default-k", title: "muse/default out of credits", since: ago(60) }, NOW)).toBe("note");
   });
 
+  test("claude-login-ended U3: a login-ended card is Needs-you at once; the moved note is a note", () => {
+    const card = { kind: "login_ended", id: "loop-login.card_claude_x-k", title: "work: login ended" };
+    expect(cardPlace({ ...card, since: ago(0) }, NOW)).toBe("needs");
+    expect(cardPlace({ kind: "login_moved", id: "loop-login.moved_claude_x-k", title: "claude/x login ended", since: ago(60) }, NOW)).toBe("note");
+  });
+
   test("studio.ctx and Restart failed never wait", () => {
     expect(cardPlace({ id: "loop-studio.ctx-1", title: "studio.ctx", since: ago(0) }, NOW)).toBe("needs");
     expect(cardPlace({ kind: "restart_failed", id: "x", title: "t", since: ago(0) }, NOW)).toBe("needs");
