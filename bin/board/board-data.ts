@@ -3118,7 +3118,8 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     let c: Row | null = null;
     try { c = db.one("SELECT agent, source, turns, updated_at, gone_at FROM observed_chat WHERE project = ? AND wt = ?", o.project, o.wt) ?? null; }
     catch { /* loop.db before migration 0044: no turns yet */ }
-    const sends = db.all("SELECT id, project, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? ORDER BY id DESC LIMIT 10",
+    // chat-multiline-send-fails U2: a dismissed send (`dismissed_at` in its result, set by fulfil/chat.ts) is left out, so it is gone on every device
+    const sends = db.all("SELECT id, project, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? AND COALESCE(json_extract(CASE WHEN json_valid(result) THEN result END, '$.dismissed_at'), 0) = 0 ORDER BY id DESC LIMIT 10",
       o.project, o.wt).reverse().map((r) => chatSend(db, r, o.topic) as ReturnType<typeof chatSend> & { first?: boolean });
     const firstQueued = sends.find((x) => x.state === "queued");
     if (firstQueued) firstQueued.first = true;

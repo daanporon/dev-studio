@@ -1110,6 +1110,23 @@ eq "chat-cancel: a typed chat is 409"   "$(post -H "$O" -H "$CT" -d "$(cid "$CH"
 eq "chat-now: a typed chat is 409"      "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CN")" "409"
 eq "chat-now: no such request is 404"   "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CN")" "404"
 eq "chat-now: a bad id is 400"          "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"id\":\"x\"}" "$CN")" "400"
+# chat-multiline-send-fails U2: the limit's error text names the rule, a failed send is dismissed (the loop marks it), a queued one is not.
+CDM="http://127.0.0.1:$PORT/api/chat-dismiss"
+eq "chat: 2001 names its length"       "$(curl -s -H "$O" -H "$CT" -d "$(cbody wTh "$(head -c 2001 /dev/zero | tr '\0' x)")" "$C" | jq -r .error)" "a chat is at most 2000 characters; this one has 2001"
+eq "chat: a bell names its line"       "$(curl -s -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\nb\ac')")" "$C" | jq -r .error)" "a chat may hold line breaks and tabs, but no other control character (line 2)"
+ML=$(printf 'para one\n\npara two\r\n\r\n\tpara three')
+eq "chat: blank lines kept byte for byte" "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$ML")" "$C")" "202"
+eq "chat: its text is the multi-line one" "$(reqrow "$(rid)" | jq -r '.payload.text')" "$(printf 'para one\n\npara two\n\n\tpara three')"
+N1=$((N1 + 1))
+FD=$(dbq "SELECT id FROM requests WHERE kind = 'chat' AND member = 'wTh' ORDER BY id DESC LIMIT 1" | jq '.[0].id')
+eq "chat-dismiss: a queued send is 409" "$(post -H "$O" -H "$CT" -d "$(cid "$FD")" "$CDM")" "409"
+dbw "UPDATE requests SET done_at = CAST(strftime('%s','now') AS INTEGER), result = '{\"ok\":false,\"error\":\"never ready\"}' WHERE id = $FD"
+jt "chat-dismiss: a failed send shows first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "[.sends[] | select(.id == $FD)] | length == 1"
+eq "chat-dismiss: a failed send is 202" "$(post -H "$O" -H "$CT" -d "$(cid "$FD")" "$CDM")" "202"
+eq "chat-dismiss: its row names the chat" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.chat]')" "[\"chat-dismiss\",$FD]"
+dbw "UPDATE requests SET result = json_set(result, '$.dismissed_at', 1) WHERE id = $FD"
+jt "chat-dismiss: the loop's mark drops it from the chat" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "[.sends[] | select(.id == $FD)] | length == 0"
+eq "chat-dismiss: no such request is 404" "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CDM")" "404"
 # board chat U19: POST /api/keys files one `keys` request {keys, via: "board"} for a live member, one open per member;
 # GET /api/chat carries the member's newest screen read as `screen`.
 K="http://127.0.0.1:$PORT/api/keys"

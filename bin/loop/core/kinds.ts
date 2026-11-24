@@ -47,6 +47,7 @@ export const REQUESTS = {
   chat: obj({ text: str, via: opt(str), request: opt(num), files: opt(arr(str)) }),
   "chat-cancel": obj({ chat: num, request: opt(num) }),
   "chat-now": obj({ chat: num, request: opt(num) }),
+  "chat-dismiss": obj({ chat: num, request: opt(num) }),
   dismiss: obj({ id: str, answer: opt(str) }),
   duplicate: obj({ wt: opt(str), handle: opt(str), newest: opt(str), runHandle: opt(str), mismatch: opt(bool), first: opt(num) }),
   // ds-feedback-github-issues U3: the operator's review of one feedback draft or note (fulfil/feedback.ts).
