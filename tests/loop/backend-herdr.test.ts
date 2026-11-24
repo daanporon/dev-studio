@@ -138,6 +138,22 @@ describe("herdr for a project, no server", () => {
     expect(existsSync(raw.dir)).toBe(false);
   });
 
+  test("a server that accepts but never answers stays failed: not read as no terminals, no second server", async () => {
+    const stateRoot = join(dir, "slow-state"), project = "realp";
+    const sockDir = join(stateRoot, project, "loop", "herdr");
+    mkdirSync(sockDir, { recursive: true });
+    const held: import("node:net").Socket[] = [];
+    const srv = createServer((c) => { held.push(c); });   // takes the connection, never answers
+    await new Promise<void>((r) => srv.listen(join(sockDir, "herdr.sock"), r));
+    try {
+      const b = projectHerdr(project, { stateRoot, bin: join(dir, "never-run"), timeoutMs: 300 });
+      const l = await b.call("terminal.list", {});
+      expect(l.ok ? "ok" : l.error.code).toBe("failed");
+      expect(await b.ensureServer()).toBeNull();
+      expect(b.server()).toBeNull();
+    } finally { held.forEach((c) => c.destroy()); await new Promise((r) => srv.close(r)); }
+  });
+
   test("a create with no binary fails naming how to install it, and starts nothing", async () => {
     const was = process.env.DS_HERDR_BIN;
     process.env.DS_HERDR_BIN = join(dir, "no-such-herdr");

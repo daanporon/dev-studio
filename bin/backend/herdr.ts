@@ -301,6 +301,19 @@ export async function herdrUp(sock: string): Promise<boolean> {
   try { return !!(await rpc(sock, "ping", {}, 2000)).result; } catch { return false; }
 }
 
+// True only when no server listens on the socket: no socket file, or a connect refused or not found. A
+// server that accepts but is slow to answer is not absent (a failed call to it stays failed).
+export function herdrAbsent(sock: string, ms = 2000): Promise<boolean> {
+  if (!existsSync(sock)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const c = createConnection(sock);
+    const end = (v: boolean) => { clearTimeout(timer); c.destroy(); resolve(v); };
+    const timer = setTimeout(() => end(false), ms);
+    c.on("connect", () => end(false));
+    c.on("error", (e: NodeJS.ErrnoException) => end(e.code === "ENOENT" || e.code === "ECONNREFUSED"));
+  });
+}
+
 // Start a herdr server for the loop in `dir` (config.toml, herdr.sock, server.log), through
 // server-unit.ts, and wait until it answers (a server already on the socket is refused; one that never
 // answers is stopped). Its own session (`ds-<name>`) and socket keep it apart
@@ -340,7 +353,7 @@ export type ProjectHerdr = Backend & { dir: string; socket: string; ensureServer
 // The project's herdr backend, as the loop makes it (bin/loop/squad/contracts.ts): its server is the unit
 // ds-herdr-<project>, its files (config.toml, herdr.sock, server.log) in <stateRoot>/<project>/loop/herdr/,
 // or in a short folder under the runtime dir when that socket path would pass 100 bytes. The server is
-// started on a terminal.create only, never by a read: with no server a list is empty, a close closes
+// started on a terminal.create only, never by a read: with no server (herdrAbsent) a list is empty, a close closes
 // nothing and any other op on a terminal is not_found. A server a previous loop process started is
 // used as it is. The binary is `bin`, else herdrBin(); `home`, `shell` and `maxRuntimeS` are for tests.
 export function projectHerdr(project: string, o: { stateRoot: string; bin?: string; home?: string; shell?: string; timeoutMs?: number; maxRuntimeS?: number }): ProjectHerdr {
@@ -354,7 +367,7 @@ export function projectHerdr(project: string, o: { stateRoot: string; bin?: stri
   let starting: Promise<HerdrServer | null> | null = null, last: HerdrServer | null = null;
 
   async function startIt(): Promise<HerdrServer | null> {
-    if (await herdrUp(socket)) return null;
+    if (!(await herdrAbsent(socket))) return null;   // one listens (a slow one too): the create goes to it
     const bin = o.bin ?? herdrBin();
     if (!bin) throw new Error(`herdr: no herdr binary (DS_HERDR_BIN, the pinned ${HERDR_VERSION} install in ${herdrPinnedDir()} or herdr on PATH); install it with: bun bin/backend/herdr.ts install`);
     const s = await startHerdr({ bin, dir, name: `herdr-${safe}`, home: o.home, shell: o.shell, maxRuntimeS: o.maxRuntimeS });
@@ -372,7 +385,9 @@ export function projectHerdr(project: string, o: { stateRoot: string; bin?: stri
         return inner.call(op, req);
       }
       const a = await inner.call(op, req);
-      if (a.ok || a.error.code !== "failed" || await herdrUp(socket)) return a;
+      // Only a server that is not there reads as no terminals; a slow or failing one stays failed, so the
+      // observer writes nothing rather than marking every member gone.
+      if (a.ok || a.error.code !== "failed" || !(await herdrAbsent(socket))) return a;
       inner = fresh();
       if (op === "terminal.list") return okAnswer("terminal.list", { terminals: [] }) as Answer<O>;
       if (op === "terminal.close") return okAnswer("terminal.close", { closed: false }) as Answer<O>;
