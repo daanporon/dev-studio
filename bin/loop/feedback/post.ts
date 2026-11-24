@@ -22,14 +22,21 @@ import { RESET_GRACE_S } from "../io/github-budget.ts";
 
 const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
-/** Is Feedback on: the env var, else the `feedback` row (default or any project's) written last by
- *  `observed_at`, so the last switch flipped anywhere wins (it is host-wide); off when none. */
+/** Is Feedback on: the env var, else the newest change by a person: of the project rows (`project != ''`) of
+ *  `limits.conf` `feedback` that hold a value, the one whose newest `config_history` entry (same project, file,
+ *  key) is latest, ties by project label. The last change from any project's Settings wins (it is host-wide).
+ *  With no such project row, the default row; off when none. `observed_at` is not used: the config observer
+ *  rewrites it on every sweep. */
 export function feedbackOn(store: Store): boolean {
   const ev = process.env[limitEnv("feedback")]?.trim();
   if (ev) return ev === "on";
-  const r = store.db.query("SELECT value FROM config WHERE file = 'limits.conf' AND key = 'feedback' AND TRIM(COALESCE(value, '')) != '' ORDER BY observed_at DESC, project = '' ASC LIMIT 1")
+  const pick = (r: { value: string | null } | null) => String(r?.value ?? "").trim().split(/\s+/)[0] === "on";
+  const r = store.db.query(`SELECT c.value FROM config c WHERE c.file = 'limits.conf' AND c.key = 'feedback' AND c.project != '' AND TRIM(COALESCE(c.value, '')) != ''
+      ORDER BY COALESCE((SELECT MAX(h.at) FROM config_history h WHERE h.project = c.project AND h.file = c.file AND h.key = c.key), 0) DESC, c.project ASC LIMIT 1`)
     .get() as { value: string | null } | null;
-  return String(r?.value ?? "").trim().split(/\s+/)[0] === "on";
+  if (r) return pick(r);
+  return pick(store.db.query("SELECT value FROM config WHERE file = 'limits.conf' AND key = 'feedback' AND project = '' AND TRIM(COALESCE(value, '')) != '' LIMIT 1")
+    .get() as { value: string | null } | null);
 }
 /** owner/name of a github.com remote URL (`https://github.com/o/n(.git)`, `git@github.com:o/n(.git)`, `ssh://git@github.com/o/n`), else null. */
 export function parseOrigin(url: string): string | null {
