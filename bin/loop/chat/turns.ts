@@ -68,6 +68,9 @@ export const epoch = (t: unknown): number | null => {
 // (CHAT_PREFIX, stored without it) `from: "operator"`, a typed one also `via: "terminal"`.
 export function textTurn(role: Turn["role"], text: string, at: number | null): Turn | null {
   let t = text.trim();
+  // A multi-line board chat (U19) is pasted whole, so the harness may store it wrapped as a paste.
+  const board = role === "user" ? PASTED.exec(t) : null;
+  if (board && board[1].trim().startsWith(CHAT_PREFIX)) t = board[1].trim();
   const src = role === "user" ? userSource(t) : null;
   let images: (string | null)[] | undefined;
   if (src === "operator-board") {

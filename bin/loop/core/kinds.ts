@@ -55,7 +55,9 @@ export const REQUESTS = {
   "feedback-dismiss": obj({ draft: opt(num), note: opt(num), why: opt(str), ...THROUGH }),
   "feedback-restore": obj({ note: num, ...THROUGH }),
   "finish-unit": replay,
-  keys: obj({ text: str, enter: opt(bool) }),
+  // `text` (+ `enter`): typed as is (a digit answers a picker). `keys` (board chat U19): named keys pressed
+  // with no Enter added, even while the member works (an Escape stops it); `via` "board".
+  keys: obj({ text: opt(str), enter: opt(bool), keys: opt(arr(str)), via: opt(str) }),
   lavish: obj({ port: either(num, str) }),
   "config-undo": obj({ file: str, key: str, history: num }),
   "settings-import": obj({ text: opt(str), from: opt(str), name: opt(str), picks: arr(any) }),

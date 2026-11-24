@@ -1,4 +1,5 @@
-// fulfil/chat.ts — kind `chat` (KTD5, board chat): a one-line message from the operator, typed into a
+// fulfil/chat.ts — kind `chat` (KTD5, board chat): a message from the operator (U19: it may span lines;
+// the backend pastes it whole, so the lines arrive as one message), typed into a
 // member's own agent terminal as `dev-studio board, the operator says: <text>`, only once the member
 // is ready (memberReady, member-ready.ts; for the Studio studioReady on its adopted handle; for a Claude member
 // recent output alone does not hold it, only a fresh transcript or the working marker on screen). Payload
@@ -59,7 +60,7 @@ const sinceOf = (store: Store, id: number): number | undefined => { const n = pa
 function crewLog(store: Store, project: string, topic: string, role: string, suffix: string, text: string, at: number, images = 0): void {
   const iso = new Date(at * 1000).toISOString().replace(/\.\d+Z$/, "Z");
   const who = `${topic}/${role}${suffix ? `-${suffix}` : ""}`;
-  appendFileSync(join(store.root, project, "crew-chat.md"), `- ${iso} operator → ${who}: ${Array.from(text).slice(0, 200).join("")}${images ? ` (+${images} image${images === 1 ? "" : "s"})` : ""}\n`);
+  appendFileSync(join(store.root, project, "crew-chat.md"), `- ${iso} operator → ${who}: ${Array.from(text.replace(/\s*\n\s*/g, " ↵ ")).slice(0, 200).join("")}${images ? ` (+${images} image${images === 1 ? "" : "s"})` : ""}\n`);
 }
 
 // chat-cancel / chat-now (U4): act on the named chat request of the same project. A chat already done (typed,
@@ -104,7 +105,7 @@ const chat: Fulfiller = {
     const text = String(row.text ?? p.text ?? "").trim();
     const names: unknown[] = Array.isArray(row.files) ? row.files : Array.isArray(p.files) ? p.files : [];
     if (!wt || (!text && !names.length) || id == null) return { failed: "a chat needs a member, text or images, and its request" };
-    if (/[\u0000-\u001f\u007f]/.test(text) || Array.from(text).length > CHAT_MAX) return { failed: `a chat is one line of at most ${CHAT_MAX} characters` };
+    if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text) || Array.from(text).length > CHAT_MAX) return { failed: `a chat is at most ${CHAT_MAX} characters with no control characters but line breaks and tabs` };
     if (names.length > CHAT_FILES_MAX) return { failed: `a chat carries at most ${CHAT_FILES_MAX} images` };
     const paths: string[] = [];
     for (const n of names) {

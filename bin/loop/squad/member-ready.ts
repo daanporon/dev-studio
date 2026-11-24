@@ -5,6 +5,7 @@
 // is empty, no picker is open (an open picker question for it, or a menu its driver knows on the
 // screen), no mail to it is unread, and no earlier typed action for it (an undone answer, poke, keys
 // or chat request, or a delivery not yet taken) is ahead of this one. Each refusal names its own why.
+// Board keys pass `interrupt`: a live terminal is enough, so an Escape reaches a working member (U19).
 // A board chat to a Claude member passes `screenNoise: "ignore"`: output alone does not hold it, only a
 // fresh transcript or Claude's working marker on a screen read since that output.
 // A Claude member Orca reads `working` whose last turn ended or was interrupted (Esc) and whose screen
@@ -29,6 +30,10 @@ export type ReadyOpts = {
   // not busy. It is busy only while its transcript was written within quietS or the newest screen read,
   // taken after that output, shows Claude's working marker (workingOnScreen). Any other agent keeps the rule.
   screenNoise?: "ignore";
+  // Board keys (U19, fulfil/keys.ts): an Escape stops a working member and an arrow or digit picks in its
+  // menu, so only a live terminal is needed; working, output, a draft, a picker, a menu, mail and earlier
+  // requests do not hold it.
+  interrupt?: boolean;
 };
 
 // Claude's working marker: `esc to interrupt` in the status row under its prompt box (or on the
@@ -87,11 +92,13 @@ export function memberReady(store: Store, project: string, wt: string, now: numb
   if (o.handle) {
     const t = store.db.query("SELECT tail, tail_at, doc FROM observed_terminals WHERE project = ? AND handle = ? AND gone_at IS NULL").get(project, o.handle) as Row | null;
     if (!t) return no(`terminal ${o.handle} is gone`);
+    if (o.interrupt) return { ready: true, why: "live terminal" };
     const doc = parse(t.doc);
     out = Number(doc.last_output_at ?? 0); tail = String(t.tail ?? ""); tailAt = t.tail_at == null ? null : Number(t.tail_at); unread = Number(doc.unread ?? 0);
   } else {
     const w = store.db.query("SELECT state, last_output_at, tail, tail_at, unread, gone_at FROM observed_workers WHERE project = ? AND wt = ?").get(project, wt) as Row | null;
     if (!w || w.gone_at != null) return no("no live terminal");
+    if (o.interrupt) return { ready: true, why: "live terminal" };
     out = Number(w.last_output_at ?? 0); tail = String(w.tail ?? ""); tailAt = w.tail_at == null ? null : Number(w.tail_at); unread = Number(w.unread ?? 0);
     if (w.state === "working" && !stoppedAtPrompt(store, wt, o.agent, out, tail, tailAt)) return no("busy: working");
   }

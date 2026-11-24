@@ -2324,7 +2324,7 @@ export function brakeText(br: any): string | null {
 // the drafts waiting for review (`blocked` of them with a leak hit) and the notes by state. Host-wide, so a
 // project board shows the same numbers; an older loop.db without the tables reads as none.
 export function feedbackSummary(db: Db | null) {
-  const none = { on: false, repo: null as string | null, review: 0, blocked: 0, notes: 0, new: 0, drafted: 0, filed: 0, fixed: 0, dismissed: 0 };
+  const none = { on: false, repo: null as string | null, review: 0, blocked: 0, notes: 0, new: 0, drafted: 0, filed: 0, fixed: 0, closed: 0, dismissed: 0 };
   if (!db) return none;
   try {
     const repo = feedbackRepo(db.s);
@@ -2333,13 +2333,13 @@ export function feedbackSummary(db: Db | null) {
     for (const r of db.all("SELECT state, COUNT(*) AS n FROM feedback_notes GROUP BY state")) by[String(r.state)] = Number(r.n);
     const sum = Object.values(by).reduce((a, b) => a + b, 0);
     return { on: repo != null, repo, review: Number(d?.n ?? 0), blocked: Number(d?.b ?? 0), notes: sum, new: by.new ?? 0, drafted: by.drafted ?? 0,
-      filed: by.filed ?? 0, fixed: (by.fixed ?? 0) + (by.closed ?? 0), dismissed: by.dismissed ?? 0 };
+      filed: by.filed ?? 0, fixed: by.fixed ?? 0, closed: by.closed ?? 0, dismissed: by.dismissed ?? 0 };
   } catch { return none; }
 }
 export function feedbackLine(f: ReturnType<typeof feedbackSummary> | undefined): string | null {
   if (!f || (!f.on && f.notes === 0)) return null;
   const head = f.on ? `${f.review} draft${f.review === 1 ? "" : "s"} to review${f.blocked ? ` (${f.blocked} blocked by the leak check)` : ""}` : "off (feedback_repo is -)";
-  return `FEEDBACK  ${head} · notes: ${f.notes} (${f.new} new, ${f.drafted} drafted, ${f.filed} filed, ${f.fixed} fixed, ${f.dismissed} dismissed)`;
+  return `FEEDBACK  ${head} · notes: ${f.notes} (${f.new} new, ${f.drafted} drafted, ${f.filed} filed, ${f.fixed} fixed, ${f.closed} closed, ${f.dismissed} dismissed)`;
 }
 
 // GET /api/feedback: what the Feedback panel shows. `review` = drafts in review (or posting) with the notes they
@@ -3041,8 +3041,10 @@ function chatCrew(db: Db, project: string, topic: string) {
 }
 
 // GET /api/chat: one member's recent turns (observed_chat, redacted and capped by the loop) and its last
-// 10 chat requests, newest last. Nothing else: no transcript, file or screen is read here. null: no
-// loop.db; {missing: true}: no such live member.
+// 10 chat requests, newest last. U19: `screen` {tail, at, age_s} is the loop's newest screen read (redacted
+// by the loop): observed_workers.tail by worktree, the Studio's observed_terminals.tail by its adopted handle;
+// null when none. Nothing else: no transcript, file or terminal is read here. null: no loop.db;
+// {missing: true}: no such live member.
 export function chatJson(o: { project: string; topic: string; wt: string }, root = stateRoot()) {
   return withDb((db) => {
     const m = chatMember(db, o.project, o.topic, o.wt);
@@ -3055,12 +3057,16 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     const firstQueued = sends.find((x) => x.state === "queued");
     if (firstQueued) firstQueued.first = true;
     // Mid-turn, as the board's crew row reads it (observed_workers.state), for the panel's "Working…" line.
-    const w = db.one("SELECT state, gone_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
+    const w = db.one("SELECT state, gone_at, tail, tail_at FROM observed_workers WHERE project = ? AND wt = ?", o.project, o.wt);
+    const t = o.topic === "_studio" ? db.one(`SELECT t.tail, t.tail_at FROM observed_terminals t JOIN members m ON m.project = t.project AND m.handle = t.handle
+      WHERE t.project = ? AND t.gone_at IS NULL AND m.squad = '_studio' AND m.role = 'studio' ORDER BY m.id DESC`, o.project) : w?.gone_at == null ? w : null;
+    const now = Math.floor(Date.now() / 1000), tailAt = t?.tail_at == null ? null : Number(t.tail_at);
     return {
       crew: chatCrew(db, o.project, o.topic),
       agent: (c?.agent as string | null) ?? (m.agent as string | null) ?? null, source: (c?.source as string | null) ?? null,
       turns: c && c.gone_at == null ? (parse(String(c.turns ?? "[]")) ?? []) : [], updated_at: c?.updated_at == null ? null : Number(c.updated_at),
       working: w?.gone_at == null && w?.state === "working", sends,
+      screen: t && t.tail != null ? { tail: String(t.tail), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
     };
   }, root);
 }
