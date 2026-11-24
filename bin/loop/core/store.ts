@@ -371,7 +371,8 @@ export class Store {
   }
 
   // A member's confirmation that it re-read its instructions after a reload wish (U156):
-  // `ds reload ack` from the member's own live agent terminal. Session-checked like the pause
+  // `ds reload ack` from the member's own live agent terminal (the Orca handle, else the live terminal
+  // whose generation is DS_GEN in DS_WT's folder, as `ds pause ack` finds it). Session-checked like the pause
   // ack: the caller's terminal must be a live (not gone) terminal of the member's worktree, and
   // a reload must still be pending. An old session's ack does not count, and a stale one (nothing
   // pending) is refused. A fresh session after reload_at satisfies the wish without an ack (the

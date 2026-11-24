@@ -437,6 +437,37 @@ describe("write paths", () => {
     expect(JSON.parse(want("archived").out).effective).toBe("archived");
   });
 
+  // The spawn env with the identity variables a role worktree sets removed, so a run inside one cannot leak them.
+  const scrubbed = (extra: Record<string, string> = {}) => {
+    const env: Record<string, string | undefined> = { ...process.env };
+    for (const k of ["ORCA_TERMINAL_HANDLE", "DS_MEMBER", "DS_GEN", "DS_WT"]) delete env[k];
+    return { ...env, ...extra } as Record<string, string>;
+  };
+
+  // A terminal with no Orca handle (tmux) confirms by DS_GEN and DS_WT.
+  test("ds reload ack confirms from an off-Orca terminal by DS_GEN and DS_WT", () => {
+    const root = tmp();
+    const ack = (extra: Record<string, string>) => {
+      const p = Bun.spawnSync([DS, "--state", root, "reload", "ack", "fx", "demo", "lead"], { stdout: "pipe", stderr: "pipe", env: scrubbed(extra) });
+      return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+    };
+    const s = store(root);
+    s.want("member", "fx/demo/lead", "running", { fill: { wt: "local::/w/lead" } });
+    s.wishOnce("fx/demo/lead", "reload", { at: 1000, by: "op" });
+    s.upsert("observed_terminals", { project: "fx", handle: "tmux_1" }, { wt: "local::/w/lead", doc: JSON.stringify({ gen: "g1" }), observed_at: 1000 });
+    s.close();
+    const old = ack({ DS_GEN: "g-old", DS_WT: "/w/lead" });
+    expect(old.code).not.toBe(0);
+    expect(old.err).toContain("instructed agent terminal");
+    const ok = ack({ DS_GEN: "g1", DS_WT: "/w/lead" });
+    expect(ok.code).toBe(0);
+    const t = store(root);
+    expect(Number(t.get("members", { project: "fx", squad: "demo", role: "lead", suffix: "" })!.reloaded_at)).toBeGreaterThan(1000);
+    expect(count(t, "SELECT COUNT(*) AS n FROM events WHERE kind = 'reload_ack'")).toBe(1);
+    expect(String(t.db.query("SELECT payload FROM events WHERE kind = 'reload_ack'").get()!["payload" as never])).toContain("tmux_1");
+    t.close();
+  });
+
   // U156: the member confirms its reload from its own live agent terminal.
   test("ds reload ack confirms from the member's live terminal; an old session's ack does not count", () => {
     const savedHandle = process.env.ORCA_TERMINAL_HANDLE;
@@ -445,7 +476,7 @@ describe("write paths", () => {
     const ack = (...a: string[]) => {
       // Explicit env: a spawn without one inherits the process-start environment, not
       // this test's ORCA_TERMINAL_HANDLE assignments.
-      const p = Bun.spawnSync([DS, "--state", root, "reload", ...a], { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+      const p = Bun.spawnSync([DS, "--state", root, "reload", ...a], { stdout: "pipe", stderr: "pipe", env: scrubbed(process.env.ORCA_TERMINAL_HANDLE ? { ORCA_TERMINAL_HANDLE: process.env.ORCA_TERMINAL_HANDLE } : {}) });
       return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
     };
     expect(ack().code).toBe(2);
