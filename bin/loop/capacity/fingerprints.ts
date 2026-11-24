@@ -33,6 +33,10 @@ export const MUSE_LIMIT_RE = /^\s*◆ Usage limit reached · \/upgrade \(/;
 export const CLAUDE_CREDITS_RE = /^\s*⎿[\s\u00a0]*(API Error: 402\b|Credit balance is too low)/;
 export const MUSE_CREDITS_RE = /^\s*◆ model failed: API error 402\b/;
 export const CODEX_CREDITS_RE = /^\s*■\s*.*\binsufficient_quota\b/;
+// claude-login-ended U2: Claude's ended login, a `●`/`⏺` entry or a `⎿` result line ending `· Please run
+// /login` (Claude only). Prose quoting it never starts with those markers.
+export const CLAUDE_LOGIN_RE = /^\s*(?:[●⏺]|⎿)[\s\u00a0].*·[\s\u00a0]*Please run \/login\s*$/;
+const LOGIN_TAIL = " … · Please run /login";
 // On a Muse screen every later `◆` line is agent output: a notice followed by one no longer counts.
 export const MUSE_ENTRY_RE = /^\s*◆/;
 export const ENTRY_RE = /^\s*(⏺|●|•|■)|^\s*⎿(\s| )*[Uu]sage limit reset([^s]|$)/;
@@ -120,17 +124,20 @@ export function limitReset(text: string, anchor: number, noroll = false): number
 }
 
 export type Gate = { agent?: string | null; state: string; since: number | null; lastOutput: number | null; now: number; silentMin: number };
-export type LimitRow = { reset: number | null; notice: string; dialog: boolean; kind?: "credits"; link?: string };
+export type LimitRow = { reset: number | null; notice: string; dialog: boolean; kind?: "credits" | "login"; link?: string };
 
 // `cut -c1-NOTICE_MAX`: GNU cut counts bytes, so a split character decodes as U+FFFD, as the
 // sweep's file read back as UTF-8 does. The notice keys the sweep's imported markers.
-const cut = (s: string) => new TextDecoder().decode(new TextEncoder().encode(s).subarray(0, NOTICE_MAX));
+const cut = (s: string, n = NOTICE_MAX) => new TextDecoder().decode(new TextEncoder().encode(s).subarray(0, n));
+const bytes = (s: string) => new TextEncoder().encode(s).length;
 
 // limited_scan for one worker. idle/done count once silent SILENT_MIN since `since`, or since their
 // last output when Orca reports no state time; with neither, only a recognised dialog counts,
 // anchored at now. working is anchored at its last output and counts only with the dialog on screen
 // or SILENT_MIN of silence. A billing error (kind "credits") on an idle or done worker counts at once:
-// the agent stopped on it, so there is nothing to wait out; a working one keeps the silence rule.
+// the agent stopped on it, so there is nothing to wait out; a working one keeps the silence rule. An
+// ended login (kind "login", claude-login-ended U2) is read the same way; its notice always keeps the
+// `· Please run /login` tail (a long line is cut in its middle), which names it a login one.
 export function scan(tail: string, g: Gate): LimitRow | null {
   let anchor: number, timeless = false, recent = false;
   if (g.state === "idle" || g.state === "done") {
@@ -145,16 +152,28 @@ export function scan(tail: string, g: Gate): LimitRow | null {
   const lines = tail.replace(/\n$/, "").split("\n").slice(-WINDOW).filter((l) =>
     !/dev-studio (sweep|board)/.test(l) && !/^\s*(?:❯|•)?\s*dev-studio loop:/.test(l));
   const isCredits = (l: string) => ((!g.agent || g.agent === "claude") && CLAUDE_CREDITS_RE.test(l)) || (g.agent === "muse" && MUSE_CREDITS_RE.test(l)) || (g.agent === "codex" && CODEX_CREDITS_RE.test(l));
+  // A narrow pane wraps the login line: its rows indented under it are read with it.
+  const loginText = (i: number) => {
+    if ((g.agent && g.agent !== "claude") || !/^\s*(?:[●⏺]|⎿)[\s\u00a0]/.test(lines[i])) return null;
+    let text = lines[i];
+    for (let j = i + 1; j < lines.length && /[^ \t]/.test(lines[j]) && indent(lines[j]) > indent(lines[i]); j++) text += ` ${lines[j].trim()}`;
+    return CLAUDE_LOGIN_RE.test(text) ? text : null;
+  };
+  const isLogin = (i: number) => loginText(i) !== null;
   let at = -1;
-  for (let i = lines.length - 1; i >= 0; i--) if (LIMIT_RE.test(lines[i]) || isCredits(lines[i]) || (g.agent === "muse" && MUSE_LIMIT_RE.test(lines[i])) || (g.agent === "codex" && CODEX_LIMIT_RE.test(lines[i]))) { at = i; break; }
+  for (let i = lines.length - 1; i >= 0; i--) if (LIMIT_RE.test(lines[i]) || isCredits(lines[i]) || isLogin(i) || (g.agent === "muse" && MUSE_LIMIT_RE.test(lines[i])) || (g.agent === "codex" && CODEX_LIMIT_RE.test(lines[i]))) { at = i; break; }
   if (at < 0 || lines.slice(at + 1).some((l) => ENTRY_RE.test(l) || (g.agent === "muse" && MUSE_ENTRY_RE.test(l)))) return null;
-  const credits = isCredits(lines[at]);
+  const login = isCredits(lines[at]) ? null : loginText(at), credits = isCredits(lines[at]) || login !== null;
   if (recent && !credits) return null;
   const full = lines[at].replace(/^[^A-Za-z0-9]+/, ""), dlg = !credits && dialog(lines);
   if (timeless && !dlg && !credits) return null;
   if (g.state === "working" && !dlg && g.now - anchor < g.silentMin * 60) return null;
   // A narrow pane wraps the notice ("resets Nov 2,\n     6pm (Europe/Berlin)"): the reset is read
   // across the lines indented under it; the notice stays its first line.
+  if (login) {
+    const line = login.replace(/^[^A-Za-z0-9]+/, "").replace(/\s+$/, "");
+    return { reset: null, notice: bytes(line) <= NOTICE_MAX ? line : cut(line, NOTICE_MAX - bytes(LOGIN_TAIL)).replace(/\uFFFD$/, "") + LOGIN_TAIL, dialog: false, kind: "login" };
+  }
   let text = full;
   for (let i = at + 1; i < lines.length && /[^ \t]/.test(lines[i]) && indent(lines[i]) > indent(lines[at]); i++) text += ` ${lines[i].trim()}`;
   if (credits) {

@@ -13,8 +13,9 @@
 //   running, a phase wish (or another model) not acted yet                        start (the handoff switches it)
 //   running, a switch owed (switches.ts: limit, fallback, phase, pin)             stop when idle
 //   working, stuck on its limit dialog (or silent past SILENT_MIN)                stop like idle
-//   running, limited with nowhere to go                                           one tell ("carry on"); out of credits: none (U3)
+//   running, limited with nowhere to go                                           one tell ("carry on"); out of credits or login ended: none (U3)
 //   running, its credits hold cleared while it still runs on that account (U3)    one tell ("works again")
+//   running, its login hold cleared while it still runs on that account           one tell ("login works again", claude-login-ended U2)
 //   running, reload pending and idle, no lifecycle act due (U156)                 one reload message with the ack command, once per reload_at
 //   running, clear pending and idle, no lifecycle act due (U156)                  the agent's clear command once per clear_at (/clear, /new; never for Muse)
 //   running                                                                       nothing
@@ -36,7 +37,7 @@ import { resumeGate } from "../reconcilers/pause-resume.ts";
 import { knob, limit, stepOpen, turnEnded } from "../reconcilers/liveness.ts";
 import { closeBusy } from "../squad/close-busy.ts";
 import { limitStuck, switchFacts, toldAlready, type Switch } from "../capacity/switches.ts";
-import { TELL, worksAgain } from "../squad/handoff.ts";
+import { loginWorksAgain, TELL, worksAgain } from "../squad/handoff.ts";
 import { HEADLESS } from "../observers/codex.ts";
 import { wtPath as wtDir } from "../observers/orca.ts";
 import { driftCleared, stopRetry } from "../squad/close-drift.ts";
@@ -64,7 +65,7 @@ export type Facts = {
   idleOK?: boolean;        // idle, nothing undelivered, no live sub-agents
   switchStop?: Switch | null;  // U154: a switch owed on a live agent (limit, fallback, phase, pin)
   tellLimit?: string | null;   // U154: the tell key when it is limited with nowhere to go
-  tellOk?: string | null;      // U3: the "works again" key once its credits hold was cleared
+  tellOk?: string | null;      // U3: the "works again" key once its credits hold was cleared (`login-ok|…`: its login hold)
   switchStuck?: boolean;       // U154: a working member stuck on its limit switches like an idle one
   hasWorktree?: boolean;       // U155: a worktree to remove once its agent is gone
   wt?: boolean;                // U158: a worktree id is recorded (its tree may already be gone)
@@ -75,7 +76,7 @@ export type Facts = {
   clearCmd?: "/clear" | "/new" | null;  // U156: the agent's clear command (null: no signal, e.g. Muse)
   checkpoint?: string | null;  // U266: the why of an owed stop still waiting on its journal checkpoint (stop-checkpoint.ts)
 };
-export type Act = { act: "start" } | { act: "stop"; why: string } | { act: "checkpoint"; why: string } | { act: "tell"; why: "limit" | "credits-ok" } | { act: "card"; why: "unknown" | "rebroke" }
+export type Act = { act: "start" } | { act: "stop"; why: string } | { act: "checkpoint"; why: string } | { act: "tell"; why: "limit" | "credits-ok" | "login-ok" } | { act: "card"; why: "unknown" | "rebroke" }
   | { act: "reload" } | { act: "clear" } | { act: "close"; phase: "stop" | "remove"; why: string } | null;
 
 export function compare(f: Facts): Act {
@@ -106,7 +107,7 @@ export function compare(f: Facts): Act {
     if (f.switchStop && (f.idleOK || f.switchStuck) && f.room)
       return f.checkpoint && f.checkpoint === f.switchStop.why ? { act: "checkpoint", why: f.checkpoint } : { act: "stop", why: f.switchStop.why };
     if (f.tellLimit && !f.room) return { act: "tell", why: "limit" };
-    if (f.tellOk) return { act: "tell", why: "credits-ok" };
+    if (f.tellOk) return { act: "tell", why: f.tellOk.startsWith("login-ok|") ? "login-ok" : "credits-ok" };
     // Lifecycle acts win over the confirmation messages below: a fresh session from a start
     // satisfies a pending reload or clear by itself, and an unconfirmed message must never
     // wedge a switch start or a tell behind it.
@@ -414,7 +415,7 @@ function decideNow(ctx: TickCtx): Action[] {
     if (act.act === "tell") {
       // U3's "works again" names the account its credits episode was on (`<agent>/<account>|<notice>`).
       const wt = String(s.m.wt ?? ""), project = String(s.m.project), key = act.why === "limit" ? s.f.tellLimit! : s.f.tellOk!;
-      const text = act.why === "limit" ? TELL : worksAgain(...splitAccount(key));
+      const text = act.why === "limit" ? TELL : act.why === "login-ok" ? loginWorksAgain : worksAgain(...splitAccount(key));
       if (wt && !toldAlready(store, project, wt, key, act.why))
         out.push(...wake({ ...ctx, project }, wt, text, act.why, key, { allowLimited: true, cap: 1 }).actions);
       continue;

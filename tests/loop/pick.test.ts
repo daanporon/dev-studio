@@ -9,12 +9,13 @@ import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import { accountRows } from "../../bin/loop/db/import-json.ts";
-import { ladder, overrideOf, pick, tuple, workDone, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
+import { accountBlock, ladder, overrideOf, pick, tuple, workDone, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
 import { reconcile, slotBudget } from "../../bin/loop/capacity/picks.ts";
 import { slot } from "../../bin/loop/capacity/slot.ts";
 import { since } from "../../bin/loop/core/events.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
 import { holdCredits } from "../../bin/loop/capacity/credits.ts";
+import { holdLogin } from "../../bin/loop/capacity/login.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -855,6 +856,32 @@ describe("U2: an account out of credits", () => {
     const w = builder(s) as Waiting;
     expect(w.wait).toBe(T + 86400);
     expect(w.reason).toContain("muse:default out of credits");
+  });
+});
+
+// claude-login-ended U2: a login hold (login.ts) blocks like credits, and the pick names it `login ended`.
+describe("claude-login-ended U2: an account whose login ended", () => {
+  function museFirst(s: Store, fallback = " claude:opus:high") {
+    s.upsert("config", { project: "fx", file: "roles.conf", key: "builder" }, { value: `muse muse-spark-1.3 ondemand max${fallback}`, observed_at: T });
+    s.upsert("observed_accounts", { agent: "muse", account: "default" }, { session_pct: "-", weekly_pct: "-", observed_at: T });
+    holdLogin(s, { agent: "muse", account: "default", from: "probe" }, T - 60);
+  }
+  test("leaves the account out with block `login` until the operator clears it", () => {
+    const s = fixture();
+    museFirst(s);
+    expect(accountBlock(s, "muse", "default", T)).toBe("login");
+    const p = ok(builder(s));
+    expect(p).toMatchObject({ agent: "claude", fallback: true });
+    expect(p.why).toContain("default login ended");
+    expect(setAccountEnabled(s, { agent: "muse", account: "default", enabled: true, by: "test" }, T)).toMatchObject({ cleared: true });
+    expect(ok(builder(s))).toMatchObject({ agent: "muse", fallback: false });
+  });
+  test("a ladder with no other rung waits until the hold's end and names it", () => {
+    const s = fixture();
+    museFirst(s, " -");
+    const w = builder(s) as Waiting;
+    expect(w.wait).toBe(T - 60 + 3600);
+    expect(w.reason).toContain("muse:default login ended");
   });
 });
 

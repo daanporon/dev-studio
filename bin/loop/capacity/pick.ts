@@ -50,6 +50,7 @@ import { memberIds, type Row, type Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { accountDisabled, DISABLED } from "./accounts.ts";
 import { creditsHolds, OUT_OF_CREDITS } from "./credits.ts";
+import { LOGIN_ENDED, loginHolds } from "./login.ts";
 import { newBuilderStart, slot, type Asker } from "./slot.ts";
 import { memo } from "./walk-memo.ts";
 import { hostCrit, hostCritHit, sampleState, type CritHit, type SampleState } from "./machine-level.ts";
@@ -76,7 +77,7 @@ export const rungTag = (r: { agent: string; model: string; plan?: string | null 
 export const accountPlan = (store: Store, agent: string, account: string | null): string | null =>
   account ? (store.get("observed_accounts", { agent, account })?.plan as string | null) ?? null : null;
 export const matchesPlan = (plan: string | null, actual: string | null) => !plan || plan === actual;
-type Acct = { plan: string | null; account: string; pct: number; reset: number | null; weekly: number; wreset: number | null; noWindow: boolean; unknown: boolean; until: number; draining: boolean; disabled: boolean; credits?: boolean };
+type Acct = { plan: string | null; account: string; pct: number; reset: number | null; weekly: number; wreset: number | null; noWindow: boolean; unknown: boolean; until: number; draining: boolean; disabled: boolean; credits?: boolean; login?: boolean };
 
 export const ENV: Record<string, string> = { pick_session_max: "DS_PICK_SESSION_MAX", pick_weekly_max: "DS_PICK_WEEKLY_MAX" };
 const DEFAULTS: Record<string, string> = {
@@ -270,6 +271,12 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
     const [a, acct] = k.split("/");
     if (a === agent && acct) { credits.add(acct); later(acct, t); }
   }
+  // claude-login-ended U2: so does a live login hold (login.ts), named `login ended`.
+  const login = new Set<string>();
+  for (const [k, t] of loginHolds(store, now)) {
+    const [a, acct] = k.split("/");
+    if (a === agent && acct) { login.add(acct); later(acct, t); }
+  }
   for (const m of store.db.query("SELECT account, limited_until FROM members WHERE agent = ? AND account IS NOT NULL AND limited_until > ? AND COALESCE(status, '') NOT IN ('gone', 'closed')").all(agent, now) as Row[]) {
     later(String(m.account), n(m.limited_until));
   }
@@ -288,6 +295,7 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
       plan: (r.plan as string | null) || null, account: String(r.account), pct: over ? 0 : sp ?? 0, reset: sr !== null && sr > now ? sr : null, weekly: wr !== null && wr <= now ? 0 : wp ?? 0,
       wreset: wr !== null && wr > now ? wr : null, noWindow, unknown: !!r.unknown || !fetched, until: until.get(String(r.account)) ?? 0, draining: r.state === "draining", disabled: r.state === DISABLED,
       ...(credits.has(String(r.account)) ? { credits: true } : {}),
+      ...(login.has(String(r.account)) ? { login: true } : {}),
     };
   });
 }
@@ -303,6 +311,7 @@ export function accountBlock(store: Store, agent: string, account: string, now: 
   if (!a) return list ? "gone" : null;
   if (a.disabled) return "disabled";
   if (a.credits) return "credits";
+  if (a.login) return "login";
   if (a.until > now) return "limited";
   if (a.draining) return "draining";
   if (["claude", "muse"].includes(agent) && a.weekly >= limitNum(store, project, "pick_weekly_max")) return "weekly";
@@ -436,6 +445,7 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   const tried: string[] = [];
   const skipped: string[] = [];   // each higher rung left and why, for the fallback pick's why
   const broke = new Set<string>();   // U2: <agent>:<account> held out of credits, named in a wait's reason
+  const loggedOut = new Set<string>();   // claude-login-ended U2: <agent>:<account> whose login ended, the same
   let off = false;                // the override's or explicit account is disabled
 
   for (let i = 0; i < floor.n; i++) {
@@ -460,8 +470,9 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
       if (a.draining && !account) { why.push(`${a.account} draining`); continue; }
       const blocks: (number | null)[] = [];
       if (a.until > now) {
-        blocks.push(a.until); why.push(`${a.account} ${a.credits ? OUT_OF_CREDITS : "limited"}`);
+        blocks.push(a.until); why.push(`${a.account} ${a.credits ? OUT_OF_CREDITS : a.login ? LOGIN_ENDED : "limited"}`);
         if (a.credits) broke.add(`${r.agent}:${a.account}`);
+        else if (a.login) loggedOut.add(`${r.agent}:${a.account}`);
       }
       if (["claude", "muse"].includes(r.agent) && a.weekly >= wmax) { blocks.push(a.wreset); why.push(`${a.account} weekly ${a.weekly}% >= ${wmax}%`); }
       if (!account && !a.noWindow) {
@@ -495,7 +506,8 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   const until = `wait until ${known ? at : `${at} (no known reset)`}`;
   if (off) return { wait: at, known, why: "wait", reason: `${how}: account disabled (${account}); ${until}` };
   const credits = broke.size ? `; ${[...broke].join(", ")} ${OUT_OF_CREDITS}` : "";
-  return { wait: at, known, why: "wait", reason: `${how}: no account with room on ${tried.join(", ")}${below}${credits}; ${until}` };
+  const login = loggedOut.size ? `; ${[...loggedOut].join(", ")} ${LOGIN_ENDED}` : "";
+  return { wait: at, known, why: "wait", reason: `${how}: no account with room on ${tried.join(", ")}${below}${credits}${login}; ${until}` };
 }
 
 // Match the running/held place to its step, including the account's plan. A stored step plan
