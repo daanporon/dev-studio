@@ -18,12 +18,21 @@ import type { Action, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { paused } from "../pause/pause.ts";
+import { offOrca } from "../squad/backend.ts";
 import { studioReady, studioView } from "../squad/studio.ts";
+import { STUDIO_MEMBER, sendFailed, sendOk } from "../squad/send-fail.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
 import { clearSending, markDelivered, markSending } from "../messages/messages.ts";
 
 const verifyTries = () => envInt("DS_LOOP_VERIFY_TRIES", 2);
 export const CHAT_TAKE_S = 60;
+// U20b: a send that is only `accepted` on a backend off Orca (tmux, herdr: no `turn_started`) gets this long
+// to be taken before it is resent; the contract observer reads the member `working` a few seconds later.
+// Orca's sends keep their 1 s.
+const takeS = () => envInt("DS_LOOP_DELIVERY_TAKE_S", 30);
+function verifyAfter(store: Store, project: string, member: string, at: number): number {
+  return at + (offOrca(store, project).wts.has(member) ? takeS() : 1);
+}
 type P = ActionPayload<"poke">;
 
 // Taken since the send: the turn the text asked for ran. Seen working is the direct case; a
@@ -35,12 +44,17 @@ function working(store: Store, d: Row): boolean {
   const w = store.db.query("SELECT state, since, observed_at FROM observed_workers WHERE project = ? AND wt = ?").get(String(d.project), String(d.member)) as Row | null;
   if (!w) return false;
   if (w.state === "working" && Number(w.observed_at) >= Number(d.at)) return true;
+  // U20b: off Orca the transcript growing since the send is the agent taking it (no native state to read).
+  if (offOrca(store, String(d.project)).wts.has(String(d.member))) {
+    const t = store.db.query("SELECT MAX(mtime) AS t FROM observed_transcripts WHERE project = ? AND wt = ?").get(String(d.project), String(d.member)) as { t: number | null };
+    if (t.t != null && Number(t.t) > Number(d.at)) return true;
+  }
   return (w.state === "done" || w.state === "idle") && w.since != null && Number(w.since) >= Number(d.at);
 }
 
 export function deliver(store: Store, d: { project: string; squad: string | null; member: string; kind: string; text: string; request?: number | null }, at: number): number {
   const r = store.db.run("INSERT INTO deliveries (project, squad, member, kind, text, request, tries, state, at, verify_at) VALUES (?, ?, ?, ?, ?, ?, 1, 'accepted', ?, ?)",
-    [d.project, d.squad, d.member, d.kind, d.text, d.request ?? null, at, at + 1]);
+    [d.project, d.squad, d.member, d.kind, d.text, d.request ?? null, at, verifyAfter(store, d.project, d.member, at)]);
   return Number(r.lastInsertRowid);
 }
 
@@ -100,7 +114,10 @@ const poke: Fulfiller = {
       }
       const seat = x.act.seat(store, a.project, a.squad ?? null, `${a.subject}:${a.episode}`, wt, at);
       const r = await seat.send("poke-terminal", [p.handle, p.text]);
-      return r.code === 0 ? { done: true, result: "sent" } : { retry: `poke-terminal ${p.handle}: not sent` };
+      if (r.code === 0) { sendOk(x.store, a.project, STUDIO_MEMBER, at); return { done: true, result: "sent" }; }
+      const err = (r.err || r.out || "").trim();
+      sendFailed(x.store, a.project, STUDIO_MEMBER, err || `poke-terminal exit ${r.code}`, at);
+      return { retry: `poke-terminal ${p.handle}: not sent${err ? `: ${err}` : ""}` };
     }
     const m = memberAt(store, a, wt);
     const seat = x.act.seat(store, a.project, a.squad ?? m.squad, `${a.subject}:${a.episode}`, wt, at);
@@ -113,7 +130,7 @@ const poke: Fulfiller = {
     if (r === "failed") { clearSending(store, sending); return { retry: `poke ${wt}: not sent` }; }
     if (p.delivery != null) {
       const d = store.get("deliveries", { id: p.delivery })!;
-      setDelivery(store, p.delivery, r === "started" ? { state: "verified", tries: Number(d.tries) + 1, at, settled_at: at } : { tries: Number(d.tries) + 1, at, verify_at: at + 1 }, "delivery_sent", d);
+      setDelivery(store, p.delivery, r === "started" ? { state: "verified", tries: Number(d.tries) + 1, at, settled_at: at } : { tries: Number(d.tries) + 1, at, verify_at: verifyAfter(store, a.project, wt, at) }, "delivery_sent", d);
       return { done: true, result: r };
     }
     // U45: a message wake that went out (started or accepted) delivered its rows.

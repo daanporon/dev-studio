@@ -11,6 +11,7 @@ import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsS
 import { basename, dirname, join, resolve } from "node:path";
 import { cachedRead, canonRead, countDrop, countSpawn, dropCached, runsOfWrite, type SpawnKind } from "./orca-cache.ts";
 import { clientRead, orcaClientOn, streams } from "./orca-client.ts";
+import { bashQ, claudeLine, claudeSettings, markTrusted, orcaData, systemJsonDir, utf8Locale, type ClaudeConfig, type LaunchLine } from "../loop/drivers/claude-launch.ts";
 
 type Env = Record<string, string | undefined>;
 type Sink = (b: string | Uint8Array) => void;
@@ -163,8 +164,7 @@ const latin1 = (b: Uint8Array): string => Buffer.from(b).toString("latin1");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Where Orca keeps its data (profiles, the bundled CLI). */
-export const orcaData = (env: Env): string =>
-  env.DS_ORCA_DATA || env.ORCA_USER_DATA_PATH || join(env.XDG_CONFIG_HOME || `${env.HOME}/.config`, "orca");
+export { orcaData };
 const claudeSys = (env: Env): string => env.DS_CLAUDE_HOME || `${env.HOME}/.claude`;
 
 type Ran = { code: number; out: Uint8Array; err: Uint8Array };
@@ -488,6 +488,20 @@ export function nameUnlock(env: Env, key: string): void {
   try { rmdirSync(dir); } catch { /* another holder's file */ }
 }
 
+/** The fields of an Orca worktree the `orca` worktree provider reads (wt-make, wt-show, wt-list). */
+// `childWorktreeIds` only when Orca gives it (worktree show does; docs/backends/orca-probe.md): the nesting the
+// trial record shows (`ds trial snapshot`, orca-backend-alternatives U16a).
+const wtSlim = (w: Record<string, unknown>) => ({ id: w.id ?? null, path: w.path ?? null, branch: w.branch ?? null,
+  head: w.head ?? null, parentWorktreeId: w.parentWorktreeId ?? null,
+  ...(Array.isArray(w.childWorktreeIds) ? { childWorktreeIds: w.childWorktreeIds as unknown[] } : {}) });
+/** `result.worktree` of an Orca JSON answer, slimmed; null when the answer holds none. */
+function wtJson(out: string): ReturnType<typeof wtSlim> | null {
+  try {
+    const w = JSON.parse(out)?.result?.worktree;
+    return w && typeof w === "object" && w.id && w.path ? wtSlim(w) : null;
+  } catch { return null; }
+}
+
 /** wt_create <repo> <name> [parent] [extra args] -> the worktree id. Idempotent: reuses a LIVE worktree
  *  with this displayName (it carries the ds-<label>-<role>-<topic> namespace), never an archived one (a
  *  torn-down ds-<label>-… must not be started back to life). Never matches the repo by the ps row's .path:
@@ -738,14 +752,23 @@ export function claudeResets(d: unknown, now: number): Record<string, unknown> {
  *  `resets` is the account's free-resets JSON from the same answer, or null when there was no readable
  *  answer (the last one read stays). */
 /** An account's OAuth access token and its expiresAt (ms, "" when absent) from `<home>/.credentials.json`;
- *  `tok` is "" when there is none. */
-function claudeToken(home: string): { tok: string; exp: string } {
+ *  `tok` is "" when there is none. `ended` is true when Claude Code ended the login: `claudeAiOauth.loginEnded`
+ *  is a non-empty string, or `claudeAiOauth` is there with an empty access token and an empty refresh token.
+ *  Only those three fields are read; the refresh token's value is never kept or printed. */
+function claudeToken(home: string): { tok: string; exp: string; ended: boolean } {
   let cred: any;
   try { cred = docs(readFileSync(`${home}/.credentials.json`, "utf8"))[0]; } catch { cred = undefined; }
-  let tok = "", exp = "";
+  let tok = "", exp = "", ended = false;
   try { const t = idx(idx(cred, "claudeAiOauth"), "accessToken"); tok = truthy(t) ? raw(t) : ""; } catch { tok = ""; }
   try { const x = idx(idx(cred, "claudeAiOauth"), "expiresAt"); exp = truthy(x) ? raw(x) : ""; } catch { exp = ""; }
-  return { tok, exp };
+  try {
+    const oa = idx(cred, "claudeAiOauth");
+    if (isObj(oa)) {
+      const le = oa.loginEnded, rt = oa.refreshToken;
+      ended = (typeof le === "string" && le !== "") || (!tok && !(typeof rt === "string" && rt !== ""));
+    }
+  } catch { ended = false; }
+  return { tok, exp, ended };
 }
 const tokenExpired = (exp: string, now: number): boolean => isNum(exp) && !(Math.floor(Number(exp) / 1000) > now);
 /** One Claude API call with an account's token: curl with the token on stdin (`-K -`, never in argv where
@@ -990,9 +1013,19 @@ export async function accountUsage(ctx: Ctx): Promise<void> {
     const [agent, id] = readTabs(l, 3);
     if (agent !== "claude" || !id) continue;
     const f = `${dir}/claude-${id}.tsv`;
+    const home = accountHome(env, id);
+    // An ended login is read from the credentials file before the cache: it needs no usage call, replaces any
+    // old figures, and a cached `login ended` row is dropped once the file has a token again.
+    if (claudeToken(home).ended) {
+      const ended = `-\t-\t-\t-\tlogin ended · ${id === "system" ? "default config" : `CLAUDE_CONFIG_DIR=${home}`}`;
+      cache(f, ended);
+      ctx.out(`claude\t${id}\t${ended}\n`);
+      continue;
+    }
     let row = cached(f, ttl, now, failTtl);
+    if (row !== null && row.split("\t")[4]?.startsWith("login ended")) row = null;
     if (row === null) {
-      const got = await usageFetch(ctx, accountHome(env, id));
+      const got = await usageFetch(ctx, home);
       row = keepStale(f, got.row, now); cache(f, row);
       if (got.resets !== null) cache(`${dir}/claude-${id}.resets.json`, got.resets, "utf8");
     }
@@ -1128,6 +1161,8 @@ const MUSE_LIMIT_RE = `^${SP}*${B("◆")} Usage limit reached ${B("·")} /upgrad
 // A billing error (kind credits): the provider's exact phrase, each on its own agent's worker (Claude's on one
 // with no known agent too); keep in step with fingerprints.ts.
 const CLAUDE_CREDITS_RE = `^${SP}*${B("⎿")}(${SP}|${NBSP})*(API Error: 402([^A-Za-z0-9_]|$)|Credit balance is too low)`;
+// An ended Claude login: the last line of the entry ends `· Please run /login` (Claude's own agent only).
+const CLAUDE_LOGIN_RE = `^${SP}*${B("⎿")}(${SP}|${NBSP})*.*${B("·")} Please run /login${SP}*$`;
 const MUSE_CREDITS_RE = `^${SP}*${B("◆")} model failed: API error 402([^A-Za-z0-9_]|$)`;
 const CODEX_CREDITS_RE = `^${SP}*${B("■")}${SP}*.*insufficient_quota`;
 const MUSE_ENTRY_RE = new RegExp(`^${SP}*${B("◆")}`, "s");
@@ -1260,11 +1295,13 @@ export async function limited(ctx: Ctx): Promise<Uint8Array> {
     const wagent = agentRows.find(([cwd]) => p !== "" && (cwd === p || cwd.startsWith(p + "/")))?.[1] ?? "";
     const lre = new RegExp(wagent === "muse" ? `${LIMIT_RE}|${MUSE_LIMIT_RE}` : wagent === "codex" ? `${LIMIT_RE}|${CODEX_LIMIT_RE}` : LIMIT_RE, "is");
     const cre = new RegExp(wagent === "muse" ? MUSE_CREDITS_RE : wagent === "codex" ? CODEX_CREDITS_RE : wagent === "" || wagent === "claude" ? CLAUDE_CREDITS_RE : "(?!)", "is");
+    const gre = new RegExp(wagent === "" || wagent === "claude" ? CLAUDE_LOGIN_RE : "(?!)", "is");
     let at = -1;
-    tailw.forEach((l, i) => { if (lre.test(l) || cre.test(l)) at = i; });
+    tailw.forEach((l, i) => { if (lre.test(l) || cre.test(l) || gre.test(l)) at = i; });
     if (at < 0) continue;
     if (tailw.slice(at + 1).some((l) => ENTRY_RE.test(l) || (wagent === "muse" && MUSE_ENTRY_RE.test(l)))) continue;
-    const credits = cre.test(tailw[at]);
+    const login = gre.test(tailw[at]);
+    const credits = cre.test(tailw[at]) || login;
     if (recent && !credits) continue;
     // A narrow pane wraps the notice ("resets Nov 2,\n     6pm (Europe/Berlin)"): the reset is read across
     // the lines indented under it; the notice stays its first line.
@@ -1281,7 +1318,7 @@ export async function limited(ctx: Ctx): Promise<Uint8Array> {
     const reset = credits ? "-" : limitReset(env, notice + wrap, anchor, dlg);
     if (st === "working" && !dlg && now - anchor < silent * 60) continue;
     // 4th field `dialog` or `-`, 5th `credits`: `-` keeps bash `read` from merging two tabs in a row.
-    out.push(Buffer.from(`${wt}\t${reset}\t${notice.slice(0, 160)}${credits ? "\t-\tcredits" : dlg ? "\tdialog" : ""}\n`, "latin1"));
+    out.push(Buffer.from(`${wt}\t${reset}\t${notice.slice(0, 160)}${login ? "\t-\tlogin" : credits ? "\t-\tcredits" : dlg ? "\tdialog" : ""}\n`, "latin1"));
   }
   screensSave(kept);
   return Buffer.concat(out);
@@ -1608,14 +1645,21 @@ const INBOX: Record<string, Verb> = {
     ctx.out(`send-run-worker: delivered to ${got || to} (${id})\n`);
     return 0;
   },
-  /** <subject> <body> -> complete THIS terminal's active dispatch with outcome succeeded
-   *  (bin/role/finish-unit.sh ends a Builder's unit with this). Discovers the ids itself — the dispatch via
+  /** [--outcome succeeded|failed] <subject> <body> -> complete THIS terminal's active dispatch with that outcome
+   *  (default succeeded; bin/role/finish-unit.sh ends a Builder's unit with this, --failed with failed). Discovers the ids itself — the dispatch via
    *  `check --peek` on $ORCA_TERMINAL_HANDLE (marks nothing read), task + sender handle via `worker-show` — so
    *  the caller passes no ids and can't complete the wrong dispatch. HOST-CONFIRMED 2026-10-28: `check
    *  --peek` carries .result.dispatchId even with zero unread (envelope metadata, not a message), and
    *  `worker-show` carries .result.dispatch.taskId + .assigneeHandle (docs/orca-notes.md). */
   async "worker-done"(ctx, a) {
-    if (a.length < 2) { ctx.err("usage: worker-done <subject> <body>\n"); return 2; }
+    const usage = () => { ctx.err("usage: worker-done [--outcome succeeded|failed] <subject> <body>\n"); return 2; };
+    let outcome = "succeeded";
+    if (a[0] === "--outcome") {
+      outcome = a[1] ?? "";
+      if (outcome !== "succeeded" && outcome !== "failed") return usage();
+      a = a.slice(2);
+    }
+    if (a.length < 2) return usage();
     const me = ctx.env.ORCA_TERMINAL_HANDLE;
     if (!me) { ctx.err("orca adapter: worker-done needs ORCA_TERMINAL_HANDLE — run it in the dispatched worker's own terminal\n"); return 1; }
     const check = await inboxCheck(ctx, ["--terminal", me, "--peek"]);
@@ -1632,7 +1676,7 @@ const INBOX: Record<string, Verb> = {
     const task = sp < 0 ? ids : ids.slice(0, sp), from = sp < 0 ? ids : ids.slice(sp + 1);
     if (!task || !from) { ctx.err(`orca adapter: worker-done could not resolve task/sender for dispatch ${disp}\n`); return 1; }
     const s = await orca(ctx, ["orchestration", "send", "--from", from, "--type", "worker_done", "--subject", a[0], "--body", a[1],
-      "--task-id", task, "--dispatch-id", disp, "--outcome", "succeeded", "--json", "--full"]);
+      "--task-id", task, "--dispatch-id", disp, "--outcome", outcome, "--json", "--full"]);
     if (s.code !== 0) { ctx.err(`orca adapter: worker-done failed for task ${task} (dispatch ${disp}; see error above)\n`); return 1; }
     ctx.out(`worker-done: completed task ${task} (dispatch ${disp})\n`);
     return 0;
@@ -1922,11 +1966,19 @@ async function liveAgent(ctx: Ctx, verb: string, wt: string): Promise<string> {
   return h;
 }
 
+/** Is <handle> a live AGENT terminal (agent_terminal's selector)? A plain shell would run typed text as a command. */
+async function agentHandle(ctx: Ctx, handle: string): Promise<boolean> {
+  const l = await orca(ctx, LIST, "drop");
+  const j = jq(l.out, (d, emit) => emit(terminalsOf(d).filter((t) => idx(t, "handle") === handle && isAgent(t)).length > 0));
+  return pipe(l.code, jqE(j)) === 0;
+}
+
 /** The terminal verbs (U225). */
 const TERMINALS: Record<string, Verb> = {
-  /** <worktree_id> <title> -> "<handle>\t<pane key>" of a new plain shell terminal: the loop's sender terminal
-   *  for one Run (docs/spikes/loop-coordinator.md). The pane key (tabId:leafId) is what Orca matches the Run's
-   *  coordinator by; it is read back from `terminal list` (empty when not listed yet). */
+  /** <worktree_id> <title> [command] -> "<handle>\t<pane key>" of a new plain shell terminal: the loop's sender
+   *  terminal for one Run (docs/spikes/loop-coordinator.md), or an orca-lite member's tab (bin/backend/orca-lite.ts,
+   *  whose env rides on [command], typed into the new shell). The pane key (tabId:leafId) is what Orca matches the
+   *  Run's coordinator by; it is read back from `terminal list` (empty when not listed yet). */
   async "terminal-create"(ctx, a) {
     // A missing argument fails the create's subshell, then the failure line (whose own $1 may be unbound).
     if (!need(ctx, a, 2)) {
@@ -1934,7 +1986,8 @@ const TERMINALS: Record<string, Verb> = {
       ctx.err(`orca adapter: terminal-create failed in ${a[0]}\n`);
       return 1;
     }
-    const c = await orca(ctx, ["terminal", "create", "--worktree", `id:${a[0]}`, "--title", a[1], "--json"]);
+    const cmd = blank(a[2]);
+    const c = await orca(ctx, ["terminal", "create", "--worktree", `id:${a[0]}`, "--title", a[1], ...(cmd ? ["--command", cmd] : []), "--json"]);
     const j = jq(c.out, (d, emit) => some(emit, idx(idx(idx(d, "result"), "terminal"), "handle")));
     jqErrs(ctx, j);
     if (pipe(c.code, jqE(j)) !== 0) { ctx.err(`orca adapter: terminal-create failed in ${a[0]}\n`); return 1; }
@@ -2043,6 +2096,72 @@ const TERMINALS: Record<string, Verb> = {
     if (r.code !== 0) { say("failed"); return 1; }
     if (jqr(out, (d, emit) => { if (idx(d, "ok") === false) emit("false"); }) === "false") { say("refused"); return 1; }
     ctx.out(`terminal-close: closed ${a[0]}\n`);
+    return 0;
+  },
+  /** -> "<handle>\t<worktreeId>\t<tabId:leafId>\t<last output, epoch s|->" per terminal Orca lists that is not
+   *  orphaned, agent or plain shell alike (the orca-lite backend's list, bin/backend/orca-lite.ts); an empty pane key
+   *  or worktree when Orca gives none. Exit 1 when the list can't be read or parsed. */
+  async "terminal-panes"(ctx) {
+    const l = await orca(ctx, LIST, "drop");
+    let ts: unknown;
+    try { ts = l.code === 0 ? (JSON.parse(l.out) as { result?: { terminals?: unknown } }).result?.terminals : null; } catch { ts = null; }
+    if (!Array.isArray(ts)) { ctx.err("orca adapter: terminal-panes could not read the terminal list\n"); return 1; }
+    const flat = (v: unknown) => (typeof v === "string" ? v.replace(/[\t\n]/g, " ") : "");
+    for (const t of ts as Record<string, unknown>[]) {
+      if (!t || typeof t.handle !== "string" || t.orphaned === true) continue;
+      const pane = t.tabId && t.leafId ? `${flat(t.tabId)}:${flat(t.leafId)}` : "";
+      const out = typeof t.lastOutputAt === "number" ? String(Math.floor(t.lastOutputAt / 1000)) : "-";
+      ctx.out(`${flat(t.handle)}\t${flat(t.worktreeId)}\t${pane}\t${out}\n`);
+    }
+    return 0;
+  },
+  /** <handle> <text> [enter] -> write <text> to that terminal as is (control bytes pass through), plain shell or
+   *  agent, with Enter after it when `enter` is given; prints `turn_started` when Orca's receipt saw the agent start
+   *  a turn (it waits up to 10 s for one), else `accepted` (orca-lite's terminal.send). Exit 1 = the send failed. */
+  async "terminal-type"(ctx, a) {
+    if (!need(ctx, a, 2)) return 1;
+    const enter = a[2] === "enter";
+    const r = await orca(ctx, ["terminal", "send", "--terminal", a[0], "--text", a[1], ...(enter ? ["--enter", "--wait-submit", "10"] : []), "--json"], "keep");
+    let d: { ok?: unknown; result?: { send?: { prompt?: { stages?: unknown } } } } | null = null;
+    try { d = JSON.parse(chomp(r.out)); } catch { d = null; }
+    if (r.code !== 0 || d?.ok === false) { ctx.err(`orca adapter: terminal-type: terminal send failed for ${a[0]}: ${chomp(r.out + r.err).slice(0, 300)}\n`); return 1; }
+    const stages = d?.result?.send?.prompt?.stages;
+    ctx.out(`${enter && Array.isArray(stages) && stages.includes("turn_started") ? "turn_started" : "accepted"}\n`);
+    return 0;
+  },
+  /** <handle> [screen|stream] [limit] -> that terminal's output, one line each: the rendered screen with `screen`,
+   *  else the accumulated output (escape sequences stripped), at most [limit] lines (orca-lite's terminal.read).
+   *  Exit 3 when Orca has no such terminal, 1 when the read failed. */
+  async "terminal-read"(ctx, a) {
+    if (!need(ctx, a, 1)) return 1;
+    const limit = /^[1-9][0-9]*$/.test(a[2] ?? "") ? a[2] : "";
+    const r = await orca(ctx, ["terminal", "read", "--terminal", a[0], ...(a[1] === "screen" ? ["--screen"] : []), ...(limit ? ["--limit", limit] : []), "--json"], "keep");
+    let d: { ok?: unknown; result?: { terminal?: { tail?: unknown } } } | null = null;
+    try { d = JSON.parse(chomp(r.out)); } catch { d = null; }
+    const tail = d?.result?.terminal?.tail;
+    if (r.code === 0 && Array.isArray(tail)) {
+      const lines = tail.map((x) => (typeof x === "string" ? x : ""));
+      ctx.out(lines.length ? `${lines.join("\n")}\n` : "");
+      return 0;
+    }
+    if (/not_found/.test(r.out + r.err)) return 3;
+    ctx.err(`orca adapter: terminal-read failed for ${a[0]}: ${chomp(r.out + r.err).slice(0, 300)}\n`);
+    return 1;
+  },
+  /** <worktree_id> <tabId:leafId> -> the state `worktree ps` gives the agent in that pane (`working`, `waiting`,
+   *  `done`, …), or nothing when ps lists no agent there: Orca reports a plain tab's agent only in a worktree
+   *  `orca worktree create` made (docs/backends/orca-probe.md Q5). orca-lite's agent.state. */
+  async "pane-state"(ctx, a) {
+    if (!need(ctx, a, 2)) return 1;
+    for (const d of await psIns(ctx)) {
+      const wts = (d as { result?: { worktrees?: unknown } })?.result?.worktrees;
+      if (!Array.isArray(wts)) continue;
+      for (const w of wts as { worktreeId?: unknown; agents?: unknown }[]) {
+        if (w?.worktreeId !== a[0] || !Array.isArray(w.agents)) continue;
+        const ag = (w.agents as { paneKey?: unknown; state?: unknown }[]).find((x) => x?.paneKey === a[1]);
+        if (ag && typeof ag.state === "string") { ctx.out(`${ag.state}\n`); return 0; }
+      }
+    }
     return 0;
   },
   /** <worktree-selector> [keep-handle|--strict] -> close EVERY terminal TAB on this worktree in ONE native call
@@ -2159,9 +2278,7 @@ const TERMINALS: Record<string, Verb> = {
   async "poke-terminal"(ctx, a) {
     if (!a[0]) { ctx.err("orca adapter: poke-terminal: needs a terminal handle\n"); return 1; }
     // Only a live AGENT terminal (agent_terminal's selector): a plain shell would run the line as a command.
-    const l = await orca(ctx, LIST, "drop");
-    const j = jq(l.out, (d, emit) => emit(terminalsOf(d).filter((t) => idx(t, "handle") === a[0] && isAgent(t)).length > 0));
-    if (pipe(l.code, jqE(j)) !== 0) { ctx.err(`orca adapter: poke-terminal: ${a[0]} is not a live agent terminal\n`); return 1; }
+    if (!(await agentHandle(ctx, a[0]))) { ctx.err(`orca adapter: poke-terminal: ${a[0]} is not a live agent terminal\n`); return 1; }
     if (!need(ctx, a, 2)) return 1;
     const r = await orca(ctx, ["terminal", "send", "--terminal", a[0], "--text", a[1], "--enter", "--json"], "drop");
     if (r.code !== 0) { ctx.err(`orca adapter: poke-terminal: terminal send failed for ${a[0]}\n`); return 1; }
@@ -2171,10 +2288,16 @@ const TERMINALS: Record<string, Verb> = {
    *  `enter` is given: a digit picks that option of a live AskUserQuestion picker at once (an Enter would
    *  select whichever option is highlighted). `enter` is a separate send: Orca refuses text + Enter in one
    *  send while a picker shows (agent_prompt_blocked). The board answers picker entries with it
-   *  (bin/loop/fulfil/answer.ts). Exit 1 = no agent terminal / failed. */
+   *  (bin/loop/fulfil/answer.ts). A `term_…` handle instead of a worktree types into that terminal when it is
+   *  a live agent terminal (the Studio's adopted one; board chat U19 sends Escape, arrows and digits through it).
+   *  Exit 1 = no agent terminal / failed. */
   async keys(ctx, a) {
     if (!need(ctx, a, 1)) return 1;
-    const h = await liveAgent(ctx, "keys", a[0]);
+    let h: string;
+    if (a[0].startsWith("term_")) {
+      if (!(await agentHandle(ctx, a[0]))) { ctx.err(`orca adapter: keys: ${a[0]} is not a live agent terminal\n`); return 1; }
+      h = a[0];
+    } else h = await liveAgent(ctx, "keys", a[0]);
     if (!h) return 1;
     if (!need(ctx, a, 2)) return 1;
     if ((await orca(ctx, ["terminal", "send", "--terminal", h, "--text", a[1], "--json"], "drop")).code !== 0) {
@@ -2384,43 +2507,14 @@ const wtPath = (wt: string): string => wt.replace(/^.*::/s, "");
 
 // --- printf %q -------------------------------------------------------------------------------------
 /** The shell's locale (LC_ALL, LC_CTYPE, LANG): a UTF-8 one prints a printable non-ASCII character as is. */
-const utf8Locale = (env: Env): boolean => /utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "");
-const Q_META = new Set([..." !\"$&'()*,;<>?[\\]^`{|}"]);
-const Q_ESC: Record<number, string> = { 7: "a", 8: "b", 9: "t", 10: "n", 11: "v", 12: "f", 13: "r", 27: "E", 39: "'", 92: "\\" };
-/** bash 5.2's `printf %q`: `''` for nothing; `$'…'` when a character is not printable (a control, or any
- *  non-ASCII outside a UTF-8 locale), its bytes in octal; else a backslash before each shell character. */
-export function bashQ(s: string, utf8: boolean): string {
-  if (s === "") return "''";
-  const cs = [...s];
-  const shown = (c: string): boolean => {
-    const n = c.codePointAt(0)!;
-    return n < 0x80 ? n >= 0x20 && n !== 0x7f : utf8 && !/\p{Cc}/u.test(c);
-  };
-  if (!cs.every(shown)) {
-    let r = "$'";
-    for (const c of cs) {
-      const n = c.codePointAt(0)!;
-      if (Q_ESC[n]) r += `\\${Q_ESC[n]}`;
-      else if (shown(c)) r += c;
-      else for (const b of Buffer.from(c)) r += `\\${b.toString(8).padStart(3, "0")}`;
-    }
-    return `${r}'`;
-  }
-  let r = "";
-  cs.forEach((c, i) => {
-    const tilde = c === "~" && (i === 0 || cs[i - 1] === "=" || cs[i - 1] === ":");
-    if (Q_META.has(c) || tilde || (c === "#" && i === 0)) r += "\\";
-    r += c;
-  });
-  return r;
-}
+export { bashQ };
 /** shim_path: `PATH=<bin/hooks/path-gates>:$PATH` for the front of a role's claude command (U235). The hook
  *  shims gate the lavish-axi / gh-axi / chrome-devtools-axi SessionStart hooks by role on every account
  *  without touching any settings.json (Orca rewrites a profile's). `$PATH` stays literal: the terminal's
  *  shell expands it. */
-function shimPath(env: Env): string {
+function gates(env: Env): string {
   const d = resolve(root(env), "bin", "hooks", "path-gates");
-  return `PATH=${bashQ(isDir(d) ? d : "", utf8Locale(env))}:$PATH`;
+  return isDir(d) ? d : "";
 }
 
 // --- the pause verbs' reads
@@ -2535,7 +2629,7 @@ async function onOtherAccount(ctx: Ctx, agent: string, acct: string): Promise<bo
 }
 /** claude_home: that account's Claude config dir, or null (said on stderr) when it does not exist. */
 function claudeHome(ctx: Ctx, acct: string): string | null {
-  const h = `${orcaData(ctx.env)}/claude-profiles/${acct}/home`;
+  const h = accountHome(ctx.env, acct);
   if (isDir(h)) return h;
   say(ctx, `orca adapter: no Claude home for account ${acct} (${h})`);
   return null;
@@ -2678,25 +2772,7 @@ function moveSessionFile(ctx: Ctx, srcRoot: string, dstRoot: string, src: string
  *  <dir>/.claude.json (projects[path].hasTrustDialogAccepted), so the TUI comes up without it. Best effort: a
  *  missing or non-JSON file is left alone, an already-trusted path is not rewritten, no other key is touched. */
 function claudeTrust(ctx: Ctx, dir: string, wt: string): void {
-  const f = `${dir}/.claude.json`, p = wtPath(wt);
-  let text: string | null = null;
-  try { if (statSync(f).isFile()) text = readFileSync(f, "utf8"); } catch { text = null; }
-  if (text === null || jqE(jq(text, (d, emit) => emit(d))) !== 0) { say(ctx, `orca adapter: not pre-trusting ${p}: no usable ${f}`); return; }
-  if (jqE(jq(text, (d, emit) => emit(idx(idx(idx(d, "projects"), p), "hasTrustDialogAccepted") === true))) === 0) return;
-  const trusted = jq(text, (d, emit) => {
-    if (d !== null && !isObj(d)) throw new JqError(`Cannot index ${jqType(d)} with "projects"`);
-    const projects = alt(idx(d, "projects"), {});
-    if (!isObj(projects)) throw new JqError(`Cannot index ${jqType(projects)} with "${p}"`);
-    const e = idx(projects, p);
-    if (e !== null && !isObj(e)) throw new JqError(`Cannot index ${jqType(e)} with "hasTrustDialogAccepted"`);
-    emit({ ...(d ?? {}), projects: { ...projects, [p]: { ...(e ?? {}), hasTrustDialogAccepted: true } } });
-  });
-  const tmp = `${dir}/.claude.json.${Math.random().toString(36).slice(2, 8).padEnd(6, "0")}`;
-  try { writeFileSync(tmp, "", { flag: "wx", mode: 0o600 }); } catch { return; }
-  if (trusted.code !== 0) { rmSync(tmp, { force: true }); return; }
-  writeFileSync(tmp, trusted.vals.map((v) => `${pretty(v)}\n`).join(""));
-  try { chmodSync(tmp, statSync(f).mode & 0o7777); } catch { /* best effort */ }
-  try { renameSync(tmp, f); } catch { rmSync(tmp, { force: true }); }
+  if (markTrusted(dir, wtPath(wt)) === "unusable") say(ctx, `orca adapter: not pre-trusting ${wtPath(wt)}: no usable ${dir}/.claude.json`);
 }
 
 /** tab_record: the file holding the handle of the tab this run's retry id owns. */
@@ -2760,30 +2836,33 @@ function noTab(ctx: Ctx, failure: string, where: Where, created: Call): null {
  *  It is launched through `env -u`, because with a managed account selected Orca's `claude` function
  *  re-selects that profile whenever the variable is unset; `env` is a binary, so it skips the function. */
 async function claudeTab(ctx: Ctx, wt: string, acct: string, args: string[]): Promise<string | null> {
-  const utf8 = utf8Locale(ctx.env), sys = ctx.env.DS_CLAUDE_SYSTEM_JSON_DIR || ctx.env.HOME || "";
-  let cmd: string;
-  if (acct === "system") {
-    claudeTrust(ctx, sys, wt);
-    cmd = `env -u CLAUDE_CONFIG_DIR ${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
-  } else if (acct) {
+  const sys = systemJsonDir(ctx.env);
+  let config: ClaudeConfig = null;
+  if (acct && acct !== "system") {
     const home = claudeHome(ctx, acct);
     if (home === null) return null;
     claudeTrust(ctx, home, wt);
-    cmd = `CLAUDE_CONFIG_DIR=${bashQ(home, utf8)} ${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
+    config = { home };
   } else {
     claudeTrust(ctx, sys, wt);
-    cmd = `${shimPath(ctx.env)} claude --dangerously-skip-permissions`;
+    if (acct) config = { system: true };
   }
-  for (const a of args) cmd += ` ${bashQ(a, utf8)}`;
+  const cmd = claudeLine({ config, gates: gates(ctx.env), identity: identity(ctx, wt), args, utf8: utf8Locale(ctx.env) });
   const { h, created } = await openTab(ctx, wt, `claude${acct ? `@${[...acct].slice(0, 8).join("")}` : ""}`, cmd);
   const where = { wt, account: acct };
   if (!h) return noTab(ctx, `could not open a terminal in ${wt} for account ${acct}`, where, created);
   return launched(ctx, h, `claude on account ${acct} never came up in ${wt}`, where);
 }
+/** The worker identity a loop start gives its terminal (U4 of orca-backend-alternatives, bin/loop/core/whoami.ts):
+ *  `DS_MEMBER=… DS_WT=… DS_GEN=… ` from the DS_START_MEMBER/DS_START_GEN the loop sent, empty for a start the loop
+ *  did not identify (an operator's script, a test, a role's shell, which may hold its own DS_MEMBER). */
+function identity(ctx: Ctx, wt: string): LaunchLine["identity"] {
+  const member = ctx.env.DS_START_MEMBER;
+  return member ? { member, wt: wtPath(wt), gen: ctx.env.DS_START_GEN || null } : null;
+}
 /** resume_tab: a tab running `claude --continue` on the default login. */
 async function resumeTab(ctx: Ctx, wt: string, model: string, args: string[]): Promise<string | null> {
-  let cmd = `${shimPath(ctx.env)} claude --continue --dangerously-skip-permissions --model ${model}`;
-  for (const a of args) cmd += ` ${bashQ(a, utf8Locale(ctx.env))}`;
+  const cmd = claudeLine({ config: null, gates: gates(ctx.env), identity: identity(ctx, wt), resume: model, args, utf8: utf8Locale(ctx.env) });
   const { h, created } = await openTab(ctx, wt, "resume", cmd);
   if (!h) return noTab(ctx, `worker-resume could not open a terminal in ${wt}`, { wt }, created);
   return launched(ctx, h, `worker-resume — claude --continue never came up in ${wt}`, { wt });
@@ -2898,8 +2977,7 @@ async function compactSettings(ctx: Ctx, window: string, wt: string): Promise<st
     ctx.err("jq: invalid JSON text passed to --argjson\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs  at https://jqlang.github.io/jq\n");
     return ["--settings", ""];
   }
-  const o = s.vals[0], den = d.bad || d.vals.length !== 1 ? [] : d.vals[0];
-  return ["--settings", pretty({ ...(win ? { env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: win } } : {}), ...(Object.keys(o).length > 0 ? { skillOverrides: o } : {}), ...(den.length > 0 ? { deniedMcpServers: den } : {}), ...(hasPlugins ? { enabledPlugins: plugins } : {}) }, 0)];
+  return claudeSettings({ window: win, skillOverrides: s.vals[0], denied: d.bad || d.vals.length !== 1 ? [] : d.vals[0], plugins });
 }
 /** forget_tab: a worker start failed: close its tab unless a replay needs it. Under a retry id that is what
  *  request-show says: absent means the actuator gives the next try a new id, which would never find this
@@ -2945,6 +3023,8 @@ async function dropNewTabs(ctx: Ctx, wt: string, before: string): Promise<void> 
  *  start only once they are gone. An agent mid-turn (its worktree's ps state is `working`) is never closed:
  *  refuse with exit 3 and `agent_busy` on stderr, so the caller can wait and retry. A close that fails, a
  *  terminal list that can't be read, or an agent still live afterwards also refuses (exit 1). No agent: no-op.
+ *  With DS_START_OLD_GONE=1 (U21c: the loop's fresh process walk found no agent) a `working` state is stale
+ *  and does not refuse: the terminals close as for an idle agent.
  *  A replay under a live retry id owns whatever its first attempt started: unless request-show says
  *  `absent`, defer to the start's own machinery (retryTab/runWorkerStart), which reuses that worker or
  *  refuses as `still pending`. */
@@ -2967,18 +3047,23 @@ async function guardFreshStart(ctx: Ctx, wt: string): Promise<number> {
   if (found.code !== 0) return refuse("could not parse the terminal list to check for a live agent");
   const handles = jqOut(found);
   if (!handles) return 0;
-  // Fail closed on busyness: an unparseable ps refuses rather than closing an agent that may be mid-turn.
-  const busy = jqOn(await psIns(ctx), (d, emit) => {
-    const states: unknown[] = [];
-    for (const w of each(idx(idx(d, "result"), "worktrees"))) {
-      if (idx(w, "worktreeId") === wt) for (const x of each(idx(w, "agents"))) states.push(idx(x, "state"));
+  // U21c: the loop walked this worktree right before the call and found no agent process while Orca still
+  // shows one working (a killed agent): DS_START_OLD_GONE skips the busy check and closes its terminals.
+  if (ctx.env.DS_START_OLD_GONE === "1") say(ctx, `orca adapter: worktree ${wt}: the loop found no agent process; closing the old agent terminals whatever Orca's state says`);
+  else {
+    // Fail closed on busyness: an unparseable ps refuses rather than closing an agent that may be mid-turn.
+    const busy = jqOn(await psIns(ctx), (d, emit) => {
+      const states: unknown[] = [];
+      for (const w of each(idx(idx(d, "result"), "worktrees"))) {
+        if (idx(w, "worktreeId") === wt) for (const x of each(idx(w, "agents"))) states.push(idx(x, "state"));
+      }
+      emit(jqIndex(states, "working") !== null);
+    });
+    if (busy.code !== 0) return refuse("could not read worktree ps to check for a mid-turn agent");
+    if (jqOut(busy) === "true") {
+      say(ctx, `orca adapter: agent_busy: worktree ${wt} has an agent mid-turn; refusing to start a second session`);
+      return 3;
     }
-    emit(jqIndex(states, "working") !== null);
-  });
-  if (busy.code !== 0) return refuse("could not read worktree ps to check for a mid-turn agent");
-  if (jqOut(busy) === "true") {
-    say(ctx, `orca adapter: agent_busy: worktree ${wt} has an agent mid-turn; refusing to start a second session`);
-    return 3;
   }
   for (const h of handles.split("\n")) {
     if (h && (await orca(ctx, ["terminal", "close", "--terminal", h], "drop")).code !== 0) return refuse(`could not close the old agent terminal ${h}`);
@@ -3723,6 +3808,45 @@ export const VERBS: Record<string, Verb> = {
     // orca prints its error JSON on STDOUT, so keep it and surface it.
     ctx.err(`${chomp(r.out + r.err)}\norca adapter: worktree rm failed for ${a[0]} (see error above)\n`);
     return 1;
+  },
+  /** <repo> <name> <branch> <base> [parent_path] -> the new worktree as one JSON line ({id, path, branch, head,
+   *  parentWorktreeId}): `orca worktree create` with no agent and no Run, setup hooks skipped, nested under
+   *  <parent_path> or explicitly top-level (the `orca` worktree provider, U8b). Orca picks the folder, and an
+   *  existing branch or taken name gets a `-2` suffix: the caller checks the answer. */
+  async "wt-make"(ctx, a) {
+    if (!need(ctx, a, 4)) return 1;
+    const parent = blank(a[4]);
+    const r = await orca(ctx, ["worktree", "create", "--repo", `path:${a[0]}`, "--name", a[1], "--branch", a[2], "--base-branch", a[3],
+      ...(parent ? ["--parent-worktree", `path:${parent}`] : ["--no-parent"]), "--setup", "skip", "--json"], "keep");
+    const w = r.code === 0 ? wtJson(r.out) : null;
+    if (w) { ctx.out(`${JSON.stringify(w)}\n`); return 0; }
+    ctx.err(`${chomp(r.out + r.err)}\norca adapter: wt-make failed (repo=${a[0]} name=${a[1]})\n`);
+    return 1;
+  },
+  /** <selector> -> the worktree as one JSON line (as wt-make prints it); exit 3 when Orca has no such worktree.
+   *  `path:<path>` finds a worktree Orca no longer lists too (docs/backends/orca-probe.md Q1). */
+  async "wt-show"(ctx, a) {
+    if (!need(ctx, a, 1)) return 1;
+    const r = await orca(ctx, ["worktree", "show", "--worktree", a[0], "--json"], "keep");
+    const w = r.code === 0 ? wtJson(r.out) : null;
+    if (w) { ctx.out(`${JSON.stringify(w)}\n`); return 0; }
+    if (/selector_not_found/.test(r.out + r.err)) return 3;
+    ctx.err(`${chomp(r.out + r.err)}\norca adapter: wt-show failed for ${a[0]}\n`);
+    return 1;
+  },
+  /** <repo> -> one JSON line per worktree Orca lists for the repo (as wt-make prints them), the main checkout
+   *  left out; exit 1 when the list cannot be read whole (a truncated list would read as worktrees gone). */
+  async "wt-list"(ctx, a) {
+    if (!need(ctx, a, 1)) return 1;
+    const r = await orca(ctx, ["worktree", "list", "--repo", `path:${a[0]}`, "--limit", "10000", "--json"], "keep");
+    let res: { worktrees?: unknown[]; truncated?: boolean } | null = null;
+    try { res = r.code === 0 ? JSON.parse(r.out).result : null; } catch { res = null; }
+    if (!res || !Array.isArray(res.worktrees) || res.truncated) {
+      ctx.err(`${chomp(r.out + r.err)}\norca adapter: wt-list failed for ${a[0]}${res?.truncated ? " (truncated)" : ""}\n`);
+      return 1;
+    }
+    for (const w of res.worktrees as Record<string, unknown>[]) if (!w.isMainWorktree) ctx.out(`${JSON.stringify(wtSlim(w))}\n`);
+    return 0;
   },
   /** <repo> <name> <agent> <prompt> [parent_wt] -> worktree id; create + launch the agent if absent. An empty
    *  <agent> creates the worktree only (/ds-up then opens the Studio with studio-start, U262). */

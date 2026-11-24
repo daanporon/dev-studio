@@ -24,8 +24,9 @@ function message(id: string, ans: string): string {
 }
 type P = ActionPayload<"answer">;
 const closed = (p: P) => pickerClosed(p.transcript, p.tool_use_id) !== false;
+// A `local::` worktree (a squad off Orca, U11b) has no card note to clear: the question was its card.
 const cardFree = (store: Store, a: Action, wt: string | undefined): wt is string =>
-  !!wt && !store.db.query("SELECT 1 FROM questions WHERE project = ? AND card_wt = ? AND status = 'open'").get(a.project, wt);
+  !!wt && !wt.startsWith("local::") && !store.db.query("SELECT 1 FROM questions WHERE project = ? AND card_wt = ? AND status = 'open'").get(a.project, wt);
 
 const answer: Fulfiller = {
   name: "answer",

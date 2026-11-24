@@ -40,16 +40,43 @@ export function stopping(store: Store, project: string, wt: string): boolean {
     return !cancel || !us.some(u => u.slug === cancel.unit && sharedBuilder(store, u));
   });
 }
-export function cancellationReality(store: Store, project: string, wt: string) {
-  const tree = wt ? store.get("observed_worktrees", { project, wt }) : null;
+// The worktree a cancelled Builder's id names: Orca's row, or (U11c) for a member of a squad on a contract
+// backend (`local::<path>`) its provider's `worktrees` row, read the same way (seen when it was made).
+// U16e: the provider's row wins over the contract observer's `observed_worktrees` row, which reads the
+// folder (never gone while it exists) and keeps only its agents count: a pooled tree (treehouse) keeps its
+// folder once returned, so only the row knows it went back.
+// Read straight from the table: store.ts → pause.ts imports this file, so io/worktrees.ts would be a cycle.
+function treeOf(store: Store, project: string, wt: string): Row | null {
+  const orca = wt ? store.get("observed_worktrees", { project, wt }) : null;
+  const r = wt.startsWith("local::") ? store.get("worktrees", { host: "local", path: wt.slice("local::".length) }) : null;
+  if (!r) return orca;
+  return { path: r.path, gone_at: r.gone_at, observed_at: r.created_at, doc: r.gone_at == null ? orca?.doc ?? null : null,
+    provider: r.provider, squad: r.squad, name: r.name };
+}
+// The name the contract seat gives a member's worktree (drivers/types.ts wtName, not imported: a cycle).
+const nameOf = (m: Row) => `${process.env.DS_PREFIX ?? "ds-"}${m.project}-${m.role}${m.suffix ? `-${m.suffix}` : ""}-${m.squad}`;
+// U16e: a pooled slot is leased again once returned, so a later member can sit at the cancelled Builder's
+// path (the same `local::<path>` id). Its provider row then names that member's worktree, not the
+// Builder's: the Builder's own tree is back in the pool (a slot is leased only once returned), and the
+// terminals and worker at the path are the new member's, never to be stopped or removed for this unit.
+function reusedBy(store: Store, project: string, wt: string, tree: Row | null, u?: Row): boolean {
+  if (!u || !tree?.provider || !tree.name) return false;
+  const m = store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? ORDER BY id DESC").get(project, String(u.squad), wt) as Row | null;
+  return !!m && (String(tree.squad ?? "") !== String(m.squad) || String(tree.name) !== nameOf(m));
+}
+export function cancellationReality(store: Store, project: string, wt: string, u?: Row) {
+  const tree = treeOf(store, project, wt);
+  const path = String(tree?.path ?? (wt.includes("::") ? wt.split("::").at(-1) : "") ?? "");
+  if (reusedBy(store, project, wt, tree, u))
+    return { tree: { ...tree, gone_at: tree?.gone_at ?? tree?.observed_at ?? 1, doc: null }, live: false, path, present: false, seen: Number(tree?.observed_at ?? 0), reused: true };
   const tabs = wt ? store.db.query("SELECT handle, observed_at FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle").all(project, wt) as Row[] : [];
   const worker = wt ? store.get("observed_workers", { project, wt }) : null;
   let agents = 0; try { agents = Number(JSON.parse(String(tree?.doc ?? "{}")).agents ?? 0); } catch {}
   const live = tabs.length > 0 || (tree?.gone_at == null && agents > 0) || (worker?.gone_at == null && ["working", "waiting"].includes(String(worker?.state)));
-  const path = String(tree?.path ?? (wt.includes("::") ? wt.split("::").at(-1) : "") ?? "");
-  const present = !!wt && ((!!tree && tree.gone_at == null) || (!!path && existsSync(path)));
+  // A provider's row is the truth for its tree: a pooled one (treehouse) keeps its folder once returned.
+  const present = !!wt && (tree?.provider ? tree.gone_at == null : (!!tree && tree.gone_at == null) || (!!path && existsSync(path)));
   const seen = Math.max(...tabs.map(t => Number(t.observed_at)), Number(tree?.observed_at ?? 0), Number(worker?.observed_at ?? 0));
-  return { tree, live, path, present, seen };
+  return { tree, live, path, present, seen, reused: false };
 }
 export function cancellationActions(ctx: TickCtx): Action[] {
   const { store, project, now } = ctx, out: Action[] = [];
@@ -59,8 +86,8 @@ export function cancellationActions(ctx: TickCtx): Action[] {
     const m = wt ? store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? ORDER BY id DESC").get(project, squad, wt) as Row | null : null;
     const shared = sharedBuilder(store, u);
     if (shared && m) clearCancellationWish(store, m, undefined, true);
-    if (!shared && m && m.want !== "gone") store.want("member", String(m.id), "gone", { by: "loop", payload: { cancel: { unit, into: u.superseded_by, why: u.cancel_reason } } });
-    const { tree, live, path, present, seen } = cancellationReality(store, project, wt);
+    const { tree, live, path, present, seen, reused } = cancellationReality(store, project, wt, u);
+    if (!shared && !reused && m && m.want !== "gone") store.want("member", String(m.id), "gone", { by: "loop", payload: { cancel: { unit, into: u.superseded_by, why: u.cancel_reason } } });
     const push = (kind: string, seen: number, payload: Row) => {
       const subject = kind === "cancel.pr" ? `${squad}/${unit}/pr` : wt;
       const prior = store.get("episodes", { project, subject, kind: `action:${kind}` });

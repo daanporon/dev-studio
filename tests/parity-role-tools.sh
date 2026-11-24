@@ -71,10 +71,13 @@ check "approve-handoff: no plan"        approve-handoff.sh @S/p/squads/t.json "$
 check "pause-checkpoint: no args"       pause-checkpoint.sh
 check "pause-checkpoint: no terminal"   pause-checkpoint.sh p sq lead - 1 note --commands-finished
 
-# ds-feedback's log line: the same text after the timestamp, in the same file
-for s in old new; do rm -f "$TMP/fb-$s"; done
-env DS_FEEDBACK_LOG="$TMP/fb-old" "$TMP/old/bin/role/ds-feedback.sh" "builder on p: a note" "and more" >/dev/null
-env DS_FEEDBACK_LOG="$TMP/fb-new" "$ROOT/bin/role/ds-feedback.sh" "builder on p: a note" "and more" >/dev/null
+# ds-feedback's log line: the same text after the timestamp, in the same file. The new side writes a
+# loop.db row first (ds-feedback-github-issues U1); with loop.db unopenable (a folder in its place) it
+# falls back to the old file, which is what is compared here.
+for s in old new; do rm -rf "$TMP/fb-$s" "$TMP/fbstate-$s"; mkdir -p "$TMP/fbstate-$s"; done
+mkdir "$TMP/fbstate-new/loop.db"
+env DS_STATE_ROOT="$TMP/fbstate-old" DS_FEEDBACK_LOG="$TMP/fb-old" "$TMP/old/bin/role/ds-feedback.sh" "builder on p: a note" "and more" >/dev/null
+env DS_STATE_ROOT="$TMP/fbstate-new" DS_FEEDBACK_LOG="$TMP/fb-new" "$ROOT/bin/role/ds-feedback.sh" "builder on p: a note" "and more" >/dev/null 2>&1
 if [ "$(sed 's/^- [^ ]* //' "$TMP/fb-old")" = "$(sed 's/^- [^ ]* //' "$TMP/fb-new")" ] \
    && [ "$(sed 's/[0-9]/N/g' "$TMP/fb-old")" = "$(sed 's/[0-9]/N/g' "$TMP/fb-new")" ]; then pass=$((pass + 1)); echo "ok   ds-feedback: log line"
 else fail=$((fail + 1)); echo "FAIL ds-feedback: log line"; fi

@@ -5,7 +5,8 @@
 // Answers only requests whose Host names this machine (DS_BOARD_HOSTS, space-separated names/IPs,
 // set by board.sh); any other Host gets 403, so a web page can't read the board via DNS rebinding.
 // The server only talks to loop.db: it never runs a command and never reads a state or conf file
-// (the page file is the one file read). Reads open loop.db read-only per request; a write is one
+// (the page file is the one file read; the one folder it writes and serves is a project's chat images,
+// `<state root>/<label>/chat-files/<topic>/`). Reads open loop.db read-only per request; a write is one
 // wish or `requests` row the loop fulfils on its next tick, answered 202 with the row's id — the
 // page then learns the outcome from the event log (GET /api/stream).
 //
@@ -29,13 +30,17 @@
 //   GET /api/chat?project=<label>&topic=<slug|_studio>&wt=<worktree>   one live member's turns from
 //                              observed_chat and its last 10 chats with their state (404: no such member)
 //   GET /api/messages?project=<label>&topic=<slug>[&wt=<worktree>]   that member's (or the squad's) message rows, newest first; a read, never an ack
+//   GET /api/chat-file?project=<label>&topic=<slug|_studio|_start>&name=<sha16>.<ext>   one stored chat image (and HEAD),
+//                              nosniff, a no-script CSP, cached a day (the name is a content hash); no member check
 //   GET /healthz               {ok, pid, port}: the loop's ping (the loop runs this server, U16)
+//   GET /page/<label>/pages/<topic>/<path>   one saved copy of a review page (sandboxed, read-only; saved-pages.ts)
 //   GET /lavish/<key>          302 to that Lavish review page; when Lavish is down, a `lavish`
 //                              request and a page that reloads until it is up
 // Writes (POST, JSON, same-origin), each a `requests` row unless said otherwise:
 //   /api/request  {project, action, topic?, role?, text?}  `studio`: the loop files the one-line
-//                 request for the Studio ("board: the operator asks you to run: /ds-…")
-//   /api/answer   {project, topic, id, answer}  the questions row answered via `board` and an
+//                 request for the Studio ("board: the operator asks you to run: /ds-…"); a start may add
+//                 `files`, up to 8 images uploaded to topic `_start` (a gone one is 409)
+//   /api/answer   {project, topic, id, answer, since?}  the questions row answered via `board` and an
 //                 `answer` row: the loop types it into the asker's terminal (the card's worktree,
 //                 else the Lead; a picker by keystroke). A Studio alert (topic _studio): `dismiss`,
 //                 even with an empty answer (one click); agent questions still need one.
@@ -43,9 +48,23 @@
 //   /api/pause, /api/resume {scope, project, topic?, wt?, role?, suffix?, prerequisites?}
 //                 shared activity state, answered 200; the loop owns checkpoint/close/start
 //   /api/poke     {project, topic}  `poke`: a wake-up line typed into a quiet Lead's terminal
-//   /api/chat     {project, topic, wt, text}  `chat`: one line (no newline or control character, at most
-//                 2000 characters) the loop types into that live, unpaused member's terminal once it is ready
+//   GET /api/feedback, POST /api/feedback {action: post|add-to|edit|dismiss|restore, draft|note, …}  the Feedback panel (U4)
+//   /api/keys     {project, topic, wt, keys}  `keys`: 1-8 named keys pressed in the member's terminal, even while it works (409: paused, or a press still open)
+//   /api/chat-dismiss  {project, id}  `chat-dismiss` of a failed or cancelled send: it leaves the chat (409: still queued or sent)
+//   /api/chat-cancel, /api/chat-now  {project, id}  `chat-cancel`/`chat-now` of an open chat request (409: already typed)
+//   /api/chat     {project, topic, wt, text, files?}  `chat`: a message of at most 2000 characters, line breaks and
+//                 tabs allowed (CR LF read as LF; no other control character, U19) the loop types into that live, unpaused member's terminal once it is ready;
+//                 `files` names up to 4 stored chat images (text may then be empty; a gone one is 409)
+//   /api/chat-file?project=&topic=&wt=  the raw bytes of one PNG/JPEG/WebP/GIF (Content-Type the image's, at
+//                 most 5 MiB, magic bytes checked) for a live member (topic `_start` and no wt: for a squad
+//                 start, in a project the loop knows), stored once as
+//                 `<state root>/<label>/chat-files/<topic>/<sha256[:16]>.<ext>` (0600), answered 200 {id, url, bytes};
+//                 each upload first prunes the project's images older than chat_files_keep_d days (500 MiB cap: 507).
+//                 The only route a body over 128 KiB may reach.
 //   /api/limits   {project, key, value|null}  `limits`: the loop sets or drops the limit; {project, key, undo: <history id>} files `config-undo` (U258)
+//   GET /api/settings-export?project=<label> the export text (a transfer file, header line first); GET /api/settings-import?project= the other projects an import can read
+//   /api/settings-import/preview {project, text|from}  the plan (one row per setting; reads only)
+//   /api/settings-import  {project, text|from, picks: [{file, key, expect}]}  `settings-import`: the loop writes the picked rows as `board`
 //   /api/skills   {project, role, set: {<skill|hook:name|mcp:server|*>: level}} | {project, role, reset: true}  `skills` (U230)
 //   /api/roles    {project, role, agent, model, effort, spawn, fallbacks | reset:true}  `roles`
 //   /api/unit    {project, topic, slug, action: release|cancel, why?}  `unit-action`: a Work units ⋯ menu choice
@@ -53,20 +72,30 @@
 //   /api/account {project, agent, account, enabled}  `account`: switch one account off/on for every pick
 //   /api/account-reset {project, agent, account, grant}  `account-reset`: use one free reset grant (usable now, none
 //                 open for that account: else 400/409); the server adds the idempotency key every try reuses
+//   /api/leftover-remove {project, topic, wt, fingerprint?}  `leftover-remove`: a Leftovers box's Remove (404 for no such
+//                 leftover, 409 with one open for it); the loop removes a safe tree, a look-first one only saved and
+//                 with the fingerprint the operator saw (archive-leftovers U4)
 //   /api/override {project, topic, wt, scope?(member|squad|role|project), role?, model?, effort?, plan?, account? | clear:true}  `override`: this member's
 //                 model/account "until done", or back to auto
 // Everything else is 404, so no state file is ever reachable.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { briefingJson, buildBoard, chatJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
+import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
+import { isTestProject } from "../loop/settings/projects.ts";
+import { BACKEND_NAMES } from "../backend/registry.ts";
+import { chatProblem } from "../loop/chat/limits.ts";
+import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
+import { KEYS, KEYS_MAX, keyOk } from "../loop/chat/keys.ts";
 import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
 import { skillsJson } from "./skills-data.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
+import { servePage } from "./saved-pages.ts";
 import { answer as answerQuestion } from "../loop/messages/questions.ts";
-import { dbPath, open, type Row, type Store } from "../loop/core/store.ts";
+import { dbPath, open, openReadOnly, stateRoot, type Row, type Store } from "../loop/core/store.ts";
+import { checkExportText, exportTransfer, IMPORT_FILES, planImport, readGet, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
 import { canRestartRole } from "../loop/pause/restart-roles.ts";
 import { paused, type PauseTarget, type Prerequisite } from "../loop/pause/pause.ts";
 
@@ -108,13 +137,17 @@ const intParam = (q: URLSearchParams, k: string) => (/^\d+$/.test(q.get(k) ?? ""
 // One line of operator text, safe to type into a terminal: no newlines, no control characters.
 const oneLine = (v: unknown) => typeof v === "string" ? v.replace(/\s*[\r\n]+\s*/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim() : "";
 
+// sameOrigin: the request's Origin names this board's own Host (a missing or bad Origin is not).
+function sameOrigin(req: Request): boolean {
+  const origin = req.headers.get("Origin");
+  let oh = "";
+  try { oh = origin ? new URL(origin).host.toLowerCase() : ""; } catch { /* bad Origin: refused */ }
+  return !!oh && oh === (req.headers.get("Host") || "").toLowerCase();
+}
 // readPost: the CSRF checks every POST shares — only this board's own page may post: same-origin,
 // and JSON (a plain form can't send that). Returns the parsed body, or the refusal to send back.
 async function readPost(req: Request): Promise<{ b: any } | { r: Response }> {
-  const origin = req.headers.get("Origin");
-  let oh = "";
-  try { oh = origin ? new URL(origin).host.toLowerCase() : ""; } catch { /* bad Origin: refused below */ }
-  if (!oh || oh !== (req.headers.get("Host") || "").toLowerCase()) return { r: text(403, "forbidden origin\n") };
+  if (!sameOrigin(req)) return { r: text(403, "forbidden origin\n") };
   if (!(req.headers.get("Content-Type") || "").toLowerCase().startsWith("application/json")) return { r: text(415, "want application/json\n") };
   if (Number(req.headers.get("Content-Length") || 0) > MAX_BODY) return { r: text(413, "too large\n") };
   try {
@@ -160,8 +193,9 @@ const ACTIONS: Record<string, { topic: boolean; cmd: (p: string, t: string, role
 };
 
 // The start dialog's fields (contract of board-start-squad-box U1). An error string, or the clean fields.
-const START_ENUMS = { type: ["feature", "testing"], autonomy: ["checkpoints", "lfg"], start: ["plan", "brainstorm", "ask", "investigate", "auto"] } as const;
-function startFields(b: any): { error: string } | { framing: string; slug?: string; type?: string; autonomy?: string; start?: string } {
+const START_ENUMS = { type: ["feature", "testing"], autonomy: ["checkpoints", "lfg"], start: ["plan", "brainstorm", "ask", "investigate", "fix", "auto"], backend: BACKEND_NAMES } as const;
+type StartFields = { framing: string; slug?: string; type?: string; autonomy?: string; start?: string; backend?: string; files?: string[] };
+function startFields(b: any): { error: string } | StartFields {
   if (typeof b.text !== "string") return { error: "say what the squad should do: the text is empty" };
   // CRLF and a lone CR become LF; nothing else changes.
   const framing = b.text.replace(/\r\n?/g, "\n");
@@ -170,13 +204,13 @@ function startFields(b: any): { error: string } | { framing: string; slug?: stri
   if (bytes > BRIEF_MAX) return { error: `the text is ${(bytes / 1024).toFixed(1)} KiB; the limit is 32 KiB` };
   const bad = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.exec(framing);
   if (bad) return { error: `the text has a control character on line ${framing.slice(0, bad.index).split("\n").length}` };
-  const out: { framing: string; slug?: string; type?: string; autonomy?: string; start?: string } = { framing };
+  const out: StartFields = { framing };
   if (b.slug != null && b.slug !== "") {
     if (typeof b.slug !== "string" || b.slug.length > 64 || b.slug.startsWith(".") || /[^A-Za-z0-9._-]/.test(b.slug))
       return { error: "topic slug may only use letters, digits, . _ - and must not start with ." };
     out.slug = b.slug;
   }
-  for (const k of ["type", "autonomy", "start"] as const) {
+  for (const k of ["type", "autonomy", "start", "backend"] as const) {
     if (b[k] == null || b[k] === "") continue;
     const ok = START_ENUMS[k] as readonly string[];
     if (typeof b[k] !== "string" || !ok.includes(b[k])) return { error: `${k} must be one of ${ok.join(", ")}` };
@@ -184,6 +218,12 @@ function startFields(b: any): { error: string } | { framing: string; slug?: stri
   }
   if (out.start === "auto") delete out.start;
   if (out.start && out.type === "testing") return { error: "a testing squad has no start" };
+  // chat-image-upload U4: names of images uploaded to `chat-files/_start/` (names only, never a path).
+  const files = b.files ?? [];
+  if (!Array.isArray(files) || files.length > START_FILES_MAX || new Set(files).size !== files.length
+    || files.some((f) => typeof f !== "string" || !CHAT_FILE_NAME.test(f)))
+    return { error: `files: at most ${START_FILES_MAX} distinct image names from /api/chat-file` };
+  if (files.length) out.files = files;
   return out;
 }
 
@@ -198,14 +238,15 @@ async function request(req: Request) {
   if (!a) return json(400, { error: `unknown action ${action}` });
   if (a.topic ? !NAME.test(topic) : topic !== "") return json(400, { error: a.topic ? "need a topic" : "no topic for this action" });
   if (role !== "" && (action !== "restart" || !NAME.test(role))) return json(400, { error: "bad role" });
-  let sf: Exclude<ReturnType<typeof startFields>, { error: string }> | null = null;
+  let sf: StartFields | null = null;
   if (isStart) {
     const f = startFields(pr.b);
     if ("error" in f) return json(400, { error: f.error });
+    for (const n of f.files ?? []) if (!chatFileAt(project, START_TOPIC, n)) return json(409, { error: `image ${n} is gone — attach it again` });
     sf = f;
   }
   const line = sf
-    ? `board: the operator asks you to run: /ds-start-squad --repo ${project}${sf.slug ? ` --topic ${sf.slug}` : ""}${sf.type ? ` --type ${sf.type}` : ""}${sf.autonomy ? ` --autonomy ${sf.autonomy}` : ""}${sf.start ? ` --start ${sf.start}` : ""}`
+    ? `board: the operator asks you to run: /ds-start-squad --repo ${project}${sf.slug ? ` --topic ${sf.slug}` : ""}${sf.type ? ` --type ${sf.type}` : ""}${sf.autonomy ? ` --autonomy ${sf.autonomy}` : ""}${sf.start ? ` --start ${sf.start}` : ""}${sf.backend ? ` --backend ${sf.backend}` : ""}`
     : `board: the operator asks you to run: ${a.cmd(project, topic, role, brief)}`;
   return write((s) => {
     if (sf && !one(s, "SELECT 1 AS x FROM projects WHERE label = ?", project)) no(409, `no project ${project} on this board`);
@@ -221,7 +262,7 @@ async function request(req: Request) {
     const filed = s.db.query("SELECT key FROM requests WHERE done_at IS NULL AND substr(key, 1, ?) = ?").all(stem.length, stem) as Row[];
     if (action !== "start" && (pendingReq(s, "studio", project, topic || null, "action", action)
       || filed.some((r) => /^\d+\.txt$/.test(String(r.key).slice(stem.length))))) no(409, "already requested — waiting for the Studio");
-    return board(s, "studio", { action, topic: topic || null, line, ...(sf ? { framing: sf.framing } : {}) }, { project, squad: topic || null });
+    return board(s, "studio", { action, topic: topic || null, line, ...(sf ? { framing: sf.framing } : {}), ...(sf?.files ? { files: sf.files } : {}) }, { project, squad: topic || null });
   });
 }
 
@@ -264,7 +305,6 @@ async function poke(req: Request) {
 // chat (crew-terminal-access U3): the member a chat names. topic is a squad, or `_studio` for the
 // project's Studio; wt is the member's worktree. A string error when the names are malformed or
 // outside this board's scope.
-const CHAT_MAX = 2000; // as fulfil/chat.ts, which fails a longer one
 function chatTarget(project: unknown, topic: unknown, wt: unknown): { project: string; topic: string; wt: string } | { status: number; error: string } {
   if (typeof project !== "string" || !NAME.test(project) || typeof topic !== "string" || (topic !== "_studio" && !NAME.test(topic))
     || typeof wt !== "string" || !wt || wt.length > 1000)
@@ -287,22 +327,285 @@ function chatGet(url: URL) {
 
 // POST /api/chat {project, topic, wt, text}: one `chat` request; the loop types
 // `dev-studio board, the operator says: <text>` into the member's own agent terminal once it is ready
-// (fulfil/chat.ts). One line only: a newline or control character is refused, never flattened.
+// (fulfil/chat.ts). U19: the text may span lines (CR LF and CR become LF, tabs kept; the backend pastes
+// it as one message); any other control character is refused, never flattened.
 async function chatPost(req: Request) {
   const pr = await readPost(req);
   if ("r" in pr) return pr.r;
   const t = chatTarget(pr.b.project, pr.b.topic, pr.b.wt);
   if ("error" in t) return json(t.status, { error: t.error });
-  const raw = pr.b.text;
-  if (typeof raw !== "string" || /[\x00-\x1f\x7f-\x9f]/.test(raw)) return json(400, { error: "one line of text, no newlines or control characters" });
+  if (typeof pr.b.text !== "string") return json(400, { error: "text must be a string" });
+  const raw = pr.b.text.replace(/\r\n?/g, "\n"), why = chatProblem(raw);
+  if (why) return json(400, { error: why });
+  const files = pr.b.files ?? [];
+  if (!Array.isArray(files) || files.length > CHAT_FILES_PER_SEND || new Set(files).size !== files.length
+    || files.some((f) => typeof f !== "string" || !CHAT_FILE_NAME.test(f)))
+    return json(400, { error: `files: at most ${CHAT_FILES_PER_SEND} distinct image names from /api/chat-file` });
   const text = raw.trim();
-  if (!text) return json(400, { error: "say something" });
-  if (Array.from(text).length > CHAT_MAX) return json(400, { error: `at most ${CHAT_MAX} characters` });
+  if (!text && !files.length) return json(400, { error: "say something" });
+  for (const f of files as string[]) if (!chatFileAt(t.project, t.topic, f)) return json(409, { error: `image ${f} is gone — attach it again` });
   return write((s) => {
     const m = chatMember(s, t.project, t.topic, t.wt) ?? no(404, noMember(t));
     if (t.topic !== "_studio" && paused(s, m as { project: string })) no(409, "this member is paused or resuming; use Resume before chatting");
-    return board(s, "chat", { text, via: "board" }, { project: t.project, squad: t.topic, member: t.wt });
+    return board(s, "chat", { text, via: "board", ...(files.length ? { files } : {}) }, { project: t.project, squad: t.topic, member: t.wt });
   });
+}
+
+// GET /api/feedback: the Feedback panel's drafts, notes and filed issues (board-data.ts feedbackJson).
+function feedbackGet() {
+  const r = feedbackJson();
+  return r ? json(200, r) : json(503, NO_DB);
+}
+
+// POST /api/feedback {action, draft|note, target?, title?, body?, why?} (ds-feedback-github-issues U4): one
+// request of U3's kinds (fulfil/feedback.ts) per press. Drafts act only while in review (409 once posted,
+// dismissed or posting), a note is dismissed only while not filed, and a second press on the same open
+// request is 409.
+const FB_ACTIONS: Record<string, string> = { post: "feedback-post", "add-to": "feedback-add-to", edit: "feedback-edit", dismiss: "feedback-dismiss", restore: "feedback-restore" };
+async function feedbackPost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const b = pr.b, action = String(b.action ?? ""), kind = FB_ACTIONS[action];
+  if (!Object.hasOwn(FB_ACTIONS, action)) return json(400, { error: "action is one of post, add-to, edit, dismiss, restore" });
+  const id = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null);
+  const draft = id(b.draft), note = id(b.note);
+  const opt = (k: string, max: number) => (b[k] == null ? undefined : typeof b[k] === "string" && b[k].length <= max ? (b[k] as string) : null);
+  if (b.draft != null && draft == null || b.note != null && note == null) return json(400, { error: "draft and note are whole numbers" });
+  const needDraft = action !== "restore" && !(action === "dismiss" && note != null);
+  if (needDraft && draft == null) return json(400, { error: "name the draft" });
+  if (!needDraft && note == null) return json(400, { error: "name the note" });
+  if (action === "dismiss" && draft != null && note != null) return json(400, { error: "name a draft or a note, not both" });
+  const why = opt("why", 500), title = opt("title", 300), body = opt("body", 60000);
+  if (why === null || title === null || body === null) return json(400, { error: "why, title or body is too long or not text" });
+  const target = id(b.target);
+  if (action === "add-to" && target == null) return json(400, { error: "name the issue number to add to" });
+  if (action === "edit" && title === undefined && body === undefined) return json(400, { error: "send a new title or body" });
+  const project = typeof b.project === "string" && NAME.test(b.project) ? b.project : "";
+  return write((s) => {
+    const d = draft != null ? one(s, "SELECT id, state FROM feedback_drafts WHERE id = ?", draft) ?? no(404, `no feedback draft ${draft}`) : null;
+    if (d && d.state !== "review") no(409, `draft ${draft} is ${d.state}, not in review`);
+    if (note != null) {
+      const n = one(s, "SELECT id, state FROM feedback_notes WHERE id = ?", note) ?? no(404, `no feedback note ${note}`);
+      if (action === "restore" && n.state !== "dismissed") no(409, `note ${note} is ${n.state}, not dismissed`);
+      if (action === "dismiss" && ["filed", "fixed", "closed", "dismissed"].includes(String(n.state))) no(409, `note ${note} is ${n.state}`);
+    }
+    const field = draft != null ? "draft" : "note", val = String(draft ?? note);
+    if (one(s, `SELECT id FROM requests WHERE kind LIKE 'feedback-%' AND done_at IS NULL AND json_extract(payload, '$.' || ?) = ?`, field, Number(val))) no(409, `a request for ${field} ${val} is already open`);
+    const payload: Record<string, unknown> = draft != null ? { draft } : { note };
+    if (action === "add-to") payload.target = target;
+    if (action === "edit") { if (title !== undefined) payload.title = title; if (body !== undefined) payload.body = body; }
+    if (action === "dismiss" && why?.trim()) payload.why = why.trim();
+    return board(s, kind, payload, { project });
+  });
+}
+
+// POST /api/keys {project, topic, wt, keys} (U19): one `keys` request pressing 1 to KEYS_MAX named keys
+// (contract.ts KEYS, or one digit or lowercase letter) in the member's terminal with no Enter added; the
+// loop presses them even while the member works (fulfil/keys.ts), so Escape stops a turn and Up/Down/Enter
+// or a digit picks in a menu. 409 for a paused member and while an earlier press for it is still open.
+async function keysPost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const t = chatTarget(pr.b.project, pr.b.topic, pr.b.wt);
+  if ("error" in t) return json(t.status, { error: t.error });
+  const keys = pr.b.keys;
+  if (!Array.isArray(keys) || !keys.length || keys.length > KEYS_MAX || !keys.every(keyOk))
+    return json(400, { error: `keys: 1 to ${KEYS_MAX} of ${KEYS.join(", ")}, or one digit or lowercase letter` });
+  return write((s) => {
+    const m = chatMember(s, t.project, t.topic, t.wt) ?? no(404, noMember(t));
+    if (t.topic !== "_studio" && paused(s, m as { project: string })) no(409, "this member is paused or resuming");
+    if (one(s, "SELECT id FROM requests WHERE kind = 'keys' AND project = ? AND member = ? AND done_at IS NULL", t.project, t.wt)) no(409, "an earlier key press is still on its way");
+    return board(s, "keys", { keys, via: "board" }, { project: t.project, squad: t.topic, member: t.wt });
+  });
+}
+
+// POST /api/chat-cancel and /api/chat-now {project, id} (studio-chat-queued-busy U4): one `chat-cancel` or
+// `chat-now` request naming a chat request that is still open; 409 once it is done or typed (or never was a chat).
+async function chatControl(req: Request, kind: "chat-cancel" | "chat-now" | "chat-dismiss") {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const project = pr.b.project, id = pr.b.id;
+  if (typeof project !== "string" || !project || typeof id !== "number" || !Number.isInteger(id) || id < 1) return json(400, { error: "project and a chat request id" });
+  return write((s) => {
+    const r = s.db.query("SELECT kind, project, squad, member, done_at, result FROM requests WHERE id = ?").get(id) as { kind: string; project: string; squad: string | null; member: string | null; done_at: number | null; result: string | null } | null;
+    if (!r || r.kind !== "chat" || r.project !== project) no(404, "no such chat");
+    if (kind === "chat-dismiss") {   // chat-multiline-send-fails U2: only a send that failed or was cancelled; a queued one has Cancel
+      if (r!.done_at == null) no(409, "still queued; use Cancel");
+      let res: { ok?: unknown; state?: unknown } = {};
+      try { res = JSON.parse(r!.result ?? "{}") ?? {}; } catch { /* no result */ }
+      if (res.ok !== false && res.state !== "cancelled") no(409, "only a failed or cancelled send can be dismissed");
+      return board(s, kind, { chat: id }, { project, squad: r!.squad, member: r!.member });
+    }
+    if (r!.done_at != null) no(409, "already typed");
+    return board(s, kind, { chat: id }, { project, squad: r!.squad, member: r!.member });
+  });
+}
+
+// ---- chat images (chat-image-upload U1) -------------------------------------------------------------
+// The shared contract with the loop (bin/loop/chat/files.ts, chat-image-upload U2): a project's images
+// live in `<state root>/<label>/chat-files/<topic>/`, each named by the first 16 hex characters of its
+// sha256 plus the extension of its sniffed type; a `chat` row names files only, never a path. These are
+// the folder and name rule are that module's (bin/loop/chat/files.ts), imported here.
+const chatFilesRoot = (project: string) => dirname(chatFileDir(stateRoot(), project, "x")); // `<state root>/<label>/chat-files`
+const CHAT_FILE_MAX = 5 * 1024 * 1024; // per stored file
+const CHAT_FILES_CAP = 500 * 1024 * 1024; // per project's chat-files/
+const CHAT_FILES_PER_SEND = CHAT_FILES_MAX;
+const CHAT_FILES_KEEP_D = 14; // chat_files_keep_d's default
+const CHAT_TMP = /^\..*\.tmp$/;
+const CHAT_TYPES: Record<string, "png" | "jpg" | "webp" | "gif"> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+const CHAT_EXT_TYPE: Record<string, string> = { png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+
+// The image type the first bytes say, or null: PNG, JPEG, GIF87a/89a, RIFF????WEBP. SVG is never one.
+function sniffImage(b: Uint8Array): "png" | "jpg" | "webp" | "gif" | null {
+  const at = (i: number, s: number[]) => s.every((v, k) => b[i + k] === v);
+  const ascii = (i: number, s: string) => at(i, [...s].map((c) => c.charCodeAt(0)));
+  if (at(0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "png";
+  if (at(0, [0xff, 0xd8, 0xff])) return "jpg";
+  if (ascii(0, "GIF87a") || ascii(0, "GIF89a")) return "gif";
+  if (b.length >= 12 && ascii(0, "RIFF") && ascii(8, "WEBP")) return "webp";
+  return null;
+}
+
+// A plain folder (never a symlink) at `p`, made 0700 when missing; throws ChatFolder otherwise.
+class ChatFolder extends Error {}
+function plainDir(p: string, make: boolean): boolean {
+  let st = lstatSync(p, { throwIfNoEntry: false });
+  if (!st && make) { try { mkdirSync(p, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; } st = lstatSync(p, { throwIfNoEntry: false }); }
+  if (!st) return false;
+  if (!st.isDirectory()) throw new ChatFolder("chat-files is not a plain folder");
+  return true;
+}
+// The topic's folder, every level under `<label>/chat-files/` checked plain; null when it is not there.
+function chatDir(project: string, topic: string, make: boolean): string | null {
+  const top = chatFilesRoot(project), dir = join(top, topic);
+  if (make && !existsSync(join(stateRoot(), project))) mkdirSync(join(stateRoot(), project), { recursive: true, mode: 0o700 });
+  return plainDir(top, make) && plainDir(dir, make) ? dir : null;
+}
+// The stored image's path when it is a plain file in the topic's plain folder, else null.
+function chatFileAt(project: string, topic: string, name: string): string | null {
+  if (!CHAT_FILE_NAME.test(name)) return null;
+  try {
+    const dir = chatDir(project, topic, false);
+    const p = dir && join(dir, name);
+    return p && lstatSync(p, { throwIfNoEntry: false })?.isFile() ? p : null;
+  } catch { return null; }
+}
+
+// chat_files_keep_d through the settings read API; a bad or missing value is 14.
+function chatKeepDays(project: string): number {
+  try {
+    const v = readGet(project, "limits.conf", "chat_files_keep_d").value ?? "";
+    const n = /^\d+$/.test(v) ? Number(v) : NaN;
+    return n >= 1 && n <= 365 ? n : CHAT_FILES_KEEP_D;
+  } catch { return CHAT_FILES_KEEP_D; }
+}
+
+// The prune every upload runs first: over `<label>/chat-files/*/`, plain files only, an image older than
+// chat_files_keep_d days and a temp file older than an hour go; any other file stays. Returns the bytes
+// left. An error never fails the upload: it is one stderr line, and the walk goes on.
+function chatPrune(project: string): number {
+  const now = Date.now(), keepMs = chatKeepDays(project) * 86400_000;
+  let left = 0, err = "";
+  const top = chatFilesRoot(project);
+  try {
+    if (!plainDir(top, false)) return 0;
+    for (const topic of readdirSync(top)) {
+      const dir = join(top, topic);
+      try {
+        if (!lstatSync(dir).isDirectory()) continue;
+        for (const name of readdirSync(dir)) {
+          const p = join(dir, name);
+          try {
+            const st = lstatSync(p);
+            if (!st.isFile()) continue;
+            const age = now - st.mtimeMs;
+            if ((CHAT_FILE_NAME.test(name) && age > keepMs) || (CHAT_TMP.test(name) && age > 3600_000)) unlinkSync(p);
+            else left += st.size;
+          } catch (e) { err ||= `${p}: ${e}`; }
+        }
+      } catch (e) { err ||= `${dir}: ${e}`; }
+    }
+  } catch (e) { err ||= `${top}: ${e}`; }
+  if (err) console.error(`board (serve): chat-files prune: ${err}`);
+  return left;
+}
+
+// chat-image-upload U4: an image for the Start squad dialog names topic `_start` and no member (no squad
+// exists yet): the project must be a name in this board's scope; a `wt` with it is refused.
+function startTarget(project: unknown, wt: boolean): { project: string; topic: string } | { status: number; error: string } {
+  if (typeof project !== "string" || !NAME.test(project) || wt) return { status: 400, error: `need a project and no member's worktree for topic ${START_TOPIC}` };
+  if (scope.project && scope.project !== project) return { status: 403, error: "target is outside this board's scope" };
+  return { project, topic: START_TOPIC };
+}
+
+// POST /api/chat-file?project=&topic=&wt=, body = the image's bytes. The checks run in this order and the
+// body is read only after the header ones pass; a refused upload writes no file.
+async function chatFilePost(req: Request, url: URL) {
+  if (!sameOrigin(req)) return text(403, "forbidden origin\n");
+  const ext = CHAT_TYPES[(req.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase()];
+  if (!ext) return json(415, { error: "want image/png, image/jpeg, image/webp or image/gif" });
+  const q = url.searchParams, start = q.get("topic") === START_TOPIC;
+  const st = start ? startTarget(q.get("project"), q.has("wt")) : null;
+  const ct = start ? null : chatTarget(q.get("project"), q.get("topic"), q.get("wt"));
+  if (st && "error" in st) return json(st.status, { error: st.error });
+  if (ct && "error" in ct) return json(ct.status, { error: ct.error });
+  const chat = ct && !("error" in ct) ? ct : null, t = (chat ?? st) as { project: string; topic: string };
+  const tooBig = { error: `an image is at most ${CHAT_FILE_MAX / 1024 / 1024} MiB` };
+  if (Number(req.headers.get("Content-Length") || 0) > CHAT_FILE_MAX) return json(413, tooBig);
+  let bytes: Uint8Array;
+  try { bytes = new Uint8Array(await req.arrayBuffer()); } catch { return json(413, tooBig); }
+  if (bytes.length > CHAT_FILE_MAX) return json(413, tooBig);
+  if (!bytes.length) return json(400, { error: "empty body: send the image's bytes" });
+  if (sniffImage(bytes) !== ext) return json(415, { error: "not a png/jpeg/webp/gif" });
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  // A chat's image needs its live member; a start's (no squad yet) a project the loop knows, as the start itself.
+  let live = false;
+  try {
+    const s = openReadOnly();
+    try { live = chat ? !!chatMember(s, chat.project, chat.topic, chat.wt) : !!one(s, "SELECT 1 AS x FROM projects WHERE label = ?", t.project); }
+    finally { s.close(); }
+  } catch (e) { return json(503, { error: `loop.db: ${e}` }); }
+  if (!live) return chat ? json(404, { error: noMember(chat) }) : json(409, { error: `no project ${t.project} on this board` });
+  const name = `${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.${ext}`;
+  try {
+    const left = chatPrune(t.project);
+    const dir = chatDir(t.project, t.topic, true)!, p = join(dir, name);
+    const st = lstatSync(p, { throwIfNoEntry: false });
+    if (st?.isFile()) { const now = new Date(); utimesSync(p, now, now); }
+    else {
+      if (left + bytes.length > CHAT_FILES_CAP) return json(507, { error: `this project's chat images are over ${CHAT_FILES_CAP / 1024 / 1024} MiB; wait for old ones to be pruned` });
+      const tmp = join(dir, `.${name}.${process.pid}.tmp`);
+      try { writeFileSync(tmp, bytes, { mode: 0o600, flag: "wx" }); renameSync(tmp, p); }
+      catch (e) { try { unlinkSync(tmp); } catch { /* not written */ } throw e; }
+    }
+  } catch (e) {
+    return json(500, { error: e instanceof ChatFolder ? e.message : `storing the image: ${String(e).slice(-300)}` });
+  }
+  const u = new URLSearchParams({ project: t.project, topic: t.topic, name });
+  return json(200, { id: name, url: `api/chat-file?${u}`, bytes: bytes.length });
+}
+
+// GET /api/chat-file?project=&topic=&name=: one stored image, never a symlink or anything outside its folder.
+// No member check, so an ended member's old bubbles still show.
+function chatFileGet(url: URL) {
+  const q = url.searchParams, project = q.get("project"), topic = q.get("topic"), name = q.get("name") ?? "";
+  if (typeof project !== "string" || !NAME.test(project) || typeof topic !== "string" || !SQUAD.test(topic))
+    return json(400, { error: "need project and topic" });
+  // A start's images (`_start`) belong to the project, as the start does.
+  if ((scope.project && scope.project !== project) || (scope.topic && topic !== START_TOPIC && scope.topic !== topic)) return json(403, { error: "target is outside this board's scope" });
+  if (!CHAT_FILE_NAME.test(name)) return json(400, { error: "bad image name" });
+  const p = chatFileAt(project, topic, name);
+  if (!p) return text(404, "image removed\n");
+  let fd = -1;
+  try {
+    fd = openSync(p, fsc.O_RDONLY | fsc.O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > CHAT_FILE_MAX) return text(404, "image removed\n");
+    return new Response(readFileSync(fd), { status: 200, headers: {
+      "Content-Type": CHAT_EXT_TYPE[name.split(".")[1]], "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline",
+      "Content-Security-Policy": "default-src 'none'; img-src 'self'", "Cache-Control": "private, max-age=86400" } });
+  } catch { return text(404, "image removed\n"); }
+  finally { if (fd >= 0) closeSync(fd); }
 }
 
 // GET /api/messages?project=&topic=[&wt=]: U278's read-only View of a member's (or the squad's) message rows.
@@ -376,6 +679,7 @@ async function limitsPost(req: Request) {
     if (row.source !== "override") return json(409, { error: `${key} has no override to reset` });
   } else {
     v = String(value).trim();
+    if (row.fileOnly && key === "feedback_repo") return json(400, { error: `${key} is an override: set it with \`ds config set --project ${project} limits.conf ${key} owner/name\` or the env, not here` });
     if (row.fileOnly) return json(400, { error: `${key} is set with \`ds config export --project ${project}\`, an edit and \`ds config import --project ${project} <file>\`, not here` });
     if (key === "review_risk_paths") {
       if (!v || /\s/.test(v) || v.startsWith(",") || v.endsWith(",") || v.includes(",,"))
@@ -402,6 +706,68 @@ async function limitsPost(req: Request) {
   return write((s) => board(s, "limits", { key, value: v }, { project }));
 }
 
+// Settings transfer (Import / Export in Settings): the export text, the plan, the apply.
+const IMPORT_PICKS_MAX = 2000;
+function importSource(b: any, project: string): { src: ImportSource } | { r: Response } {
+  const hasText = typeof b.text === "string" && b.text !== "", hasFrom = typeof b.from === "string" && b.from !== "";
+  if (hasText === hasFrom) return { r: json(400, { error: "give either text (an export) or from (another project)" }) };
+  if (hasFrom) {
+    if (!NAME.test(b.from)) return { r: json(400, { error: "bad source project" }) };
+    if (b.from === project) return { r: json(400, { error: `'${project}' can't import from itself` }) };
+    return { src: { project: b.from } };
+  }
+  return { src: { text: b.text, name: typeof b.name === "string" ? b.name.slice(0, 60) : undefined } };
+}
+// A board scoped to one project writes only that one; its reads cover the host.
+const importTarget = (b: any): { project: string } | { r: Response } => {
+  if (!NAME.test(b.project ?? "")) return { r: json(400, { error: "need project" }) };
+  if (scope.project && scope.project !== b.project) return { r: json(403, { error: "project is outside this board's scope" }) };
+  return { project: b.project };
+};
+function settingsExportGet(url: URL) {
+  const project = url.searchParams.get("project") ?? "";
+  if (!NAME.test(project)) return json(400, { error: "need project" });
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  const s = openReadOnly();
+  try {
+    return new Response(exportTransfer(s, project), { headers: { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": `attachment; filename="${project}-settings.txt"`, "Cache-Control": "no-store" } });
+  } catch (e) { return json(e instanceof SettingsError ? 400 : 500, { error: e instanceof Error ? e.message : String(e) }); } finally { s.close(); }
+}
+function settingsImportGet(url: URL) {
+  const project = url.searchParams.get("project") ?? "";
+  if (!NAME.test(project)) return json(400, { error: "need project" });
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  const s = openReadOnly();
+  try {
+    const rows = s.db.query("SELECT label FROM projects UNION SELECT project FROM config WHERE project <> '' ORDER BY 1").all() as { label: string }[];
+    return json(200, { project, projects: rows.map((r) => r.label).filter((l) => l !== project && NAME.test(l) && !isTestProject(l)) });
+  } finally { s.close(); }
+}
+async function settingsImportPreview(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const t = importTarget(pr.b); if ("r" in t) return t.r;
+  const so = importSource(pr.b, t.project); if ("r" in so) return so.r;
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  const s = openReadOnly();
+  try { return json(200, { project: t.project, rows: planImport(s, t.project, so.src, { board: true, replace: pr.b.replace === true }) }); }
+  catch (e) { return e instanceof SettingsError ? json(400, { error: e.message }) : json(500, { error: String(e).slice(-500) }); } finally { s.close(); }
+}
+async function settingsImportPost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const t = importTarget(pr.b); if ("r" in t) return t.r;
+  const so = importSource(pr.b, t.project); if ("r" in so) return so.r;
+  if ("text" in so.src) try { checkExportText(so.src.text); } catch (e) { if (e instanceof SettingsError) return json(400, { error: e.message }); throw e; }
+  const { picks } = pr.b;
+  if (!Array.isArray(picks) || !picks.length || picks.length > IMPORT_PICKS_MAX) return json(400, { error: `picks needs 1 to ${IMPORT_PICKS_MAX} rows` });
+  for (const p of picks)
+    if (!p || typeof p.file !== "string" || !(IMPORT_FILES as readonly string[]).includes(p.file) || typeof p.key !== "string" || !p.key || p.key.length > 200
+      || (p.expect !== undefined && p.expect !== null && typeof p.expect !== "string")) return json(400, { error: "each pick needs a file, a key and the expected current value" });
+  const payload = "project" in so.src ? { from: so.src.project, picks } : { text: so.src.text, ...(so.src.name ? { name: so.src.name } : {}), picks };
+  return write((s) => board(s, "settings-import", payload, { project: t.project }));
+}
+
 const WORD = /^[A-Za-z0-9._-]{1,64}$/;
 const EFFORTS = ["", "minimal", "low", "medium", "high", "xhigh", "max"];
 const FALLBACKS = /^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?)?(,[A-Za-z0-9._-]+:[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?)?)*$/;
@@ -410,6 +776,7 @@ async function rolesPost(req: Request) {
   const pr = await readPost(req);
   if ("r" in pr) return pr.r;
   const { project, role, agent, model, effort, spawn, fallbacks, plan, reset } = pr.b;
+  const ret = pr.b.return;
   if (!NAME.test(project ?? "")) return json(400, { error: "need project" });
   const shown = rolesJson(project);
   if (!shown) return json(503, NO_DB);
@@ -433,7 +800,12 @@ async function rolesPost(req: Request) {
   if (typeof fb !== "string" || (fb !== "" && !FALLBACKS.test(fb))) return bad("fallbacks must be agent:model[:effort[:plan]][,agent:model[:effort[:plan]]...]");
   const chosenPlan = plan === undefined ? row.plan : plan === null || plan === "-" ? "" : plan;
   if (typeof chosenPlan !== "string" || (chosenPlan !== "" && !WORD.test(chosenPlan))) return bad("plan must be letters, digits, . _ - or empty for Any");
-  return write((s) => board(s, "roles", { role, agent, model, spawn, effort: eff, fallbacks: fb, plan: chosenPlan }, { project }));
+  // configurable-role-elevation U2: `return` is up, stay or "" (inherit); up never goes on an elevate row. U3: on
+  // studio it moves the Studio back up through studio-move, following studio_move.
+  if (ret !== undefined && ret !== null && ret !== "up" && ret !== "stay" && ret !== "") return bad("return must be up, stay or empty (inherit)");
+  if (ret === "up" && spawn === "elevate") return bad(`'up' (move back up) can't go on '${role}': it is an elevate row, which never runs a terminal`);
+  const extra = ret === undefined || ret === null ? {} : { return: ret };
+  return write((s) => board(s, "roles", { role, agent, model, spawn, effort: eff, fallbacks: fb, plan: chosenPlan, ...extra }, { project }));
 }
 
 // skills (U230): a role's skill levels. {set: {<name>: level}} edits, {reset: true} drops the role's
@@ -536,6 +908,28 @@ async function accountResetPost(req: Request) {
   });
 }
 
+// leftover: a Leftovers box's Remove (archive-leftovers U4). One `leftover-remove` request; the loop checks the
+// tree again and removes it when it is safe, or saved first when `fingerprint` is still the tree's (else refused).
+async function leftoverRemovePost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const { project, topic, wt, fingerprint } = pr.b;
+  const ok = typeof wt === "string" && wt.length > 0 && wt.length <= 400 && !/[\x00-\x1f]/.test(wt);
+  if (!NAME.test(project ?? "") || !NAME.test(topic ?? "") || !ok || (fingerprint != null && !(typeof fingerprint === "string" && /^[0-9a-f]{8,64}$/.test(fingerprint))))
+    return json(400, { error: "need project, topic, wt and an optional fingerprint" });
+  return write((s) => {
+    const row = one(s, "SELECT doc FROM squads WHERE project = ? AND topic = ?", project, topic) ?? no(404, `no squad ${project}/${topic}`);
+    let list: any[] = [];
+    try { list = JSON.parse(String(row!.doc ?? "{}")).leftovers ?? []; } catch { /* unreadable: no leftovers */ }
+    if (!Array.isArray(list) || !list.some((l) => l && l.wt === wt)) no(404, `${project}/${topic} has no leftover ${wt}`);
+    const open = one(s, "SELECT id FROM requests WHERE kind = 'leftover-remove' AND done_at IS NULL AND project = ? AND json_extract(payload, '$.wt') = ?", project, wt);
+    if (open) no(409, `a removal of ${wt} is already open (request #${open.id})`);
+    const r = board(s, "leftover-remove", { wt, ...(fingerprint ? { fingerprint } : {}) }, { project, squad: topic });
+    // A paused squad holds the request until Resume (pause.ts actionBlock); say so in the answer.
+    return paused(s, { project, squad: topic }) ? json(202, { ok: true, id: Number(r.id), queued: true }) : r;
+  });
+}
+
 // unit: the ⋯ menu on a Work units row (squad-done-definition U5). One `unit-action` request; the loop's
 // fulfiller (fulfil/unit-action.ts) runs cancel-unit for the unit and its open dependents, or resumes
 // the squad and tells the Lead to release the unit. Cancel needs a reason; a done or cancelled unit
@@ -607,6 +1001,12 @@ async function answer(req: Request) {
     const st = squadRow(s, project, topic);
     const q = one(s, "SELECT * FROM questions WHERE project = ? AND squad = ? AND id = ? AND status = 'open' ORDER BY seq DESC LIMIT 1", project, topic, id)
       ?? no(409, `question ${id} is not open (already answered?)`);
+    // The asking the operator saw: its `since` (epoch seconds or the entry's ISO time) must be the open row's `asked_at`.
+    if (pr.b.since !== undefined && pr.b.since !== null) {
+      const want = typeof pr.b.since === "number" ? Math.floor(pr.b.since) : Math.floor(Date.parse(String(pr.b.since)) / 1000);
+      if (!Number.isFinite(want) || want !== (q.asked_at === null || q.asked_at === undefined ? null : Number(q.asked_at)))
+        no(409, `question ${id} was answered or asked again; the board has updated`);
+    }
     let e: any = {};
     try { e = JSON.parse(String(q.doc ?? "{}")) ?? {}; } catch { /* a bare row */ }
     const picker = e.source === "picker";
@@ -622,7 +1022,7 @@ async function answer(req: Request) {
     // A picker lives only in its asker's terminal.
     const wt = String((picker ? q.card_wt : q.card_wt || st.lead_wt) ?? "") || no(409, "no agent to send it to (no card or Lead worktree)");
     // Answered here and now: the question leaves the board at once, and a second send finds it closed.
-    answerQuestion(s, project, topic, id, ans, "board");
+    answerQuestion(s, project, topic, id, ans, "board", q.seq as number);
     const choices = picker ? (() => { try { return JSON.parse(String(q.choices ?? "[]")); } catch { return []; } })() : undefined;
     const pick = picker ? { choices, transcript: e.transcript_path, tool_use_id: e.tool_use_id } : {};
     return board(s, "answer", { id, answer: ans, seq: q.seq, card_wt: q.card_wt ?? undefined, via: "board", ...pick }, { project, squad: topic, member: wt });
@@ -636,7 +1036,7 @@ async function answer(req: Request) {
 // The page's fingerprint (U7): a hash of web/board.html, read per call (the file is small; a `git pull` that changes it
 // changes the fingerprint at once). It rides in the served page (<meta name="page-version">) and in /board.json
 // (`page_version`), so an open tab sees that the server's page code moved and offers a reload.
-const readPage = () => readFileSync(page).toString(); // the one file this server reads
+const readPage = () => readFileSync(page).toString(); // the one file this server reads, besides the chat images
 function pageVersion(): string {
   try { return createHash("sha1").update(readPage()).digest("hex").slice(0, 12); } catch { return ""; }
 }
@@ -780,6 +1180,22 @@ const waitPage = (why: string) => new Response(`<!doctype html><meta charset="ut
 <title>Starting Lavish</title><body style="font:15px system-ui;margin:2em">Lavish is starting (${why}); this page reloads until it is up.</body>`,
   { status: 202, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 
+// GET /page/<label>/pages/<topic>/<path> -> one saved copy of a review page (or a css, js, image or font file it
+// links, by extension) from `<state root>/<label>/pages/<topic>/`, read-only (bin/board/saved-pages.ts). Served
+// under that path so a page's relative links resolve; its scripts run in an opaque origin (CSP sandbox), so they
+// cannot call this board's API.
+function pageGet(url: URL) {
+  let seg: string[];
+  try { seg = url.pathname.slice("/page/".length).split("/").map(decodeURIComponent); } catch { return text(404, "not found\n"); }
+  const [project, pages, topic, ...rest] = seg;
+  if (pages !== "pages" || !NAME.test(project ?? "") || !SQUAD.test(topic ?? "")) return text(404, "not found\n");
+  if ((scope.project && scope.project !== project) || (scope.topic && scope.topic !== topic)) return json(403, { error: "target is outside this board's scope" });
+  const f = servePage(stateRoot(), project, topic, rest);
+  if (!f) return text(404, "not found\n");
+  return new Response(f.bytes, { status: 200, headers: { "Content-Type": f.type, "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox allow-scripts", "Cache-Control": "no-store" } });
+}
+
 // GET /lavish/<key> -> 302 to that Lavish review page; when Lavish is down, one `lavish` request.
 async function lavish(key: string) {
   if (!/^[0-9a-f]{16}$/.test(key)) return text(404, "not found\n");
@@ -803,10 +1219,14 @@ async function get(req: Request, url: URL) {
   if (path === "/api/limits") return limitsGet(url);
   if (path === "/api/roles") return rolesGet(url);
   if (path === "/api/skills") return skillsGet(url);
+  if (path === "/api/settings-export") return settingsExportGet(url);
+  if (path === "/api/settings-import") return settingsImportGet(url);
   if (path === "/api/briefing") return briefingGet(url);
   if (path === "/api/events") return eventsGet(url);
   if (path === "/api/events/lists") return eventsListsGet(url);
   if (path === "/api/chat") return chatGet(url);
+  if (path === "/api/feedback") return feedbackGet();
+  if (path === "/api/chat-file") return chatFileGet(url);
   if (path === "/api/messages") return messagesGet(url);
   if (path === "/api/questions") return questionsGet(url);
   if (path === "/") {
@@ -818,26 +1238,38 @@ async function get(req: Request, url: URL) {
   // The loop's liveness ping (U16): cheap, no db read, so a slow render is never a dead board.
   if (path === "/healthz") return json(200, { ok: true, pid: process.pid, port });
   if (path.startsWith("/lavish/")) return lavish(path.slice(8));
+  if (path.startsWith("/page/")) return pageGet(url);
   return text(404, "not found\n");
 }
 // --- end of read routes ---------------------------------------------------------------------------
 
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
-  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/settings-import/preview": settingsImportPreview,
 };
 
 async function handle(req: Request) {
   if (!hosts.has(hostName(req.headers.get("Host")))) return text(403, "forbidden host\n");
-  const path = new URL(req.url).pathname;
+  const url = new URL(req.url), path = url.pathname;
+  // Bun takes bodies up to an image's size (maxRequestBodySize) for the upload alone: any other request
+  // that says it is bigger than a JSON post may be is refused before routing.
+  if (path === "/api/chat-file" && req.method === "POST") return chatFilePost(req, url);
+  if (Number(req.headers.get("Content-Length") || 0) > MAX_BODY) return text(413, "too large\n");
   if (Object.hasOwn(POSTS, path)) return req.method === "POST" ? POSTS[path](req) : text(405, "POST only\n");
   // These paths are GET routes too (the read block), so they are not in POSTS.
   if (path === "/api/limits" && req.method === "POST") return limitsPost(req);
   if (path === "/api/roles" && req.method === "POST") return rolesPost(req);
   if (path === "/api/skills" && req.method === "POST") return skillsPost(req);
+  if (path === "/api/settings-import" && req.method === "POST") return settingsImportPost(req);
   if (path === "/api/chat" && req.method === "POST") return chatPost(req);
+  if (path === "/api/feedback" && req.method === "POST") return feedbackPost(req);
+  if (path === "/api/keys" && req.method === "POST") return keysPost(req);
+  if (path === "/api/chat-cancel" && req.method === "POST") return chatControl(req, "chat-cancel");
+  if (path === "/api/chat-now" && req.method === "POST") return chatControl(req, "chat-now");
+  if (path === "/api/chat-dismiss" && req.method === "POST") return chatControl(req, "chat-dismiss");
   if (req.method !== "GET" && req.method !== "HEAD") return text(405, "GET only\n");
-  return get(req, new URL(req.url));
+  return get(req, url);
 }
 
 // One listener per address (e.g. 127.0.0.1 and the tailnet IP). Retry a few seconds (30 tries,
@@ -845,7 +1277,7 @@ async function handle(req: Request) {
 const bindTries = Math.max(1, Number(process.env.DS_BOARD_BIND_TRIES) || 30);
 for (const hostname of bindArg.split(/\s+/).filter(Boolean)) {
   for (let i = 0; ; i++) {
-    try { Bun.serve({ hostname, port, fetch: handle, maxRequestBodySize: MAX_BODY, idleTimeout: 30 }); break; }
+    try { Bun.serve({ hostname, port, fetch: handle, maxRequestBodySize: CHAT_FILE_MAX + 64 * 1024, idleTimeout: 30 }); break; }
     catch (e) {
       if (i >= bindTries - 1) { console.error(`board (serve): could not bind ${hostname}:${port} — ${e}`); process.exit(1); }
       await Bun.sleep(200);

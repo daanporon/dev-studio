@@ -10,14 +10,17 @@
 //             Out of credits (episode state `credits`, provider-billing-fallback U3) with nowhere
 //             to go -> no tell: "carry on" would be false, its next call fails the same way. Once
 //             the hold is cleared (credits.ts clearCredits: the probe or the operator) while it
-//             still runs on that account -> one "works again" tell (okKey).
+//             still runs on that account -> one "works again" tell (okKey). An ended login (state
+//             `login`, claude-login-ended U2) is the same: no tell while held, one "login works again"
+//             tell (key `login-ok|…`) once login.ts clearLogin ends the hold.
 //   account   (provider-billing-fallback U5) its live account is switched off (accounts.ts) and the
 //             pick, which leaves a disabled account out, lands elsewhere -> stop when idle. One stop
 //             per `account_disabled` event (the key carries its id): switching it off again later
 //             moves members again, a replay does not. Nowhere to go (a pin to that account makes the
 //             pick wait) -> it keeps running. Never a limited one (its limit row moves it, off it too).
-//   fallback  a Thinker (the only role that moves back up, as U110) idle on a lower rung with
-//             the top rung free -> stop when idle, at most once per `fallback_return_min`,
+//   fallback  a member whose ladder row says `up` (configurable-role-elevation U1: roles.conf
+//             column 8, roster.ts resolveBackUp; shipped on for the Thinker only) idle on a lower
+//             rung with the top rung free -> stop when idle, at most once per `fallback_return_min`,
 //             and only with no live sub-agents and no open
 //             background step. U180: the stop needs a start slot whose pick (picks.ts, with every
 //             earlier stop of the tick counted as load) still lands above `from`; the stop reserves
@@ -33,10 +36,14 @@ import { liveSquads, stepOpen } from "../reconcilers/liveness.ts";
 import { worker, type Worker } from "../reconcilers/limits.ts";
 import { envInt } from "../core/tick.ts";
 import { BABYSIT } from "../reconcilers/phases.ts";
-import { agentOf, ladder, limit, overrideOf, pick, placeRung, sameModel } from "./pick.ts";
+import { agentOf, ladder, limit, overrideOf, pick, placeRung, sameModel, workDone } from "./pick.ts";
+import { backUpOf } from "../settings/roster.ts";
+import { memberUnit, mergedUnit } from "../pause/pause-conditions.ts";
+import type { Target } from "../pause/pause.ts";
 import { accountDisabled } from "./accounts.ts";
 import { lastStart, view } from "../squad/member-state.ts";
 import type { Row, Store } from "../core/store.ts";
+import { isLoginKey, loginOkKey } from "./login.ts";
 
 export type SwitchWhy = "limit" | "account" | "fallback" | "phase" | "pin";
 export const SWITCH_WHYS: readonly string[] = ["limit", "account", "fallback", "phase", "pin"];
@@ -95,8 +102,9 @@ function flagged(m: Row): boolean {
 // (tellKey) carries the one "carry on". A pinned member is never moved by a limit.
 function limitFacts(store: Store, m: Row, w: Worker, ep: Row, now: number): Facts {
   const project = String(m.project);
-  // U3: an account out of credits gets no "carry on": nothing changes until its hold is cleared.
-  const tell = ep.state === "credits" ? null : tellKey(ep);
+  // U3: an account out of credits gets no "carry on": nothing changes until its hold is cleared. Nor
+  // one whose login ended (claude-login-ended U2).
+  const tell = ep.state === "credits" || ep.state === "login" ? null : tellKey(ep);
   if (overrideOf(store, m)) return { stop: null, tell, ok: null };
   const until = Number(ep.ended_at);
   const { tier, phase } = tierPhase(store, project, m);
@@ -120,11 +128,16 @@ function tellKey(ep: Row): string {
 // and the member still runs on that account. A member that moved, or wrote on (closed), gets none;
 // nor one already told, so a told member's act never holds back a due start, reload or clear. The
 // key carries the episode's start: Claude's and Codex's notices have no request id, so a second
-// 402 on the same account repeats the episode key.
+// 402 on the same account repeats the episode key. A cleared login episode (claude-login-ended U2) gets
+// the `login-ok|…` key instead (decide.ts tells "your account's login works again").
 function okKey(store: Store, m: Row, w: Worker): string | null {
   const wt = String(m.wt), ep = store.get("episodes", { project: m.project, subject: wt, kind: "limited" });
   if (ep?.state !== "cleared" || ep.source !== "loop" || !w.account) return null;
   if (!String(ep.episode_key ?? "").startsWith(`${w.agent}/${w.account}|`)) return null;
+  if (isLoginKey(ep.episode_key)) {
+    const key = loginOkKey(ep);
+    return toldAlready(store, String(m.project), wt, key, "login-ok") ? null : key;
+  }
   const key = `credits-ok|${String(ep.episode_key)}@${Number(ep.started_at)}`;
   return toldAlready(store, String(m.project), wt, key, "credits-ok") ? null : key;
 }
@@ -146,21 +159,26 @@ function accountStop(store: Store, m: Row, w: Worker, now: number): Switch | nul
   return { why: "account", episode: `stop:account:${agent}/${account}@${ev?.id ?? 0}` };
 }
 
-// A Thinker's move back up (U66, from reconcilers/fallback.ts): idle on a lower rung with the
-// top rung free. Only Thinkers move back up; a pinned or limited member is left to its row.
+// A member's move back up (U66, from reconcilers/fallback.ts): idle on a lower rung with the top
+// rung free. Only a member whose ladder row (the row its models come from) resolves `up` moves back
+// up (configurable-role-elevation U1; shipped: the Thinker); a pinned or limited member is left to
+// its row, and a Builder whose unit is finished waits to be retired, not moved.
 function fallbackStop(store: Store, m: Row, w: Worker, now: number): Switch | null {
-  const project = String(m.project);
-  if (String(m.role) !== "thinker" || overrideOf(store, m)) return null;
+  const project = String(m.project), role = String(m.role);
+  if (overrideOf(store, m)) return null;
   if (Number(m.limited_until ?? 0) > now || limitedEp(store, m, now)) return null;
   if (w.state !== "idle" && w.state !== "done") return null;
   if (w.ow.sub_agents != null || stepOpen(store, String(m.wt))) return null;
   const repo = (store.get("squads", { project, topic: String(m.squad) })?.repo as string | null) ?? null;
   const { tier, phase } = tierPhase(store, project, m);
-  const lad = ladder(store, { project, role: "thinker", tier, phase, squad: String(m.squad) }, repo);
-  if (!lad) return null;
+  const lad = ladder(store, { project, role, tier, phase, squad: String(m.squad) }, repo);
+  if (!lad || !backUpOf(store, project, lad.row)) return null;
+  if (workDone(store, m)) return null;
+  const unit = memberUnit(store, m as Target);
+  if (unit && mergedUnit(store, unit)) return null;
   const here = rungOf(store, lad, m, w, now);
   if (here === 0 || (here === null && !flagged(m))) return null;
-  const p = pick(store, { project, role: "thinker", tier, phase, squad: String(m.squad), member: Number(m.id) }, now);
+  const p = pick(store, { project, role, tier, phase, squad: String(m.squad), member: Number(m.id) }, now);
   if ("error" in p || "wait" in p) return null;
   const to = p.rung - 1, from = here ?? lad.rungs.length;
   if (to >= from) return null;
@@ -246,7 +264,8 @@ export function limitStuck(store: Store, m: Row, now: number): boolean {
   return dialog || silent;
 }
 
-// The tell key's wake row already told it: the tell went out once (`reason` credits-ok: U3's).
+// The tell key's wake row already told it: the tell went out once (`reason` credits-ok: U3's; login-ok:
+// claude-login-ended U2's).
 export function toldAlready(store: Store, project: string, wt: string, key: string, reason = "limit"): boolean {
   return store.get("episodes", { project, subject: wt, kind: `wake:${reason}` })?.episode_key === key;
 }

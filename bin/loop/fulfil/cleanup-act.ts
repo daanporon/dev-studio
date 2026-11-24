@@ -7,22 +7,27 @@
 //   b  removeGuarded under the Claude temp root (a session dir: under its slug dir); KTD14 again
 //   c  `git worktree remove` (no force) from the clone; the branch ref stays
 //   d  a git folder: as c, once the backend list shows it is no Orca worktree; an entity:
-//      terminal-close-worktree, the probe again, worktree-rm (as fulfil/worktree.ts)
+//      terminal-close-worktree, the probe again, worktree-rm (as fulfil/worktree.ts); a worktree a
+//      provider made for a squad on a contract backend (U11c): no backend list is read, its terminals
+//      close through the contract, the probe again, its provider removes it (no force), by path
 //   e  one capped pass over the glob (tidy.removeGlobBatch, KTD9); a capped pass asks for the next
+//   f  one capped pass inside each folder the trim glob matches (tidy.trimGlobBatch, investigate-disk-
+//      cleanup U2); the folders themselves stay; a capped pass asks for the next, as e
 // Each outcome is one event (R13): cleanup_stopped, cleanup_removed or cleanup_failed. A failure
 // settles done with facts.act_error on the row, never a retry storm; the next scan tries again.
 import { lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Action } from "../core/plugins.ts";
 import type { Exec, Fulfiller, Result } from "../core/actuator.ts";
-import { cleanupGlobs, limit, limitInt } from "../settings/limits.ts";
+import { cleanupGlobs, limit, limitInt, trimGlobs } from "../settings/limits.ts";
 import { errOf, spawn } from "../io/orca.ts";
 import { mangle, shellAdapter, wtPath, type PsWorktree } from "../observers/orca.ts";
 import { actionBlock } from "../pause/pause.ts";
 import { readCwdRaw, readUid } from "../io/proc.ts";
 import { judge, keepSet, lastScan, parseFacts, refusal, type CleanupRow, type Facts } from "../reconcilers/cleanup.ts";
-import type { Store } from "../core/store.ts";
-import { claudeTmpRoot, gitWorktrees, inUse, liveAgents, probeTree, procIndex, removeGlobBatch, removeGuarded, stopProcs, targetRef,
+import type { Row, Store } from "../core/store.ts";
+import { contractCloseTerminals, contractRemoveTree, contractTree, contractWt } from "../squad/removal.ts";
+import { claudeTmpRoot, gitWorktrees, inUse, liveAgents, probeTree, procIndex, removeGlobBatch, removeGuarded, stopProcs, targetRef, trimGlobBatch,
   type DirReader, type InUse, type TProc } from "../io/tidy.ts";
 
 export const CLEANUP_ACT = "cleanup.act";
@@ -125,6 +130,10 @@ async function refresh(store: Store, r: CleanupRow, f: Facts, o: ActOpts, use: I
       if (!cleanupGlobs(store, r.project).valid.includes(r.key)) return { gone: "the glob is no longer configured" };
       return { facts: f };
     }
+    case "f": {
+      if (!trimGlobs(store, r.project).valid.includes(r.key)) return { gone: "the trim glob is no longer configured" };
+      return { facts: f };
+    }
   }
   return { facts: f };
 }
@@ -143,6 +152,7 @@ const why = (r: CleanupRow, f: Facts, ageH: number): string => ({
   c: "helper checkout of no live member: clean, nothing unpushed",
   d: "worktree of no live member: clean, nothing unpushed",
   e: `untouched ${ageH}h, ours, no open file`,
+  f: `inside a kept cache folder: untouched ${ageH}h, ours, no open file`,
 } as Record<string, string>)[r.class] ?? "removable";
 const removed = (x: Exec, a: Action, r: CleanupRow, kind: "cleanup_removed" | "cleanup_stopped", payload: Record<string, unknown>): Result => {
   x.store.tx(() => {
@@ -160,7 +170,9 @@ async function act(a: Action, x: Exec, o: ActOpts): Promise<Result> {
   if (limit(store, a.project, "host_tidy") !== "apply") return { done: true, result: "kept: host_tidy is not apply" };
   const uid = o.uid ?? process.getuid?.() ?? -1, proc = o.proc ?? "/proc";
   const keep = keepSet(store), use = (o.inUse ?? inUse)(proc);
-  const ps = r.class === "d" ? await psList(o) : { ps: [], error: null };
+  // U11c: a contract squad's worktree is no Orca worktree, whatever Orca lists: no list is read for it.
+  const own = r.class === "d" && typeof parseFacts(r.facts).entity !== "string" ? contractTree(store, r.path ?? r.key) : null;
+  const ps = r.class === "d" && !own ? await psList(o) : { ps: [], error: null };
   const fresh = await refresh(store, r, parseFacts(r.facts), o, use, uid, ps);
   if ("gone" in fresh) {
     store.db.query("UPDATE observed_cleanup SET gone_at = ? WHERE project = ? AND class = ? AND key = ?").run(x.now, r.project, r.class, r.key);
@@ -190,15 +202,17 @@ async function act(a: Action, x: Exec, o: ActOpts): Promise<Result> {
     }
     case "c": case "d": {
       if (typeof f.entity === "string") return removeEntity(a, x, r, f, reason);
+      if (own) return removeContract(a, x, r, own, path, reason);
       const repo = String(f.repo);
       const rm = await git(repo, "worktree", "remove", path);
       if (rm.code !== 0) return failed(x, a, r, errOf(rm, "git worktree remove"));
       return removed(x, a, r, "cleanup_removed", { kb: r.size_kb, repo, branch: f.branch ?? null, reason });
     }
-    case "e": {
-      const b = await removeGlobBatch(r.key, { ageS: tmpAgeS, now: x.now, inUse: use, uid, max: o.batch, maxMs: o.batchMs, dirs: o.dirs });
+    case "e": case "f": {
+      const batch = r.class === "e" ? removeGlobBatch : trimGlobBatch;
+      const b = await batch(r.key, { ageS: tmpAgeS, now: x.now, inUse: use, uid, max: o.batch, maxMs: o.batchMs, dirs: o.dirs });
       store.tx(() => {
-        store.event("cleanup_removed", { project: a.project, payload: { class: "e", glob: r.key, count: b.count, kb: b.kb, sample: b.sample, capped: b.capped, reason } });
+        store.event("cleanup_removed", { project: a.project, payload: { class: r.class, glob: r.key, count: b.count, kb: b.kb, sample: b.sample, capped: b.capped, reason } });
         // A capped pass leaves the row removable under a new pass number (the next episode); a full one leaves what was kept.
         const next = b.capped ? { removable: Math.max(1, Number(f.removable ?? 0) - b.count), act_pass: Number(f.act_pass ?? 0) + 1 }
           : { removable: 0, count: Math.max(0, Number(f.count ?? 0) - b.count) };
@@ -224,6 +238,22 @@ async function removeEntity(a: Action, x: Exec, r: CleanupRow, f: Facts, reason:
   const rm = await x.act.orca.run("worktree-rm", [`id:${id}`], { env });
   if (rm.code !== 0) return failed(x, a, r, errOf(rm, "worktree-rm"));
   return removed(x, a, r, "cleanup_removed", { kb: r.size_kb, entity: id, reason });
+}
+
+// U11c: a contract squad's worktree, as removeEntity: its terminals through the contract, then its provider.
+async function removeContract(a: Action, x: Exec, r: CleanupRow, own: Row, path: string, reason: string): Promise<Result> {
+  const w = { project: String(own.project), squad: String(own.squad), wt: contractWt(own), path: String(own.path) };   // the row's own path: terminals match their cwd exactly
+  if (actionBlock(x.store, a)) return { wait: "paused" };
+  const c = await contractCloseTerminals(a, x, w);
+  if (c.code !== 0) return failed(x, a, r, errOf(c, "terminal.close"));
+  if (actionBlock(x.store, a)) return { wait: "paused" };
+  if (await exists(path)) {
+    const p = await probeTree(path, await targetRef(path));
+    if (!p || p.dirty > 0 || p.unique > 0) return failed(x, a, r, p ? `changed after its terminals closed (dirty ${p.dirty}, unpushed ${p.unique})` : "probe failed after its terminals closed");
+  }
+  const rm = await contractRemoveTree(a, x, w);
+  if (rm.code !== 0) return failed(x, a, r, errOf(rm, "worktree remove"));
+  return removed(x, a, r, "cleanup_removed", { kb: r.size_kb, provider: own.provider, branch: own.branch ?? null, reason });
 }
 
 export function cleanupAct(o: ActOpts = {}): Fulfiller {

@@ -2,7 +2,7 @@
 // skills with their level, lock and savings; the `skills` request (fulfil/skills.ts) writes one project
 // config row, a reset drops it, and `ds skills resolve`'s overrides show the change.
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { skillsJson } from "../../bin/board/skills-data.ts";
@@ -119,4 +119,14 @@ test("the project repo's skills form their own group with the project:* default;
   expect(v("builder").skills.find((x) => x.name === "e2e")).toMatchObject({ group: "Project repo", level: "on" });
   expect(skillsJson("fx", s.root, { skills: SK })!.roles[0].skills.some((x) => x.group === "Project repo")).toBe(false);
   expect(skill(s, "builder", "run").group).not.toBe("Project repo");
+});
+
+test("a save and a reset rewrite the backup's skills.conf section (settings-export-import U1)", async () => {
+  const s = imported(), tick = rig(s), backup = join(s.root, "fx", "settings.export");
+  file(s, "skills", { role: "builder", set: { run: "off" } });
+  await tick();
+  expect(readFileSync(backup, "utf8")).toContain("\n#== skills.conf\nbuilder run off\n");
+  file(s, "skills", { role: "builder", reset: true });
+  await tick(T + 1);
+  expect(readFileSync(backup, "utf8")).not.toContain("#== skills.conf");
 });

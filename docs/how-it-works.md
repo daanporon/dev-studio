@@ -97,8 +97,9 @@ Models are configuration, not code: `../conventions/roles.conf` holds the shared
   Rules: `../conventions/thinker-routing.md`.
 - **Units are tiered.** The Thinker tiers each unit `standard` or `hard`. In `ce-pipeline`
   mode a standard unit builds on the `builder-standard` model, a hard one on `builder`.
-  Every unit's code review runs on the `builder-review` model, whatever built it — that
-  review is what makes a cheaper build safe.
+  When unsure the Thinker picks `standard`; the Lead moves a struggling unit up to `hard`. A hard
+  unit's full review runs on `builder-review` (Opus), a standard unit's on `builder-review-standard`
+  (Sonnet) — that review is what makes a cheaper build safe.
 - **A built unit is babysat on a cheaper model.** Once a Builder's PR is open and the Builder
   sits idle with nothing waiting for it, the loop restarts it fresh in the same worktree on the
   `builder-<tier>-babysit` row (sonnet), with a prompt naming the unit, branch, PR and journal.

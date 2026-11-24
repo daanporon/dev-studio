@@ -6,6 +6,10 @@
 // board whose row says running but whose pid is gone re-arms the wish (a new want_at) and answers
 // `was_down: true`: the loop restarts it on its next tick (board.sh --serve says so). --wait polls until the
 // row's status matches (or it failed) and exits 1 when it does not in time or the loop gave up.
+// The port: --port, else the scope's registered port (the row's `port`: the one its board last bound,
+// which the loop moves to the next free one when the asked port is taken), else 8787. Without --port
+// the wish keeps the port its last ask named, so asking again for a board the loop moved (8787 taken,
+// running on 8788) is a no-op, not a restart.
 import { parse, print, seconds, shape, waitFor } from "../loop/core/cli.ts";
 import { isBoard } from "../loop/fulfil/board.ts";
 import { open, type Row } from "../loop/core/store.ts";
@@ -23,6 +27,14 @@ export async function run(args: string[]): Promise<number> {
     print(rows.map((r) => shape(r)));
     return 0;
   } finally { s.close(); }
+}
+
+// The port a stored wish asked for, or null.
+function askedPort(payload: string | null | undefined): number | null {
+  let wish: { port?: unknown } | null;
+  try { wish = JSON.parse(String(payload ?? "null")); } catch { return null; }
+  const p = Number(wish?.port);
+  return Number.isInteger(p) && p > 0 ? p : null;
 }
 
 export const wantHelp = "[--project <label>] [--topic <slug>] [--port <n>] [--bind <addrs>] [--hosts <names>] [--stop] [--by <who>] [--wait <s>]";
@@ -43,10 +55,11 @@ export async function wantBoard(args: string[]): Promise<number> {
     let wasDown = false, startedBefore: unknown = null;
     if (stop) res = s.want("service", id, "stopped", { by });
     else {
-      const had = s.db.query("SELECT port FROM services WHERE name = 'board' AND project = ? AND topic = ?").get(project, topic) as { port: number | null } | null;
+      const had = s.db.query("SELECT port, want_payload FROM services WHERE name = 'board' AND project = ? AND topic = ?").get(project, topic) as { port: number | null; want_payload: string | null } | null;
       const port = opt.port !== undefined ? Number(opt.port) : Number(had?.port ?? DEFAULT_PORT);
+      const asked = opt.port !== undefined ? port : (askedPort(had?.want_payload) ?? port);
       // The asker's bind addresses and Host names (DS_BIND / DS_BOARD_HOSTS) ride in the wish.
-      const payload = { port, ...(opt.bind ? { bind: opt.bind } : {}), ...(opt.hosts ? { hosts: opt.hosts } : {}) };
+      const payload = { port: asked, ...(opt.bind ? { bind: opt.bind } : {}), ...(opt.hosts ? { hosts: opt.hosts } : {}) };
       res = s.want("service", id, "running", { payload, fill: { port }, by });
       // Asked again about a board the row calls running with no live process: the same wish is a
       // no-op for the store, so re-arm it — the loop's next tick restarts the board.

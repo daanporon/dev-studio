@@ -9,8 +9,17 @@
 //                  brings a killed one back within a tick). The row records the want_at it served as
 //                  started_at (never older than the wish). Wait in the background up to DS_LOOP_BOARD_WAIT_MS (default
 //                  10 s) for /healthz. Running: status=running with pid and started_at. Exited (a
-//                  port in use) or never answered: status=failed, the log's tail in `result`, the
-//                  wish given up (`want_result` failed: …) until the next `ds want board`.
+//                  port taken between the probe and the bind) or never answered: status=failed, the
+//                  log's tail in `result`, the wish given up (`want_result` failed: …) until the next
+//                  `ds want board`.
+//                  The port (U2 of board-empty-state-and-port): the row's `port` when nobody holds it on
+//                  any bind address, else the next free one up to DS_BOARD_PORT_TRIES (20) further
+//                  (bin/board/free-port.ts), skipping ports another scope's row registers (running or
+//                  not) and ports another start is probing (`claimed`). The port bound is written back
+//                  to the row, so it is the scope's registered port from then on (`ds want board`
+//                  without --port asks for it). A row whose own old server is alive keeps its port;
+//                  after a restart stopped it, the port gets a 2 s release window before it counts
+//                  as taken (the server's own bind retry covers the rest). No free port: failed.
 //   board_restart  stop the old pid, count the restart (payload.counted), then the same start
 //   board_stop     stop the pid; status=stopped
 //   board_giveup   the restart cap: stop the pid, status=failed, one Studio alert
@@ -27,6 +36,7 @@ import { discoverProjects } from "../settings/projects.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { tailscale } from "../io/tailnet.ts";
+import { freePort, held, lastPort } from "../../board/free-port.ts";
 
 const waitMs = () => envInt("DS_LOOP_BOARD_WAIT_MS", 10_000);
 const pingMs = () => envInt("DS_LOOP_BOARD_PING_MS", 3_000);
@@ -37,6 +47,9 @@ const children = new Map<number, Bun.Subprocess>();
 // A board in a systemd unit is no child of ours: its wrapper shell writes the exit code to a file.
 const exitFiles = new Map<number, string>();
 const starting = new Set<number>();
+// The ports starts in flight have picked (or are probing), by port -> row id: a second start skips them.
+const claimed = new Map<number, number>();
+const unclaim = (port: number, id: number) => { if (claimed.get(port) === id) claimed.delete(port); };
 export function exitCodeOf(pid: number): number | null {
   const c = children.get(pid)?.exitCode;
   if (c != null) return c;
@@ -178,14 +191,41 @@ async function startUnit(id: number, argv: string[], env: Record<string, string>
   return null;
 }
 
+// True when another scope's row registers this port, or another start has claimed it.
+function taken(s: Store, id: number, port: number): boolean {
+  const by = claimed.get(port);
+  if (by !== undefined && by !== id) return true;
+  return s.db.query("SELECT 1 FROM services WHERE name = 'board' AND id != ? AND port = ?").get(id, port) != null;
+}
+
+// The port this start binds: the row's own when its old server still holds it, else the first free
+// one from the row's port (after a restart of our own server, a short wait for it to let go first).
+async function pickPort(s: Store, r: Row, b: string, restarted: boolean): Promise<number | null> {
+  const id = Number(r.id), asked = Number(r.port);
+  if (isBoard(r.pid)) return asked;
+  if (restarted && !taken(s, id, asked)) for (let i = 0; i < 10 && await held(asked, b); i++) await Bun.sleep(200);
+  return freePort(asked, b, {
+    skip: (p) => taken(s, id, p),
+    claim: (p) => claimed.set(p, id),
+    release: (p) => unclaim(p, id),
+  });
+}
+
 // Spawn the server and wait for /healthz in the background.
-async function start(x: Exec, r: Row): Promise<Result> {
-  const { store, now: at } = x, id = Number(r.id), port = Number(r.port);
+async function start(x: Exec, r: Row, restarted = false): Promise<Result> {
+  const { store, now: at } = x, id = Number(r.id), asked = Number(r.port);
   // The wish this start serves: started_at is never older than it (a wish written after the tick's
   // clock was read would otherwise look newer than the start it got).
   const served = Math.max(at, Number(r.want_at ?? 0));
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) { fail(store, r, `no valid port (${r.port})`, at); return { failed: `no valid port (${r.port})` }; }
-  const b = bindsOf(r), log = logPath(store.root, r);
+  if (!Number.isInteger(asked) || asked <= 0 || asked > 65535) { fail(store, r, `no valid port (${r.port})`, at); return { failed: `no valid port (${r.port})` }; }
+  const b = bindsOf(r);
+  const port = await pickPort(store, r, b, restarted);
+  if (port === null) {
+    const why = `ports ${asked}-${lastPort(asked)} are all taken or registered to another board`;
+    fail(store, r, why, at);
+    return { failed: why };
+  }
+  const log = logPath(store.root, r);
   mkdirSync(join(log, ".."), { recursive: true });
   try { renameSync(log, `${log}.1`); } catch { /* none yet */ }
   closeSync(openSync(log, "w"));
@@ -199,7 +239,7 @@ async function start(x: Exec, r: Row): Promise<Result> {
     let p: Bun.Subprocess;
     try {
       p = Bun.spawn(argv, { cwd: ROOT, detached: true, stdio: ["ignore", fd2, fd2], env } as Parameters<typeof Bun.spawn>[1]);
-    } catch (e) { closeSync(fd2); const why = `spawn failed: ${(e as Error).message}`; fail(store, r, why, at); return { failed: why }; }
+    } catch (e) { closeSync(fd2); unclaim(port, id); const why = `spawn failed: ${(e as Error).message}`; fail(store, r, why, at); return { failed: why }; }
     closeSync(fd2);
     p.unref();
     // A start replaces whatever ran before: the exit codes of the dead ones are no longer asked for.
@@ -209,7 +249,11 @@ async function start(x: Exec, r: Row): Promise<Result> {
   }
   const { pid } = h;
   starting.add(id);
-  set(store, "service_starting", r, { status: "starting", pid, started_at: served, result: null }, at, { pid });
+  // The port bound becomes the row's: the scope's registered port, the one every reader pings. Not
+  // over a newer wish written meanwhile (another port): the reconciler restarts the board on that one.
+  const same = store.wish("service", id)?.want_at === r.want_at;
+  set(store, "service_starting", r, { status: "starting", pid, started_at: served, result: null, ...(same ? { port } : {}) }, at, { pid, port, ...(port !== asked ? { asked } : {}) });
+  r = store.wish("service", id) ?? { ...r, port };
   return {
     background: (async (): Promise<Result> => {
       try {
@@ -230,7 +274,7 @@ async function start(x: Exec, r: Row): Promise<Result> {
         const t = tail(log), why = `the board didn't answer /healthz on :${port} within ${waitMs() / 1000}s${t ? `: ${t}` : ""}`;
         failStart(store, r, why, at);
         return { failed: why };
-      } finally { starting.delete(id); }
+      } finally { starting.delete(id); unclaim(port, id); }
     })(),
   };
 }
@@ -261,6 +305,7 @@ const board: Fulfiller = {
         `the web board${r.project ? ` for ${r.project}` : ""}${r.topic ? ` (${r.topic})` : ""} ${why} — the loop stopped restarting it; see ${logPath(x.store.root, r)}, then ask again with \`board.sh ${r.project || ""} --serve\``);
       return { done: true };
     }
+    const restarted = a.kind === "board_restart" && isBoard(r.pid);
     if (a.kind === "board_restart") {
       await stop(r.pid);
       const restarts = restartsOf(r);
@@ -271,7 +316,7 @@ const board: Fulfiller = {
       set(x.store, "service_started", r, { status: "running", last_ping_at: x.now }, x.now, { pid: r.pid, adopted: true });
       return { done: true };
     }
-    return start(x, rowOf(x.store, a) ?? r);
+    return start(x, rowOf(x.store, a) ?? r, restarted);
   },
 };
 export default board;

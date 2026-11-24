@@ -10,6 +10,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mount as mountPage, type Run } from "./board-mount";
+import { BACKEND_NAMES } from "../../bin/backend/registry.ts";
 
 const root = join(import.meta.dir, "../..");
 const page = readFileSync(join(root, "web/board.html"), "utf8");
@@ -67,6 +68,28 @@ const flowBoard = {
     ],
   },
 };
+test("paused-in-swimlanes: the lane header counts paused apart, its paused group starts folded, an unfolded dim card says why and for how long", async () => {
+  const pz = (slug: string) => flowCard({ key: "fixture/gone/" + slug, slug, stage: "building", group: "paused", paused: true, paused_s: 90000, note: "paused by you" });
+  const pb = { ...flowBoard, flow: { ...flowBoard.flow, cards: [flowCard({ key: "fixture/gone/w1", slug: "w1", stage: "building", group: "coding" }), pz("p1"), pz("p2")],
+    counts: { ...flowBoard.flow.counts, building: 1, pr_open: 0, needs_you: 0, merging: 0, queued: 0, paused: 2 } } };
+  const r = await mount(pb, false);
+  const doc = r.window.document;
+  try {
+    doc.getElementById("flow").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    expect(doc.querySelector("#flow-col-building h4")?.textContent).toContain("1 · 2 paused");
+    expect(doc.querySelector("#flow small")?.textContent).toContain("2 paused");
+    const g = doc.querySelector('#flow-col-building [data-group="paused"]') as any;
+    expect(g.querySelector(".fgl").textContent).toBe("▸ paused");
+    expect(g.querySelectorAll(".fcard").length).toBe(0);
+    g.querySelector(".fgrp").dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((x) => setTimeout(x, 30));
+    const c = doc.querySelector('#flow-col-building [data-group="paused"] .fcard.paused') as any;
+    expect(c).not.toBeNull();
+    expect(c.querySelector(".m").textContent).toContain("paused by you");
+    expect(c.querySelector(".m").textContent).toContain("25h");
+  } finally { r.window.close?.(); }
+});
 test("every Flow card opens a details window; a PR number opens the PR, not the window", async () => {
   const r = await mount(flowBoard, false);
   const w = r.window, doc = w.document;
@@ -136,8 +159,8 @@ test("a member with 2 unread messages shows 'Inbox 2' and opens the 'Inbox · <m
 });
 
 // ---- board-start-squad-box U1: the Start squad dialog.
-async function startDialog(reply: (body: any) => any) {
-  const r = await mount(board, false);
+async function startDialog(reply: (body: any) => any, b: any = board) {
+  const r = await mount(b, false);
   const w = r.window, doc = w.document, posts: any[] = [];
   w.fetch = async (url: string, init?: any) => {
     if (String(url) !== "api/request") return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
@@ -165,7 +188,7 @@ test("Start squad: a multi-line brief and the fields are one POST that keeps eve
     await d.click(d.btn(/^Send$/)); await d.click(d.btn(/^Sending…$/));
     d.text()?.dispatchEvent(new d.w.KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
     await d.wait(120);
-    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan" }]);
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan", backend: "orca" }]);
     expect(d.doc.querySelector('[role="dialog"][aria-label="Start squad"]')).toBeNull();
     expect(d.doc.body.textContent).toContain("sent to the Studio: start squad my-topic (request #7)");
     expect(d.r.errors).toEqual([]);
@@ -193,7 +216,7 @@ test("Start squad: a 400 keeps the dialog and the text; testing disables Start a
     await d.set(".start-type", "testing", "change");
     expect(d.doc.querySelector(".start-start").disabled).toBe(true);
     await d.click(d.btn(/^Send$/));
-    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "a\nb", type: "testing", autonomy: "checkpoints" }]);
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "a\nb", type: "testing", autonomy: "checkpoints", backend: "orca" }]);
     expect(d.doc.querySelector(".start-text").value).toBe("a\nb");
     expect(d.doc.body.textContent).toContain("not sent: the text has a control character on line 2");
     expect(d.btn(/^Send$/)).toBeTruthy();
@@ -402,6 +425,37 @@ test("the Plans list: an approved plan shows its chip and a menu item that opens
   } finally { await r.window.happyDOM.close(); }
 });
 
+// ---- debrief-in-needs-you pages U1: the Try it group sits in Documents, after the debrief, and opens like a plan.
+test("Documents: a squad's Try it page shows as its own group and opens", async () => {
+  const sq = { ...udBoard.squads[0], debrief: "set out: x", try_it: { name: "sq-try-it.md", mtime: now - 600, markdown: "# Try it — sq\n\n1. Open the board; see the squad." } };
+  const r = await mount({ ...udBoard, squads: [sq] }, false);
+  const w = r.window, doc = w.document;
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await new Promise((x) => setTimeout(x, 30)); };
+  try {
+    doc.getElementById("squads").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    await click(doc.querySelector(".row.squad"));
+    const groups = [...doc.querySelectorAll(".docbox .docs")].map((g: any) => g.getAttribute("data-docs"));
+    expect(groups.slice(0, 2)).toEqual(["debrief", "tryit"]);
+    await click(doc.querySelector('.docs[data-docs="tryit"] .plan'));
+    expect(doc.querySelector(".mbox .mhd span")?.textContent).toBe("sq — try it");
+    expect(doc.querySelector(".mbox")?.textContent).toContain("Open the board; see the squad.");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+test("Documents: a squad without a Try it page has no Try it group", async () => {
+  const r = await mount({ ...udBoard, squads: [{ ...udBoard.squads[0], try_it: null }] }, false);
+  const w = r.window, doc = w.document;
+  try {
+    doc.getElementById("squads").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    doc.querySelector(".row.squad").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await new Promise((x) => setTimeout(x, 30));
+    expect(doc.querySelector('.docs[data-docs="tryit"]')).toBeNull();
+  } finally { await r.window.happyDOM.close(); }
+});
+
 test("the dim ★ on a Merged card reads at opacity .7, dimmer than the bright ★ (U6)", async () => {
   const bright = { ...flowBoard.flow.cards[0], focus: "on", key: "fixture/gone/bright", slug: "bright" };
   const r = await mount({ ...flowBoard, flow: { ...flowBoard.flow, cards: [bright, ...flowBoard.flow.cards] } }, false);
@@ -446,4 +500,250 @@ test("the ★ and ⚡ come before the unit name, outside the part that is cut (U
   expect(ell(un.querySelector(".unit-open"))).toBe("ellipsis");
   expect(ell(un.querySelector(".umark"))).not.toBe("ellipsis");
   expect(doc.querySelector('.fcard[data-key="fixture/gone/m1"] .umark')).toBeNull();
+});
+
+// ---- debrief-on-archive U2: a `sweep-debrief-<topic>-<n>` card opens the archived squad's debrief; Mark read answers the _studio card.
+test("a Debrief card shows 'Debrief · <topic>', opens the archived debrief and Mark read posts the _studio answer", async () => {
+  const card = { squad: "_studio", label: "fixture", kind: "studio", card_squad: null, id: "sweep-debrief-wrap-1", debrief: "wrap", from: "loop", title: "Debrief: wrap", titled: true,
+    text: "Wrapped up cleanly — written at archive by the Lead.", choices: [], options: ["Mark read"], act: null, age_min: 1, about: null };
+  const archived = { topic: "wrap", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [],
+    debrief: "Wrapped up cleanly.\n\nUNIQUE-DEBRIEF-BODY" };
+  const r = await mount({ ...board, needs_you: [card], archived: [archived] }, false);
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) === "api/answer") posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && !doc.querySelector(".qnote"); k++) await wait(25);
+    const note = doc.querySelector(".qnote");
+    expect(note.textContent).toContain("Debrief · wrap");
+    note.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("UNIQUE-DEBRIEF-BODY");
+    expect(posts).toEqual([]); // opening it is not reading it
+    const mark = [...doc.querySelectorAll(".qnote button")].find((b: any) => b.textContent.trim() === "Mark read") as any;
+    mark.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(posts.length).toBe(1);
+    expect(posts[0]).toMatchObject({ project: "fixture", topic: "_studio", id: "sweep-debrief-wrap-1", answer: "Mark read" });
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
+// debrief-in-needs-you U3: an old-id card (`loop-debrief-…` with reason `debrief-<topic>`) is a Debrief card like the new one.
+test("an old-id and a new-id Debrief card both show in Needs you, with linked PRs; Open falls back to the card text; Mark read answers only its card", async () => {
+  const mk = (id: string, topic: string, extra: any = {}) => ({ squad: "_studio", label: "fixture", kind: "studio", card_squad: null, id, debrief: topic, reason: `debrief-${topic}`, from: null,
+    title: "Debrief: " + topic, titled: true, text: `1. Set out to do ${topic}.\n2. Shipped #123 and #45.`, choices: [], options: ["Mark read"], act: null, age_min: 3000, about: null, repo_slug: "o/r", ...extra });
+  const oldC = mk("loop-debrief-oldy-1uy1p7zj2un2e", "oldy"), newC = mk("sweep-debrief-newy-1", "newy");
+  const archived = { topic: "newy", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [], debrief: "NEWY-ARCHIVED-BODY" };
+  const r = await mount({ ...board, needs_you: [oldC, newC], loop_notes: [], archived: [archived] }, false);
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) === "api/answer") posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && doc.querySelectorAll(".qnote").length < 2; k++) await wait(25);
+    const notes = [...doc.querySelectorAll(".qnote")] as any[];
+    expect(notes.map((n) => n.querySelector(".sq").textContent)).toEqual([expect.stringContaining("Debrief · oldy"), expect.stringContaining("Debrief · newy")]);
+    expect(notes[0].querySelectorAll('a[href="https://github.com/o/r/pull/123"]').length).toBe(1);
+    expect(notes[0].querySelector(".lndet.dbr")).not.toBeNull();
+    expect(doc.querySelectorAll(".lnnote").length).toBe(0);
+    notes[1].querySelector('[data-ev="open-debrief"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("NEWY-ARCHIVED-BODY");
+    notes[0].querySelector('[data-ev="open-debrief"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("The full debrief of this squad is not on the board.");
+    expect(doc.body.textContent).toContain("Set out to do oldy.");
+    notes[0].querySelector('[data-ev="mark-read"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(posts).toEqual([expect.objectContaining({ topic: "_studio", id: "loop-debrief-oldy-1uy1p7zj2un2e", answer: "Mark read" })]);
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
+// chat-with-studio U1: the header's Studio button(s), the badge, the new-reply dot and the opener, on the real page.
+const studio = (over: any = {}) => ({ label: "fixture", wt: "/w/st", handle: "term_s", adopted: true, unread: 0, reply_due: 0, working: false, reply_at: null,
+  agent: "claude", walk: null, model_label: null, account: null, account_label: null, ctx: null, ctx_level: null, ...over });
+const btns = (r: Run) => [...r.root.querySelectorAll(".hdr .studio-btn")] as any[];
+const wait = (ms = 60) => new Promise((x) => setTimeout(x, ms));
+
+test("chat-with-studio U1: an adopted Studio's button opens the chat on _studio; no badge or dot while quiet", async () => {
+  const r = await mountPage({ ...board, studio: [studio()] }, false, { "api/chat": { agent: "claude", source: "transcript", turns: [], sends: [] } });
+  try {
+    expect(btns(r)).toHaveLength(1);
+    expect(btns(r)[0].disabled).toBe(false);
+    expect(btns(r)[0].querySelector(".msg-badge")).toBeNull();
+    expect(btns(r)[0].querySelector(".studio-dot")).toBeNull();
+    btns(r)[0].click(); await wait();
+    expect(r.urls).toContain("api/chat?project=fixture&topic=_studio&wt=%2Fw%2Fst");
+    expect(r.root.querySelector(".chat .mhd")!.textContent).toContain("Chat · Studio · fixture");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+test("chat-with-studio U1: the badge shows unread + reply_due, a reply newer than the seen mark gives a dot until the panel was open", async () => {
+  const at = Math.floor(Date.now() / 1000);
+  const turns = [{ role: "assistant", text: "hello", at }];
+  const b = { ...board, studio: [studio({ unread: 1, reply_due: 2, working: true, reply_at: at })] };
+  const r = await mountPage(b, false, { "api/chat": { agent: "claude", source: "transcript", turns, sends: [] } });
+  try {
+    // first visit: no mark, so reply_at becomes the mark and there is no dot
+    expect(btns(r)[0].querySelector(".msg-badge")!.textContent).toBe("3");
+    expect(btns(r)[0].querySelector(".studio-dot")).toBeNull();
+    expect(btns(r)[0].textContent).toContain("working");
+  } finally { await r.window.happyDOM.close(); }
+  const r2 = await mountPage({ ...b, studio: [studio({ reply_at: at + 100 })] }, false, { "api/chat": { agent: "claude", source: "transcript", turns: [{ role: "assistant", text: "newer", at: at + 100 }], sends: [] } });
+  try {
+    r2.window.localStorage.setItem("b:chat-seen:fixture//w/st", JSON.stringify(at));
+    btns(r2)[0].click(); await wait();   // opening re-renders; the panel loads and marks the newer reply seen
+    expect(r2.window.localStorage.getItem("b:chat-seen:fixture//w/st")).toBe(JSON.stringify(at + 100));
+    (r2.root.querySelector(".chat .mhd button") as any).click(); await wait();
+    expect(r2.root.querySelector(".chat")).toBeNull();
+    expect(btns(r2)[0].querySelector(".studio-dot")).toBeNull();
+  } finally { await r2.window.happyDOM.close(); }
+});
+
+test("chat-with-studio U1: a non-adopted Studio's button is disabled with its reason; a host-wide board has one labelled button each", async () => {
+  const r = await mountPage({ ...board, studio: [studio({ adopted: false, handle: null })] }, false);
+  try {
+    expect(btns(r)[0].disabled).toBe(true);
+    expect(btns(r)[0].title).toContain("has not adopted");
+  } finally { await r.window.happyDOM.close(); }
+  const r2 = await mountPage({ ...board, project: "", studio: [studio({ label: "a", wt: "/w/a" }), studio({ label: "b", wt: "/w/b" })] }, false);
+  try {
+    expect(btns(r2).map((x) => x.textContent.trim().replace(/\s+/g, " "))).toEqual(["💬 Studio · a", "💬 Studio · b"]);
+  } finally { await r2.window.happyDOM.close(); }
+});
+
+// ---- orca-backend-alternatives U9: the dialog presets the project's default_backend and sends the backend picked.
+test("Start squad: Backend starts on the project's default_backend, follows the project, and is sent", async () => {
+  const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", default_backend: "tmux" }, { label: "other", default_backend: "orca" }] };
+  const d = await startDialog(() => ({ status: 202, body: { ok: true, id: 3 } }), b);
+  try {
+    expect(d.doc.querySelector(".start-backend").value).toBe("tmux");
+    // The page's list is a copy of the registry's; this keeps the two the same.
+    expect([...d.doc.querySelectorAll(".start-backend option")].map((o: any) => o.value)).toEqual([...BACKEND_NAMES]);
+    await d.set(".start-project", "other", "change");
+    expect(d.doc.querySelector(".start-backend").value).toBe("orca");
+    await d.set(".start-project", "fixture", "change");
+    await d.set(".start-backend", "herdr", "change");
+    await d.set(".start-text", "go");
+    await d.click(d.btn(/^Send$/));
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "go", type: "feature", autonomy: "checkpoints", backend: "herdr" }]);
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+
+test("a squad off orca shows its backend chip, with the worktree tool only when it is not the backend's default", async () => {
+  const sq = (topic: string, over: any) => ({ label: "fixture", topic, type: "feature", autonomy: "orchestration", ship_mode: "ce-pipeline", display_status: "working", display_key: "working", phase: "build", status: "active", members: [], units: [], questions: [], ...over });
+  const r = await mount({ ...board, squads: [sq("plain", { backend: "orca", worktree_provider: "orca", provider_default: true }),
+    sq("ontmux", { backend: "tmux", worktree_provider: "git", provider_default: true }), sq("ontree", { backend: "tmux", worktree_provider: "treehouse", provider_default: false })] }, false);
+  try {
+    const doc = r.window.document;
+    for (let k = 0; k < 40 && doc.querySelectorAll(".row.squad").length < 3; k++) await new Promise((res) => setTimeout(res, 25));
+    const rowOf = (t: string) => [...doc.querySelectorAll(".row.squad")].find((e: any) => e.textContent.includes(t)) as any;
+    expect(rowOf("plain").querySelector(".sqbackend")).toBeNull();
+    expect(rowOf("ontmux").querySelector(".sqbackend").textContent).toBe("tmux");
+    expect(rowOf("ontree").querySelector(".sqbackend").textContent).toBe("tmux · treehouse");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+// ---- archive-leftovers U3: a leftover shows its check: look first with the commits and files, safe, or not checked.
+test("a squad's Leftovers block shows look first with commits, files and Keep it; a safe one and an unchecked one", async () => {
+  const lo = (wt: string, check: any) => ({ wt, path: "/w/" + wt, branch: "work-" + wt, n_files: 0, files: [], unpushed: 0, reason: "kept: 1 uncommitted, 2 unpushed", waits_on: "old text", unit: "u1", pr: "12", age_min: 5, check });
+  const check = (over: any) => ({ at: now - 120, safe: false, commits: [{ sha: "aaaa1111bbbb", title: "first change" }, { sha: "cccc2222dddd", title: "second change" }], differ: ["src/only-here.ts"], n_differ: 1, target: "origin/main", target_sha: "e".repeat(40), head: "f".repeat(40), fingerprint: "fp1", checked_age_s: 180, ...over });
+  const squad = { label: "fixture", topic: "one", type: "feature", autonomy: "orchestration", ship_mode: "ce-pipeline", display_status: "working", display_key: "working", phase: "build", status: "active", members: [], units: [], questions: [],
+    leftovers: [lo("look", check({})), lo("safe", check({ safe: true, commits: [], differ: [], n_differ: 0 })), lo("none", null)] };
+  const r = await mount({ ...board, squads: [squad] });
+  try {
+    const doc = r.window.document;
+    const until = async (f: () => any) => { for (let k = 0; k < 40 && !f(); k++) await new Promise((res) => setTimeout(res, 25)); };
+    await until(() => doc.querySelector(".row.squad"));
+    doc.querySelector(".row.squad").dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await until(() => doc.querySelector(".lo"));
+    const rows = [...doc.querySelectorAll(".lo")].map((e: any) => e.textContent as string);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain("look first");
+    expect(rows[0]).toContain("first change");
+    expect(rows[0]).toContain("second change");
+    expect(rows[0]).toContain("src/only-here.ts");
+    expect(rows[0]).toContain("PR #12");
+    expect(rows[0]).toContain("checked 3m ago");
+    expect(rows[0]).toContain("Keep it");
+    expect(rows[1]).toContain("safe, removing on the next check");
+    expect(rows[2]).toContain("not checked yet");
+    expect(doc.querySelector(".box h3")!.parentElement!.textContent).not.toContain("waits on");
+    const keep = [...doc.querySelectorAll(".lo a")].find((a: any) => /Keep it/.test(a.textContent)) as any;
+    expect(keep.getAttribute("title")).toContain("git -C /w/look push origin HEAD:refs/heads/work-look");
+    expect(keep.getAttribute("title")).toContain("git -C /w/look diff --binary HEAD > ~/.dev-studio/state/fixture/pages/one/leftovers/look.patch");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+// archive-leftovers U4: Remove on a look-first leftover asks first (commits, files, the patch line) and posts the
+// check's fingerprint; on a safe one it posts at once; a finished press shows its outcome on the row.
+test("Remove on a leftover: look first confirms with the commits and posts the fingerprint; safe posts at once", async () => {
+  const lo = (wt: string, check: any, remove: any = null) => ({ wt, path: "/w/" + wt, branch: "work-" + wt, n_files: 0, files: [], unpushed: 0, reason: "kept", waits_on: null, unit: "u1", pr: null, age_min: 5, check, remove });
+  const check = (over: any) => ({ at: now - 120, safe: false, commits: [{ sha: "aaaa1111bbbb", title: "first change" }], differ: ["src/only-here.ts"], n_differ: 1, target: "origin/main", target_sha: "e".repeat(40), head: "f".repeat(40), fingerprint: "0123456789abcdef01234567", checked_age_s: 60, ...over });
+  const squad = { label: "fixture", topic: "one", type: "feature", autonomy: "orchestration", ship_mode: "ce-pipeline", display_status: "working", display_key: "working", phase: "build", status: "active", members: [], units: [], questions: [],
+    leftovers: [lo("look", check({})), lo("safe", check({ safe: true, commits: [], differ: [], n_differ: 0, fingerprint: "89abcdef0123456789abcdef" })),
+      lo("gone", check({}), { id: 9, at: now - 30, done_at: now - 20, result: { ok: false, state: "refused", error: "refused: the tree changed since you looked" } })] };
+  const r = await mount({ ...board, squads: [squad] });
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) === "api/leftover-remove") { posts.push(JSON.parse(init.body)); return new w.Response(JSON.stringify({ ok: true, id: posts.length }), { status: 202 }); }
+    return new w.Response("{}", { status: 404 });
+  };
+  const until = async (f: () => any) => { for (let k = 0; k < 40 && !f(); k++) await new Promise((res) => setTimeout(res, 25)); };
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await new Promise((x) => setTimeout(x, 30)); };
+  try {
+    await until(() => doc.querySelector(".row.squad"));
+    await click(doc.querySelector(".row.squad"));
+    await until(() => doc.querySelector(".lo"));
+    const rows = () => [...doc.querySelectorAll(".lo")] as any[];
+    expect(rows()[2].textContent).toContain("not removed: the tree changed since you looked");
+    await click(rows()[0].querySelector(".lo-rm"));
+    expect(posts).toEqual([]);
+    const ask = doc.querySelector(".lo-confirm") as any;
+    expect(ask.textContent).toContain("first change");
+    expect(ask.textContent).toContain("src/only-here.ts");
+    expect(ask.querySelector(".lo-save").textContent).toBe("uncommitted changes are saved to a patch; commits stay on branch work-look");
+    await click(ask.querySelector(".lo-go"));
+    expect(posts).toEqual([{ project: "fixture", topic: "one", wt: "look", fingerprint: "0123456789abcdef01234567" }]);
+    expect(doc.querySelector(".lo-confirm")).toBeNull();
+    expect(rows()[0].textContent).toContain("removing…");
+    await click(rows()[1].querySelector(".lo-rm"));
+    expect(doc.querySelector(".lo-confirm")).toBeNull();
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual({ project: "fixture", topic: "one", wt: "safe", fingerprint: "89abcdef0123456789abcdef" });
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
+// archive-leftovers U2: an archived squad's box lists its kept worktrees in the same Leftovers block as a live squad.
+test("an archived squad's box shows the Leftovers block", async () => {
+  const archived = { topic: "oldsq", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [],
+    leftovers: [{ wt: "wt-arch", path: "/tmp/wt-arch-UNIQUE", branch: "br-arch", n_files: 1, files: ["a.txt"], unpushed: 0, reason: "kept", waits_on: null, unit: "u1", age_min: 5 }] };
+  const r = await mount({ ...board, archived: [archived] }, false);
+  const w = r.window, doc = w.document;
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && !doc.querySelector(".arch"); k++) await wait(25);
+    const show = [...doc.querySelectorAll(".arch button")].find((b: any) => b.textContent.trim() === "show") as any;
+    show.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    const row = [...doc.querySelectorAll(".row.squad")].find((e: any) => e.textContent.includes("oldsq")) as any;
+    expect(row).toBeTruthy();
+    row.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    expect(doc.body.textContent).toContain("Leftovers");
+    expect(doc.body.textContent).toContain("/tmp/wt-arch-UNIQUE");
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
 });

@@ -7,9 +7,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { capTurns, chatLine, MAX_BYTES, MAX_RUN_LIST, remark, toolTurn, type Turn } from "../../bin/loop/chat/turns.ts";
+import { capTurns, chatLine, MAX_BYTES, MAX_RUN_LIST, remark, textTurn, toolTurn, type Turn } from "../../bin/loop/chat/turns.ts";
 import { redact } from "../../bin/loop/chat/redact.ts";
 import { screenTurns } from "../../bin/loop/chat/screen.ts";
+import { parse as claudeParse } from "../../bin/loop/chat/claude.ts";
 import { chatObserver, READ_WINDOW } from "../../bin/loop/observers/chat.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
@@ -174,6 +175,14 @@ const toolLine = (name: string, input: Record<string, unknown>, ts: string) =>
   `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t" + ts, name, input }] }, timestamp: ts })}\n`;
 const at = (m: number) => `2026-11-17T12:${String(m).padStart(2, "0")}:00Z`;
 
+test("U19: a multi-line board chat is the operator's line with its breaks, also when stored wrapped as a paste", () => {
+  const line = chatLine("first\nsecond\n\tthird");
+  expect(textTurn("user", line, 1)).toEqual({ role: "user", text: "first\nsecond\n\tthird", at: 1, from: "operator" });
+  expect(textTurn("user", `<pasted_content>\n${line}\n</pasted_content>`, 2)).toEqual({ role: "user", text: "first\nsecond\n\tthird", at: 2, from: "operator" });
+  // A paste the operator made in the terminal stays a terminal line.
+  expect(textTurn("user", "<pasted_content>\nsome log\n</pasted_content>", 3)).toMatchObject({ from: "operator", via: "terminal", text: "some log" });
+});
+
 describe("crew-terminal-access U5: a conversation, not a tool log", () => {
   test("an operator line stays in the window after 30 tool calls follow it, read over several ticks", () => {
     const f = setup(); tick(f);
@@ -288,6 +297,55 @@ describe("incremental reads", () => {
     expect(READ_WINDOW).toBe(256 * 1024);
   });
 
+  const asst = (text: string) => `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, timestamp: "2026-11-17T11:05:00Z" })}\n`;
+  const blob = (type: string, kb: number, extra: Record<string, unknown> = {}) => `${JSON.stringify({ type, ...extra, attachment: { text: "z".repeat(kb * 1024) } })}\n`;
+
+  test("a compaction burst over the read window keeps the board line and the reply in order", () => {
+    const f = setup(); tick(f);
+    appendFileSync(f.claudePath, asst("first answer"));
+    tick(f, T + 1);
+    appendFileSync(f.claudePath, userLine("dev-studio board, the operator says: please summarise"));
+    const burst = JSON.stringify({ type: "system", subtype: "compact_boundary" }) + "\n"
+      + JSON.stringify({ type: "user", isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: "user", content: "COMPACT SUMMARY TEXT" } }) + "\n"
+      + blob("attachment", 160) + blob("api-request-blob", 60) + blob("api-request-blob", 60);
+    appendFileSync(f.claudePath, burst);
+    expect(Buffer.byteLength(burst)).toBeGreaterThan(READ_WINDOW);
+    appendFileSync(f.claudePath, asst("the reply after compaction"));
+    tick(f, T + 2);
+    const ts = turns(f, f.claudeWt), texts = ts.map((t) => t.text);
+    const i = texts.indexOf("please summarise"), j = texts.indexOf("the reply after compaction");
+    expect(i).toBeGreaterThan(-1);
+    expect(j).toBeGreaterThan(i);
+    expect(ts[i].from).toBe("operator");
+    expect(texts.some((x) => String(x).includes("COMPACT SUMMARY"))).toBe(false);
+    expect(row(f, f.claudeWt).read_to).toBe(statSync(f.claudePath).size);
+  });
+
+  test("a line longer than the read window is parsed whole across chunks", () => {
+    const f = setup(); tick(f);
+    appendFileSync(f.claudePath, userLine("x".repeat(READ_WINDOW + 5000)) + asst("after the long line"));
+    tick(f, T + 1);
+    const texts = turns(f, f.claudeWt).map((t) => String(t.text));
+    expect(texts.some((x) => x.startsWith("xxx"))).toBe(true);
+    expect(texts.at(-1)).toBe("after the long line");
+  });
+
+  test("an append over FOLLOW_MAX jumps to the end window and logs once", () => {
+    const f = setup();
+    f.o = chatObserver({ log: (l) => f.logs.push(l), followMax: 1024 * 1024 });
+    tick(f);
+    const n = turns(f, f.claudeWt).length;
+    appendFileSync(f.claudePath, userLine("LOST MARK") + blob("attachment", 1100) + asst("tail reply"));
+    tick(f, T + 1);
+    const texts = turns(f, f.claudeWt).map((t) => String(t.text));
+    expect(texts).toHaveLength(n + 1);
+    expect(texts.at(-1)).toBe("tail reply");
+    expect(texts).not.toContain("LOST MARK");
+    appendFileSync(f.claudePath, blob("attachment", 1100) + asst("again"));
+    tick(f, T + 2);
+    expect(f.logs.filter((l) => l.includes("in one tick"))).toHaveLength(1);
+  });
+
   test("a half-written line is not parsed until it completes", () => {
     const f = setup(); tick(f);
     const before = Number(row(f, f.claudeWt).read_to), n = turns(f, f.claudeWt).length;
@@ -374,4 +432,13 @@ describe("ended members", () => {
     expect(t20).toHaveLength(20);
     expect(t20.some((t) => t.from === "operator")).toBe(false);
   });
+});
+
+test("chat-image-upload U2: a board line's images suffix becomes `images`, in the path, native and image-only forms", () => {
+  const turns = claudeParse(readFileSync(join(FIX, "claude-images.jsonl"), "utf8"));
+  expect(turns.map((t) => ({ text: t.text, from: t.from, images: t.images }))).toEqual([
+    { text: "look", from: "operator", images: ["0123456789abcdef.png", "fedcba9876543210.jpg"] },
+    { text: "look", from: "operator", images: [null] },
+    { text: "", from: "operator", images: ["0123456789abcdef.png"] },
+  ]);
 });

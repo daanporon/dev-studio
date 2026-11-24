@@ -27,7 +27,7 @@ for the backup and how to put one back.
 Default roster: `conventions/roles.conf`. One row per role:
 
 ```
-name  agent  model  spawn  [effort]  [fallbacks]
+name  agent  model  spawn  [effort]  [fallbacks]  [plan]  [return]
 ```
 
 - `agent` — which agent runs the role (`claude`, `muse`). The agent and its
@@ -42,6 +42,16 @@ name  agent  model  spawn  [effort]  [fallbacks]
   `-` or blank = the model's default).
 - `fallbacks` — optional ordered `agent:model[:effort],…` list. The picker
   tries the role's own model first, then each fallback in order. `-` = none.
+- `plan` — optional: restricts the first step to that observed account plan. `-` = any.
+- `return` — optional: `up` moves an idle member started from this row back up to a higher
+  rung once it has room (after a limit moved it down), at most once per `fallback_return_min`;
+  `stay` keeps it where it is. `-` or omitted inherits: the default row of the same name, then
+  the base role's row (`builder-standard` from `builder`), else `stay`. The default roster
+  sets `up` on `thinker` alone. `up` is refused on an `elevate` row. On `studio` (resolved from
+  its own rows only) `up` moves the Studio back up through `studio_move` (below). A Builder
+  whose unit is done or merged is never moved; one stopped to move up keeps its seat under
+  `max_builders` until it is placed again. `roles.sh list` shows the resolved value as
+  `back up`.
 
 The default roster:
 
@@ -92,11 +102,11 @@ Six rows need one extra line:
 Change it per project (the normal way):
 
 - `/ds-roles` — `bin/commands/roles.sh list [<project>]` shows the effective roster;
-  `set <project> <role> <agent> <model> [spawn] [effort] [fallbacks]` writes that one
+  `set <project> <role> <agent> <model> [spawn] [effort] [fallbacks] [plan] [up|stay]` writes that one
   role's row for the project; every role the project has no row for runs the default
   row (U267); `reset <project> <role>` (or `rm`) drops the project's row, so the role
   follows the default again.
-- Web board: ⚙ Settings → **Roles** tab (the same row, via `POST /api/roles`).
+- Web board: ⚙ Settings → **Roles** tab (the same row, via `POST /api/roles`). An `always`/`ondemand` row has a **Move back up when there is room** checkbox (column 8: ticked writes `up`, unticked `stay`, "use inherited" writes `-`; absent on `elevate` rows, and `up` on one is a 400; on `studio` its hint says it closes the Studio tab and opens a fresh one from its journal, when idle, following `studio_move`).
   A change applies to the next spawn, not to running roles.
 
 ## Limits: thresholds the board and loop use
@@ -126,16 +136,17 @@ key's source.
 | `pick_load_hard` / `pick_load_standard` | Session % one hard / standard (or untiered) member adds to its account while it counts as newly placed | 20 / 10 | non-negative integer | `DS_LIMIT_PICK_LOAD_HARD` / `DS_LIMIT_PICK_LOAD_STANDARD` |
 | `pick_load_lead` / `pick_load_thinker` | Session % one Lead / Thinker adds to its account while it counts as newly placed, whatever its tier (U180). Measured on 2026-11-09/10: the real 5-hour % rose at most 3% on a Max account in a Lead or Thinker's first 10 minutes, so 1 × the Max scale of 4 | 1 / 1 | non-negative integer | `DS_LIMIT_PICK_LOAD_LEAD` / `DS_LIMIT_PICK_LOAD_THINKER` |
 | `pick_ttl_s` | Seconds a newly placed member's load counts (a start or a `run-switch`); also how long a limit switch the actuator holds back keeps its first pick before it picks again, and how long a fallback stop holds its reservation (below) | 600 | non-negative integer | `DS_LIMIT_PICK_TTL_S` |
-| `fallback_return_min` | Loop: an idle member on a fallback rung (any rung below the first of its `roles.conf` row, on any agent) is moved to the highest rung above it that has room again; this is the minutes between tries per member. `0` turns it off. In one tick the moves share the room: a member is stopped only when its pick, with the tick's earlier picks and moves counted as load, still lands above its rung, so three Thinkers aiming at room for one stop one. The stop reserves that place until the member is placed or `pick_ttl_s` passes: other picks count it as load, and its own start keeps it while it still fits. A start that lands on another agent or model anyway logs `fallback_missed` with the pick's reason, and the member waits out this window | 15 | non-negative integer | `DS_LIMIT_FALLBACK_RETURN_MIN` |
+| `fallback_return_min` | Loop: an idle member whose `roles.conf` row resolves `return` to `up` (column 8; the default roster: the Thinker), on a fallback rung (any rung below the first of its row, on any agent), is moved to the highest rung above it that has room again; this is the minutes between tries per member (and between the Studio's moves back up, when its `studio` row says `up`). `0` turns it off. In one tick the moves share the room: a member is stopped only when its pick, with the tick's earlier picks and moves counted as load, still lands above its rung, so three Thinkers aiming at room for one stop one. The stop reserves that place until the member is placed or `pick_ttl_s` passes: other picks count it as load, and its own start keeps it while it still fits. A start that lands on another agent or model anyway logs `fallback_missed` with the pick's reason, and the member waits out this window | 15 | non-negative integer | `DS_LIMIT_FALLBACK_RETURN_MIN` |
 | `unit_token_x` | Runaway-unit alert: × the median of done units of its tier | 3 | non-negative integer | `DS_UNIT_TOKEN_X` |
 | `unit_token_max` | …or this absolute cache-write cap | 20000000 | non-negative integer | `DS_UNIT_TOKEN_MAX` |
 | `max_builders` | Live Builder agents the project runs at once (U145). A Builder start over it (add-role, a restart, a resume after pause, a crash restart) waits for a slot: `add-role.sh` exits 3 `WAIT slot: <project> at max_builders <n>` and leaves the unit planned; the loop leaves the wish open and asks again each tick. A free slot goes to the oldest work first: a dispatched unit before a planned one, then the lower unit id. Live = not paused and its agent runs; a live Builder's own restart (hung restart, run-switch, limit move, phase switch) never waits. The check lives in the account pick (`bin/loop/capacity/pick.ts`, so `bin/ds pick` answers it too); Leads, Thinkers and the other roles are never limited | - (no limit) | positive integer, or `-` | `DS_LIMIT_MAX_BUILDERS` |
 | `max_light_builders` | Light lane (adaptive-builder-capacity U3): extra Builder slots on top of `max_builders` that only units marked `Lane: light` on their plan line take. A normal unit starts while live normal Builders < `max_builders` and the live total < `max_builders` + `max_light_builders`; a light unit starts while the live total is under that sum, in a light slot, or in a free normal slot while no normal unit of the project waits. The wait names both lanes: `WAIT slot: <project> normal 6/6, light 2/2`. Needs `max_builders` set; `0` is today's single lane | 0 | non-negative integer | `DS_LIMIT_MAX_LIGHT_BUILDERS` |
 | `light_lane_cpu_h` | CPU-hours (the unit's `unit_cpu`) after which a light unit counts as normal: it keeps running, the loop records one `unit_lane_moved` event (unit, CPU-hours, rule), and the project starts no new normal unit while normal Builders are over `max_builders` | 3 | positive number | `DS_LIMIT_LIGHT_LANE_CPU_H` |
-| `focus_squad` | The project's focus squad (squad-priority U1; one at most). While Builder seats are full, its queued units take the next free seat after urgent units and units that block started work, ahead of older units of other squads, never over `max_builders`. Per lane it gets at most that lane's seats − 1, so the last normal and the last light seat still go oldest first and a one-seat lane ignores it. Only a live feature squad can be set; a suspended one keeps the key without effect; the loop clears it when the squad closes, finishes or goes. Set with `ds focus <project> [<squad> \| --clear]` or the board; each change logs one `focus_set` event | - | a squad slug, or `-` (none) | `DS_LIMIT_FOCUS_SQUAD` |
+| `focus_squad` | The project's focus squad (squad-priority U1; one at most). While Builder seats are full, its queued units take the next free seat after urgent units and units that block started work, ahead of older units of other squads, the one with the most open dependents first (`unblock_first`), never over `max_builders`. Per lane it gets at most that lane's seats − 1, so the last normal and the last light seat still go oldest first and a one-seat lane ignores it. Only a live feature squad can be set; a suspended one keeps the key without effect; the loop clears it when the squad closes, finishes or goes. Set with `ds focus <project> [<squad> \| --clear]` or the board; each change logs one `focus_set` event | - | a squad slug, or `-` (none) | `DS_LIMIT_FOCUS_SQUAD` |
 | `flow_stuck_floor_min` | The board's Flow calls a card late when its time in the stage passes the larger of twice the typical time and this many minutes. The typical time is the median over the project's units done in the last 7 days, per tier (standard, hard) once a tier has 5 of them, else for the project | 10 | minutes | `DS_LIMIT_FLOW_STUCK_FLOOR_MIN` |
 | `flow_quiet_min` | A late Flow card reads **stuck** (red) only when its Builder shows no sign of work for this many minutes: not working, no review or checks running, no output, and under 5% CPU. A late card whose Builder is active reads **slow** (amber). A stale card, and a ready PR waiting for its Builder to run `finish-unit`, are stuck whatever the activity (U279) | 20 | positive integer, minutes | `DS_LIMIT_FLOW_QUIET_MIN` |
-| `builder_host_brake` | With `on`, no new Builder agent starts, in any project that has it on, while the latest host sample (the board's machine panel) crosses a `machine_*_crit` line: load, memory, swap or pressure (U4; the same levels the board colours red). The start waits with `WAIT host: <metric> <value> ≥ crit <line>` and is asked again next tick. A missing or stale sample (older than 3 × `DS_LOOP_MACHINE_S`) never brakes; a running Builder, a live Builder replacing its own agent and every other role are never braked | off | `on` or `off` | `DS_LIMIT_BUILDER_HOST_BRAKE` |
+| `unblock_first` | With `on`, while Builder seats are full, a queued unit that open units wait on takes the next free seat before an older one nothing waits on (picker-prefers-unblocking-units U1): after urgent units, units that block started work, the focus squad's room and resumed work, the unit with the most open dependents goes first (`planned` or `dispatched` units waiting on it through `deps` and `ext_deps`, the whole chain, each once, not held or superseded, in a live squad). Inside the focus squad it always counts; outside it only while the lane has room (its seats − 1 − its live seats whose unit has open dependents), so the last seat of each lane still goes oldest first and a one-seat lane ignores it. Never over `max_builders`. `slot()`'s wait says `(next: unlocks N)` | on | `on` or `off` | `DS_LIMIT_UNBLOCK_FIRST` |
+| `builder_host_brake` | With `on`, no new Builder agent starts, in any project that has it on, while the latest host sample (the board's machine panel) crosses a `machine_*_crit` line: load, memory, swap or pressure (U4; the same levels the board colours red). The start waits with `WAIT host: <metric> <value> ≥ crit <line>` and is asked again next tick. A missing or stale sample (older than 3 × `DS_LOOP_MACHINE_S`) never brakes; a running Builder, a live Builder replacing its own agent and every other role are never braked The board shows it while it holds (board-shows-host-brake U2): the Builders tile turns red with `⛔ host brake`, the queued lane opens with a banner naming the metric, its value, the crit line and key, how many queued units would start without it and this setting, those cards sit under `for the host`, and the text board prints a `BRAKE` line; with the brake off in this project but on in another, the same host sample shows as a muted note, never as holding. | off | `on` or `off` | `DS_LIMIT_BUILDER_HOST_BRAKE` |
 | `restart_rss_gb` | An idle agent whose resident memory (RSS, U149) passes this many GB is restarted once it is idle (U153), at most once per 60 minutes per member; a fresh start drops a Codex agent's retained heap. `-` turns it off | - (off) | positive number, or `-` | `DS_LIMIT_RESTART_RSS_GB` |
 | `expected_checks` | Checks a PR must have run before `finish-unit.sh` and the board read it ready; absent or only skipped reads `required:<context>` | - (none) | comma-separated context names, no spaces | `DS_LIMIT_EXPECTED_CHECKS` |
 | `auto_merge` | Merge method the loop arms GitHub auto-merge with on a merge-ready unit PR (U166): `off` keeps today's Lead merge poke (KTD17) | `off` | `off`, `squash`, `merge`, `rebase` | `DS_LOOP_AUTO_MERGE` |
@@ -143,18 +154,20 @@ key's source.
 | `github_budget_share` | Share of the hourly GitHub GraphQL budget (5000 points) the PR observer may spend (U286): the next read waits `max(DS_LOOP_GITHUB_S, cost × 3600 / (share × limit))`, and for GitHub's reset when fewer than two reads' cost remain. Host-wide (one gh user): the smallest share any project sets wins | 0.5 | number above 0, at most 1 | `DS_LIMIT_GITHUB_BUDGET_SHARE` |
 | `pr_stale_min` | Minutes a blocked unit PR stays blocked before the loop flags it stale on the board | 0 | non-negative integer | `DS_LIMIT_PR_STALE_MIN` |
 | `stale_repoke_min` | Minutes of quiet (no push, Builder idle at its prompt, its worktree under 5% CPU, no check running) after a blocked unit PR's first pr-stale poke before the second comes without a push; `0` = only after a push | 30 |
-| `stale_lead_min` | Minutes after a Builder's second pr-stale poke before a unit PR still not merge-ready is reported to its Lead, once per red stretch | 30 | non-negative integer, `0` = never | `DS_LOOP_STALE_LEAD_MIN` |
-| `stale_alert_min` | Minutes after that Lead request before a unit PR still blocked raises one Studio alert for the stretch (U178) | 120 | non-negative integer, `0` = never | `DS_LOOP_STALE_ALERT_MIN` |
+| `stale_lead_min` | Minutes after a Builder's second pr-stale poke (or after the second's due time, `stale_repoke_min` after the first, when it could not be sent) before a unit PR still not merge-ready is reported to its Lead, once per red stretch | 30 | non-negative integer, `0` = never | `DS_LOOP_STALE_LEAD_MIN` |
+| `stale_alert_min` | Minutes after that Lead request before a unit PR still blocked raises one Studio alert for the stretch (U178) | 60 | non-negative integer, `0` = never | `DS_LOOP_STALE_ALERT_MIN` |
 | `prompt_wait_min` | Minutes a Builder that Orca reads `working` may sit at its prompt before the loop nudges it: its transcript has not moved, its worktree is under 5% CPU, no review runs on its unit, the only thing open is a background command (say a wait loop that never ends) and the unit has no open PR. The nudge names the command; the idle ladder follows (a second nudge `stale_min` later, then a report to its Lead), and its Builder gets no quiet poke meanwhile (builder-idle-no-pr-card U1) | 20 | non-negative integer, `0` = off | `DS_SWEEP_PROMPT_WAIT_MIN` |
+| `gone_min` | Minutes a member Orca still reads `working` may show no agent process in its worktree before the loop reads it gone and restarts it: every process walk since a time after its last start found none, its transcript has not grown since, it has no finish row of its generation and the loop did not stop it. A failed or split walk proves nothing and keeps the clock; a walk that finds the agent stops it (orca-backend-alternatives U21a) | 3 | non-negative integer | `DS_SWEEP_GONE_MIN` |
 | `msg_chase_min` | Minutes a `ds msg` message may stay unread after its poke before the loop pokes the receiver once more, while it is idle (U277); `0` = never | 15 | non-negative integer | `DS_LIMIT_MSG_CHASE_MIN` |
 | `notes_cap` | Most notes a role keeps per project in `notes.sh`; every role prints all its notes at start, so a higher cap costs context in every session of that role. Lowering it deletes nothing: a role over the cap just cannot add until it drops one | 20 | whole number 1-100 | `DS_LIMIT_NOTES_CAP` |
 | `msg_reply_alert_min` | Minutes a needs-reply message may get no reply before one Studio alert names sender, receiver and subject; the reply clears it (U277); `0` = never | 60 | non-negative integer | `DS_LIMIT_MSG_REPLY_ALERT_MIN` |
+| `archive_debrief_min` | Minutes an archive (`ds want squad … gone`, `/ds-close-squad`, the board's Archive) keeps a live Lead to write the final debrief before the squad closes with the done-time debrief and a line naming the units added after it (debrief-on-archive U1); `0` = no wait | 10 | non-negative integer | `DS_LIMIT_ARCHIVE_DEBRIEF_MIN` |
 | `required_wait_min` | Minutes a unit PR waits on `required:<context>` alone (no human gate) with its Builder idle before the Builder gets one poke, and again before its Lead gets one request (U179) | 15 | non-negative integer, `0` = never | `DS_LOOP_REQUIRED_WAIT_MIN` |
 | `red_repoke_min` | Minutes after the last pr-news poke before a red unit PR whose failed check ran again and failed again gets one more poke naming the failed lanes (U214). Only while the Builder is idle, at most 2 per head; a new head, a new failing check or more threads are news at once | 15 | non-negative integer, `0` = never | `DS_LOOP_RED_REPOKE_MIN` |
 | `compact_mode_lead` | How the loop compacts the Lead | compact | `compact`, `clear`, `off` (`off` = never) | `DS_LIMIT_COMPACT_MODE_LEAD` |
 | `compact_mode_thinker` | How the loop compacts the Thinker. `clear` types `/clear` only when nothing is open: no open question it asked, the squad past planning, every `<topic>-*-plan.md` approved, no file of its transcript dir (session and `subagents/`) written within `compact_idle_min`, no unread mail; otherwise it types `/compact`. `compact` turns clearing off. | clear | `compact`, `clear`, `off` | `DS_LIMIT_COMPACT_MODE_THINKER` |
 | `compact_mode_studio` | How the loop compacts the Studio: `compact` types `/compact` into the Studio's own terminal when it is idle and its input line is empty (see below) | compact | `compact`, `off` (`off` = only the `studio.ctx` card) | `DS_LIMIT_COMPACT_MODE_STUDIO` |
-| `studio_move` | What the loop does when the Studio's account is limited: `auto` moves it to the account the picker chooses for the `studio` role (its own tab closed and a fresh one started there from studio.md and its journal), only while it sits idle with an empty prompt; `ask` shows a card whose "move it" answer does the same; `off` only shows the card with the command to run. No adopted Studio terminal or no account with room always gives the card | auto | `auto`, `ask`, `off` | `DS_LIMIT_STUDIO_MOVE` |
+| `studio_move` | What the loop does when the Studio's account is limited: `auto` moves it to the account the picker chooses for the `studio` role (its own tab closed and a fresh one started there from studio.md and its journal), only while it sits idle with an empty prompt; `ask` shows a card whose "move it" answer does the same; `off` only shows the card with the command to run. No adopted Studio terminal or no account with room always gives the card. It also rules the move back up of a Studio whose `studio` row says `up` (`auto` moves, `ask` cards first, `off` never) | auto | `auto`, `ask`, `off` | `DS_LIMIT_STUDIO_MOVE` |
 | `compact_mode_builder` | How the loop compacts Builders | compact | `compact`, `clear`, `off` | `DS_LIMIT_COMPACT_MODE_BUILDER` |
 
 The Studio's compaction (U263) types `/compact` only into the Studio terminal the loop adopted
@@ -172,8 +185,8 @@ A Studio out of credits (U264) is moved per `studio_move` through the one termin
 under the same ready check, which runs again right before anything is closed. The loop closes that
 tab only (never the worktree's other panes), starts the Studio in the same worktree on the pick
 (`studio-start`, with the auto-compact window and the Studio's skill overrides), tells it to read its
-journal briefing, and records the new terminal; the board shows "Studio moved to <agent>:<account>"
-for a day. A Run the old tab coordinated is bound again from a fresh `ds-loop` pane, and the rewake
+journal briefing, and records the new terminal; the move stays in the Event log under Crew
+(`studio_moved`). A Run the old tab coordinated is bound again from a fresh `ds-loop` pane, and the rewake
 hook lives in the worktree, so the new tab keeps it. While the Studio is busy nothing happens; when
 it stays not ready (text on the input line, unread mail, a waiting request) for
 `DS_LOOP_STUDIO_MOVE_HOLD_S` seconds (600) the `studio.limit` card says why and gives the command to
@@ -184,12 +197,22 @@ new Studio tab it finds instead of starting another, or waits `DS_LOOP_STUDIO_MO
 first. With `ask`, only answering the card with its suggestion "move it" approves the move; Dismiss
 or any other answer (for instance after restarting it yourself) only clears the card.
 
+A Studio whose `studio` row says `up` (column 8, configurable-role-elevation U3) is also moved back
+up: while it is not limited, runs on a lower rung of its ladder (by agent, model and account plan;
+rungs that differ only in effort count as the first) and the picker has room on a higher one, the
+same move runs with `why: back-up` (in `studio_moved`). `auto` moves it once it is ready, with no
+time limit and no held card; `ask` first shows its own "Studio can move back up" card (subject
+`studio.up`) whose "move it" answer approves it; `off` never moves it. At most one move back up per
+`fallback_return_min` (0 = never). The card and its approval clear once the move is no longer owed,
+and a limited Studio takes the limit move instead.
+
 A red unit PR is one stretch from the read that blocks it until it is ready, merged,
 closed or waits on a `required:<context>` alone; GitHub reshuffling its reasons on one
 head does not start a new one (U178). In a stretch the Builder gets two pr-stale pokes (the second after a push, or after `stale_repoke_min` of quiet),
 plus one per new session (placed or cleared after its last poke about the PR); pr-news
 only for a new head or a blocking reason the stretch has not sent yet; the Lead one
-request `stale_lead_min` after the second poke; and the Studio one alert
+request `stale_lead_min` after the second poke (or after its due time when the loop could not
+send it: a limited, paused or busy Builder, a draft in its prompt); and the Studio one alert
 `stale_alert_min` after that.
 
 A unit PR that waits on `required:<context>` alone waits on a context nobody has posted,
@@ -216,10 +239,15 @@ Review thresholds apply when a Builder runs `bin/review/review-unit.sh`:
 | `review_skip_lenses` | `-` | Comma-separated reviewer lenses the project drops (`security`, `learnings`, …); never `correctness`; `-` means none |
 | `host_tidy` | `report` | `report`: the loop only keeps the Host tidy card. `apply` (exactly that word): it also removes, one at a time per project, each row the card calls removable, after reading it again (processes are stopped, Claude temp dirs and glob files removed, helper checkouts and orphaned worktrees removed without force, their branches kept). A paused or refused project gets no removal. Each removal writes one `cleanup_removed`, `cleanup_stopped` or `cleanup_failed` event. The card is in Needs-you only when something needs the operator (a refusal or failed backend list, an invalid glob, a removable row while not `apply`, a failed removal under `apply`) and starts with `Needs you:`; `ds observed cleanup --project <label>` lists every row at any time |
 | `cleanup_tmp_globs` | `-` | Comma- or space-separated absolute globs of host temp files the loop may clear: wildcard in the last path segment only, at least 3 literal characters there, and a parent that is not `/`, the home dir, the dev-studio root, the state dir, a workspaces dir or a repo clone. An invalid glob matches nothing. `-` means none. Read whole (`limitLine`), unlike other keys |
+| `cleanup_trim_globs` | `-` | Cache folders the loop keeps but trims inside: the same glob rules as `cleanup_tmp_globs` (an invalid one is listed on the Host tidy card and trims nothing). Each matched folder stays; only the entries directly inside it are judged (one class `f` row per glob). With `host_tidy apply`, a file older than `cleanup_tmp_age_h`, of this uid and open in no process is unlinked (a symlink's target stays) and a folder inside goes only when nothing in it is newer, in capped passes. A glob may also sit in `cleanup_tmp_globs`: that one removes whole old folders, this one trims the live one. `-` means none. Read whole (`limitLine`) |
 | `cleanup_tmp_age_h` | `48` | Hours a match must be untouched before it is cleared; non-negative integer, else 48 |
 | `cleanup_on_close` | `-` | Command run in a member's worktree before the loop removes it (read whole, e.g. `docker compose down -v`). A ` #` starts a comment, so point it at a script when the command needs one. `-` means none |
+| `disk_card_free_pct` | `20` | A Studio card `Disk <path> low: <free> free (<pct>%)` opens when a disk's free share drops below this percent and names up to 8 consumers (Docker build cache, images and volumes, the Host tidy rows, `disk_watch_paths`). It clears once free space is above the value plus 5 points. `0` = off. The card deletes nothing. |
+| `tick_alarm_ms` | `6000` | A Studio card `Loop ticks slow: <avg> s` opens when the average tick time of each of the last `tick_alarm_windows` `tick_slow` events is over this many ms; it names the three slowest steps and how long ticks have been slow. It clears once the newest event is at or under the limit, or when no `tick_slow` event came for twice `DS_LOOP_SLOW_EVERY_S` (600 s). `0` = off. |
+| `tick_alarm_windows` | `3` | How many `tick_slow` events in a row must be over `tick_alarm_ms` (1 to 20). |
+| `disk_watch_paths` | `-` | Host-level, summed: the paths of the default row and of every project the loop ticks (a `zz…` test project's row is not read) are all sized, once each; the env value `DS_LIMIT_DISK_WATCH_PATHS` wins alone. Comma- or space-separated absolute paths (a leading `~/` is the home; no `..`, no wildcard) the disk card sizes with `du -sk`, e.g. `~/.bun/install/cache,~/.claude/projects`. Set it through an import like `cleanup_tmp_globs`. |
 
-`cleanup_tmp_globs` and `cleanup_on_close` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
+`cleanup_tmp_globs`, `cleanup_trim_globs`, `cleanup_on_close` and `disk_watch_paths` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
 
 For example, `/ds-limits <project> review_risk_paths contracts/*.sol,src/auth/*`
 uses the risky threshold for those files. Globs match the whole path; `*` also
@@ -319,7 +347,39 @@ After that the rows are the only copy:
   `settings.export` (every section; a file it lacks loses its rows) or one file, named by `--file` or
   by its own name (`limits.conf`, `limits.conf.imported-2026-11-17`, …). The file's rows become
   exactly the text's, unchecked, each change one history row by `ds config import`.
-- `ds config export [--project <label>]` prints the same text as the backup.
+- `ds config export --project <label>` prints the same rows as the backup (skills rules included) with a
+  first line `#! ds-settings 1 from=<label> rev=<short commit> at=<iso>`, the file header that marks a
+  transfer file; the backup itself has no header. An older export without the header or the `skills.conf`
+  section still reads.
+- `ds config import --project <label> <path> --dry-run` prints the rows the restore would change and writes nothing.
+- `ds config copy <from> <to>` is the checked copy (not a restore): `<from>` is a project on this host or an
+  export file from another host. It prints one line per row (`[x]` picked, action `add|change|same|remove|skip`,
+  file, key, current → new, why) and writes nothing; `--apply` writes the picked rows, each with a history row
+  by `import:<from>`. Unknown keys (`hooks_ts`) and rows the target refuses are skipped with their reason;
+  project-specific keys (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`,
+  `cleanup_tmp_globs`, `cleanup_trim_globs`, `cleanup_on_close`, `disk_watch_paths`, `ship-mode`) are not picked unless named with `--include <key>`.
+  `--only <file>` limits it to a file, `--skip <key>` unpicks a key, `--replace` also drops target rows the
+  source lacks, `--json` prints the plan as JSON. The three options may repeat or take a comma list.
+- `ds config prune <project>` lists the project's rows whose key this dev-studio doesn't know and, with
+  `--apply`, drops them (one history row each).
+
+### Copy settings with the board's Import and Export
+
+The Settings window has **Export** and **Import** (settings-export-import U3).
+
+- **Export** downloads `<project>-settings.txt` (`GET /api/settings-export?project=`): the export text with a
+  first line `#! ds-settings 1 from=<label> rev=<commit> at=<time>` and the `skills.conf` rows.
+- **Import** takes a file, pasted text or another project on this host. **Preview** (`POST
+  /api/settings-import/preview {project, text|from}`) shows one row per setting: action (`add`, `change`,
+  `same`, `skip`), file, key, now → new, and why. Each row has a tick box. Settings that fit one project only
+  (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`, ship mode) start unticked and can be
+  ticked; a key this dev-studio doesn't know, a value it would refuse, and the shell-only keys
+  (`cleanup_on_close`, `cleanup_tmp_globs`, `cleanup_trim_globs`, `disk_watch_paths`, shown `shell only`) are greyed and can't be ticked.
+- **Apply** (`POST /api/settings-import {project, text|from, picks: [{file, key, expect}]}`) files one
+  `settings-import` request; the loop writes only the picked rows, each one `config_history` row by
+  `board` (so the Limits and Roles tabs can undo them one by one), and answers with what it `written`,
+  `skipped` and found `stale` (a row that changed after the preview). The dialog shows the three counts and
+  the Limits and Roles tabs read their rows again.
 
 ## Autonomy: checkpoints vs fire-and-forget
 
@@ -415,6 +475,7 @@ The loop also reads the `DS_SWEEP_*` settings listed below under their compatibi
 | `DS_SWEEP_SPAWN_GRACE_MIN` | Minutes after spawn during which the loop never reports a member dead or exited | 5 |
 | `DS_SWEEP_SILENT_MIN` | Minutes quiet before the loop pokes an agent with unread messages; also the usage-limit quiet threshold | 10 |
 | `DS_SWEEP_HUNG_MIN` | Minutes without output before the loop reports a worktree hung | 30 (a member whose command is still running waits `long_step_min` more) |
+| `DS_SWEEP_GONE_MIN` | Minutes every process walk may find no agent in a member's worktree, while Orca still reads it working, before the loop reads it gone and restarts it (limits `gone_min`) | 3 |
 | `DS_SWEEP_RECHECK_MIN` | Minutes between liveness pokes and before checking restart or usage-limit recovery | 5 |
 | `DS_SWEEP_REBREAK_MIN` | Window in which a second break stops the loop from restarting a member automatically | 30 |
 | `DS_SWEEP_POKES` | Liveness wake-up pokes before the loop escalates a quiet agent | 2 |

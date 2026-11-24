@@ -5,6 +5,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { ROOT, backendPath, chomp, readJson, run as runCmd, writeErr, writeOut } from "../lib/shared";
 import { prHealthLine } from "../lib/lib";
+import { squadContract } from "../lib/contract-roles.ts";
 import { alt, interp, truthy } from "./watch-ts";
 import { LABEL_FORM, PLAIN_HEADING, PLAIN_LABELS, REVISION_LABELS, approvedCopyPath, planRevisions, plainSection } from "../lib/plan-plain";
 
@@ -94,6 +95,42 @@ async function main(argv: string[]): Promise<number> {
   }
   const HEAD = TITLE || Q; // what the card note, receipt and reply show
 
+  // A bad --unit is checked first (before any PR check or gh read): its own line, exit 2, no usage, and the
+  // squad's real unit slugs so the agent can retry.
+  if (UNIT && existsSync(STATE)) {
+    const units = arr(readJson(STATE)?.units);
+    if (!units.some((u) => u?.slug === UNIT)) {
+      const list = units.map((u) => interp(u?.slug) + (u?.plan_unit ? ` (${interp(u.plan_unit)})` : "")).filter((s) => s.trim());
+      writeErr(`ask-operator: unknown unit '${UNIT}' in ${STATE} — ${list.length ? `this squad's units: ${list.join(", ")}` : "has no units yet — register the plan first, or leave out --unit"}\n`);
+      throw new Exit(2);
+    }
+  }
+
+  // The refusal for a PR question: who posts it, and the asker's next step. Reads only the state file and
+  // loop.db (pr-ready.ts exit 4 = no observed row; no gh read here).
+  const refuseLoopPr = async (prs: string[]): Promise<never> => {
+    const j = existsSync(STATE) ? readJson(STATE) : undefined;
+    const pr = prs.find((r) => isUnitPr(r)) ?? prs[0] ?? "";
+    const unit = pr ? arr(j?.units).find((u) => interp(u?.pr) === pr && alt(u?.status, "") !== "done" && alt(u?.status, "") !== "cancelled") : undefined;
+    const topic = basename(STATE, ".json");
+    const slug = interp(unit?.slug) || "<slug>";
+    const open = pr ? arr(j?.waiting_on_you).find((q) => q?.asker === "loop" && interp(q?.pr) === pr) : undefined;
+    const base = "the loop asks PR questions";
+    const isBuilder = ASKER === "builder" || ASKER.startsWith("builder-");
+    const fix = (why: string): string => isBuilder
+      ? `${base}; #${pr} ${why} — fix it in your unit, and if the cause is outside your unit tell your Lead: ~/.dev-studio/bin/role/send-role.sh ${topic} lead "<subject>" "<body>"`
+      : `${base}; #${pr} ${why} — its Builder fixes it first: ~/.dev-studio/bin/role/send-role.sh ${topic} builder-${slug} "<subject>" "<body>"; if the operator must decide, ask about the unit with --unit ${slug} and no PR number in --title or --question`;
+    if (open) refuse(`${base}; #${pr} already has its question on the board as ${interp(open.id)} — nothing to post, the operator answers it there`);
+    let msg = "";
+    if (pr && unit && existsSync(STATE)) {
+      const r = await runCmd([process.execPath, join(ROOT, "bin", "loop", "squad", "pr-ready.ts"), STATE, pr]);
+      if (r.rc === 0) msg = `${base}; #${pr} has only human gates left, so the loop posts it once its Builder has finished — nothing to post`;
+      else if (r.rc === 1) msg = fix(`is not ready (${chomp(r.out)}), so nobody asks yet`);
+      else msg = fix("is in a state the loop has not read yet, so nobody asks yet");
+    } else msg = fix("is not one of this squad's unit PRs; the loop posts only those");
+    return refuse(msg);
+  };
+
   // One of this squad's live unit PRs (the ones the loop asks about).
   const isUnitPr = (pr: string): boolean => {
     if (!existsSync(STATE)) return false;
@@ -113,7 +150,7 @@ async function main(argv: string[]): Promise<number> {
     else if (refs.length > 1 && !PICKER_TID) {
       // a mirrored picker is already open: not a PR question, however many it names
       if (isLeadOrBuilder(ASKER)) {
-        if (refs.some((r) => isUnitPr(r))) refuse("the loop asks PR questions; finish your unit and stop");
+        if (refs.some((r) => isUnitPr(r))) await refuseLoopPr(refs);
       } else bad(`one question per PR: this question names ${refs.map((r) => "#" + r).join(" ")} — ask about one PR per question (add --pr <n> to be explicit)`);
     }
   }
@@ -121,7 +158,7 @@ async function main(argv: string[]): Promise<number> {
   // The loop asks PR questions: an explicit --pr from a Builder or Lead is refused; a PR named in the
   // text only when it is one of this squad's unit PRs.
   if (PR && !PICKER_TID && isLeadOrBuilder(ASKER)) {
-    if (PR_EXPLICIT || isUnitPr(PR)) refuse("the loop asks PR questions; finish your unit and stop");
+    if (PR_EXPLICIT || isUnitPr(PR)) await refuseLoopPr([PR]);
     PR = "";
   }
   if (PICKER_TID) PR = "";
@@ -156,7 +193,10 @@ async function main(argv: string[]): Promise<number> {
   if (!existsSync(STATE)) refuse(`NOT on the board — no state file at ${STATE} (your spec's state= path; ls ~/.dev-studio/state/*/squads/)`);
   const st = readJson(STATE);
   const runId = st?.run_id;
-  if (!truthy(runId) || runId === "")
+  // A squad off Orca (U11b) has no Run: its loop.db row's backend says it is live all the same.
+  const sqDir = dirname(resolve(STATE)), offOrca = basename(sqDir) === "squads"
+    && squadContract(dirname(dirname(sqDir)), basename(dirname(sqDir)), basename(STATE, ".json")) !== null;
+  if ((!truthy(runId) || runId === "") && !offOrca)
     refuse(`NOT on the board — ${STATE} has no run_id (not a live squad's state file)`);
   // U3: a linked document (--doc), or for a plan-* question the plan found by the id rule; a plan ask needs the plain section.
   let DOC_PATH = "", plainLines: { label: string; text: string }[] = [], revLines: { label: string; text: string }[] = [], revNum = 0;
@@ -206,7 +246,6 @@ async function main(argv: string[]): Promise<number> {
       }
     }
   }
-  if (UNIT && !arr(st?.units).some((u) => u?.slug === UNIT)) bad(`unknown unit '${UNIT}' in ${STATE}`);
 
   const cur = await runCmd([BACKEND, "current"]);
   const wt = chomp(cur.out);

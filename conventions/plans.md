@@ -24,6 +24,8 @@ board and the Lead's `units[]` track the work; this file holds the plan's durabl
 and keep it out of the project's history by gitignoring that folder in the project
 (a one-line `.gitignore` entry, per project). The **canonical** plan is the
 dev-studio-state file above — the Thinker saves the finished plan there explicitly.
+The plan stays `.md` in `squads/`; any Lavish page made from it goes in
+`state/<label>/pages/<topic>/` (`<project>/docs/plans/` is lost when the worktree closes).
 
 ## Per-project override (future, unbuilt)
 

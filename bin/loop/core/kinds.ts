@@ -23,7 +23,7 @@ export const RESTART_MODES = ["now", "idle"] as const;
 
 // A wish's payload (`want_payload`), by subject. A string is a stored replay and is not checked.
 export const WISH_PAYLOADS = {
-  squad: obj({ from: opt(str), id: opt(num) }),
+  squad: obj({ from: opt(str), id: opt(num), backend: opt(str), backend_host: opt(str), worktree_provider: opt(str) }),   // backend…: U9, chosen once at spawn
   member: obj({ why: opt(str), prompt: opt(str), agent: opt(str), model: opt(str), effort: opt(str), account: opt(str), ctx: opt(num),
     request: opt(bool), unit: opt(str), spec: opt(str), pauseResume: opt(str) }),
   service: obj({ bind: opt(str), hosts: opt(str) }),
@@ -31,7 +31,7 @@ export const WISH_PAYLOADS = {
 export type WishPayload<S extends keyof typeof WISH_PAYLOADS> = Val<(typeof WISH_PAYLOADS)[S]>;
 
 // ---------------------------------------------------------------- requests
-const replay = obj({ argv: arr(str), kind: opt(str), key: opt(str), cwd: opt(str), from: opt(str) });
+const replay = obj({ argv: arr(str), kind: opt(str), key: opt(str), cwd: opt(str), from: opt(str), member: opt(str), gen: opt(str), wt: opt(str) });
 const MERGE = obj({ n: opt(num), repo: opt(str), method: opt(str), unit: opt(str), topic: opt(str), base: opt(str), ref: opt(str), head: opt(str), ep: opt(str) });
 const THROUGH = { request: opt(num) };
 
@@ -39,17 +39,30 @@ export const REQUESTS = {
   account: obj({ agent: str, account: str, enabled: opt(bool) }),
   // account-free-resets U4: one press of a grant's Use button; `key` is the idempotency key every try reuses.
   "account-reset": obj({ agent: str, account: str, grant: str, key: str, ...THROUGH }),
-  alert: obj({ title: opt(str), text: opt(str), option: opt(str), why: opt(str), unit: opt(str), card: opt(str), reason: opt(str), fields: opt(rec) }),
+  "leftover-remove": obj({ wt: str, fingerprint: opt(str), ...THROUGH }),   // archive-leftovers U4: the board's Remove
+  alert: obj({ id: opt(str), title: opt(str), text: opt(str), option: opt(str), why: opt(str), unit: opt(str), card: opt(str), reason: opt(str), fields: opt(rec) }),
   "alert-clear": obj({ prefix: opt(str), id: opt(str) }),
   answer: obj({ id: str, answer: str, seq: opt(num), card_wt: opt(str), choices: opt(arr(any)), transcript: opt(str), tool_use_id: opt(str), via: opt(str) }),
   board: obj({ file: str, text: str }),
-  chat: obj({ text: str, via: opt(str), request: opt(num) }),
+  chat: obj({ text: str, via: opt(str), request: opt(num), files: opt(arr(str)) }),
+  "chat-cancel": obj({ chat: num, request: opt(num) }),
+  "chat-now": obj({ chat: num, request: opt(num) }),
+  "chat-dismiss": obj({ chat: num, request: opt(num) }),
   dismiss: obj({ id: str, answer: opt(str) }),
   duplicate: obj({ wt: opt(str), handle: opt(str), newest: opt(str), runHandle: opt(str), mismatch: opt(bool), first: opt(num) }),
+  // ds-feedback-github-issues U3: the operator's review of one feedback draft or note (fulfil/feedback.ts).
+  "feedback-post": obj({ draft: num, ...THROUGH }),
+  "feedback-add-to": obj({ draft: num, target: num, ...THROUGH }),
+  "feedback-edit": obj({ draft: num, title: opt(str), body: opt(str), ...THROUGH }),
+  "feedback-dismiss": obj({ draft: opt(num), note: opt(num), why: opt(str), ...THROUGH }),
+  "feedback-restore": obj({ note: num, ...THROUGH }),
   "finish-unit": replay,
-  keys: obj({ text: str, enter: opt(bool) }),
+  // `text` (+ `enter`): typed as is (a digit answers a picker). `keys` (board chat U19): named keys pressed
+  // with no Enter added, even while the member works (an Escape stops it); `via` "board".
+  keys: obj({ text: opt(str), enter: opt(bool), keys: opt(arr(str)), via: opt(str) }),
   lavish: obj({ port: either(num, str) }),
   "config-undo": obj({ file: str, key: str, history: num }),
+  "settings-import": obj({ text: opt(str), from: opt(str), name: opt(str), picks: arr(any) }),
   "limit-lift": obj({ agent: str, account: str, ...THROUGH }),
   limits: obj({ key: str, value: opt(either(str, num)) }),
   merge: MERGE,
@@ -62,15 +75,15 @@ export const REQUESTS = {
   "request-restart": obj({ target: opt(str), key: opt(str), who: opt(str), topic: opt(str), cause: opt(str), since: opt(num), what: opt(str), command: opt(str), path: opt(str), text: opt(str) }),
   "request-switch": obj({ target: opt(str), key: opt(str), who: opt(str), topic: opt(str), cause: opt(str), since: opt(num), what: opt(str), command: opt(str), path: opt(str), text: opt(str) }),
   "request.file": obj({ target: opt(str), key: opt(str), who: opt(str), topic: opt(str), cause: opt(str), since: opt(num), what: opt(str), command: opt(str), path: opt(str), text: opt(str) }),
-  roles: obj({ role: str, agent: opt(str), model: opt(str), effort: opt(str), spawn: opt(str), fallbacks: opt(str), reset: opt(bool), plan: opt(str) }),
+  roles: obj({ role: str, agent: opt(str), model: opt(str), effort: opt(str), spawn: opt(str), fallbacks: opt(str), reset: opt(bool), plan: opt(str), return: opt(str) }),
   "send-peer": replay,
   "send-role": replay,
   skills: obj({ role: opt(str), reset: opt(bool), set: opt(rec) }),
   squad: obj({ id: opt(num), op: opt(str) }),
-  studio: obj({ action: str, topic: opt(str), line: opt(str), framing: opt(str), id: opt(str), answer: opt(str), request: opt(num), label: opt(str), date: opt(str), since: opt(num), until: opt(num), spend: opt(any), merges_upto: opt(any) }),
-  "studio-move": obj({ handle: opt(str), agent: opt(str), account: opt(str), model: opt(str), effort: opt(str), from: opt(str) }),
+  studio: obj({ action: str, topic: opt(str), line: opt(str), framing: opt(str), files: opt(arr(str)), id: opt(str), answer: opt(str), request: opt(num), label: opt(str), date: opt(str), since: opt(num), until: opt(num), spend: opt(any), merges_upto: opt(any) }),
+  "studio-move": obj({ handle: opt(str), agent: opt(str), account: opt(str), model: opt(str), effort: opt(str), from: opt(str), why: opt(str), notice: opt(str) }),
   withdraw: obj({ of: opt(str), key: opt(str), episode: opt(str) }),
-  "worktree.remove": obj({ label: opt(str), topic: opt(str), wt: opt(str), path: opt(str), unit: opt(str), merged: opt(bool) }),
+  "worktree.remove": obj({ label: opt(str), topic: opt(str), wt: opt(str), path: opt(str), unit: opt(str), merged: opt(bool), gone: opt(bool) }),
   "plan-revoke": obj({ plan: str, why: str, keep_started: opt(bool) }),
   "unit-action": obj({ action: str, slug: str, why: opt(str) }),
   "wt-set-parent": obj({ wt: str, parent: str, request: opt(num) }),
@@ -95,6 +108,10 @@ const ONLY_ACTIONS = {
   "cleanup.report": obj({ refused: opt(str) }),
   // exposed-cleanup U2: run one group of queued stop commands (exposed rows `ids`, one command) once.
   "expose.stop": obj({ ids: arr(num), cmd: str, cwd: opt(str) }),
+  // main-red-liveness-test U2: merge the base into a merge-ready unit PR that is only behind it.
+  "update-branch": obj({ n: num, repo: str, ref: str, head: opt(str), unit: opt(str), topic: opt(str), base: opt(str) }),
+  // ds-feedback-github-issues U2: one drafter pass over the `new` notes (`keys`, oldest first) for `repo`.
+  "feedback.draft": obj({ repo: str, keys: arr(str) }),
   board_start: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_restart: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_stop: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
@@ -109,11 +126,19 @@ export function payloadOf<K extends ActionKind>(a: { kind: string; payload?: unk
   return (a.payload ?? {}) as ActionPayload<K>;
 }
 
+// ---------------------------------------------------------------- feedback (migration 0057)
+// A ds-feedback note's states (feedback_notes.state) and a draft's (feedback_drafts.state); the
+// tables' CHECKs list the same words.
+export const FEEDBACK_NOTE_STATES = ["new", "drafted", "project-only", "already-fixed", "filed", "fixed", "closed", "dismissed"] as const;
+export type FeedbackNoteState = (typeof FEEDBACK_NOTE_STATES)[number];
+export const FEEDBACK_DRAFT_STATES = ["review", "posting", "filed", "dismissed", "fixed", "closed"] as const;
+export type FeedbackDraftState = (typeof FEEDBACK_DRAFT_STATES)[number];
+
 // ---------------------------------------------------------------- facts
 const ep = obj({ episode: opt(str), account: opt(str), notice: opt(str), reset: opt(num), kind: opt(str), until: opt(num) });
 const svc = { id: num, name: opt(str), project: opt(str), topic: opt(str), port: opt(num) };
 const delivery = { delivery: num, state: opt(str), settled_at: opt(num), tries: opt(num), at: opt(num), verify_at: opt(num) };
-const wishDone = obj({ result: opt(str), want: opt(str), id: opt(num), subject: opt(str) });
+const wishDone = obj({ result: opt(str), want: opt(str), id: opt(num), subject: opt(str), rescued: opt(str), dropped_questions: opt(num) });
 const anyOf = obj({}); // payload is the written columns: not fixed
 
 export const FACTS = {
@@ -123,6 +148,15 @@ export const FACTS = {
   delivery_sent: obj(delivery),
   delivery_verified: obj(delivery),
   exposed: obj({ name: str, role: opt(str), scope: opt(str), suffix: opt(str), url: opt(str), audience: opt(str), stop: opt(bool), ports: opt(arr(num)) }),
+  feedback_imported: obj({ file: str, lines: num, added: num, renamed: opt(str) }),
+  feedback_noted: obj({ key: str, project: str, member: opt(str), source: str }),
+  feedback_drafted: obj({ repo: str, notes: num, drafts: num, blocked: num, kept: num, model: opt(str), account: opt(str), head: opt(str) }),
+  // U3: a draft on its way out, out (filed #issue), edited, dismissed (a draft or one note), a note restored.
+  feedback_posting: obj({ draft: num, repo: str, kind: str, target: opt(num) }),
+  feedback_filed: obj({ draft: num, repo: str, issue: num, url: str, notes: arr(num), found: bool }),
+  feedback_edited: obj({ draft: num, leak: str }),
+  feedback_dismissed: obj({ draft: opt(num), notes: arr(num), why: opt(str) }),
+  feedback_restored: obj({ note: num }),
   limit_cleared: ep,
   limit_expired: ep,
   limit_wait: ep,
@@ -131,6 +165,17 @@ export const FACTS = {
   message_read: obj({ ids: arr(num), by: str }),
   message_replied: obj({ id: num, reply: opt(num), request: opt(num) }),
   message_sent: obj({ key: str, to: str, from: str, kind: str, subject: str }),
+  finish_recorded: obj({ key: str, member: str, unit: opt(str), outcome: str, gen: opt(str) }),
+  worktree_created: obj({ path: str, provider: str, branch: str, adopted: bool, parent: opt(str) }),
+  worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
+  worktree_gone: obj({ path: str, provider: str, why: str }),
+  // U10 (squad/shadow.ts): the shadow signals.
+  // chat-multiline-send-fails U1 (core/code-watch.ts): the checkout's HEAD moved loop code; the loop exits 75.
+  loop_code_changed: obj({ from_rev: str, to_rev: str, files: arr(str), count: num }),
+  shadow_started: obj({}),
+  shadow_disagree: obj({ point: str, old: str, new: str, member: str, id: opt(num), gen: opt(str), wt: opt(str), transient: bool, ticks: num, first_at: num }),
+  shadow_explained: obj({ event: num, why: str, by: opt(str) }),
+  shadow_crash: obj({ member: str, id: num, gen: str, next: str }),
   builder_wish_settled: obj({ id: num, unit: str, was: opt(str) }),
   builder_wish_withdrawn: obj({ id: num, unit: str, why: str, by: str, reason: opt(str) }),
   member_drift_cleared: obj({ id: opt(num), path: opt(str), status: opt(str) }),
@@ -138,7 +183,7 @@ export const FACTS = {
   member_requested: obj({ by: opt(str), id: opt(num), role: opt(str), suffix: opt(str), tier: opt(str), unit: opt(str) }),
   member_start_failed: anyOf,
   member_started: anyOf,
-  member_suspended: obj({ id: opt(num), result: opt(str) }),
+  member_suspended: obj({ id: opt(num), result: opt(str), rescued: opt(str) }),
   member_told: anyOf,
   member_waiting: obj({}),
   orca_call_settled: obj({ dispatch: opt(str), retry: opt(any), state: opt(str) }),
@@ -149,6 +194,7 @@ export const FACTS = {
   service_starting: obj({ ...svc, pid: opt(num) }),
   service_stopped: obj({ ...svc, gone: opt(bool) }),
   account_credits_held: obj({ agent: str, account: str, until: opt(num), from: opt(str), notice: opt(str), link: opt(str) }),
+  account_login_ended: obj({ agent: str, account: str, from: opt(str), notice: opt(str) }),
   spend: obj({ squads: opt(num) }),
   squad_run: obj({ id: num, run_id: str }),
   squad_state: obj({ cmd: opt(str), args: opt(arr(any)) }),

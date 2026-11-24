@@ -3,8 +3,9 @@
 state/*
 !state/SCHEMA.json
 
-# Agent-jotted dev-studio feedback (bin/role/ds-feedback.sh) — host-local, operator-reviewed.
-# A bare file under state/, so state/*/ (dirs only) doesn't cover it.
+# Agent-jotted dev-studio feedback (bin/role/ds-feedback.sh) — host-local, operator-reviewed. Notes are
+# loop.db rows now; this file is the fallback when loop.db can't be opened (`ds feedback import` reads it
+# in and renames it). A bare file under state/, so state/*/ (dirs only) doesn't cover it.
 state/dev-studio-feedback
 
 # The sweep's per-worker token spend for the board (bin/sweep.sh step 0), plus its .tmp/.lock.

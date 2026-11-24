@@ -16,9 +16,11 @@
 // one event, `account_disabled` or `account_enabled`, payload {agent, account, by}; a switch to the
 // state it already has changes nothing and records nothing.
 // U2 (provider-billing-fallback): enabling an account with a live credits hold also clears the hold
-// (credits.ts clearCredits, one `account_credits_cleared` event), even when it was not disabled.
+// (credits.ts clearCredits, one `account_credits_cleared` event), even when it was not disabled. So does
+// a live login hold (claude-login-ended U2: login.ts clearLogin, one `account_login_cleared` event).
 import { now, type Row, type Store } from "../core/store.ts";
 import { clearCredits, creditsHold } from "./credits.ts";
+import { clearLogin, loginHold } from "./login.ts";
 
 export const DISABLED = "disabled";
 
@@ -30,9 +32,11 @@ export function accountDisabled(store: Store, agent: string, account: string | n
 export function setAccountEnabled(store: Store, req: { agent: string; account: string; enabled: boolean; by: string }, at = now()): { changed: boolean; state: string | null; cleared?: boolean } {
   const { agent, account, enabled, by } = req;
   const r = switchAccount(store, req, at);
-  if (!enabled || creditsHold(store, agent, account, at) === null) return r;
-  clearCredits(store, agent, account, by, at);
-  return { changed: true, state: r.state, cleared: true };
+  if (!enabled) return r;
+  const credits = creditsHold(store, agent, account, at) !== null, login = loginHold(store, agent, account, at) !== null;
+  if (credits) clearCredits(store, agent, account, by, at);
+  if (login) clearLogin(store, agent, account, by, at);
+  return credits || login ? { changed: true, state: r.state, cleared: true } : r;
 }
 
 function switchAccount(store: Store, req: { agent: string; account: string; enabled: boolean; by: string }, at: number): { changed: boolean; state: string | null } {

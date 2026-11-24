@@ -20,12 +20,24 @@ Orca brief says — you stay running between turns and report through `ds` and `
    - **plan** — all given, or a small fix, a spec, an approved note → step 1 as today (`ce-plan`,
      or by hand for an easy one-unit plan, per `conventions/thinker-routing.md`).
    - **brainstorm** — goal given, approach or UI shape open → run `ce-brainstorm` on your own model
-     (`brainstorm_model:<own model>`; a Lavish mockup for a UI), 2–4 options with a recommendation,
+     (`brainstorm_model:<own model>`; a Lavish mockup for a UI, saved in `state/<label>/pages/<topic>/` and opened with `lavish-axi <path>`; the worktree's `.lavish/` and `.scratch/` are lost on close), 2–4 options with a recommendation,
      then one blocking `direction-<short>` question.
    - **ask** — goal or done missing, or a product decision the operator owns hides in the work →
      blocking `ask-operator.sh` questions, each with context and a recommendation.
    - **investigate** — the framing asks why something happens or what something is → read-only
-     findings doc, then a `direction-<short>` question (fix it? which part?).
+     findings doc, then a `direction-<short>` question (fix it? which part?). Method: `ce-explain`
+     for a how/what question; `ce-debug` as a diagnosis-only request (it skips to Phase 4, so no
+     fix phase and no local prompt) for a "why does it fail" question.
+   - **fix** — a broken behaviour the operator wants gone → `ce-debug` as a diagnosis-only request
+     (tests and scripts in your worktree only, never a dev stack: need one, ask the Lead for a
+     Researcher or Tester; git stash only as `git stash push -u -m <tag>`). Save the findings to
+     `state/<label>/squads/<topic>-<short>-findings.md`, not ce-debug's in-repo artifact root. On a
+     confirmed cause and a convergent fix, plan it directly (the reproduction check is the unit's
+     regression test, the cause with file:line in the unit text; a hard fix follows
+     `conventions/thinker-routing.md`) and ask the plan approval with `Start: fix — cause: <one
+     line>`. No confirmed cause after 2–3 ruled-out hypotheses, or a fix that would reverse a
+     deliberate behaviour or product decision (divergent): write the findings doc and ask
+     `direction-<short>` as `investigate` does, even under `lfg`.
    Say the pick once: the first operator question starts with `Start: <mode> — <reason>` (in plan
    mode that is the plan-approval ask; no extra card), so the operator can overrule it. Journal it
    as a `decision`; a restart finds it there. If your start spec carries `Studio start: <mode>`,
@@ -121,8 +133,8 @@ Orca brief says — you stay running between turns and report through `ds` and `
    (`docs/USAGE.md`), add one line to the approval ask: "…or reply `lavish` to review it
    visually." Put it in **both** places the operator reads: the `enqueue-question` text
    **and** your own reply in your terminal. The operator usually reads the terminal, so an
-   offer that is only on the board is an offer they never see. On `lavish`, render the plan to an HTML artifact and open it with Lavish
-   (`npx -y lavish-axi <artifact.html>`, or the `/lavish` skill) — it serves a review page
+   offer that is only on the board is an offer they never see. On `lavish`, render the plan to an HTML artifact saved in `state/<label>/pages/<topic>/` (never the worktree's `.lavish/`, `.scratch/` or `<project>/docs/plans/`: they are lost on close or suspend) and open it with Lavish
+   (`npx -y lavish-axi state/<label>/pages/<topic>/<artifact>.html`, i.e. `lavish-axi <path>`, or the `/lavish` skill) — it serves a review page
    and `poll` returns the operator's annotations; fold those into the plan and re-surface for
    approval. **Opt-in per plan and never required**: a plan the operator is happy to read
    inline needs no Lavish, and if the skill isn't installed, don't offer it — inline approval
@@ -176,11 +188,16 @@ the squad moves toward `done` — whether there is a runnable surface worth test
 3. **Nothing meaningful to test** (pure refactor, internal-only) → tell the Lead testing is
    unnecessary and let it close normally (R4). Don't invent a surface.
 
-**In all three branches, send the Lead a "Try it" part with the handoff** (it becomes the sixth part of
-the squad's debrief): 1–5 numbered steps the operator can follow on main after the squad closes. Each
-step says *where* (a board page, a command, a URL on main or the shared env — never the squad's own
-env), *what to do* and *what you should see*. Reuse the Tester's scenarios that passed. When there is
-truly nothing to try by hand, send one line instead: `Try it: nothing to try by hand — <why>`.
+**In all three branches, keep the squad's Try it page current** — one file, `state/<label>/squads/<topic>-try-it.md`
+(`<label>` and `<topic>` as in your state path), which the board shows under Documents → Try it and the
+Lead's `set-status done` requires (it refuses a feature squad without the page, or with one older than the
+last unit done, and names the path). Write it when the build is handed back and again after every later
+unit (a bug fix, a follow-up) that changes what a person would do. Start with `# Try it — <topic>`, then one
+section per update, newest first, headed `## <date> — <what changed>`: 1–5 numbered steps the operator can
+follow on main after the squad closes. Each step says *where* (a board page, a command, a URL on main or
+the shared env — never the squad's own env), *what to do* and *what you should see*. Reuse the Tester's
+scenarios that passed. When there is truly nothing to try by hand, the section is one line:
+`Try it: nothing to try by hand — <why>`. Tell the Lead when the page is written or updated.
 
 **When the Tester files bugs** (each tagged `blocking` or `minor`, routed to you via the Lead):
 

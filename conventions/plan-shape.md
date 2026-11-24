@@ -37,14 +37,18 @@ Builder a unit it can't ship.
 **d. Tag each unit's Builder tier.** Every unit line carries `Tier: standard|hard` — the
 model its Builder builds on (the loop maps it through the roster) and the review it gets
 (`builder-review`, Opus, for hard; `builder-review-standard`, Sonnet, for standard). A unit is **hard** when any one holds; otherwise **standard**:
-- Any topic-level hard signal in `conventions/thinker-routing.md` applies to this unit itself
-  (security, auth, payments, data deletion, migrations, new data shape, shared contract).
+- A topic-level hard signal in `conventions/thinker-routing.md` (security, auth, payments, data
+  deletion, migrations, new data shape, shared contract) applies only when this unit's own change
+  is the risky part: it changes the check, the money movement, the schema or the contract. A unit
+  that merely sits in a module of that area (wiring, UI, copy, tests, a refactor next to it) is
+  not hard for that reason.
 - It changes code with many callers, concurrency, or a state machine.
 - The area it touches has little or no test coverage.
 - It doesn't follow an existing pattern in the repo.
 
-**Unsure → hard** — the opposite of the topic score's default-cheap rule, because a
-mis-scored Builder costs review rounds and CI failures. Example unit line:
+**Unsure → standard** — the same default-cheap rule as the topic score. The safety net is the
+Lead's move-up: `set-unit-tier <slug> hard` after a second wedge or two failed fix rounds
+(`roles/lead.md`), which restarts the Builder on the hard tier. Example unit line:
 `U2 — retry on lock timeout — deps: U1 — Tier: hard`.
 
 **Unit lines are read by a script** (`register-plan`), so write each one exactly as

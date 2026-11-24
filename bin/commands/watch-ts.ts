@@ -3,6 +3,7 @@
 // beat file and exit codes as the shell body.
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { contractStates, squadContract } from "../lib/contract-roles.ts";
 import { ROOT, backendPath, chomp, dsLabel, dsLoopOn, readJson, run as runCmd, stateRoot, writeErr, writeOut } from "../lib/shared";
 import { repoSlug } from "../lib/lib";
 import { cksum } from "./rewake-hook-ts";
@@ -10,6 +11,8 @@ import { settle } from "../loop/squad/squad-finish.ts";
 import { open, openReadOnly } from "../loop/core/store.ts";
 import { toplevel } from "../loop/squad/exposed.ts";
 import { ack, inbox, line, senderAt, waitingFor, waitingLines, type Addr, type Message } from "../loop/messages/messages.ts";
+import { parseMember, whoAmI } from "../loop/core/whoami.ts";
+import { instructionFilesFor } from "../lib/update-classes";
 
 /** U276: whose message rows this tick reads on a loop root — `me`, else this worktree's member; null when
  *  loop.db can't tell (no db, no member: the Orca read stays). */
@@ -116,11 +119,21 @@ function expandWord(word: string): string[] {
   try { names = readdirSync(dir).filter((f) => !f.startsWith(".") && re.test(f)).sort(); } catch { /* no folder */ }
   return names.length ? names.map((f) => join(dir, f)) : [word];
 }
-/** `cksum` of the instruction files catted together (missing ones skipped). */
+/** The role this worktree's session is (DS_MEMBER, else loop.db's member for the folder); null when unknown. */
+function myRole(): string | null {
+  const id = parseMember(whoAmI().member);
+  if (id) return id.role;
+  if (!dsLoopOn()) return null;
+  let s: ReturnType<typeof openReadOnly> | null = null;
+  try { const f = senderAt((s = openReadOnly(stateRoot())), toplevel()); return f.role && f.role !== "unknown" ? f.role : null; }
+  catch { return null; } finally { s?.close(); }
+}
+/** `cksum` of the instruction files catted together (missing ones skipped): AGENTS.md plus the role's own file
+ *  (`studio/studio.md` for the Studio), not every conventions file; with no role known, all of them. */
 function instrHash(): string {
   const env = process.env.DS_INSTR_FILES;
   const words = env ? env.split(/\s+/).filter((w) => w !== "")
-    : [join(ROOT, "AGENTS.md"), join(ROOT, "roles", "*.md"), join(ROOT, "studio", "studio.md"), join(ROOT, "conventions", "*.md")];
+    : instructionFilesFor(myRole()).map((f) => join(process.env.DS_INSTR_ROOT || ROOT, f)); // DS_INSTR_ROOT: a test tree
   const parts: Buffer[] = [];
   for (const f of words.flatMap(expandWord)) { try { parts.push(readFileSync(f)); } catch { /* cat 2>/dev/null */ } }
   return cksum(Buffer.concat(parts));
@@ -200,11 +213,14 @@ export async function run(argv: string[]): Promise<number> {
       try { r = jget(st, "run_id"); } catch { /* jq error: empty */ }
       RUN = truthy(r) ? interp(r) : "";
     }
-    if (!RUN) { writeErr("watch: no run_id\n"); return 1; }
+    // A squad off Orca has no Run (U11b): its Lead's mail is only ever loop.db rows.
+    const OFF = MODE === "lead" ? squadContract(SR, LABEL, TOPIC) : null;
+    if (!RUN && !(ROWS && OFF)) { writeErr("watch: no run_id\n"); return 1; }
     let holder = "";
     if (MODE === "lead" && !ROWS) holder = chomp((await runCmd([BACKEND, "run-coordinator", RUN])).out);
-    if (ROWS) { own = true; LOOPRUN = true; hdr = `lead messages (loop.db; the loop holds run=${RUN} and writes its mail here)`; }
-    else if (holder && holder !== (process.env.ORCA_TERMINAL_HANDLE ?? "")) { own = true; LOOPRUN = true; hdr = `worktree inbox (the loop holds run=${RUN} and relays its mail here)`; }
+    if (ROWS && !RUN) { own = true; LOOPRUN = true; hdr = `lead messages (loop.db; no Run: the squad runs on ${OFF})`; }
+    else if (ROWS) { own = true; LOOPRUN = true; hdr = `lead messages (loop.db; the loop holds run=${RUN} and writes its mail here)`; }
+    else if (holder && holder !== (whoAmI().handle ?? "")) { own = true; LOOPRUN = true; hdr = `worktree inbox (the loop holds run=${RUN} and relays its mail here)`; }
     else { own = false; hdr = `run=${RUN}`; }
   }
   let rows: Message[] | null = null, rd = { out: "", err: "", rc: 0 };
@@ -315,7 +331,10 @@ export async function run(argv: string[]): Promise<number> {
   try { writeFileSync(BEAT, ""); } catch { /* best effort */ }
 
   // --- team check-in + work items ---
-  const sr = await runCmd([BACKEND, "worker-states"]);
+  // A squad off Orca: its members' states from its own backend, through the contract (U11b), never Orca.
+  const sr = squadContract(SR, LABEL, TOPIC)
+    ? await contractStates(SR, LABEL).then((c) => ({ out: c.lines.join("\n"), err: c.blind.join("; "), rc: c.blind.length && !c.lines.length ? 1 : 0 }))
+    : await runCmd([BACKEND, "worker-states"]);
   const states = chomp(sr.out);
   const STATES_UNKNOWN = readRc !== 0 && (sr.rc !== 0 || states === "");
   const stateOf = (id: string): string => {
@@ -396,7 +415,7 @@ export async function run(argv: string[]): Promise<number> {
     const live = await prLive(n);
     if (!live) return { text: `      PR #${n} state unknown\n`, suppress: false };
     const lstate = cutF(live, 1), lsum = cutF(live, 2);
-    if (lstate === "MERGED") return { text: `      PR #${n} MERGED (live)\n  ‼ merged\t${slug}\t${wt}\tPR #${n} MERGED\tthe loop has not marked it done: mark it done and retire the Builder\n`, suppress: true };
+    if (lstate === "MERGED") return { text: `      PR #${n} MERGED (live)\n  ‼ merged\t${slug}\t${wt}\tPR #${n} MERGED\tthe loop has not marked it done yet: it does on its next PR read; if this stays after a tick, mark it done (refused until the loop has read the merge), and it retires the Builder\n`, suppress: true };
     if (lstate === "CLOSED") return { text: `      PR #${n} CLOSED (live)\n`, suppress: false };
     return { text: `      PR #${n} OPEN ${lsum} (live)\n`, suppress: false };
   };
@@ -525,7 +544,7 @@ export async function run(argv: string[]): Promise<number> {
       const roles = join_(jqSort(each(jget(st, "members")).map((m) => jget(m, "role"))), ",");
       tok = cksum(`${RUN}|${slugs}|${roles}\n`);
     } catch { tok = cksum(""); }
-    writeOut(`  ★ finished\t${TOPIC}\t${tok}\twrapping up — every unit done or cancelled, nothing held and no Tester left: do the testability handoff, write the debrief (set-debrief), then set-status done and tell the operator /ds-close-squad ${TOPIC}\n`);
+    writeOut(`  ★ finished\t${TOPIC}\t${tok}\twrapping up — every unit done or cancelled, nothing held and no Tester left: do the testability handoff, check the Try it page is current, then set-status done and tell the operator /ds-close-squad ${TOPIC} (no debrief now: the loop asks for it at archive)\n`);
   }
 
   // OPEN QUESTIONS: the waiting_on_you queue, every tick, so none can rot unseen.

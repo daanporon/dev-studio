@@ -1,7 +1,8 @@
 // ds directory-ts — the phone book (U222): what bin/lib/directory.sh runs. Same arguments, output and exit codes.
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
-import { stateRoot, dsLabel, dsPrefix, chomp, readJson, globJson, backend as realBackend, type Ran, writeOut as realOut, writeErr as realErr } from "../lib/shared";
+import { stateRoot, dsLabel, dsPrefix, chomp, readJson, globJson, backend as realBackend, hostBackendPath, run as runCmd, type Ran, writeOut as realOut, writeErr as realErr } from "../lib/shared";
+import { contractLive, isLocalWt, type Live } from "../lib/contract-roles.ts";
 
 export const help = `list [--project <label>] [--from <squad>] [--json] | reach|check <squad> <role[-suffix]> [--project <label>] — the phone book (directory.sh)`;
 
@@ -44,10 +45,19 @@ function hasWt(doc: any, wt: string): boolean {
 
 /** What the phone book reads and writes through: the real process (`run`), or the loop's own (U248: its Orca
  *  observer asks for a list as a function, with the backend's reads in process and the output collected). */
-export type DirIo = { stateRoot: string; backend: (args: string[]) => Promise<Ran>; out: (s: string) => void; err: (s: string) => void };
+/** `contract` (U11b) reads the live terminals of the project's squads off Orca (bin/lib/contract-roles.ts):
+ *  a member whose worktree is `local::<path>` is live when one of them runs there, and Orca is never asked
+ *  about it. Without it (the loop's own Orca observer, which watches those squads through their seats)
+ *  such a member reads as Orca sees it: not running. */
+export type DirIo = { stateRoot: string; backend: (args: string[]) => Promise<Ran>; out: (s: string) => void; err: (s: string) => void;
+  contract?: (label: string) => Promise<Live> };
 
+// `current` is this process's own worktree, through its squad's adapter (a `local::` path off Orca); the
+// Orca reads are the host's, so a squad off Orca still sees which Orca squads of its project are live.
 export const run = (argv: string[]): Promise<number> =>
-  runWith({ stateRoot: stateRoot(), backend: realBackend, out: realOut, err: realErr }, argv);
+  runWith({ stateRoot: stateRoot(), out: realOut, err: realErr,
+    backend: (a) => (a[0] === "current" ? realBackend(a) : runCmd([hostBackendPath(), ...a])),
+    contract: (label) => contractLive(stateRoot(), label) }, argv);
 
 export async function runWith(io: DirIo, argv: string[]): Promise<number> {
   const STATE_ROOT = io.stateRoot, backend = io.backend, writeOut = io.out, writeErr = io.err;
@@ -67,14 +77,16 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
   }
   if (!["list", "reach", "check"].includes(OP)) return usage();
 
-  // list --project: the backend reads start at once, beside `current`.
+  // An Orca read is about a member Orca runs: a `local::` member is the contract's when it is read (U11b).
+  const onOrca = (wt: string) => !(io.contract && isLocalWt(wt));
+  // list --project: the backend reads start at once, beside `current`; none for a project all off Orca.
   const pre = new Map<string, Promise<Ran>>();
   let termsP: Promise<Ran> | null = null;
   if (OP === "list" && PROJECT) {
-    termsP = backend(["wt-terminals"]);
     for (const f of globJson(join(STATE_ROOT, dsLabel(PROJECT), "squads"))) {
       const doc = readJson(f);
-      if (notRunningReason(doc)) continue;
+      if (notRunningReason(doc) || !membersOf(doc).some((m) => onOrca(m.wt))) continue;
+      termsP ??= backend(["wt-terminals"]);
       const run = runIdOf(doc);
       if (run && !pre.has(run)) pre.set(run, backend(["worker-detail", run]));
     }
@@ -122,7 +134,7 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
     }
   }
 
-  // Live terminals, fetched once; a failed fetch = blind (liveness unknown), an empty success = none.
+  // Live terminals, fetched once per side; a failed fetch = blind (liveness unknown), an empty success = none.
   let TERMS: string[] = [], BLIND = false, termsLoaded = false;
   const termsLoad = async () => {
     if (termsLoaded) return;
@@ -131,7 +143,13 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
     if (r.rc !== 0) { BLIND = true; TERMS = []; }
     else TERMS = chomp(r.out).split("\n");
   };
-  const hasTerm = (wt: string) => !!wt && TERMS.includes(wt);
+  let LIVE = null as Live | null;
+  const liveLoad = async (wts: string[]) => {
+    if (wts.some(onOrca)) await termsLoad();
+    if (!LIVE && wts.some((w) => !onOrca(w))) LIVE = await io.contract!(LABEL);
+  };
+  const blind = (wt: string) => (onOrca(wt) ? BLIND : !!LIVE?.blind.length);
+  const hasTerm = (wt: string) => !!wt && (onOrca(wt) ? TERMS.includes(wt) : !!LIVE?.terms.some((t) => t.wt === wt));
 
   // Live handles per run: "<run>\t<wt>\t<handle>" rows, newest first.
   const details: { run: string; wt: string; handle: string }[] = [];
@@ -145,17 +163,19 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
       if (f.length >= 2) details.push({ run, wt: f[0], handle: f[1] });
     }
   };
-  const termsOf = (run: string, wt: string) =>
-    details.filter((d) => d.run === run && d.wt === wt).map((d) => d.handle).join(RS);
+  const termsOf = (run: string, wt: string) => (onOrca(wt)
+    ? details.filter((d) => d.run === run && d.wt === wt).map((d) => d.handle)
+    : (LIVE?.terms ?? []).filter((t) => t.wt === wt).map((t) => t.id)).join(RS);
 
   type Row = string[];
   const row = (f: string, role: string, suf: string, wt: string, run: string, reason: string): Row => {
     const squad = basename(f, ".json");
     const name = role + (suf ? "-" + suf : "");
     let live = "no";
-    if (!reason) { if (BLIND) live = "unknown"; else if (hasTerm(wt)) live = "yes"; }
+    if (!reason) { if (blind(wt)) live = "unknown"; else if (hasTerm(wt)) live = "yes"; }
     let kind: string, addr: string;
-    if (role === "lead") { kind = "run"; addr = run; }
+    // A Lead is reached through its Run; a squad off Orca has none, so its Lead is a worktree like the rest.
+    if (role === "lead" && run) { kind = "run"; addr = run; }
     else if (FROM && FROM === squad) { kind = "worktree"; addr = wt; }
     else { kind = "worktree-run"; addr = wt; }
     let send: string;
@@ -171,7 +191,7 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
       for (const f of globJson(DIR)) {
         const doc = readJson(f);
         const reason = notRunningReason(doc);
-        if (!reason) { await termsLoad(); await detailLoad(runIdOf(doc)); }
+        if (!reason) { await liveLoad(membersOf(doc).map((m) => m.wt)); await detailLoad(runIdOf(doc)); }
         const frun = runIdOf(doc);
         for (const m of membersOf(doc)) {
           if (!m.role) continue;
@@ -196,7 +216,7 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
         let st: string;
         if (reason) st = `not running (${reason})`;
         else if (live === "yes") st = "live";
-        else if (live === "unknown") st = "unknown (backend wt-terminals failed)";
+        else if (live === "unknown") st = onOrca(wt) ? "unknown (backend wt-terminals failed)" : `unknown (${LIVE?.blind.join("; ")})`;
         else st = "not running";
         out += `  ${squad.padEnd(24)} ${name.padEnd(22)} ${st}\n      wt:    ${wt}\n      reach: ${send}\n`;
       }
@@ -223,11 +243,11 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
   const doc = readJson(f);
   const reason = notRunningReason(doc);
   if (reason) { writeErr(`directory: ${squad} — ${reason}; nothing to reach\n`); return 2; }
-  if (OP !== "check") await termsLoad();
   let hit: Row | null = null;
   for (const m of membersOf(doc)) {
     if (!m.role) continue;
     if (m.role + (m.suffix ? "-" + m.suffix : "") !== want) continue;
+    if (OP !== "check") await liveLoad([m.wt]);
     hit = row(f, m.role, m.suffix, m.wt, runIdOf(doc), "");
     break;
   }
@@ -236,7 +256,8 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
   const [, , , , wt, live, kind, addr, runId] = hit;
   if (kind !== "run" && live === "unknown") {
     writeOut(`${kind}\t${addr}\t${runId}\t${wt}\n`);
-    writeErr(`directory: can't see live terminals (backend wt-terminals failed) — ${squad}/${want} liveness unknown; address printed, the send receipt judges\n`);
+    const why = onOrca(wt) ? "backend wt-terminals failed" : LIVE?.blind.join("; ");
+    writeErr(`directory: can't see live terminals (${why}) — ${squad}/${want} liveness unknown; address printed, the send receipt judges\n`);
     return 4;
   }
   if (kind !== "run" && live !== "yes") {

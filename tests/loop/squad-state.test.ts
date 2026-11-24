@@ -45,12 +45,16 @@ describe("the store backend", () => {
     expect(s.get("units", {project:"p",squad:"s",slug:"unit"})?.wait_until).toBeNull();
   });
 
-  test("done needs a debrief; the debrief lives in the stored squad doc and its export (U1)", () => {
+  test("done with no debrief works (debrief-in-needs-you U2)", () => {
     const { root: r, file } = root(true);
     expect(ss(r, file, "set-task", "t").code).toBe(0);
-    const refused = ss(r, file, "set-status", "done");
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("refusing done: no debrief — write one first:");
+    expect(ss(r, file, "set-status", "done").code).toBe(0);
+    expect(doc(file).debrief ?? null).toBeNull();
+  });
+
+  test("done needs no debrief; the debrief lives in the stored squad doc and its export (U1)", () => {
+    const { root: r, file } = root(true);
+    expect(ss(r, file, "set-task", "t").code).toBe(0);
     expect(ss(r, file, "set-debrief", "").code).toBe(1);
     expect(ss(r, file, "set-debrief", "shipped #1\nTry it: nothing to try by hand — docs only\n").code).toBe(0);
     const s = store(r);
@@ -61,21 +65,18 @@ describe("the store backend", () => {
     expect(JSON.parse(ss(r, file, "get").out).debrief).toBe("shipped #1\nTry it: nothing to try by hand — docs only");
   });
 
-  test("a feature squad's debrief needs a Try it part; a testing squad's does not (brief-other-prs U3)", () => {
+  test("set-debrief records when and over which units (debrief-on-archive U1)", () => {
     const { root: r, file } = root(true);
-    expect(ss(r, file, "set-debrief", "1. Set out to do: x\n2. Shipped: #1").code).toBe(0);
-    const refused = ss(r, file, "set-status", "done");
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("Try it");
-    expect(ss(r, file, "set-debrief", "2. Shipped: #1\n6. **Try it:** 1. open the board and see x").code).toBe(0);
-    expect(ss(r, file, "set-status", "done").code).toBe(0);
-    const n = root(true);
-    expect(ss(n.root, n.file, "set-debrief", "- try it: nothing to try by hand — docs only").code).toBe(0);
-    expect(ss(n.root, n.file, "set-status", "done").code).toBe(0);
-    const t = root(true);
-    expect(ss(t.root, t.file, "set-type", "testing").code).toBe(0);
-    expect(ss(t.root, t.file, "set-debrief", "shipped #1").code).toBe(0);
-    expect(ss(t.root, t.file, "set-status", "done").code).toBe(0);
+    expect(ss(r, file, "add-unit", "u-one", "-", "").code).toBe(0);
+    expect(ss(r, file, "add-unit", "u-two", "-", "").code).toBe(0);
+    const before = Math.floor(Date.now() / 1000);
+    expect(ss(r, file, "set-debrief", "shipped #1").code).toBe(0);
+    const s = store(r);
+    const d = JSON.parse(String((s.db.query("SELECT doc FROM squads WHERE project = 'p' AND topic = 's'").get() as { doc: string }).doc));
+    expect(d.debrief_units).toEqual(["u-one", "u-two"]);
+    expect(d.debrief_at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    expect(Math.floor(Date.parse(d.debrief_at) / 1000)).toBeGreaterThanOrEqual(before);
+    expect(doc(file)).toMatchObject({ debrief: "shipped #1", debrief_units: ["u-one", "u-two"] });
   });
 
   test("done refuses a planned or held unit, once per hold kind, and names its command (squad-done-definition U2)", () => {
@@ -102,6 +103,7 @@ describe("the store backend", () => {
     expect(ss(r, file, "add-unit", "a").code).toBe(0);
     expect(ss(r, file, "set-unit-status", "a", "done", "--no-pr").code).toBe(0);
     expect(ss(r, file, "add-member", "tester", "1", "wt_t").code).toBe(0);
+    writeFileSync(file.replace(/\.json$/, "-try-it.md"), "# Try it\n\n1. one\n");
     expect(ss(r, file, "set-status", "done").code).toBe(0);
     const t = root(true);
     expect(ss(t.root, t.file, "set-type", "testing").code).toBe(0);
@@ -249,6 +251,60 @@ describe("plan paths canonicalize to the absolute form (U181)", () => {
     const abs = join(realpathSync(base), rel);
     expect(ss(r, file, "add-unit", "u1", "", rel, "--tier", "standard").code).toBe(0);
     expect(doc(file).units[0].plan).toBe(abs);
+  });
+
+  describe("open work on a done squad sets it back to running", () => {
+    const FIX = join(ROOT, "tests", "fixtures", "register-plan.md");
+    const doneSquad = () => {
+      const x = root(true);
+      expect(ss(x.root, x.file, "set-debrief", "shipped #1\nTry it: nothing to try by hand — docs only").code).toBe(0);
+      expect(ss(x.root, x.file, "set-status", "done").code).toBe(0);
+      return x;
+    };
+    const status = (r: string) => rows(store(r), "SELECT status FROM squads WHERE project = 'p' AND topic = 's'")[0].status;
+
+    test("register-plan reopens a done squad, in the row and the export, with a note", () => {
+      const { root: r, file } = doneSquad();
+      const res = ss(r, file, "register-plan", FIX);
+      expect(res.code, res.err).toBe(0);
+      expect(res.err).toContain("squad-state: note: squad was done; set back to running for ");
+      expect(status(r)).toBe("running");
+      expect(doc(file).status).toBe("running");
+    });
+    test("add-unit reopens a done squad; --hold leaves it done; a suspended squad stays suspended", () => {
+      const a = doneSquad();
+      const held = ss(a.root, a.file, "add-unit", "x", "", "", "--tier", "standard", "--hold");
+      expect(held.code, held.err).toBe(0);
+      expect(status(a.root)).toBe("done");
+      const res = ss(a.root, a.file, "add-unit", "y", "", "", "--tier", "standard");
+      expect(res.code, res.err).toBe(0);
+      expect(res.err).toContain("set back to running for 1 open unit(s)");
+      expect(status(a.root)).toBe("running");
+      const b = root(true);
+      expect(ss(b.root, b.file, "set-status", "suspended").code).toBe(0);
+      expect(ss(b.root, b.file, "add-unit", "x", "", "", "--tier", "standard").code).toBe(0);
+      expect(status(b.root)).toBe("suspended");
+    });
+    test("a done squad with a close in flight stays done, with a note", () => {
+      const { root: r, file } = doneSquad();
+      store(r).db.run("UPDATE squads SET want = 'gone' WHERE project = 'p' AND topic = 's'");
+      const res = ss(r, file, "register-plan", FIX);
+      expect(res.code, res.err).toBe(0);
+      expect(res.err).toContain("squad-state: note: squad is closing; left done");
+      expect(status(r)).toBe("done");
+    });
+    test("a re-run of a plan whose units are all done leaves the squad done", () => {
+      const { root: r, file } = doneSquad();
+      const plan = join(tmp(), "p.md");
+      writeFileSync(plan, "U1 — First — deps: none — Tier: standard\n");
+      expect(ss(r, file, "register-plan", plan).code).toBe(0);
+      const slug = doc(file).units[0].slug;
+      expect(ss(r, file, "cancel-unit", slug, "--why", "test").code).toBe(0);
+      expect(ss(r, file, "set-status", "done").code).toBe(0);
+      const again = ss(r, file, "register-plan", plan);
+      expect(again.code, again.err).toBe(0);
+      expect(status(r)).toBe("done");
+    });
   });
 
   test("approve-plan stores the absolute path; plan-approved agrees in every form", () => {

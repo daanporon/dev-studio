@@ -6,7 +6,7 @@
 //   view(m)          its effective wish: pause.ts effective() (archived, suspended, paused, own wish),
 //                    plus a Builder whose unit is done, merged or cancelled reads archived, and a
 //                    one-shot role (not standing, not a Builder) whose task dispatch completed reads
-//                    stopped. A view only: no row changes.
+//                    stopped (U12: off Orca, one with a finish row of its generation). A view only.
 //   lastStart(m)     the newest start of this member the loop knows (placed_at, started), epoch s.
 //   walkedGone(w, t) a walk read after a stop's call at t found no agent (account-move-slow U2).
 //   startEpisode(m)  the start act's episode: stable across wish edits (a model write mid-start keeps
@@ -15,12 +15,15 @@
 import { effective, startSent } from "../pause/pause.ts";
 import { memberUnit, mergedUnit } from "../pause/pause-conditions.ts";
 import { STANDING } from "../drivers/types.ts";
+import { onContract } from "./backend.ts";
+import { finishOf } from "./finish-read.ts";
 import type { Row, Store } from "../core/store.ts";
 
 export const LOCK_KINDS = ["member", "member.close", "role", "request-restart", "request-switch",
   "pause-control", "cancel.stop", "rebind", "unbind", "duplicate"].map((k) => `action:${k}`);
 export const LOCK_OPS = ["worker-start", "worker-resume", "role-start", "terminal-create", "terminal-close",
-  "terminal-close-worktree", "pause-close", "pause-release", "dispatch-abandon", "worker-stop", "worker-release"];
+  "terminal-close-worktree", "pause-close", "pause-release", "dispatch-abandon", "worker-stop", "worker-release",
+  "terminal.create", "terminal.close"];   // U11: a contract backend's start and stop (core/actuator.ts contractStart)
 
 const who = (m: Row) => `${m.role}${m.suffix ? `-${m.suffix}` : ""}`;
 const iso = (v: unknown) => (v ? Math.floor(Date.parse(String(v)) / 1000) : NaN);
@@ -43,6 +46,8 @@ export function view(store: Store, m: Row): View {
     const u = memberUnit(store, { project: String(m.project), squad: String(m.squad), role: "builder", suffix: String(m.suffix ?? ""), member: (m.wt as string | null) ?? null });
     if (u && (u.status === "cancelled" || u.status === "merged" || mergedUnit(store, u))) return "archived";
   } else if (e === "running" && !STANDING.has(String(m.role)) && m.wt) {
+    // U12: off Orca there is no dispatch; a finish row of the member's generation ends the one-shot.
+    if (onContract(store, String(m.project), String(m.squad))) return finishOf(store, m) ? "stopped" : e;
     const w = store.get("observed_workers", { project: m.project, wt: m.wt });
     if (w?.dispatch === "completed") return "stopped";
   }
@@ -82,13 +87,14 @@ export function startEpisode(store: Store, m: Row): string {
 export const stopCallKey = (id: number, episode: string, op: string) => `stop:${id}:${episode}:${op}`;
 
 // A stop of this member waits on reality: its member action's episode has not ended and that
-// episode's worker-stop call went out (its last row not failed). Only then can the old agent's
-// dispatch settle any tick now, so the Orca observer reads its Run every tick (account-move-slow U1).
+// episode's worker-stop call (U11: its terminal.close, on a contract backend) went out (its last row not
+// failed). Only then can the old agent's dispatch settle any tick now, so the Orca observer reads its Run
+// every tick (account-move-slow U1).
 export function stopOpen(store: Store, project: string, id: number): boolean {
   const ep = store.get("episodes", { project, subject: `member:${id}`, kind: "action:member" });
   if (!ep || ep.ended_at != null || ["done", "dropped", "failed"].includes(String(ep.state))) return false;
-  const call = store.db.query("SELECT state FROM orca_calls WHERE key = ? ORDER BY id DESC LIMIT 1")
-    .get(stopCallKey(id, String(ep.episode_key), "worker-stop")) as Row | null;
+  const call = store.db.query("SELECT state FROM orca_calls WHERE key IN (?, ?) ORDER BY id DESC LIMIT 1")
+    .get(stopCallKey(id, String(ep.episode_key), "worker-stop"), stopCallKey(id, String(ep.episode_key), "terminal.close")) as Row | null;
   return !!call && call.state !== "failed";
 }
 
@@ -97,7 +103,7 @@ export function stopOpen(store: Store, project: string, id: number): boolean {
 export function startInFlight(store: Store, m: Row): boolean {
   if (m.want === "running" && startSent(store, m.id, startEpisode(store, m))) return true;
   const p = String(m.project), wt = String(m.wt ?? "");
-  return !!store.db.query("SELECT 1 FROM orca_calls WHERE project = ? AND member = ? AND op IN ('worker-start', 'worker-resume', 'role-start') AND state IN ('sent', 'pending')").get(p, wt)
+  return !!store.db.query("SELECT 1 FROM orca_calls WHERE project = ? AND member = ? AND op IN ('worker-start', 'worker-resume', 'role-start', 'terminal.create') AND state IN ('sent', 'pending')").get(p, wt)
     || !!store.db.query(`SELECT 1 FROM episodes WHERE project = ? AND state = 'running' AND
         kind IN ('action:member', 'action:role') AND (subject = ? OR json_extract(action, '$.action.payload.id') = ?)`).get(p, `member:${m.id}`, Number(m.id));
 }

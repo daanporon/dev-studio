@@ -3,7 +3,7 @@
 // board-data.ts wiring; the tables below feed bin/board/flow.ts directly for the edge rules.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { flowLine, flowOf, ordinal, unitStage, type FlowEvent, type FlowReview, type FlowUnit } from "../../bin/board/flow.ts";
-import { renderText } from "../../bin/board/board-data.ts";
+import { pausedFacts, renderText } from "../../bin/board/board-data.ts";
 import { FX_NOW, flowFixture } from "./flow-fixture.ts";
 
 const N = FX_NOW, D = 86400;
@@ -20,7 +20,7 @@ describe("the fixture board", () => {
     expect(card("u4-plan")).toMatchObject({ stage: "queued", group: "held", note: "plan not approved" });
     expect(card("u5-slot")).toMatchObject({ group: "waiting for a slot", note: "at max_builders 6", since: null, in_stage_s: null });
     expect(card("u6-account")).toMatchObject({ group: "waiting for an account", note: "no room until 13:30" });
-    expect(card("u20-starting")).toMatchObject({ group: "waiting for a slot", note: "starting" });
+    expect(card("u20-starting")).toMatchObject({ stage: "building", group: "coding" });   // a starting Builder holds a seat: not Queued
     expect(card("u7-next")).toMatchObject({ group: "waiting for a slot", note: "next in line", since: N - 3600, stuck: false });
   });
 
@@ -74,10 +74,10 @@ describe("the fixture board", () => {
   });
 
   test("counts: each its cards, all of them the header's units left; a suspended squad has none", () => {
-    const c = b.flow.counts, of = (st: string) => b.flow.cards.filter((x: any) => x.stage === st).length;
-    expect(c).toEqual({ queued: 7, building: 4, pr_open: 5, needs_you: 2, merging: 2, stuck: 1, slow: 2, open_prs: 7, merged_today: 1 });
+    const c = b.flow.counts, of = (st: string) => b.flow.cards.filter((x: any) => x.stage === st && !x.paused).length;
+    expect(c).toEqual({ queued: 6, building: 5, pr_open: 5, needs_you: 2, merging: 2, paused: 0, stuck: 1, slow: 2, open_prs: 7, merged_today: 1 });
     for (const st of ["queued", "building", "pr_open", "needs_you", "merging"]) expect(c[st]).toBe(of(st));
-    expect(c.queued + c.building + c.pr_open + c.needs_you + c.merging).toBe(b.header.units_left);
+    expect(c.queued + c.building + c.pr_open + c.needs_you + c.merging + c.paused).toBe(b.header.units_left);
     expect(b.flow.cards.filter((x: any) => x.squad !== "flow")).toEqual([]);
     expect(b.flow.cards.some((x: any) => "open_pr" in x)).toBe(false);
   });
@@ -90,7 +90,7 @@ describe("the fixture board", () => {
   });
 
   test("every project: counts and per_day summed, each card against its own project's typical", () => {
-    expect(all.flow.counts).toMatchObject({ building: 5, stuck: 1, slow: 3, merged_today: 2 });
+    expect(all.flow.counts).toMatchObject({ building: 6, stuck: 1, slow: 3, merged_today: 2 });
     expect(all.flow.per_day.reduce((n: number, d: any) => n + d.merged, 0)).toBe(12);
     expect(all.flow.typical_s[f.b]).toEqual({ building: 300, pr_open: 100, merging: 50 });
     expect(all.flow.cards.find((c: any) => c.project === f.b)).toMatchObject({ slug: "u1-quick", in_stage_s: 1000, stuck: false, slow: true });   // late (> 600 in b, < 2400 in a) with its Builder working
@@ -98,7 +98,7 @@ describe("the fixture board", () => {
 
   test("text: one FLOW line under the STUDIO line, with flow.counts' numbers", () => {
     const lines = renderText(b).split("\n").filter((l) => l.startsWith("FLOW "));
-    expect(lines).toEqual(["FLOW 7 queued · 4 building · 5 PR open · 2 merging · 1 stuck · 2 slow · 2 needs you · 1 merged today"]);
+    expect(lines).toEqual(["FLOW 6 queued · 5 building · 5 PR open · 2 merging · 1 stuck · 2 slow · 2 needs you · 1 merged today"]);
     expect(renderText(b).split("\n")[1]).toBe(lines[0]);
   });
 });
@@ -124,7 +124,7 @@ describe("flow.ts", () => {
     const q = (pick: FlowUnit["pick"]) => one(unit("u", { status: "planned", pick }));
     const p = { reason: null, wait_until: null, wait_known: null, slot: 0, account: null };
     expect(q({ ...p, reason: "queued: 4 of 4 start slots in flight" })).toMatchObject({ group: "waiting for a slot", note: "4 of 4 start slots in flight" });
-    expect(q({ ...p, reason: "WAIT host: psi cpu 40 ≥ crit 25" })).toMatchObject({ group: "waiting for a slot", note: "host busy: psi cpu 40 ≥ crit 25" });   // U4 host brake
+    expect(q({ ...p, reason: "WAIT host: psi cpu 40 ≥ crit 25" })).toMatchObject({ group: "waiting for the host", note: null });   // U4 host brake: the lane banner carries the reason
     expect(q({ ...p, reason: "no account free", wait_until: N + 600, wait_known: 0 })).toMatchObject({ group: "waiting for an account", note: "no account free" });
     expect(q({ ...p, reason: "no account free" })).toMatchObject({ group: "waiting for an account", note: "no account free" });
     expect(one(unit("u", { status: "planned", paused: true, blocked_by: ["x"] }))).toMatchObject({ group: "held", note: "paused" });
@@ -148,6 +148,35 @@ describe("flow.ts", () => {
       .toMatchObject({ stage: "building", note: "PR closed", since: null, in_stage_s: null, stuck: false });
   });
 
+  test("paused (paused-in-swimlanes U1): a paused building, pr_open and merging card leaves its count for group paused", () => {
+    const pu = (slug: string, o: Partial<FlowUnit> = {}) => unit(slug, { paused: true, paused_at: N - 90000, paused_why: "paused by you", ...o });
+    const f = flow([pu("b"), pu("p", { pr: pr("1") }), pu("m", { pr: pr("2"), verdict: "ready" }), unit("w"), unit("q", { status: "planned", paused: true, paused_why: "Lead hold", hold: true })],
+      [ev("b", "unit_dispatched", 900), ev("m", "unit_pr", 900), ev("m", "auto_merge_armed", 300)]);
+    const by = (k: string) => f.cards.find((c) => c.slug === k)!;
+    expect(["b", "p", "m"].map((k) => [by(k).stage, by(k).group, by(k).note, by(k).paused_s])).toEqual([
+      ["building", "paused", "paused by you", 90000], ["pr_open", "paused", "paused by you", 90000], ["merging", "paused", "paused by you", 90000]]);
+    expect(f.counts).toMatchObject({ building: 1, pr_open: 0, merging: 0, paused: 3, queued: 1 });
+    expect(by("w")).toMatchObject({ group: "coding", paused: false });
+    expect(by("q")).toMatchObject({ stage: "queued", group: "held", note: "Lead hold", paused: false });
+    expect(by("b").since).not.toBeNull();   // the stage's own time stays
+    expect(flowLine(f)).toContain("0 needs you · 3 paused · 0 merged today");
+    expect(flowLine(flow([unit("w")]))).not.toContain("paused");
+    expect(one(pu("x", { paused_at: null })).paused_s).toBeNull();
+  });
+
+  test("paused_why: manual, dependency, plan, Lead hold, and pausing / resuming while in flight", () => {
+    const db = { s: { get: () => ({ requested_at: 500 }) } }, bm = { role: "builder", suffix: "" };
+    const st = (state: string, sources: any[]) => ({ state, sources });
+    const why = (pause: any, hold = false) => pausedFacts(db, "p", "s", bm, pause, hold);
+    expect(why(st("paused", [{ source: "manual", requested_at: 900 }, { source: "dependency", requested_at: 700, prerequisites: [], remaining: ["x"] }]))).toEqual({ paused_at: 700, paused_why: "paused by you" });
+    expect(why(st("paused", [{ source: "dependency", requested_at: 700, prerequisites: [{ kind: "unit" }], remaining: ["prerequisite unresolved: p/s/u1", "prerequisite unresolved: o/r#4"] }]))).toEqual({ paused_at: 700, paused_why: "waits on p/s/u1, o/r#4" });
+    expect(why(st("paused", [{ source: "dependency", requested_at: 700, prerequisites: [{ kind: "plan" }], remaining: ["plan not approved: a.md"] }])).paused_why).toBe("plan taken back");
+    expect(why(st("pausing", [{ source: "manual", requested_at: 900 }])).paused_why).toBe("pausing");
+    expect(why(st("resuming", []))).toEqual({ paused_at: 500, paused_why: "resuming" });
+    expect(why(st("active", []), true)).toEqual({ paused_at: null, paused_why: "Lead hold" });
+    expect(why(null)).toEqual({ paused_at: null, paused_why: null });
+  });
+
   test("Building review groups (U4): stopped, reviewing, fixing findings, coding; paused keeps its note", () => {
     const rv = (state: FlowReview["state"], o: Partial<FlowReview> = {}): FlowReview =>
       ({ project: P, squad: S, slug: "u", state, since: null, kind: null, round: null, findings: null, ...o });
@@ -158,7 +187,7 @@ describe("flow.ts", () => {
     expect(at(rv("reviewing", { since: N - 600, kind: "delta-wide", round: 3 })).note).toBe("3rd review · delta-wide 10m");
     expect(at(rv("fixing", { since: N - 120, findings: 1 }))).toMatchObject({ group: "fixing findings", note: "1 finding 2m" });
     expect(at(rv("stopped"))).toMatchObject({ group: "review stopped", note: "reviews stopped · needs --retry" });
-    expect(at(rv("fixing", { findings: 3 }), unit("u", { paused: true }))).toMatchObject({ group: "fixing findings", note: "paused" });
+    expect(at(rv("fixing", { findings: 3 }), unit("u", { paused: true }))).toMatchObject({ group: "paused", stage: "building", note: "paused" });
     expect(at(rv("reviewing", { since: N - 60 }), unit("u", { pr: pr("1", "closed") })).note).toBe("review 1m");
     // a review row for a unit with an open PR changes nothing: the PR stage wins
     expect(flow([unit("u", { pr: pr("1") })], [], 10, [rv("stopped")]).cards[0]).toMatchObject({ stage: "pr_open", group: "in review" });
@@ -275,7 +304,7 @@ describe("flow.ts", () => {
 
   test("an empty Flow still has 30 days, the scope's squads and no typical times", () => {
     const e = flow([]);
-    expect(e.counts).toEqual({ queued: 0, building: 0, pr_open: 0, needs_you: 0, merging: 0, stuck: 0, slow: 0, open_prs: 0, merged_today: 0 });
+    expect(e.counts).toEqual({ queued: 0, building: 0, pr_open: 0, needs_you: 0, merging: 0, paused: 0, stuck: 0, slow: 0, open_prs: 0, merged_today: 0 });
     expect(e.per_day).toHaveLength(30);
     expect(e.squads).toEqual({ [`${P}/${S}`]: { stuck: 0, slow: 0, longest_stuck_s: null, needs_you: 0, last_merge_at: null } });
     expect(e.median_total_s).toBeNull();
@@ -313,6 +342,6 @@ describe("U5: merged rows carry pr_url", () => {
     const f = flowOf({ now: N, events: [], floor_min: {}, squads: [{ project: "pa", squad: S }, { project: "pb", squad: S }],
       units: [unit("a1", { project: "pa", status: "planned", pick: slotp, place: [1, 1, 1, 1] }), unit("b1", { project: "pb", status: "planned", pick: slotp, place: [1, 1, 1, 2] }),
         unit("a2", { project: "pa", status: "planned", pick: slotp, place: [1, 1, 1, 3] })] });
-    expect(f.cards.map((c) => [c.slug, c.queue_pos])).toEqual([["a1", 1], ["b1", 1], ["a2", 2]]);
+    expect(f.cards.map((c) => [c.slug, c.queue_pos])).toEqual([["a1", 1], ["a2", 2], ["b1", 1]]);   // the queued cards follow queued_order: by project, then place
   });
 });

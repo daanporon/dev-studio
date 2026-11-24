@@ -238,7 +238,22 @@ board "$LBL" > "$TMP/big.json" 2>"$TMP/big.err" || true
 jt "big plan: squad renders"          "$TMP/big.json" '.squads[] | select(.topic=="big") | .plans[0].markdown | length > 1500000' '.squads | map(.topic)'
 jt "big plan: archived renders"       "$TMP/big.json" '.archived[] | select(.topic=="big") | .plans[0].markdown | length > 1500000' '.archived | length'
 eq "big plan: no jq error"            "$(grep -c 'Argument list too long' "$TMP/big.err" || true)" "0"
-rm -rf "$SD/big.json" "$SD/big-alpha-plan.md" "$DS_STATE_ROOT/$LBL/archive"
+# debrief-in-needs-you pages U1: a squad's Try it page (<topic>-try-it.md) is its `try_it`, live in squads/ and archived in archive/; none is null.
+printf '# Try it — big\n\n## 2026-11-23 — a\n\n1. Open the board; see it.\n' > "$SD/big-try-it.md"
+printf '# Try it — big\n\n1. Open the board; see it archived.\n' > "$DS_STATE_ROOT/$LBL/archive/big-try-it.md"
+board "$LBL" > "$TMP/big.json" 2>"$TMP/big.err" || true
+jt "try it: a live squad carries its page"     "$TMP/big.json" '.squads[] | select(.topic=="big") | .try_it.name == "big-try-it.md" and (.try_it.markdown | contains("see it.")) and .try_it.mtime > 0'
+jt "try it: an archived squad carries its page" "$TMP/big.json" '.archived[] | select(.topic=="big") | .try_it.markdown | contains("archived")'
+jt "try it: a squad without a page has null"   "$TMP/big.json" '[.squads[] | select(.topic!="big") | .try_it] | all(. == null)'
+# archive-leftovers U2: an archived squad's kept worktree stays in sight: `archived[].leftovers` and the text board's line.
+printf '{"topic":"big","closed_at":"2026-10-01T00:00:00Z","units":[],"leftovers":[{"wt":"wt-arch","path":"/tmp/wt-arch","branch":"br-arch","n_files":1,"unpushed":2,"reason":"kept: 1 uncommitted, 2 unpushed","unit":"u1"}]}' > "$DS_STATE_ROOT/$LBL/archive/big-1.json"
+board "$LBL" > "$TMP/big.json" 2>"$TMP/big.err" || true
+jt "archived leftovers: board.json carries the record" "$TMP/big.json" '.archived[] | select(.topic=="big") | .leftovers | length == 1 and .[0].path=="/tmp/wt-arch" and .[0].branch=="br-arch" and .[0].unpushed==2'
+jt "archived leftovers: a squad with none has []"      "$TMP/big.json" '[.archived[] | select(.topic!="big") | .leftovers] | all(. == [])'
+BIGT="$(tb "$LBL" 2>/dev/null)"
+eq "archived leftovers: text board names the squad"   "$(printf '%s' "$BIGT" | grep -cF -- 'ARCHIVED big')" "1"
+eq "archived leftovers: text board line"              "$(printf '%s' "$BIGT" | grep -cF -- '⚑ /tmp/wt-arch  (br-arch) — not checked yet')" "1"
+rm -rf "$SD/big.json" "$SD/big-alpha-plan.md" "$SD/big-try-it.md" "$DS_STATE_ROOT/$LBL/archive"
 
 # A suspended squad: its question is NOT counted and NOT in the inbox; it sorts after running.
 printf '{"run_id":"r2","status":"suspended","type":"feature","autonomy":"checkpoints","members":[{"role":"lead","wt":"wl2","owns":[],"for":""}],"units":[],"waiting_on_you":[{"id":"q2","asker":"lead","blocking":true,"question":"parked","since":"2026-10-08T09:00:00Z"}]}' > "$SD/parked.json"
@@ -322,6 +337,10 @@ mq su-sq running '' '[{"slug":"u1","status":"dispatched"}]'
 mq st-sq running '' '[{"slug":"u1","status":"dispatched"}]'
 mq rs-sq suspended '' '[{"slug":"u1","status":"planned"}]'
 mq ok-sq suspended '' '[{"slug":"u1","status":"planned"}]'
+mq db-sq running '' '[{"slug":"u1","status":"done"}]'
+mq dw-sq running '' '[{"slug":"u1","status":"done"}]'
+mq rm-sq running '' '[{"slug":"u1","status":"done"}]'
+mq ul-sq running '' '[{"slug":"leaf","status":"planned"},{"slug":"root","status":"planned"},{"slug":"d1","status":"planned","deps":["root"]},{"slug":"d2","status":"planned","deps":["d1"]},{"slug":"d3","status":"planned","deps":["root"]}]'
 board "$LBL" > /dev/null
 NOWS=$(date +%s)
 dbw "UPDATE members SET want='running', wt=NULL, want_result=NULL WHERE project='$LBL' AND role='builder'"
@@ -331,8 +350,20 @@ dbw "UPDATE squads SET want='suspended', want_by='operator', want_at=$NOWS-60 WH
 dbw "UPDATE squads SET want='suspended', want_by='operator', want_at=$NOWS-1200 WHERE project='$LBL' AND topic='st-sq'"
 dbw "UPDATE squads SET want='running', want_by='operator', want_at=$NOWS-60 WHERE project='$LBL' AND topic='rs-sq'"
 dbw "UPDATE squads SET want='suspended', want_by='operator', want_at=$NOWS-60, want_result='done: suspended' WHERE project='$LBL' AND topic='ok-sq'"
+# debrief-on-archive U2: an open archive-debrief step (wish 12 min old, step 4 min) reads archiving with its hover and is not stuck;
+# a step that settled 1 min ago on a 20-minute wish times its stuck clock from the step's end.
+dbw "UPDATE squads SET want='gone', want_by='operator', want_at=$NOWS-720 WHERE project='$LBL' AND topic='db-sq'"
+dbw "UPDATE squads SET want='gone', want_by='operator', want_at=$NOWS-1200 WHERE project='$LBL' AND topic='dw-sq'"
+dbw "INSERT INTO episodes (project, subject, kind, squad, started_at, ended_at, episode_key, state, result, source, observed_at) SELECT project, 'squad:' || id, 'archive-debrief', topic, $NOWS-240, NULL, CAST(want_at AS TEXT), 'open', '{\"asked_at\":'||($NOWS-240)||',\"limit_s\":600}', 'loop', $NOWS FROM squads WHERE project='$LBL' AND topic='db-sq'"
+dbw "INSERT INTO episodes (project, subject, kind, squad, started_at, ended_at, episode_key, state, result, source, observed_at) SELECT project, 'squad:' || id, 'archive-debrief', topic, $NOWS-660, $NOWS-60, CAST(want_at AS TEXT), 'written', '{\"asked_at\":'||($NOWS-660)||',\"limit_s\":600}', 'loop', $NOWS FROM squads WHERE project='$LBL' AND topic='dw-sq'"
+# archive-stuck-worktrees U2: a member whose worktree removal was dropped stale (presence running) 2 min ago.
+dbw "UPDATE squads SET want='gone', want_by='operator', want_at=$NOWS-300 WHERE project='$LBL' AND topic='rm-sq'"
+dbw "INSERT INTO members (project, squad, wt, role, suffix, status, observed_at, updated_at) VALUES ('$LBL', 'rm-sq', 'wrm::/tmp/wrm', 'builder', 'u1', 'stopped', $NOWS, $NOWS)"
+dbw "INSERT INTO episodes (project, subject, kind, squad, started_at, ended_at, episode_key, state, result, source, observed_at) SELECT project, 'member:' || id, 'action:member.close', squad, $NOWS-130, $NOWS-120, 'close:remove:archived:1', 'dropped', 'stale: presence running', 'loop', $NOWS FROM members WHERE project='$LBL' AND squad='rm-sq' AND role='builder'"
 dbw "INSERT INTO events (at, project, squad, kind, payload) VALUES ($NOWS-600, '$LBL', 'st-sq', 'wish_given_up', '{\"error\":\"stop timed out\"}')"
 render "$LBL" --json > "$TMP/q.json"
+TXTRM="$(render "$LBL")"
+rm -f "$SD/rm-sq.json"   # later cases count live members
 ds_of(){ echo ".squads[] | select(.topic==\"$1\") | $2"; }
 jt "queued: planned units + wanted Builder + a pick wait" "$TMP/q.json" "$(ds_of q-sq '.display_status=="queued" and (.phase_note|contains("6 of 6"))')"
 jt "queued: a dispatched unit stays implementing"         "$TMP/q.json" "$(ds_of qd-sq '.display_status=="implementing"')"
@@ -340,14 +371,22 @@ jt "queued: a unit blocked by a dep does not queue (dispatched dep -> implementi
 jt "queued: a held unit with a planned dependent is parked (U8)" "$TMP/q.json" "$(ds_of qh-sq '.display_status=="parked · 1 held"')"
 jt "queued: no units is planning"                         "$TMP/q.json" "$(ds_of qn-sq '.display_status=="planning"')"
 jt "want gone on a running squad shows archiving"         "$TMP/q.json" "$(ds_of ar-sq '.display_status=="archiving" and (.phase_note|contains("operator")) and .phase_stuck==false')"
+jt "archive-debrief open: archiving, hover names the step, not stuck at 12 min" "$TMP/q.json" "$(ds_of db-sq '.display_status=="archiving" and (.phase_note|contains("Lead writing the final debrief (4 of 10 min)")) and .phase_stuck==false')"
+jt "archive-debrief written: hover names it, stuck clock runs from the step's end" "$TMP/q.json" "$(ds_of dw-sq '.display_status=="archiving" and (.phase_note|contains("debrief written")) and .phase_stuck==false')"
+jt "archiving names the member and the skipped removal" "$TMP/q.json" "$(ds_of rm-sq '.display_status=="archiving" and (.phase_note|contains("waiting on builder-u1: removal skipped (presence running) 2 min ago, try 1, next in")) and .phase_stuck==false')"
 jt "want suspended on a running squad shows suspending"   "$TMP/q.json" "$(ds_of su-sq '.display_status=="suspending"')"
 jt "a 20-minute wish is stuck, with the wish_given_up reason" "$TMP/q.json" "$(ds_of st-sq '.display_status=="suspending" and .phase_stuck==true and (.phase_note|contains("stop timed out"))')"
 jt "want running on a suspended squad shows resuming"     "$TMP/q.json" "$(ds_of rs-sq '.display_status=="resuming"')"
 jt "a granted wish shows the stored status"               "$TMP/q.json" "$(ds_of ok-sq '.display_status=="suspended"')"
 TXT="$(render "$LBL")"
+grep -qF -- "waiting on builder-u1: removal skipped" <<<"$TXTRM" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board removal note" >&2; }
+grep -qF -- "archiving: asked" <<<"$TXT" && grep -qF -- "Lead writing the final debrief (4 of 10 min)" <<<"$TXT" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board debrief hover" >&2; }
 grep -qF -- "queued: waiting for a Builder" <<<"$TXT" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board queued note" >&2; }
+# picker-prefers-unblocking-units U2: a unit others wait on prints unlocks:N (its whole chain), a leaf prints none.
+grep -E -- "root.*unlocks:3" <<<"$TXT" >/dev/null && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board unlocks:3 on the root" >&2; }
+grep -E -- "leaf.*unlocks:" <<<"$TXT" >/dev/null && { fail=$((fail+1)); echo "  FAIL: text board leaf has no unlocks" >&2; } || pass=$((pass+1))
 grep -qF -- "⚠stuck" <<<"$TXT" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board stuck flag" >&2; }
-rm -f "$SD"/{q,qd,qb,qh,qn,ar,su,st,rs,ok}-sq.json
+rm -f "$SD"/{q,qd,qb,qh,qn,ar,su,st,rs,ok,ul,db,dw}-sq.json
 
 # Wrapping up (U2; squad-done-definition U1): a running feature squad with >=1 unit, every
 # unit done or cancelled and no done unit's PR open (squad-finish.ts) shows it; dispatched,
@@ -396,9 +435,9 @@ jt "parked: a squad with no held unit has held 0 and its own key" "$TMP/rc.json"
 eq "text board: a parked squad's header" "$(grep -cF 'ready-held-sq  [parked · 1 held]' "$TMP/rc.txt" || true)" "1"
 rm -f "$SD"/{held-plan,held-reason,ready-cancel,openpr,mergedpr}-sq.json "$SD/ready-sq.json" "$SD/ready-held-sq.json" "$SD/notready-disp-sq.json" "$SD/notready-plan-sq.json" "$SD/notready-testing-sq.json" "$SD/notready-empty-sq.json" "$SD/already-done-sq.json" "$SD/still-testing-sq.json" "$SD/tester-gone-sq.json"
 
-# A running squad meeting the finished condition sorts below every active squad and
-# just above done/failed, deterministically — needs-you still ranks first, and both
-# views share the order (the text board walks the same sorted squad array).
+# Squad order (squad-table-ordering U1): needs-you, running by share done (name order differs from share
+# order here), wrapping up, parked, paused, done; the same list in the JSON and the text board (it walks the
+# same sorted squad array), and a paused running squad (a squad-scope pause row) sorts below parked.
 RD="$DS_STATE_ROOT/zzrdy_$$/squads"; mkdir -p "$RD"
 printf '{"run_id":"a","status":"running","type":"feature","members":[],"units":[],"waiting_on_you":[{"id":"q","asker":"lead","blocking":true,"question":"x","since":"2026-10-08T09:00:00Z"}]}' > "$RD/aaa-needy.json"
 printf '{"run_id":"b","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"dispatched"}]}' > "$RD/mmm-active.json"
@@ -408,18 +447,23 @@ printf '{"run_id":"e","status":"running","type":"feature","members":[],"units":[
 printf '{"run_id":"f","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"dispatched"},{"slug":"u2","status":"planned","hold":true},{"slug":"u3","status":"planned","hold":true}]}' > "$RD/ddd-running-held.json"
 printf '{"run_id":"g","status":"done","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"planned","hold":true}]}' > "$RD/zzy-done-held.json"
 printf '{"run_id":"h","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"planned","hold":true}],"waiting_on_you":[{"id":"q","asker":"lead","blocking":false,"question":"x","since":"2026-10-08T09:00:00Z"}]}' > "$RD/eee-parked-asking.json"
-board "zzrdy_$$" > "$TMP/rdy.json"
-eq "wrapping up sorts below active and parked, above done" "$(jq -r '[.squads[].topic] | join(" ")' "$TMP/rdy.json")" "aaa-needy eee-parked-asking ddd-running-held mmm-active ccc-parked bbb-ready zzy-done-held zzz-done"
-eq "text board: same squad order" "$(tb "zzrdy_$$" 2>/dev/null | grep -o '^▣ [^ ]*' | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//')" "aaa-needy eee-parked-asking ddd-running-held mmm-active ccc-parked bbb-ready zzy-done-held zzz-done"
-jt "parked sorts below running, above wrapping up; keeps status running" "$TMP/rdy.json" '.squads[] | select(.topic=="ccc-parked") | .display_status=="parked · 1 held" and .status=="running" and .pause.state=="active"'
+printf '{"run_id":"i","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"done"},{"slug":"u3","status":"done"},{"slug":"u4","status":"dispatched"}]}' > "$RD/yyy-threeq.json"
+printf '{"run_id":"j","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"dispatched"},{"slug":"u3","status":"dispatched"},{"slug":"u4","status":"dispatched"}]}' > "$RD/qqq-quarter.json"
+printf '{"run_id":"k","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"done"},{"slug":"u2","status":"dispatched"}]}' > "$RD/kkk-paused.json"
+mkdb "zzrdy_$$"
+dbw "INSERT INTO pause_intents (scope, project, squad, role, suffix, source, generation, requested_by, requested_at) VALUES ('squad', 'zzrdy_$$', 'kkk-paused', '', '', 'manual', 'g1', 'you', $(date +%s))"
+render "zzrdy_$$" --json > "$TMP/rdy.json"
+eq "squad order: needs-you, running by share, wrapping up, parked, paused, done" "$(jq -r '[.squads[].topic] | join(" ")' "$TMP/rdy.json")" "eee-parked-asking aaa-needy yyy-threeq mmm-active qqq-quarter ddd-running-held bbb-ready ccc-parked kkk-paused zzy-done-held zzz-done"
+eq "text board: same squad order" "$(render "zzrdy_$$" 2>/dev/null | grep -o '^▣ [^ ]*' | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//')" "eee-parked-asking aaa-needy yyy-threeq mmm-active qqq-quarter ddd-running-held bbb-ready ccc-parked kkk-paused zzy-done-held zzz-done"
+jt "parked keeps status running and is not paused" "$TMP/rdy.json" '.squads[] | select(.topic=="ccc-parked") | .display_status=="parked · 1 held" and .status=="running" and .pause.state=="active"'
 jt "a running squad with held units shows the badge count, not parked" "$TMP/rdy.json" '.squads[] | select(.topic=="ddd-running-held") | .held==2 and .display_key!="held-only"'
 jt "a stored done squad with held units shows the badge count" "$TMP/rdy.json" '.squads[] | select(.topic=="zzy-done-held") | .held==1 and .display_status=="done"'
-jt "a parked squad with a question sorts into needs-you first" "$TMP/rdy.json" '.squads[] | select(.topic=="eee-parked-asking") | .display_key=="held-only" and (.questions|length)==1'
+jt "a parked squad with a question sorts into needs-you" "$TMP/rdy.json" '.squads[] | select(.topic=="eee-parked-asking") | .display_key=="held-only" and (.questions|length)==1'
 eq "text board: a running squad's held badge" "$(tb "zzrdy_$$" 2>/dev/null | grep -cF 'ddd-running-held  [implementing] 2 held' || true)" "1"
 # squad-done-definition U4: every state explains itself; a stored done squad is a Needs-you row.
 jt "explain: wrapping up has means, set_by, you_can" "$TMP/rdy.json" '.squads[] | select(.topic=="bbb-ready") | .display_key=="wrapping-up" and .display_status=="wrapping up" and (.explain.means|length)>0 and (.explain.set_by|length)>0 and (.explain.you_can|length)>0'
 jt "explain: parked and done have one" "$TMP/rdy.json" '[.squads[] | select(.topic=="ccc-parked" or .topic=="zzz-done") | .explain.you_can|length>0] | all'
-jt "done: a Needs-you row with Close squad" "$TMP/rdy.json" '[.needs_you[] | select(.kind=="done" and .squad=="zzz-done")] | length==1 and (.[0].act.label=="Close squad") and (.[0].title|test("read the debrief, then Close squad"))'
+jt "done: a Needs-you row with Close squad" "$TMP/rdy.json" '[.needs_you[] | select(.kind=="done" and .squad=="zzz-done")] | length==1 and (.[0].act.label=="Close squad") and (.[0].title|test("try it out, then Close squad")) and ((.[0].title|test("read the debrief"))|not)'
 jt "done: the row sorts after the questions and is counted" "$TMP/rdy.json" '(.needs_you|last|.kind)=="done" and .needs_count==([.needs_you[]]|length)'
 jt "no board text says ready to close" "$TMP/rdy.json" '[.. | strings | select(test("ready to close"))] | length==0'
 TXT="$(tb "zzrdy_$$" 2>/dev/null)"
@@ -435,6 +479,19 @@ LAVISH_AXI_STATE_DIR="$TMP/lv" board "$LBL" > "$TMP/lv.json"
 jt "lavish session on its squad"  "$TMP/lv.json" '.squads[] | select(.topic=="lav-sq") | .lavish == [{"key":"k1","name":"brainstorm.html","dir":".lavish","mtime":0,"url":"http://h:4387/session/k1","status":"open"}]' '.squads[] | select(.topic=="lav-sq") | .lavish'
 jt "no lavish state = empty list" "$J" '.squads[0].lavish == []'
 rm -f "$SD/lav-sq.json"
+
+# A squad's pages folder (pages/<topic>/, legacy squads/<topic>-board/) and its worktree: three pages on A, one on B, one on archived C.
+PG="$DS_STATE_ROOT/$LBL"; mkdir -p "$PG/pages/pa" "$PG/pages/pb" "$PG/pages/pc" "$PG/squads/pa-board" "$TMP/wtPA" "$PG/archive"
+PR="$DBR/$LBL"  # the board reads the db under $DBR: that is the root its pages folders are named from
+printf '{"run_id":"p1","status":"running","members":[],"units":[],"worktrees":["u1::%s/wtPA"]}' "$TMP" > "$SD/pa.json"
+printf '{"run_id":"p2","status":"running","members":[],"units":[]}' > "$SD/pb.json"
+printf '{"topic":"pc","closed_at":"2026-10-01T00:00:00Z","units":[]}' > "$PG/archive/pc-1.json"
+printf '{"sessions":{"a1":{"key":"a1","file":"%s/pages/pa/one.html","url":"http://h/session/a1","status":"open"},"a2":{"key":"a2","file":"%s/squads/pa-board/two.html","url":"http://h/session/a2","status":"open"},"a3":{"key":"a3","file":"%s/wtPA/three.html","url":"http://h/session/a3","status":"open"},"b1":{"key":"b1","file":"%s/pages/pb/b.html","url":"http://h/session/b1","status":"open"},"c1":{"key":"c1","file":"%s/pages/pc/c.html","url":"http://h/session/c1","status":"open"},"n1":{"key":"n1","file":"%s/notes/n.html","url":"http://h/session/n1","status":"open"}}}' "$PR" "$PR" "$TMP" "$PR" "$PR" "$PR" > "$TMP/lv/state.json"
+LAVISH_AXI_STATE_DIR="$TMP/lv" board "$LBL" > "$TMP/pg.json"
+jt "pages: squad A lists its 3 (pages/, -board/, worktree)" "$TMP/pg.json" '[.squads[] | select(.topic=="pa") | .lavish[].key] | sort == ["a1","a2","a3"]' '.squads[] | select(.topic=="pa") | .lavish'
+jt "pages: squad B lists only its own" "$TMP/pg.json" '[.squads[] | select(.topic=="pb") | .lavish[].key] == ["b1"]'
+jt "pages: archived C lists its 1" "$TMP/pg.json" '[.archived[] | select(.topic=="pc") | .lavish[].key] == ["c1"]' '.archived'
+rm -rf "$PG/pages" "$PG/squads/pa-board" "$PG/archive" "$SD/pa.json" "$SD/pb.json"
 
 # Dependency DAG: u2 no deps -> ready; u3 waits on u1(done)+u4 -> blocked. Natural order u1..u10.
 printf '{"run_id":"w1","status":"running","type":"feature","members":[],"units":[{"slug":"u10-last","status":"planned","deps":["u3"]},{"slug":"u1","status":"done"},{"slug":"u3","status":"planned","deps":["u1","u4"]},{"slug":"u2","status":"planned","deps":[]},{"slug":"u4","status":"planned","deps":[]}]}' > "$SD/deps-sq.json"
@@ -525,6 +582,21 @@ apt "UPDATE episodes SET state = 'cleared', ended_at = 2 WHERE kind = 'at-prompt
 jt "a cleared at-prompt episode: no marker, working keeps the card alive" "$TMP/apt2.json" '(.squads[] | select(.topic=="apt") | all(.members[]; .at_prompt == null)) and ([.flow.cards[] | select(.squad=="apt")] | all(.stuck == false))'
 rm -f "$SD/apt.json"
 
+# paused-in-swimlanes U1: a dispatched unit whose Builder the operator paused leaves Building for the lane's paused
+# group: `1 building` stays the working one, `1 paused` counts the other, and the FLOW line says so.
+printf '{"run_id":"pzd","status":"running","members":[{"role":"lead","wt":"wl"},{"role":"builder","wt":"wtPa"},{"role":"builder","wt":"wtPb","suffix":"u2"}],"units":[{"slug":"u1","status":"dispatched","builder_wt":"wtPa"},{"slug":"u2","status":"dispatched","builder_wt":"wtPb"}]}' > "$SD/pzd.json"
+jq '.workers += [["wtPa","working","ds-pzd",null,60,null,"completed",null,"ctx_pa"],["wtPb","working","ds-pzd",null,60,null,"completed",null,"ctx_pb"]]' "$SEED" > "$TMP/seed-pz.json"
+pzd(){ SEED="$TMP/seed-pz.json" mkdb "$LBL"
+  dbw "INSERT INTO pause_intents (scope, project, squad, role, suffix, source, generation, requested_by, requested_at) VALUES ('member', '$LBL', 'pzd', 'builder', '', 'manual', 'g1', 'you', $(( $(date +%s) - 25*3600 )))"
+  dbw "INSERT INTO pause_members (project, squad, role, suffix, generation, state, reason, requested_at) VALUES ('$LBL', 'pzd', 'builder', '', 'g1', 'paused', 'paused', $(( $(date +%s) - 25*3600 )))"
+  render "$LBL" "${1---json}"; }
+pzd > "$TMP/pzd.json"
+jt "a paused Builder's unit: building and paused counts" "$TMP/pzd.json" '[.flow.cards[] | select(.squad=="pzd")] as $c | ($c | length) == 2 and ([$c[] | select(.group=="paused")] | length) == 1 and ([$c[] | select(.stage=="building" and .group!="paused")] | length) == 1'
+jt "a paused card says why and for how long" "$TMP/pzd.json" '[.flow.cards[] | select(.squad=="pzd" and .group=="paused")][0] | .note=="paused by you" and .paused_s >= 90000 and .paused_s < 91000 and .stage=="building"'
+pzd "" > "$TMP/pzd.txt"
+grep -qE -- "^FLOW .* · 1 needs you · 1 paused|^FLOW .* · [0-9]+ needs you · 1 paused" "$TMP/pzd.txt" && pass=$((pass+1)) || { fail=$((fail+1)); echo "  FAIL: text board FLOW line says 1 paused" >&2; }
+rm -f "$SD/pzd.json"
+
 # A DONE squad with no live workers gets a close nudge.
 printf '{"run_id":"d1","status":"done","type":"feature","members":[],"units":[{"slug":"u1","status":"done"}]}' > "$SD/done-sq.json"
 board "$LBL" > "$TMP/f.json"
@@ -545,7 +617,7 @@ jt "U5: archived squad with a debrief" "$TMP/g2.json" '.archived[] | select(.top
 jt "U5: archived squad without one: null" "$TMP/g2.json" '.archived[] | select(.topic=="old-feature") | .debrief==null'
 jt "U5: a done live squad carries its debrief" "$TMP/g2.json" '.squads[] | select(.topic=="dd-sq") | .debrief=="live debrief"'
 rm -f "$SD/dd-sq.json"
-eq "U5: page shows the Debrief group in Docs and the muted label" "$(grep -cF 'const DebriefChip' "$ROOT/web/board.html")$(grep -cF 'id: "debrief", label: "Debrief"' "$ROOT/web/board.html")$(grep -cF '>no debrief<' "$ROOT/web/board.html")$(grep -cF '<${Docs} s=${a} onPlan=${setPlan} closed=${true}' "$ROOT/web/board.html")$(grep -cF 'closed=${s.status === "done"}' "$ROOT/web/board.html")" "01111"
+eq "U5: page shows the Debrief group in Docs and the muted label" "$(grep -cF 'const DebriefChip' "$ROOT/web/board.html")$(grep -cF 'id: "debrief", label: "Debrief"' "$ROOT/web/board.html")$(grep -cF 'class="mut nodebrief">${i.name}<' "$ROOT/web/board.html")$(grep -cF '<${Docs} s=${a} onPlan=${setPlan} closed=${true}' "$ROOT/web/board.html")$(grep -cF 'closed=${s.status === "done"}' "$ROOT/web/board.html")" "01111"
 rm -rf "$AD"
 
 # U5: briefs. No files -> empty list; ten files over two weeks -> newest first, only the first has markdown.
@@ -609,16 +681,18 @@ eq "text board: not-responding markers" "$(SEED="$TMP/seed-st.json" tb "zzstall_
 # .beat, the Lead worktree's last_output_at and the last relayed Run mail; .beat counts only
 # when it is newer. A Lead whose relay keeps failing after its last output shows unreachable.
 QD="$DS_STATE_ROOT/zzquiet_$$/squads"; mkdir -p "$QD"
-for t in q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11; do printf '{"run_id":"%s","status":"running","members":[{"role":"lead","wt":"wtQ%s"}],"units":[]}' "$t" "${t#q}" > "$QD/$t.json"; done
+for t in q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12; do printf '{"run_id":"%s","status":"running","members":[{"role":"lead","wt":"wtQ%s"}],"units":[]}' "$t" "${t#q}" > "$QD/$t.json"; done
 touch -t "$(date -v-12H +%Y%m%d%H%M 2>/dev/null || date -d '-12 hours' +%Y%m%d%H%M)" "$QD/q1.beat"
 touch -t "$(date -v-61M +%Y%m%d%H%M 2>/dev/null || date -d '-61 min' +%Y%m%d%H%M)" "$QD/q5.beat"
 touch -t "$(date -v-60M +%Y%m%d%H%M 2>/dev/null || date -d '-60 min' +%Y%m%d%H%M)" "$QD/q6.beat"
 cat > "$TMP/seed-q.json" <<JSON
 {"workers":[["wtQ1","working",null,null,120],["wtQ2","working"],["wtQ3","working",null,null,3660],["wtQ4","working",null,null,120],["wtQ5","working"],["wtQ6","working"],
-  ["wtQ7","done",null,null,4800],["wtQ8","idle",null,null,4800],["wtQ9","idle",null,null,4800],["wtQ10","working",null,null,2100],["wtQ11","done",null,null,4800]],
+  ["wtQ7","done",null,null,4800],["wtQ8","idle",null,null,4800],["wtQ9","idle",null,null,4800],["wtQ10","working",null,null,2100],["wtQ11","done",null,null,4800],
+  ["wtQ12","working",null,null,2100]],
  "unread":[["wtQ8",1,900],["wtQ9",1,300],["wtQ11",0,3600]],
  "terminals":[["tq1","wtQ1","q1"]],
- "worktrees":[["wtQ1",null],["wtQ2",null],["wtQ3",null],["wtQ4",null],["wtQ5",null],["wtQ6",null],["wtQ7",null],["wtQ8",null],["wtQ9",null],["wtQ10",null],["wtQ11",null]],
+ "transcripts":[["wtQ12","claude-x",null,null,"$ROOT/tests/fixtures/liveness/interrupted.jsonl"]],
+ "worktrees":[["wtQ12",null],["wtQ1",null],["wtQ2",null],["wtQ3",null],["wtQ4",null],["wtQ5",null],["wtQ6",null],["wtQ7",null],["wtQ8",null],["wtQ9",null],["wtQ10",null],["wtQ11",null]],
  "events":[]}
 JSON
 QN="$NOW"
@@ -639,6 +713,7 @@ jt "idle Lead, 80 min, nothing unread: no verdict (the screenshot case)" "$TMP/q
 jt "idle Lead, unread 15 min: not responding"        "$TMP/q.json" '.squads[] | select(.topic=="q8") | .lead | .silent==true and .verdict=="not responding" and (.since_s|floor) >= 899 and .since_s < 960'
 jt "idle Lead, unread 5 min: no verdict yet"          "$TMP/q.json" '.squads[] | select(.topic=="q9") | .lead | .silent==false and .verdict==null'
 jt "working Lead, no output 35 min: hung"             "$TMP/q.json" '.squads[] | select(.topic=="q10") | .lead | .verdict=="hung" and (.since_s|floor) >= 2099'
+jt "working Lead, no output 35 min, last turn stopped with Esc: not hung" "$TMP/q.json" '.squads[] | select(.topic=="q12") | .lead | .verdict != "hung"'
 jt "old unread episode but the count is 0: no verdict" "$TMP/q.json" '.squads[] | select(.topic=="q11") | .lead | .verdict==null'
 jt "an unreachable relay wins over another verdict"   "$TMP/q.json" '.squads[] | select(.topic=="q3") | .lead | .verdict=="unreachable"'
 jt "one not-responding Lead is no stall"              "$TMP/q.json" '.stall == null'
@@ -1201,13 +1276,40 @@ jt "studio: on the claude account, its walk not unknown" "$TMP/studio.json" '.st
 st="$(DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" 2>&1)"
 has "studio: the text board's Studio line" "$st" "studio $SL: claude"
 has "studio: the line names the account" "$st" "@acct-studio"
-jt "studio: no move yet" "$TMP/studio.json" '.studio[0].moved == null'
-# U264: the loop moved the Studio to another account: the board says where to, the text board too.
+# U12 (orca-backend-alternatives): a squad on tmux. One contract observer tick over the fake contract
+# with no native state (tests/board-contract-db.ts) gives each member its state: the Lead at an empty
+# prompt reads idle, the Builder that printed just now working, the Thinker with no terminal gone.
+CL="zztmux_$$"; CR="$TMP/contract-root"; mkdir -p "$CR/$CL/squads"
+cwt(){ printf 'local::/tmp/zz-%s-%s' "$CL" "$1"; }
+printf '{"topic":"ontmux","status":"running","type":"feature","members":[{"role":"lead","wt":"%s"},{"role":"builder","suffix":"u1","wt":"%s"},{"role":"thinker","wt":"%s"}],"units":[{"slug":"u1","status":"dispatched","builder_wt":"%s"}],"worktrees":["%s","%s","%s"]}\n' \
+  "$(cwt lead)" "$(cwt builder-u1)" "$(cwt thinker)" "$(cwt builder-u1)" "$(cwt lead)" "$(cwt builder-u1)" "$(cwt thinker)" > "$CR/$CL/squads/ontmux.json"
+DS_STATE_ROOT="$CR" bun "$ROOT/tests/board-contract-db.ts" "$CL"
+DS_STATE_ROOT="$CR" PATH="$NP" "$ROOT/bin/board/board.sh" "$CL" --json > "$TMP/contract.json"
+jt "tmux squad: on the tmux backend" "$TMP/contract.json" '.squads[] | select(.topic=="ontmux") | .backend == "tmux"'
+jt "tmux squad: each member's state from the contract observer" "$TMP/contract.json" \
+  '[.squads[] | select(.topic=="ontmux") | .members[] | {label, state}] == [{"label":"lead","state":"idle"},{"label":"builder-u1","state":"working"},{"label":"thinker","state":"gone"}]'
+ct="$(DS_STATE_ROOT="$CR" PATH="$NP" "$ROOT/bin/board/board.sh" "$CL" 2>&1)"
+has "tmux squad: the text board names the backend" "$ct" "on:tmux"
+# U12b: with no dispatch, the Builder's no-PR report is found by its generation, and the Builder still reads working.
+jt "tmux squad: a Builder that ended with no PR waits on its Lead (no dispatch)" "$TMP/contract.json" \
+  '.squads[] | select(.topic=="ontmux") | .units[] | select(.slug=="u1") | .wait_label == "waiting · Lead · ended with no PR"'
+has "tmux squad: the text board shows the Builder working" "$ct" "builder-u1                                 working"
+# chat-with-studio U1: the entry carries the Crew box's mail count (a message stored under squad _studio, role studio),
+# whether it is mid-turn and the time of its newest assistant text turn; a quiet Studio has 0 / false / null.
+jt "studio: a quiet Studio has no mail, is not working and has no reply" "$TMP/studio.json" '.studio[0] | .unread == 0 and .reply_due == 0 and .working == false and .reply_at == null'
+DS_STATE_ROOT="$SR" bun "$ROOT/tests/board-studio-db.ts" "$SL" --chatty
+DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" --json > "$TMP/studio-chatty.json"
+jt "studio: mail sent to _studio/studio counts as unread" "$TMP/studio-chatty.json" '.studio[0] | .unread == 1 and .reply_due == 0'
+jt "studio: working from observed_workers" "$TMP/studio-chatty.json" '.studio[0].working == true'
+jt "studio: reply_at is the newest assistant text turn" "$TMP/studio-chatty.json" '.studio[0].reply_at != null and (now - .studio[0].reply_at) > 50 and (now - .studio[0].reply_at) < 120'
+st="$(DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" 2>&1)"
+has "studio: the text line shows the mail count" "$st" "mail:1"
+# U5: after a Studio move the board shows no Studio moved line (the event stays in the Event log).
 DS_STATE_ROOT="$SR" bun "$ROOT/tests/board-studio-db.ts" "$SL" --moved
 DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" --json > "$TMP/studio-moved.json"
-jt "studio: the move is on the Studio row" "$TMP/studio-moved.json" '.studio[0].moved | .to == "claude:B" and .from == "claude:acct-a" and .handle == "term_studio"'
+jt "studio: a seeded studio_moved event adds no moved field" "$TMP/studio-moved.json" '.studio[0] | has("moved") | not'
 st="$(DS_STATE_ROOT="$SR" PATH="$NP" "$ROOT/bin/board/board.sh" "$SL" 2>&1)"
-has "studio: the text board says where the Studio moved" "$st" "Studio moved to claude:B"
+case "$st" in *"Studio moved"*) fail=$((fail+1)); echo "  FAIL: studio: the text board has no Studio moved line" >&2;; *) pass=$((pass+1));; esac
 
 # U266: a member whose planned restart waits on its journal checkpoint shows it, like a pausing one.
 mq sc-sq running ',{"role":"builder","suffix":"u1","wt":"wsc"}' '[{"slug":"u1","status":"dispatched"}]'
@@ -1248,7 +1350,34 @@ jt "U4: after a clear the card is gone"               "$TMP/cr2.json" '[.needs_y
 jt "U4: after a clear the account row is plain"       "$TMP/cr2.json" '.accounts[] | select(.agent=="muse") | .credits == null and (.text | test("out of credits") | not)'
 jt "U4: after a clear the account is free again"      "$TMP/cr2.json" '.accounts_summary | .free == 2 and .credits == []'
 eq "U4 page: the account row links the billing page" "$(grep -cF 'href=${a.credits.link} target="_blank"' "$ROOT/web/board.html")" "1"
+
+# claude-login-ended U3: a login-ended card (login-card.ts files it) is Needs-you at once, with its two
+# answers; resolving it takes it away.
+"$ROOT/bin/lib/alerts.sh" "$CRA" add loop-login.card_claude_work-x "work: login ended" \
+  "work: login ended — run /login in the Studio's terminal (or \`claude /login\`). Stuck on it: the Studio. Press Logged in once it works, or Switch it off to disable the account and restart them." \
+  "" "" '{"kind":"login_ended","options":["Logged in","Switch it off"],"login":{"agent":"claude","account":"work"}}' >/dev/null
+HOSTST="$TMP/stcr" mkdb "$LBL"; render "$LBL" --json > "$TMP/lg.json"
+jt "login U3: one Needs-you card at once, no grace"   "$TMP/lg.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")] | length == 1 and (.[0].title == "work: login ended")'
+jt "login U3: the card offers Logged in and Switch it off" "$TMP/lg.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")][0] | [.choices[].label] == ["Logged in","Switch it off"]'
+"$ROOT/bin/lib/alerts.sh" "$CRA" resolve loop-login.card_claude_work-x >/dev/null
+HOSTST="$TMP/stcr" board "$LBL" > "$TMP/lg2.json"
+jt "login U3: after the answer the card is gone"      "$TMP/lg2.json" '[.needs_you[] | select(.id=="loop-login.card_claude_work-x")] | length == 0'
 rm -f "$CRA"
+
+# claude-login-ended U4: claude/system held by a live login hold: the row reads login ended with no
+# percentages, the Accounts tile counts it as not free; with the hold ended all three are back to normal.
+HOSTST="$TMP/stcr" mkdb "$LBL"
+dbw "INSERT INTO episodes (project, subject, kind, episode_key, state, started_at, ended_at, source, observed_at) VALUES ('', 'login|claude/system', 'account', 'screen', 'claude/system', $((NOWC-60)), $((NOWC+3600)), 'loop', $NOWC)"
+render "$LBL" --json > "$TMP/lg.json"
+jt "claude-login-ended U4: the row reads login ended"   "$TMP/lg.json" '.accounts[] | select(.agent=="claude") | .text == "claude:system login ended · run /login" and .login.notice == "login ended" and .login.where == "screen"'
+jt "claude-login-ended U4: the tile counts it, not free" "$TMP/lg.json" '.accounts_summary | .free == 1 and .total == 2 and (.login | map(.label)) == ["system"] and .level == "warn"'
+render "$LBL" > "$TMP/lg.txt"
+eq "claude-login-ended U4: the text board prints login ended" "$(grep -c 'login ended' "$TMP/lg.txt" | sed 's/^[1-9][0-9]*$/yes/')" "yes"
+dbw "UPDATE episodes SET ended_at = $((NOWC-5)) WHERE subject = 'login|claude/system'"
+render "$LBL" --json > "$TMP/lg2.json"
+jt "claude-login-ended U4: after the hold ends the row is plain" "$TMP/lg2.json" '.accounts[] | select(.agent=="claude") | .login == null and (.text | test("login ended") | not)'
+jt "claude-login-ended U4: after the hold ends the account is free" "$TMP/lg2.json" '.accounts_summary | .free == 2 and .login == []'
+eq "claude-login-ended U4 page: the row has a login ended badge" "$(grep -cF 'a.login ? html`<span class="bdg limited">login ended' "$ROOT/web/board.html")" "1"
 
 # needs-you-dismiss-only U2: a stopped review of a squad unit is a loop note on its squad's row (not Needs-you)
 # until it has lasted refusal_needs_min; one with no squad is Needs-you at once.
@@ -1269,6 +1398,8 @@ OLDC="$(date -u -d "@$((NOWC-1200))" +%Y-%m-%dT%H:%M:%SZ)"
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-when "Review stopped" "Reviews stopped" "restart it" "" '{"kind":"out_of_credits"}' >/dev/null
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-acts "Studio limited" "Studio is limited" "move it" "" '{"kind":"out_of_credits","acts_on_answer":true}' >/dev/null
 "$ROOT/bin/lib/alerts.sh" "$CRA" add na-two "Two answers" "Pick one" "" "" '{"kind":"out_of_credits","options":["Fixed","Switch it off"]}' >/dev/null
+# studio-hung-agent-broken U2: the broken Studio's card as liveness.ts files it (no option, two answers in fields).
+"$ROOT/bin/lib/alerts.sh" "$CRA" add na-studio "Studio not responding" "studio (hung since 09:00) — the $LBL Studio (your cockpit terminal claude, term_s) has shown no output for 35 min while Orca reads it as working" "" "The loop never restarts the Studio on its own." '{"kind":"agent_broken","restart":true,"handle":"term_s","options":["Restart Studio","It'"'"'s fine"]}' >/dev/null
 jq --arg t "$OLDC" '.alerts |= map(.since = $t)' "$CRA" > "$CRA.t" && mv "$CRA.t" "$CRA"
 HOSTST="$TMP/stcr" mkdb "$LBL"; render "$LBL" --json > "$TMP/na.json"
 NA='.needs_you[] | select(.id=="%s")'
@@ -1276,6 +1407,7 @@ jt "dismiss-only: no option, no choices, no when"  "$TMP/na.json" "[${NA/\%s/na-
 jt "dismiss-only: a lone non-acting option is when" "$TMP/na.json" "[${NA/\%s/na-when}] | .[0] | .choices == [] and .when == \"restart it\" and .suggestion == null and .options == [\"restart it\"]"
 jt "dismiss-only: a lone acting option is a choice" "$TMP/na.json" "[${NA/\%s/na-acts}] | .[0] | [.choices[].label] == [\"move it\"] and .when == null and .acts_on_answer == true"
 jt "dismiss-only: two options stay choices"        "$TMP/na.json" "[${NA/\%s/na-two}] | .[0] | [.choices[].label] == [\"Fixed\",\"Switch it off\"] and .when == null"
+jt "studio-hung-agent-broken U2: the Studio card in Needs-you offers Restart Studio and It's fine" "$TMP/na.json" "[${NA/\%s/na-studio}] | .[0] | .title == \"Studio not responding\" and ([.choices[].label] == [\"Restart Studio\",\"It's fine\"]) and .when == null"
 rm -f "$CRA"
 
 S2='.squads[] | select(.topic=="ov-sq")'
@@ -1374,6 +1506,89 @@ render "$LBL" --json > "$TMP/upd.json"
 jt "U3 update: a pending request shows"      "$TMP/upd.json" '.update.pending != null'
 has "U3 update: pending text" "$(render "$LBL")" "UPDATE asked — waiting for the Studio"
 dbw "DELETE FROM observed_update"
+
+# investigate-disk-cleanup U1: the Host tidy card on the board shows a size the measuring pass took
+# (`size_from: du`) as it is, and a partial walk not measured yet as `≥ <size>`.
+TIDY_TXT="$(bun -e '
+  const { open } = await import(process.argv[1] + "/bin/loop/core/store.ts");
+  const { cardText } = await import(process.argv[1] + "/bin/loop/fulfil/cleanup.ts");
+  const s = open(process.argv[2]), p = process.argv[3], at = Math.floor(Date.now() / 1000);
+  s.upsert("projects", { label: p }, { home_repo: null, observed_at: 1 });
+  const ins = s.db.query("INSERT INTO observed_cleanup (project, class, key, path, size_kb, first_seen, verdict, facts, observed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  ins.run(p, "d", "/w/ds-measured", "/w/ds-measured", 3145728, at, "removable", JSON.stringify({ partial: true, size_from: "du", size_at: at }), at);
+  ins.run(p, "c", "/h/partial", "/h/partial", 2048, at, "too new", JSON.stringify({ partial: true }), at);
+  ins.run(p, "f", "/srv/zzcache-*", "/srv", 10240, at, "removable", JSON.stringify({ folders: 2, count: 40, removable: 30, too_new: 9, not_ours: 0, in_use: 1, partial: true, size_from: "du", size_at: at }), at);
+  s.upsert("config", { project: p, file: "limits.conf", key: "cleanup_trim_globs" }, { value: "/srv/zzcache-*, relative-*", observed_at: 1 });
+  process.stdout.write(cardText(s, p)); s.close();' "$ROOT" "$TMP/tidy-root" "$LBL")"
+"$ROOT/bin/lib/alerts.sh" "$CRA" add "cleanup:$LBL.card" "Host tidy: $LBL" "Needs you: 1 removable.
+$TIDY_TXT" "" "" '{"kind":"host_tidy","removable":1}' >/dev/null
+board "$LBL" > "$TMP/tidy.json"
+TIDY_SEL="(.needs_you[], .loop_notes[]) | select(.title==\"Host tidy: $LBL\") | .text"
+jt "U1 sizes: the measured row's size is shown as it is" "$TMP/tidy.json" "[$TIDY_SEL] | length == 1 and (.[0] | contains(\"- [d] removable · 3.0 GB · /w/ds-measured\"))"
+jt "U1 sizes: a partial row not measured yet reads ≥"    "$TMP/tidy.json" "[$TIDY_SEL][0] | contains(\"- [c] too new · ≥ 2.0 MB · /h/partial\") and (contains(\"≥ 3.0 GB\") | not)"
+jt "U2 trim: the class f row reads its folders kept and entries inside" "$TMP/tidy.json" "[$TIDY_SEL][0] | contains(\"Trim /srv/zzcache-*: 2 folders kept, 40 entries inside (10.0 MB), 30 removable, too new 9, not ours 0, in use 1.\") and contains(\"- [f] removable · 10.0 MB · 40 entries inside 2 folders matching /srv/zzcache-* (kept)\")"
+jt "U2 trim: a rejected trim glob is listed with its reason"           "$TMP/tidy.json" "[$TIDY_SEL][0] | contains(\"Invalid trim glob relative-*: \") and contains(\"(trims nothing).\")"
+rm -f "$CRA"
+
+# disk-pressure U3: an open disk spell shows a Needs-you card (title, first consumer) and one DISK line on the text board.
+DNOW="$(date +%s)"
+dbw "INSERT INTO observed_machine (host, disks, observed_at) VALUES ('dh', '[{\"path\":\"/\",\"total_kb\":1048576000,\"free_kb\":157286400}]', $DNOW)"
+dbw "INSERT INTO episodes (project, subject, kind, state, started_at, episode_key, source, observed_at) VALUES ('$LBL', 'disk-pressure./', 'disk-pressure', 'low', $DNOW, '$DNOW', 'loop', $DNOW)"
+dbw "INSERT INTO observed_disk_usage (key, label, size_kb, reclaimable_kb, read_at, observed_at) VALUES ('docker:build-cache', 'Docker build cache', 524288000, 503316480, $DNOW, $DNOW)"
+dbw "INSERT INTO observed_disk_usage (key, label, size_kb, read_at, observed_at) VALUES ('du:/srv/cache', '/srv/cache', 1048576, $DNOW, $DNOW)"
+dbw "INSERT INTO observed_alerts (project, id, doc, observed_at) VALUES ('$LBL', 'sweep-disk-pressure./-1', '{\"id\":\"sweep-disk-pressure./-1\",\"asker\":\"sweep\",\"title\":\"Disk / low: 150 GB free (15%)\",\"question\":\"Disk / low: 150 GB free (15%). Biggest consumers: 1. Docker build cache: 500 GB (480 GB reclaimable).\",\"since\":\"2026-11-20T09:00:00Z\"}', $DNOW)"
+render "$LBL" --json > "$TMP/disk.json"
+jt "disk U3: the Needs-you card carries the title"        "$TMP/disk.json" '.studio_alerts | map(select(.text | startswith("Disk / low: 150 GB free (15%)"))) | length == 1'
+jt "disk U3: the card names Docker build cache first"     "$TMP/disk.json" '.studio_alerts[] | select(.text | startswith("Disk /")) | .text | test("1\\. Docker build cache: 500 GB")'
+jt "disk U3: board.json lists the spell and its consumers" "$TMP/disk.json" '.disk | length == 1 and .[0].path == "/" and .[0].free_pct == 15 and (.[0].consumers[0] | startswith("Docker build cache: 500 GB"))'
+has "disk U3: the text board's DISK line" "$(render "$LBL")" "DISK  ⚠ Disk / low: 150 GB free (15%) — Docker build cache: 500 GB (480 GB reclaimable)"
+dbw "UPDATE episodes SET ended_at = $DNOW, state = 'closed' WHERE kind = 'disk-pressure'"
+render "$LBL" --json > "$TMP/disk.json"
+jt "disk U3: a closed spell leaves no disk field"         "$TMP/disk.json" 'has("disk") | not'
+dbw "DELETE FROM observed_alerts WHERE id LIKE 'sweep-disk-pressure%'"
+
+# loop-tick-8s U4: a slow-ticks card (sweep-tick-alarm.slow-<n>) is a Needs-you card, not a loop note.
+dbw "INSERT INTO observed_alerts (project, id, doc, observed_at) VALUES ('$LBL', 'sweep-tick-alarm.slow-1', '{\"id\":\"sweep-tick-alarm.slow-1\",\"asker\":\"sweep\",\"title\":\"Loop ticks slow: 9.0 s\",\"question\":\"Loop ticks slow: 9.0 s a tick over the last 3 windows (limit 6.0 s), slow for 20 min. Slowest steps a tick: observe:orca 4.5 s.\",\"since\":\"2026-11-20T09:00:00Z\"}', $DNOW)"
+render "$LBL" --json > "$TMP/tickalarm.json"
+jt "tick-alarm U4: the card is in Needs-you" "$TMP/tickalarm.json" '([.needs_you[] | select(.id=="sweep-tick-alarm.slow-1")] | length == 1) and ([.loop_notes[] | select(.id=="sweep-tick-alarm.slow-1")] | length == 0)'
+dbw "DELETE FROM observed_alerts WHERE id LIKE 'sweep-tick-alarm%'"
+
+# reasked-question-shows-answered U1: an answered earlier asking of a re-asked question (same id, status answered)
+# changes nothing on the text board: the open asking is printed once, as before.
+RQ="$(bun -e 'const {Database}=require("bun:sqlite");const d=new Database(process.argv[1],{readonly:true});const r=d.query("SELECT squad, id, question FROM questions WHERE project = ? AND status = \x27open\x27 AND question IS NOT NULL ORDER BY seq LIMIT 1").get(process.argv[2]);console.log(r?JSON.stringify(r):"")' "$DBR/loop.db" "$LBL")"
+if [ -n "$RQ" ]; then
+  RQ_Q="$(printf '%s' "$RQ" | jq -r .question)"; RQ_ID="$(printf '%s' "$RQ" | jq -r .id)"; RQ_SQ="$(printf '%s' "$RQ" | jq -r .squad)"
+  RQ_BEFORE="$(render "$LBL" | grep -cF -- "$RQ_Q" || true)"
+  dbw "INSERT INTO questions (project, squad, id, asker, blocking, question, asked_at, status, answer, answered_via, answered_at, doc) VALUES ('$LBL', '$RQ_SQ', '$RQ_ID', 'lead', 1, '$(printf '%s' "$RQ_Q" | sed "s/'/''/g")', 1, 'answered', 'earlier', 'board', 2, '{}')"
+  eq "reask U1: an answered earlier asking leaves the text board's question line count" "$(render "$LBL" | grep -cF -- "$RQ_Q" || true)" "$RQ_BEFORE"
+  eq "reask U1: the question is printed once" "$RQ_BEFORE" "1"
+else
+  eq "reask U1: the fixture has an open question" "none" "one"
+fi
+
+# ds-feedback-github-issues U4: the header's Feedback facts and the text board's FEEDBACK line. With Feedback off
+# the panel reads off but the notes still count; with one the draft count is the header number.
+dbw "INSERT INTO feedback_drafts (key, kind, title, body, leak, state, created_at, updated_at) VALUES ('fd:a', 'issue', 'T', 'B', 'ok', 'review', 1, 1), ('fd:b', 'issue', 'T2', 'B2', 'blocked', 'review', 1, 1), ('fd:c', 'issue', 'T3', 'B3', 'ok', 'filed', 1, 1)"
+dbw "INSERT INTO feedback_notes (key, project, text, source, state, at, updated_at) VALUES ('n1', 'p', 'one', 'cli', 'new', 1, 1), ('n2', 'p', 'two', 'cli', 'drafted', 1, 1), ('n3', 'p', 'three', 'cli', 'dismissed', 1, 1)"
+render "$LBL" --json > "$TMP/fb.json"
+jt "feedback U4: with Feedback off the header reads off and counts notes" "$TMP/fb.json" '.feedback.on == false and .feedback.repo == null and .feedback.notes == 3 and .feedback.review == 2'
+dbw "INSERT INTO config (project, file, key, value, observed_at) VALUES ('', 'limits.conf', 'feedback', 'on', 1) ON CONFLICT (project, file, key) DO UPDATE SET value = 'on'"
+dbw "INSERT INTO config (project, file, key, value, observed_at) VALUES ('', 'limits.conf', 'feedback_repo', 'o/r', 1) ON CONFLICT (project, file, key) DO UPDATE SET value = 'o/r'"
+render "$LBL" --json > "$TMP/fb.json"
+jt "feedback U4: with a repo the header counts drafts to review" "$TMP/fb.json" '.feedback.on == true and .feedback.repo == "o/r" and .feedback.review == 2 and .feedback.blocked == 1 and .feedback.new == 1 and .feedback.dismissed == 1'
+has "feedback U4: the text board's FEEDBACK line" "$(render "$LBL")" "FEEDBACK  2 drafts to review (1 blocked by the leak check) · notes: 3 (1 new, 1 drafted, 0 filed, 0 fixed, 0 closed, 1 dismissed)"
+dbw "UPDATE config SET value = 'off' WHERE key = 'feedback'; UPDATE config SET value = '-' WHERE key = 'feedback_repo'"
+
+# archive-leftovers U3: a kept worktree shows the loop's check of it: look first, two commits, one differing file.
+cat > "$SD/lo-sq.json" <<'JSON'
+{"run_id":"lo","status":"running","type":"feature","members":[],"units":[{"slug":"u1","status":"dispatched","pr":"12"}],
+ "leftovers":[{"wt":"w1::/tmp/wt-look","path":"/tmp/wt-look","branch":"br-look","reason":"kept: 1 uncommitted, 2 unpushed","waits_on":null,"unit":"u1","files":["a.ts"],"n_files":1,"unpushed":2,"recorded_at":"2026-10-08T09:00:00Z"}]}
+JSON
+mkdb "$LBL"
+dbw "INSERT INTO episodes (project, squad, subject, kind, state, episode_key, source, observed_at, result) VALUES ('$LBL', 'lo-sq', 'w1::/tmp/wt-look', 'leftover-check', 'look-first', 'fp1', 'loop', $(date +%s), '{\"at\":1,\"safe\":false,\"commits\":[{\"sha\":\"aaaa1111\",\"title\":\"first\"},{\"sha\":\"bbbb2222\",\"title\":\"second\"}],\"differ\":[\"a.ts\"],\"n_differ\":1,\"target\":\"origin/main\",\"target_sha\":\"x\",\"head\":\"y\",\"fingerprint\":\"fp1\"}')"
+render "$LBL" --json > "$TMP/lo.json"
+jt "leftover U3: the board JSON carries the check" "$TMP/lo.json" '.squads[] | select(.topic=="lo-sq") | .leftovers[0].check | .safe==false and (.commits|length)==2 and .differ==["a.ts"] and .n_differ==1'
+hasre "leftover U3: the text line says look first" "$(render "$LBL" 2>/dev/null)" '⚑ /tmp/wt-look  \(br-look\) — look first: 2 commits, 1 file not on main · checked '
 
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

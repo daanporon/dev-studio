@@ -3,7 +3,7 @@
 //
 //   stop (decider)                        checkpoint first?
 //   restart wish, mode idle               yes
-//   fallback (a Thinker moving back up)   yes
+//   fallback (moving back up, row `up`)   yes
 //   pin (the operator's model/account)    yes
 //   account (its account switched off)    yes (provider-billing-fallback U5)
 //   rss (over restart_rss_gb)             yes
@@ -18,7 +18,7 @@
 //   4. CHECKPOINT_S after the ask (or after the row, if no poke could go out) with no line: the
 //      journal gets `checkpoint failed <generation>: …` and the row is `failed`; the stop goes this tick
 // A row still asking whose stop is no longer owed (wish cleared, pin removed, move no longer due) is
-// `dropped` once the agent is idle again (a fallback move is only seen on an idle Thinker) or gone;
+// `dropped` once the agent is idle again (a fallback move is only seen on an idle member) or gone;
 // nothing is stopped and a written checkpoint stays an ordinary journal line. Each settled step logs
 // one `stop_checkpoint` event (member, why, generation, result).
 import { randomUUID } from "node:crypto";

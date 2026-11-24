@@ -68,7 +68,7 @@ Pick by audience:
    never as a direct write.
 2. **dev-studio roles on that project** go in notes (below).
 3. **How dev-studio works** goes in this repo's `docs/solutions/`. A role on the host jots it
-   with `bin/role/ds-feedback.sh`.
+   with `bin/role/ds-feedback.sh`, which writes a `feedback_notes` row in loop.db (`ds feedback list`).
 
 **Tie-breaker.** When a role needs the know-how now and a repo change is in doubt or outside its
 unit, it writes the note now. If everyone on the repo needs it too, it also raises the follow-up,

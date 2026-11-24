@@ -124,7 +124,9 @@ case "$sub" in
     else
       printf '%s' "${ORCA_PS_PRIMARY:-$EMPTY_PS}"
     fi ;;
-  "worktree create")  echo '{"result":{"worktree":{"id":"wt_new"}}}' ;;
+  "worktree create")  if [ -n "${ORCA_WT_OUT:-}" ]; then echo "$ORCA_WT_OUT"; else echo '{"result":{"worktree":{"id":"wt_new"}}}'; fi ;;
+  # ORCA_WT_OUT / ORCA_WT_RC: what worktree show / list (and create, when set) answer (U8b's wt-* verbs).
+  "worktree show"|"worktree list") echo "${ORCA_WT_OUT:-{\"result\":{\}\}}"; exit "${ORCA_WT_RC:-0}" ;;
   "worktree current") echo '{"result":{"worktree":{"id":"wt_self"}}}' ;;
   "worktree rm")      echo '{"result":{}}' ;;
   "repo add")         echo '{"result":{}}' ;;
@@ -844,6 +846,32 @@ got="$(FAKE_USAGE_CODE=401 FAKE_USAGE_BODY='{}' "$ADAPTER" account-usage 2>/dev/
 has "account-usage: a window reset since the good figures is blanked" "$(printf '%s\n' "$got" | grep '^claude	system	')" "$(printf -- '-\t-\t20\t1900000000\trefused@')"
 got="$(FAKE_USAGE_CODE=200 FAKE_USAGE_BODY='{"five_hour":{"utilization":10,"resets_at":1900000000}}' usage)"
 eq  "account-usage: 200 -> no expired note"       "$got" "$(printf 'claude\tsystem\t10\t1900000000\t-\t-')"
+# An ended login (credentials file: loginEnded, or both tokens empty) is its own row, read before the cache:
+# no usage call, no stale figures; a token again (even with a fresh cached ended row) fetches at once.
+usage_keep() { : > "$CURL_LOG"; "$ADAPTER" account-usage 2>/dev/null || true; }
+WANT_ENDED="$(printf 'claude\tsystem\t-\t-\t-\t-\tlogin ended · default config')"
+usage >/dev/null; : > "$CURL_LOG"
+printf '{"claudeAiOauth":{"accessToken":"tok-secret","refreshToken":"ref-secret","loginEnded":"time_limit"}}' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: loginEnded -> login ended row, no stale figures" "$(usage_keep)" "$WANT_ENDED"
+eq  "account-usage: loginEnded -> no usage request" "$(cat "$CURL_LOG")" ""
+has "account-usage: the cache holds the ended row" "$(cat "$DS_USAGE_CACHE/claude-system.tsv")" "login ended"
+printf '{"claudeAiOauth":{"accessToken":"","refreshToken":""}}' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: empty tokens -> login ended" "$(usage)" "$WANT_ENDED"
+eq  "account-usage: empty tokens -> no usage request" "$(cat "$CURL_LOG")" ""
+creds $(( ($(date +%s) + 3600) * 1000 ))
+got="$(usage_keep)"
+eq  "account-usage: a token again with a fresh cached ended row -> fetched now" "$got" "$(printf 'claude\tsystem\t72\t1893510000\t41\t1900000000')"
+has "account-usage: a token again -> the endpoint was called" "$(cat "$CURL_LOG")" "https://api.anthropic.com/api/oauth/usage"
+printf '{"claudeAiOauth":{"accessToken":"t","refreshToken":""}}' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: an access token and no refresh token is not ended" "$(usage | cut -f1,2)" "$(printf 'claude\tsystem')"
+has "account-usage: ... and the endpoint was called" "$(cat "$CURL_LOG")" "oauth/usage"
+printf '{"other":1}' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: no claudeAiOauth -> unknown, not ended" "$(usage | grep -c 'login ended')" "0"
+printf 'not json' > "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: an unreadable file -> not ended" "$(usage | grep -c 'login ended')" "0"
+rm -f "$DS_CLAUDE_HOME/.credentials.json"
+eq  "account-usage: a missing file -> not ended" "$(usage | grep -c 'login ended')" "0"
+
 rm -f "$DS_CLAUDE_HOME/.credentials.json"
 eq  "account-usage: missing token -> unknown"     "$(usage)" "$(printf 'claude\tsystem\t-\t-\t-\t-')"
 eq  "account-usage: missing token -> no call"     "$(wc -c < "$CURL_LOG" | tr -d ' ')" "0"
@@ -1153,6 +1181,14 @@ ORCA_SCREEN="$(cat "$CRD/claude-402.txt")"; export ORCA_SCREEN
 eq "credits: Claude 402 -> credits row" "$(lim idle $since | cut -f2,4,5)" "$(printf -- '-\t-\tcredits')"
 ORCA_SCREEN="$(cat "$CRD/claude-quoted.txt")"; export ORCA_SCREEN
 eq "credits: a grep result quoting the 402 line -> nothing" "$(lim idle $since)" ""
+ORCA_SCREEN="$(cat "$CRD/claude-login.txt")"; export ORCA_SCREEN
+eq "login: Claude '· Please run /login' -> login row, no reset" "$(lim idle $since | cut -f2,4,5)" "$(printf -- '-\t-\tlogin')"
+ORCA_SCREEN="$(cat "$CRD/claude-login-after.txt")"; export ORCA_SCREEN
+eq "login: output after the line -> nothing" "$(lim idle $since)" ""
+lim_as muse
+ORCA_SCREEN="$(cat "$CRD/claude-login.txt")"; export ORCA_SCREEN
+eq "login: a Claude login line on a muse worker -> nothing" "$(lim idle $since)" ""
+lim_as claude
 lim_as codex
 ORCA_SCREEN="$(cat "$CRD/codex-quota.txt")"; export ORCA_SCREEN
 eq "credits: Codex insufficient_quota -> credits row" "$(lim idle $since | cut -f2,4,5)" "$(printf -- '-\t-\tcredits')"
@@ -1374,6 +1410,17 @@ hasnt "role-start with no account: no --agent launch" "$(cat "$ORCA_LOG")" "--ag
 : > "$ORCA_LOG"; "$ADAPTER" role-start run_1 repo1 - spec muse muse-spark-1.3 nm >/dev/null 2>&1 || true
 has "role-start of another agent: Orca's own launch (no path gates)" "$(cat "$ORCA_LOG")" "--agent muse --model muse-spark-1.3"
 hasnt "role-start of another agent: no tab of ours" "$(cat "$ORCA_LOG")" "terminal create"
+# U4 (orca-backend-alternatives): a loop start hands DS_START_MEMBER/DS_START_GEN; the claude tab's launch line
+# carries them as DS_MEMBER, DS_WT and DS_GEN. Orca's own launch (muse) carries none. The tab never inherits
+# the caller's DS_MEMBER: only the DS_START_* pair sets one.
+: > "$ORCA_LOG"; DS_START_MEMBER=fx/sq/builder-u1 DS_START_GEN=gen-7 "$ADAPTER" worker-start run_1 "id:repo1::/w/b1" spec claude opus - - system >/dev/null 2>&1 || true
+has "a loop start: the claude tab carries its identity" "$(cat "$ORCA_LOG")" "--command DS_MEMBER=fx/sq/builder-u1 DS_WT=/w/b1 DS_GEN=gen-7 $SHIMP claude --dangerously-skip-permissions --model opus"
+: > "$ORCA_LOG"; DS_START_MEMBER=fx/sq/builder-u1 DS_START_GEN=gen-8 "$ADAPTER" worker-resume run_1 "id:repo1::/w/b1" spec opus system claude >/dev/null 2>&1 || true
+has "a loop resume: the claude tab carries its identity" "$(cat "$ORCA_LOG")" "DS_MEMBER=fx/sq/builder-u1 DS_WT=/w/b1 DS_GEN=gen-8 $SHIMP claude --continue"
+: > "$ORCA_LOG"; DS_MEMBER=fx/sq/lead DS_GEN=g0 "$ADAPTER" worker-start run_1 "id:repo1::/w/b1" spec claude opus - - system >/dev/null 2>&1 || true
+hasnt "a caller's own DS_MEMBER is not passed on" "$(cat "$ORCA_LOG")" "DS_MEMBER="
+: > "$ORCA_LOG"; DS_START_MEMBER=fx/sq/builder-u1 DS_START_GEN=gen-7 "$ADAPTER" worker-start run_1 wtX spec muse muse-spark-1.3 - - default >/dev/null 2>&1 || true
+hasnt "Orca's own launch (muse) carries no identity" "$(cat "$ORCA_LOG")" "DS_MEMBER="
 
 # Another account: a claude tab under that account's config dir, then worker-start --terminal.
 : > "$ORCA_LOG"; rc=0; "$ADAPTER" role-start run_1 repo1 - spec claude opus nm - high acctB >/dev/null 2>&1 || rc=$?
@@ -1763,6 +1810,13 @@ has "worker-done peeks its own dispatch" "$(cat "$ORCA_LOG")" "check --terminal 
 has "worker-done resolves task via worker-show" "$(cat "$ORCA_LOG")" "worker-show --dispatch ctx_self --json"
 has "worker-done sends from the assignee" "$(cat "$ORCA_LOG")" "--from term_self --type worker_done"
 has "worker-done sends both ids + outcome" "$(cat "$ORCA_LOG")" "--task-id task_self --dispatch-id ctx_self --outcome succeeded"
+# U3 (orca-backend-alternatives): finish-unit.sh --failed sends --outcome failed; any other outcome is refused.
+: > "$ORCA_LOG"; ORCA_TERMINAL_HANDLE=term_me run worker-done --outcome failed "failed U" "why" >"$TMP/out" 2>&1 && r=0 || r=$?
+eq "worker-done --outcome failed exits 0" "$r" "0"
+has "worker-done --outcome failed sends failed" "$(cat "$ORCA_LOG")" "--task-id task_self --dispatch-id ctx_self --outcome failed"
+: > "$ORCA_LOG"; ORCA_TERMINAL_HANDLE=term_me run worker-done --outcome maybe s b >"$TMP/out" 2>&1 && r=0 || r=$?
+eq "worker-done --outcome maybe exits 2" "$r" "2"
+eq "worker-done --outcome maybe issues no orca call" "$(wc -l < "$ORCA_LOG" | tr -d ' ')" "0"
 : > "$ORCA_LOG"; rc=0; env -u ORCA_TERMINAL_HANDLE "$ADAPTER" worker-done s b >"$TMP/out" 2>&1 || rc=$?
 eq "worker-done without a handle exits 1" "$rc" "1"
 has "worker-done without a handle says why" "$(cat "$TMP/out")" "ORCA_TERMINAL_HANDLE"
@@ -2234,6 +2288,24 @@ unset ORCA_PS_PRIMARY_FILE
 
 unset ORCA_PAUSE_WORKERS_FILE ORCA_PAUSE_WORKERS_PAGE2
 unset ORCA_PAUSE_TABS_FILE
+
+# U8b: the `orca` worktree provider's verbs print a slim JSON line per worktree.
+W='{"id":"R::/w/a1","path":"/w/a1","branch":"refs/heads/feat/a1","head":"abc","parentWorktreeId":"R::/w/lead","displayName":"a1"}'
+out=$(ORCA_WT_OUT="{\"result\":{\"worktree\":$W}}" run wt-make /repo a1 feat/a1 main /w/lead)
+eq "wt-make prints the slim worktree" "$out" '{"id":"R::/w/a1","path":"/w/a1","branch":"refs/heads/feat/a1","head":"abc","parentWorktreeId":"R::/w/lead"}'
+has "wt-make: no agent, nested, setup skipped" "$(cat "$ORCA_LOG")" "worktree create --repo path:/repo --name a1 --branch feat/a1 --base-branch main --parent-worktree path:/w/lead --setup skip --json"
+ORCA_WT_OUT="{\"result\":{\"worktree\":$W}}" run wt-make /repo a1 feat/a1 main "" >/dev/null
+has "wt-make with no parent is top-level" "$(cat "$ORCA_LOG")" "--no-parent --setup skip"
+rc=0; ORCA_WT_OUT='{"result":{"worktree":{}}}' run wt-make /repo a1 feat/a1 main 2>/dev/null || rc=$?; eq "wt-make: an answer with no worktree fails" "$rc" "1"
+eq "wt-show by path" "$(ORCA_WT_OUT="{\"result\":{\"worktree\":$W}}" run wt-show path:/w/a1 | jq -r .id)" "R::/w/a1"
+L='{"id":"R::/w/lead","path":"/w/lead","branch":"refs/heads/lead","head":"abc","parentWorktreeId":null,"childWorktreeIds":["R::/w/a1"],"displayName":"lead"}'
+eq "wt-show keeps Orca's childWorktreeIds (U16a)" "$(ORCA_WT_OUT="{\"result\":{\"worktree\":$L}}" run wt-show path:/w/lead | jq -c .childWorktreeIds)" '["R::/w/a1"]'
+rc=0; ORCA_WT_OUT='{"ok":false,"error":{"code":"selector_not_found"}}' ORCA_WT_RC=1 run wt-show path:/w/x 2>/dev/null || rc=$?; eq "wt-show: none is exit 3" "$rc" "3"
+rc=0; ORCA_WT_OUT='{"ok":false,"error":{"code":"runtime_busy"}}' ORCA_WT_RC=1 run wt-show path:/w/x 2>/dev/null || rc=$?; eq "wt-show: another failure is exit 1" "$rc" "1"
+M='{"id":"R::/repo","path":"/repo","branch":"refs/heads/main","isMainWorktree":true}'
+eq "wt-list leaves the main checkout out" "$(ORCA_WT_OUT="{\"result\":{\"worktrees\":[$M,$W],\"truncated\":false}}" run wt-list /repo | jq -r .path)" "/w/a1"
+has "wt-list asks for the repo's whole list" "$(cat "$ORCA_LOG")" "worktree list --repo path:/repo --limit 10000 --json"
+rc=0; ORCA_WT_OUT="{\"result\":{\"worktrees\":[$W],\"truncated\":true}}" run wt-list /repo >/dev/null 2>&1 || rc=$?; eq "wt-list: a truncated list fails" "$rc" "1"
 
 echo "orca-adapter: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

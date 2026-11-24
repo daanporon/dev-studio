@@ -60,6 +60,32 @@ ck "dispatched: refused" "$rc" "1"
 ck "dispatched: says use --cancel" "$(printf '%s' "$out" | grep -c -- '--cancel')" "1"
 ck "dispatched: no wish" "$(sql "SELECT want FROM members WHERE suffix = 'u2' AND role = 'builder'")" ""
 
+# U4: the Lead cannot mark u2 done (and so close its Builder) while its PR #41 is not merged. The PR is
+# found the way the lifecycle reconciler finds it: by <nwo>#<pr> through the squad repo's github config.
+sqlw() { "${bun:-bun}" -e 'const { Database } = require("bun:sqlite"); new Database(process.argv[1]).run(process.argv[2]);' "$S/loop.db" "$1"; }
+SS="$TMP/bin/role/squad-state.sh"
+sqlw "INSERT INTO config (project, file, key, value, observed_at) VALUES ('fx', 'github', 'repo:fx', 'o/fx', 1)"
+rc=0; out="$("$SS" "$SF" set-unit-status u2 "done" 2>&1)" || rc=$?
+ck "unobserved PR: done refused" "$rc" "1"
+ck "unobserved PR: says not read yet" "$(printf '%s' "$out" | grep -c 'PR #41 has no observed state yet')" "1"
+sqlw "INSERT INTO observed_prs (project, ref, pr, state, observed_at) VALUES ('fx', 'o/fx#41', 41, 'OPEN', 1)"
+rc=0; out="$("$SS" "$SF" set-unit-status u2 "done" 2>&1)" || rc=$?
+ck "open PR: done refused" "$rc" "1"
+ck "open PR: names the PR and open" "$(printf '%s' "$out" | grep -c 'PR #41 is open')" "1"
+ck "open PR: says the loop marks it on the merge" "$(printf '%s' "$out" | grep -c 'The loop marks the unit done and closes its Builder when the PR merges')" "1"
+ck "open PR: unit still dispatched" "$(sql "SELECT status FROM units WHERE slug = 'u2'")" "dispatched"
+rc=0; "$SS" "$SF" set-unit-status u2 "done" --no-pr >/dev/null 2>&1 || rc=$?
+ck "open PR: --no-pr does not skip it" "$rc" "1"
+rc=0; out="$(run fx t1 builder-u2 2>&1)" || rc=$?
+ck "open PR: close-role still refuses the Builder" "$rc" "1"
+ck "open PR: close-role says still dispatched" "$(printf '%s' "$out" | grep -c 'still dispatched')" "1"
+sqlw "UPDATE observed_prs SET state = 'CLOSED' WHERE ref = 'o/fx#41'"
+rc=0; out="$("$SS" "$SF" set-unit-status u2 "done" 2>&1)" || rc=$?
+ck "closed PR: done refused" "$rc" "1"
+ck "closed PR: points at set-unit-pr or cancel-unit" "$(printf '%s' "$out" | grep -c 'is closed.*new PR (set-unit-pr) or cancel-unit')" "1"
+ck "closed PR: unit still dispatched" "$(sql "SELECT status FROM units WHERE slug = 'u2'")" "dispatched"
+sqlw "DELETE FROM observed_prs WHERE ref = 'o/fx#41'"
+
 # --into/--why without --cancel, and --cancel --force, are refused.
 rc=0; run fx t1 builder-u2 --into PR#9 >/dev/null 2>&1 || rc=$?
 ck "into without cancel: exit 2" "$rc" "2"

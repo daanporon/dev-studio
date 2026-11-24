@@ -4,7 +4,7 @@
 //   refusals         a project with squads but an empty keep-set, or a pass whose backend worktree
 //                    list failed (classes c and d), reads `report only`; so does a row with no project
 //   floors (R9)      a process: 10 minutes after its worktree went; Claude temp dirs and glob files:
-//                    cleanup_tmp_age_h (48) by mtime; helper checkouts, orphan folders and entities
+//                    cleanup_tmp_age_h (48) by mtime (class f: the entries inside a trimmed folder); helper checkouts, orphan folders and entities
 //                    (and a process in one): 24 hours from orphaned_since
 // orphaned_since is set the first time a row is found unreferenced (its first_seen when it was never
 // judged, so a pass that finds a 3-day-old orphan does not restart its clock) and cleared when a
@@ -73,7 +73,7 @@ export type Judge = { keep: KeepSet; now: number; refused: string | null; psErro
 
 // A row's verdict (one of VERDICTS, `in use by pid N` with its pid) and its orphaned_since.
 export function judge(r: CleanupRow, f: Facts, j: Judge): { verdict: string; orphaned_since: number | null } {
-  const keepOf = r.class === "b" ? (f.session ? [] : [f.slug_wt]) : r.class === "e" ? [] : [f.wt_id, f.wt, f.entity, r.path];
+  const keepOf = r.class === "b" ? (f.session ? [] : [f.slug_wt]) : r.class === "e" || r.class === "f" ? [] : [f.wt_id, f.wt, f.entity, r.path];
   if (!r.project || j.refused || ((r.class === "c" || r.class === "d") && j.psError)) return { verdict: "report only", orphaned_since: r.orphaned_since };
   if (keepOf.some((x) => j.keep.has(x))) return { verdict: "live member", orphaned_since: null };
   const orphaned = r.orphaned_since ?? (r.verdict === null ? r.first_seen : j.now);
@@ -94,7 +94,7 @@ export function judge(r: CleanupRow, f: Facts, j: Judge): { verdict: string; orp
       if (f.detached || p?.detached) return v("detached");
       return v(old(orphaned, ORPHAN_FLOOR_S) ? "removable" : "too new");
     }
-    case "e": {
+    case "e": case "f": { // f: the entries inside a kept cache folder, judged the same way
       if ((f.removable ?? 0) > 0) return v("removable");
       const kept: [number, string][] = [[f.too_new ?? 0, "too new"], [f.not_ours ?? 0, "not ours"], [f.in_use ?? 0, `in use by pid ${f.in_use_pid ?? "?"}`]];
       return v(kept.reduce((a, b) => (b[0] > a[0] ? b : a))[1]);
@@ -160,7 +160,7 @@ function apply(store: Store, project: string): Action[] {
   const rows = store.db.query("SELECT class, key, path, facts, observed_at FROM observed_cleanup WHERE project = ? AND gone_at IS NULL AND verdict = 'removable' ORDER BY class = 'a' DESC, COALESCE(size_kb, 0) DESC, key").all(project) as
     { class: string; key: string; path: string | null; facts: string | null; observed_at: number }[];
   for (const r of rows) {
-    const subject = actSubject(r.class, r.key), pass = r.class === "e" ? Number(parseFacts(r.facts).act_pass ?? 0) : 0;
+    const subject = actSubject(r.class, r.key), pass = r.class === "e" || r.class === "f" ? Number(parseFacts(r.facts).act_pass ?? 0) : 0;
     const episode = `${r.observed_at}${pass ? `:${pass}` : ""}`;
     if (store.get("episodes", { project, subject, kind: `action:${CLEANUP_ACT}` })?.episode_key === episode) continue;
     const a: Action = { project, subject, kind: CLEANUP_ACT, episode, payload: { class: r.class, key: r.key, path: r.path } };

@@ -70,6 +70,14 @@ run_fu_in() { local d="$1"; shift; out=""; err=""; rc=0; out="$(cd "$d" && "$FU"
 reset_calls() { : > "$TMP/gh-calls"; : > "$TMP/backend-calls"; }
 pr_of() { jq -r '.units[0].pr // empty' "$STATE"; }
 wd_count() { grep -c '^worker-done ' "$TMP/backend-calls" || true; }
+# finishes rows (U3 of orca-backend-alternatives) matching a WHERE clause, 0 before loop.db exists.
+fin_count() {
+  [ -f "$DS_STATE_ROOT/loop.db" ] || { echo 0; return; }
+  bun -e 'const d = new (require("bun:sqlite").Database)(process.argv[1], { readonly: true }); console.log(d.query(`SELECT COUNT(*) AS n FROM finishes WHERE ${process.argv[2]}`).get().n)' "$DS_STATE_ROOT/loop.db" "$1"
+}
+fin_col() { # fin_col <column> <where> — the newest matching row's column
+  bun -e 'const d = new (require("bun:sqlite").Database)(process.argv[1], { readonly: true }); console.log(d.query(`SELECT ${process.argv[2]} AS v FROM finishes WHERE ${process.argv[3]} ORDER BY id DESC`).get()?.v ?? "")' "$DS_STATE_ROOT/loop.db" "$1" "$2"
+}
 
 # --- refusals send nothing -------------------------------------------------------
 run_fu 2>/dev/null; eq "usage with no args exits 2" "$rc" "2"
@@ -164,9 +172,11 @@ eq "gh failure writes no state" "$(cat "$STATE")" "$before"
 eq "gh failure sends nothing" "$(wd_count)" "0"
 GH_FAIL=0
 
+eq "refusals write no finish row" "$(fin_count 1)" "0"
+
 # --- the happy path: a ready PR --------------------------------------------------
 export GH_JSON='[{"number":7,"state":"OPEN"}]'; health ready.json; reset_calls; mkstate
-run_fu "$STATE" U1-widget
+DS_GEN=gen-7 run_fu "$STATE" U1-widget
 eq "open PR exits 0" "$rc" "0"
 eq "open PR recorded in state" "$(pr_of)" "7"
 has "gh asked for this repo" "$(cat "$TMP/gh-calls")" "--repo acme/widgets"
@@ -182,6 +192,13 @@ has "worker_done body reports 0 commits since" "$(cat "$TMP/backend-calls")" "0 
 has "journal names the PR" "$(cat "$JFILE")" "PR #7"
 has "backend confirmation passes through" "$out" "worker-done: completed task task_stub"
 has "receipt names the PR" "$out" "finished (PR #7)"
+eq "open PR writes one ok finish row" "$(fin_count "outcome = 'ok'")" "1"
+eq "the ok row names the Builder" "$(fin_col member "outcome = 'ok'")" "$LABEL/regplan/builder-U1-widget"
+eq "the ok row carries DS_GEN" "$(fin_col gen "outcome = 'ok'")" "gen-7"
+eq "the ok row names the unit" "$(fin_col unit "outcome = 'ok'")" "U1-widget"
+has "the ok row's body is worker_done's" "$(fin_col body "outcome = 'ok'")" "PR #7 merge-ready"
+DS_GEN=gen-7 run_fu "$STATE" U1-widget
+eq "a re-run at the same HEAD writes no second ok row" "$(fin_count "outcome = 'ok'")" "1"
 
 # --- required-only and zero checks pass -------------------------------------------
 health required-only.json; reset_calls; mkstate
@@ -370,11 +387,37 @@ eq "--no-pr records no PR" "$(pr_of)" ""
 eq "--no-pr sends one worker_done" "$(wd_count)" "1"
 has "--no-pr subject says no PR" "$(cat "$TMP/backend-calls")" "finished U1-widget (no PR)"
 has "--no-pr journal says no PR" "$(cat "$JFILE")" "without a PR"
+eq "--no-pr writes one no-pr finish row" "$(fin_count "outcome = 'no-pr'")" "1"
+eq "--no-pr row has no gen without DS_GEN" "$(fin_col "COALESCE(gen, '-')" "outcome = 'no-pr'")" "-"
+run_fu "$STATE" U1-widget --no-pr
+eq "a re-run --no-pr writes no second row" "$(fin_count "outcome = 'no-pr'")" "1"
 
 run_fu "$STATE" U1-widget --bogus
 eq "unknown flag is usage" "$rc" "2"
 run_fu "$STATE" U1-widget --check --no-pr
 eq "two flags is usage" "$rc" "2"
+
+# --- --failed: a unit that cannot be built (U3 of orca-backend-alternatives) ----------
+reset_calls; mkstate
+run_fu "$STATE" U1-widget --failed
+eq "--failed with no reason is usage" "$rc" "2"
+eq "--failed with no reason sends nothing" "$(wd_count)" "0"
+eq "--failed with no reason writes no row" "$(fin_count "outcome = 'failed'")" "0"
+DS_GEN=gen-f run_fu "$STATE" U1-widget --failed "the API it needs does not exist"
+eq "--failed exits 0" "$rc" "0"
+eq "--failed never asks gh" "$(wc -l < "$TMP/gh-calls" | tr -d ' ')" "0"
+eq "--failed records no PR" "$(pr_of)" ""
+eq "--failed sends one worker_done" "$(wd_count)" "1"
+has "--failed sends outcome failed" "$(cat "$TMP/backend-calls")" "worker-done --outcome failed failed U1-widget"
+has "--failed body names the why" "$(cat "$TMP/backend-calls")" "cannot be built: the API it needs does not exist"
+has "--failed journal says failed" "$(cat "$JFILE")" "unit failed: the API it needs does not exist"
+has "--failed receipt says failed" "$out" "ended failed"
+eq "--failed writes one failed row" "$(fin_count "outcome = 'failed'")" "1"
+eq "the failed row carries DS_GEN" "$(fin_col gen "outcome = 'failed'")" "gen-f"
+DS_GEN=gen-f run_fu "$STATE" U1-widget --failed "the API it needs does not exist"
+eq "a re-run --failed writes no second row" "$(fin_count "outcome = 'failed'")" "1"
+run_fu "$STATE" U1-widget --failed "x" --no-pr
+eq "--failed with another flag is usage" "$rc" "2"
 
 # --- a failed send keeps the recorded PR and says to re-run --------------------------
 export GH_JSON='[{"number":7,"state":"OPEN"}]'; health ready.json; export BACKEND_FAIL=1; reset_calls; mkstate
@@ -398,6 +441,20 @@ eq "already-sent exits 0" "$rc" "0"
 eq "already-sent keeps the recorded PR" "$(pr_of)" "7"
 has "already-sent says nothing more to send" "$out" "worker_done was already sent for this dispatch"
 export BACKEND_FAIL=0 BACKEND_ERR=""
+
+# --- U11 (orca-backend-alternatives): a squad not on Orca sends no worker_done ----------
+# DS_BACKEND is on every terminal the loop makes for such a squad: the finish row is the finish.
+export GH_JSON='[{"number":7,"state":"OPEN"}]'; health ready.json; reset_calls; mkstate
+ok_before="$(fin_count "outcome = 'ok'")"
+DS_BACKEND=tmux DS_GEN=gen-t run_fu "$STATE" U1-widget
+eq "non-Orca squad exits 0" "$rc" "0"
+eq "non-Orca squad records the PR" "$(pr_of)" "7"
+eq "non-Orca squad sends no worker_done" "$(wd_count)" "0"
+has "non-Orca squad says why" "$out" "squad on backend tmux: no worker_done"
+has "non-Orca receipt names the PR" "$out" "finished (PR #7)"
+has "non-Orca squad records its finish" "$out" "finish"
+eq "non-Orca squad's finish is the ok row of this unit and head (no second one)" "$(fin_count "outcome = 'ok'")" "$ok_before"
+has "non-Orca journal does not claim worker_done" "$(tail -3 "$JFILE")" "no worker_done (no Run)"
 
 # --- a journal that can't be written warns but doesn't block --------------------------
 mkdir -p "$SD"; rm -rf "$SD/journals"; touch "$SD/journals"; reset_calls; mkstate

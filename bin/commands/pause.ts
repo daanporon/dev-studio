@@ -1,8 +1,9 @@
 import { parse, print } from "../loop/core/cli.ts";
-import { acknowledge, projection, type PauseTarget, type Prerequisite } from "../loop/pause/pause.ts";
+import { acknowledge, projection, sessionOf, type PauseTarget, type Prerequisite } from "../loop/pause/pause.ts";
 import { now, open } from "../loop/core/store.ts";
+import { whoAmI } from "../loop/core/whoami.ts";
 
-export const help = "<project|squad|member> <project> [squad] [role] [suffix] [--prerequisites <json>] — checkpoint and pause; show/ack are agent controls";
+export const help = "<project|squad|member> <project> [squad] [role] [suffix] [--prerequisites <json>] — checkpoint and pause; show/ack/session are agent controls";
 export function target(args: string[]): PauseTarget {
   const [scope, project, squad, role, suffix] = args;
   const count = scope === "project" ? 2 : scope === "squad" ? 3 : scope === "member" ? 4 : 0;
@@ -16,8 +17,14 @@ export async function run(args: string[]): Promise<void> {
     if (pos[0] === "ack") {
       if (pos.length !== 9) throw new Error("usage: ds pause ack <project> <squad> <role> <suffix|-> <generation> <session> <dispatch|-> <journal>");
       const [, project, squad, role, suffix, generation, session, dispatch, file] = pos;
-      if (process.env.ORCA_TERMINAL_HANDLE !== session) throw new Error("pause: acknowledgment must come from the instructed agent terminal");
+      if (sessionOf(s, whoAmI()) !== session) throw new Error("pause: acknowledgment must come from the instructed agent terminal");
       print(acknowledge(s, { project, squad, role, suffix: suffix === "-" ? "" : suffix }, generation, session, dispatch, file, now()));
+      return;
+    }
+    if (pos[0] === "session") {
+      const me = sessionOf(s, whoAmI());
+      if (!me) throw new Error("pause: not in an agent terminal the loop knows");
+      console.log(me);
       return;
     }
     const show = pos[0] === "show", t = target(show ? pos.slice(1) : pos);

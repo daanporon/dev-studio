@@ -62,7 +62,7 @@ test("light lane on: unit lanes and the header split", () => {
 test("light lane off: no lane keys, the header as before", () => {
   const f = fixture(0), b = f.board();
   expect(b.header.builders_light_of).toBeUndefined();
-  expect(b.header.builders_normal).toBeUndefined();
+  expect(b.header.builders_light).toBe(0);   // seats() counts every Builder in the one lane
   expect(b.header.builders_working).toBe(3);
 });
 

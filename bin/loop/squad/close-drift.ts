@@ -6,6 +6,10 @@
 //                 check then sees no wt and archives.
 //   stopRetry     close.ts's stop reported done, yet the member still reads running: after one dispatch
 //                 read plus one walk, stop it again under a new episode; after 3 tries, one card.
+//   removeRetry   close.ts dropped the worktree removal as stale (Orca still lists the stopped agent's
+//                 dispatch as live, so presence reads running): try it again under a new episode, the
+//                 first time after one dispatch read plus one walk, then doubling up to REMOVE_WAIT_MAX_MIN.
+//                 No cap: a closing squad never gives up. From the third stale drop on, one card too.
 import { existsSync } from "node:fs";
 import { effective } from "../pause/pause.ts";
 import { view } from "./member-state.ts";
@@ -14,6 +18,8 @@ import { wtPath } from "../observers/orca.ts";
 import type { Row, Store } from "../core/store.ts";
 
 export const STOP_TRIES = 3;
+export const REMOVE_CARD_TRIES = 3;
+export const REMOVE_WAIT_MAX_MIN = 30;
 
 export function driftCleared(store: Store, m: Row, now: number): boolean {
   if (!m.wt) return false;
@@ -46,4 +52,29 @@ export function stopRetry(store: Store, m: Row, episode: string, now: number): R
   if (now - done[done.length - 1].at < after) return { episode, wait: true, tries: done.length };
   if (done.length >= STOP_TRIES) return { episode, card: true, tries: done.length };
   return { episode: `${episode}:retry${done.length}`, tries: done.length };
+}
+
+// The remove's claim row (one per member, the newest episode). A remove that close.ts dropped as stale stays
+// held under its episode key for ever (tick.ts claim() renews only a `generation changed` drop), so a fresh
+// key is the only way to try it again: `<episode>:retry<n>`. `tries` counts the stale drops so far, `wait`
+// is set while the backoff runs, `next_at` is when the next try may go, `reason` the last stale reason.
+export type RemoveRetry = Retry & { next_at?: number; reason?: string };
+export function removeWaitS(store: Store, project: string, n: number): number {
+  const first = knob(store, project, "DISPATCH_READ_MIN", 5) + knob(store, project, "WALK_MIN", 1);
+  return Math.min(first * 2 ** n, REMOVE_WAIT_MAX_MIN) * 60;
+}
+export function removeRetry(store: Store, m: Row, episode: string, now: number): RemoveRetry {
+  const project = String(m.project);
+  const row = store.get("episodes", { project, subject: `member:${m.id}`, kind: "action:member.close" });
+  const key = String(row?.episode_key ?? "");
+  const n = key === episode ? 0 : key.startsWith(`${episode}:retry`) ? Number(key.slice(episode.length + 6)) : NaN;
+  if (!Number.isInteger(n) || n < 0) return { episode, tries: 0 };
+  const result = String(row!.result ?? "");
+  // A try under way (or ended on anything but a stale drop) keeps its key: the claim decides.
+  if (row!.state !== "dropped" || !/^stale(:|$)/.test(result)) return { episode: key, tries: n };
+  const tries = n + 1, next = Number(row!.ended_at ?? now) + removeWaitS(store, project, n);
+  const reason = result.replace(/^stale:?\s*/, "") || "stale";
+  const card = tries >= REMOVE_CARD_TRIES || undefined;
+  if (now < next) return { episode: key, wait: true, card, tries, next_at: next, reason };
+  return { episode: `${episode}:retry${tries}`, card, tries, next_at: next, reason };
 }

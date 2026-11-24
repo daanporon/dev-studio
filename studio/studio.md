@@ -14,7 +14,7 @@ orchestration lesson worth keeping, capture it here with `ce-compound`.
 1. **Thinking + spawning.** Shape what topics should exist before any squad is created,
    and deep-dive cross-topic questions. When a topic is ready, **spawn the squad
    directly** — `/ds-start-squad` (or `bin/commands/spawn-squad.sh …`), run from here. You never
-   Add `--start plan|brainstorm|ask|investigate` only when the framing's cues are clear ("investigate", "why does", "what is" → investigate; "think about", "brainstorm", "how can we improve", "what makes sense" → brainstorm; "small fix", a ticket or note with the decisions made → plan); leave it off when unsure — the Thinker then triages itself.
+   Add `--start plan|brainstorm|ask|investigate|fix` only when the framing's cues are clear (the operator's own `--start` or Start-dialog pick always wins; something broken the operator wants gone → fix; "investigate", "why does", "what is", wanting to understand → investigate; "think about", "brainstorm", "how can we improve", "what makes sense" → brainstorm; "small fix", a ticket or note with the decisions made → plan); leave it off when unsure — the Thinker then triages itself.
    interact with a squad's Builders; you talk to its **Lead** to operate it and to its
    **Thinker** to think with it. A squad's own questions are handled by its Lead (which
    pings *you at that Lead*); only a genuinely **cross-squad** question reaches the Studio
@@ -63,7 +63,7 @@ One brief per date: the loop never sends a second, so take your time and do it o
 
 1. Run the command from the line: `bin/ds briefing-input <label> --date <date>`. It prints the
    facts for the window since the last brief, and the same-length window before it ("the day
-   before"), in brief order: needs you (each item `new` or `waiting <age>`), progress per squad
+   before"), in brief order: needs you (the board's own Needs-you list, headed `Needs you: N` with the board's count; each item `new` or `waiting <age>`), progress per squad
    (% done at the window's start and now), squad PRs merged with their titles (squad PRs only, not the repo total),
    one "Elsewhere in <repo>" block per repo (the merged PRs that are not a squad's, grouped by
    scope), PRs opened and stuck, squads started, your decisions, quiet squads, finished squads
@@ -96,6 +96,8 @@ A fact you cannot find stays out.
 
 ## Needs you
 - <new items first, one plain sentence each; then one "Still waiting: …" bullet>; else "Nothing."
+
+Needs you is the board's Needs-you list and nothing else: state its count as given and never add an item the facts do not list. The `Loop notes (no answer needed; …)` line is not a request: say it at most once, as a plain remark ("13 Stop command failed notes on the board"), never as something to answer or act on. A line marked `(not counted above)` is a side note, not an ask.
 
 ## What happened
 - **<squad>** 91% → 93%
@@ -157,7 +159,7 @@ up to 4, if more than one cross-squad question is open) — then
 `send <squad-run> answer "msg_id=<id> <the pick>"` down to each owning Lead. The picker blocks
 your terminal, so it only works while you're attached; never reach for it during a hook tick.
 
-**Where you save things:** `squads/` holds only `<topic>.json` squad state files (written by `bin/role/squad-state.sh`) and `.md` plans and brainstorms; notes, reviews and experiment records go in `state/<project>/notes/` or as `.md` next to their plan, morning briefs go in `state/<project>/briefings/<date>.md`, and a JSON file in `squads/` that is not a squad is skipped with a warning.
+**Where you save things:** `squads/` holds only `<topic>.json` squad state files (written by `bin/role/squad-state.sh`) and `.md` plans and brainstorms; notes, reviews and experiment records go in `state/<project>/notes/` or as `.md` next to their plan, morning briefs go in `state/<project>/briefings/<date>.md`, and a JSON file in `squads/` that is not a squad is skipped with a warning. Lavish review pages and their files go in `state/<label>/pages/_studio/` (a squad's in `pages/<topic>/`), opened with `lavish-axi <path>`; the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend.
 
 ## Reloading squads after a dev-studio update
 

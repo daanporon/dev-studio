@@ -39,7 +39,9 @@ first. In short:
   lavish -g` (also run by `bin/host/install-skills.sh`). No other setup — the CLI runs on demand
   via `npx -y lavish-axi`, and **Lavish picks its own network binding**: loopback, or this
   machine's Tailscale address when it detects a tailnet (phone-ready MagicDNS link). It's
-  optional — without it the Thinker just uses inline plan approval. Security: a tailnet-bound
+  optional — without it the Thinker just uses inline plan approval. Pages and their files live in
+  `state/<label>/pages/<topic>/` (the Studio's in `pages/_studio/`), not the worktree, whose
+  `.lavish/` and `.scratch/` are lost on close. Security: a tailnet-bound
   Lavish server is **unauthenticated and can serve local files** to anyone on the tailnet, so
   keep the tailnet trusted, or set `LAVISH_AXI_HOST=127.0.0.1` to force loopback-only (view it
   over an SSH tunnel).
@@ -217,6 +219,15 @@ With explicit flags (`--repo` + `--topic`) it passes them straight through to
 /ds-start-squad --repo <project-selector> --topic add-login [--autonomy checkpoints|lfg] [--framing "what this squad should do"]
 ```
 
+The board's **Start squad** dialog does the same: its brief (up to 32 KiB) is written to
+`state/<project>/framings/board-start-<request>.md` and the Studio's line passes it as
+`--framing-file`. A start can carry up to 8 images (PNG, JPEG, WebP or GIF, at most 5 MiB each),
+uploaded while the dialog is open to `state/<project>/chat-files/_start/` (pruned after
+`chat_files_keep_d` days, like chat images). When the Studio's request is filed they are copied to
+`state/<project>/framings/board-start-<request>/` and kept with the brief, never pruned, and the
+brief ends with an `## Attached images` section listing their absolute paths, so every role that
+reads the brief can open them. Images are not checked for secrets.
+
 This creates the squad's Run + task and starts **the Lead + the Thinker** (the
 Lead `run-use`s the Run to become its coordinator). **Builders are on-demand** —
 the Lead spawns one per unit from the Thinker's plan, never before there's a plan
@@ -287,7 +298,7 @@ One name per state; the pill's hover, the expanded squad and the text board say 
 | `blocked` / `waiting-on-you` | the Lead | a question or blocker needs you | answer it in Needs-you |
 | `parked · N held` | the loop (computed) | nothing dispatched or ready; the only open work is N held units | release them, cancel them, suspend the squad, or leave it parked |
 | `wrapping up` | the loop (computed) | every unit done or cancelled, no open PR, no Tester; the Lead owes the test check and the debrief | nothing; a "Wrap-up stalled" card comes only if the Lead stops answering |
-| `done` | the Lead, after the debrief | finished; waits only for you | read the debrief, then Close squad (a Needs-you row says so) |
+| `done` | the Lead; the debrief is written at archive | finished; waits only for you | Close squad (the debrief is written then) (a Needs-you row says so) |
 | `pausing` `paused` `resuming` | you (Pause) | agents stopped, worktrees kept | Resume |
 | `suspended` | you (Suspend) | worktrees removed, branches kept | Restore |
 | `archiving` `suspending` | you | the loop is carrying it out | wait; it reads stuck after 15 min |
@@ -315,8 +326,11 @@ your laptop over the **tailnet** (`http://<tailscale-ip>:<port>/`). The loop run
 reason when it failed; the loop starts `bin/board/board-server.ts` as its
 child, pings `/healthz` every tick and restarts it within a tick when it dies or stops
 answering. More than three restarts in ten minutes raise one Studio alert and leave the row
-`failed` until you ask again; a port already in use fails it the same way, with the bind error
-(`bin/ds services` shows each row's status, pid and why). Its log is
+`failed` until you ask again (`bin/ds services` shows each row's status, pid and why). When
+another process already holds the port (a second project's board, any other tool), the loop
+takes the next free one, up to `DS_BOARD_PORT_TRIES` (20) further, skipping ports another
+board's row has registered; the port it bound becomes that board's port from then on, so the
+address stays the same between runs, and `--serve` prints it with `(8787 was taken)`. Its log is
 `state/<label>/board-serve.log`.
 
 ```sh
@@ -324,7 +338,8 @@ bin/board/board.sh name:your-app --serve           # the wish; prints the 127.0.
 bin/board/board.sh name:your-app --stop            # the loop stops it on its next tick
 ```
 
-Pass a port as `--serve 9000`. Without Tailscale it serves on `127.0.0.1` only (there is
+Pass a port as `--serve 9000` (`--serve-fg [port]`, the server in the foreground by hand, also
+moves on to the next free port). Without Tailscale it serves on `127.0.0.1` only (there is
 no file-based page, browsers won't load the board data from `file://`). `DS_BIND` overrides
 the addresses, space-separated (`DS_BIND=127.0.0.1` for host-only, `0.0.0.0` to open it up on
 purpose). It serves the page and `/board.json`, plus same-origin JSON APIs —
@@ -392,7 +407,7 @@ yet). The two warning states are the dropped-handoff failures made impossible to
 miss. The LEAD column shows a Lead only when the loop's own liveness check says it is stuck, never
 for being idle: `⚠LEAD-NOT-RESPONDING(Nm)` (idle with Run mail unread for `DS_SWEEP_SILENT_MIN`, 10 minutes; the loop pokes it
 twice and then asks for a restart), `⚠LEAD-HUNG(Nm)` (working with no output for `DS_SWEEP_HUNG_MIN`, 30 minutes, no long
-step open) and `⚠LEAD-UNREACHABLE` (Run mail the loop cannot deliver to it). The web board shows the
+step open, and its last turn neither ended nor stopped with Esc) and `⚠LEAD-UNREACHABLE` (Run mail the loop cannot deliver to it). The web board shows the
 same words in red. A Lead that is idle with nothing waiting shows nothing however long it has been idle.
 
 On the web board each squad has two dropdowns: **work units** (the list above, with
@@ -463,6 +478,29 @@ it is paused. A chat to a Builder, Tester, Reviewer or Researcher also lands in 
 squad's `crew-chat.md`, so its Lead sees it on its next tick. The panel reads
 `GET /api/chat` every 3 s while open; `board.json` carries no turns.
 
+**Switch members inside the Chat panel.** With two or more live members in the squad, the panel
+shows a tab per member under its title (lead, thinker, each builder, …) in the Crew box's order, each
+with the box's mail count and a dot when that member wrote a reply you have not seen in this browser;
+one click shows that member's chat without closing the panel. On a phone the title's name is a button
+(`<member> ▾`, with the other members' mail and a dot) that opens the same list. What you typed for
+each member stays with it (per browser tab, kept across a switch, a close and a reload) until you send it.
+
+**Attach images in the Chat panel.** The 📎 button (or a paste into the box, or a drop anywhere on the
+panel) attaches up to 4 images; each shows as a 56 px thumbnail with ✕ and is uploaded at once. An image over
+3.5 MiB, with a long side over 2000 px, or of a type the server refuses (an iPhone HEIC) is redrawn in the
+page as a JPEG with its long side at most 2000 px first; a small one goes as it is. Send works with images
+and no text; the typed line then ends with the stored paths, which the member opens with its file-reading
+tool, and the bubble shows the thumbnails. Images are kept 14 days (an older bubble says `image removed`),
+are not checked for secrets, and a Muse member or a screen-only chat shows `this member may not see images`.
+Attached images stay in each member's draft across a switch.
+
+**Chat with the Studio from the board.** The board's top bar has a **💬 Studio** button (one per
+project on a host-wide board) that opens the same Chat panel on the project's Studio, titled
+`Chat · Studio · <project>`. The loop types your line in once the Studio has been quiet for two
+minutes. The button shows the mail waiting for the Studio (the Crew box's unread + waiting-for-reply
+count), a dot when the Studio wrote a reply you have not seen in this browser, and `working` while it
+is mid-turn. Until the loop has adopted the Studio's terminal the button is greyed out and says so.
+
 **Take back a plan approval.** Approved the wrong plan, or changed your mind? Run
 `bin/role/squad-state.sh <state> revoke-plan <plan> --why "<why>"` (or tell the Thinker to).
 The plan leaves `approved_plans` (the squad keeps `revoked_plans`: who, when, why), its
@@ -503,11 +541,17 @@ bin/commands/roles.sh set  your-app thinker claude fable         # thinker -> fa
 bin/commands/roles.sh set  your-app thinker-deep claude opus elevate  # hard-topic planning model
 bin/commands/roles.sh set  your-app builder claude opus always high   # ...with high reasoning effort
 bin/commands/roles.sh set  your-app builder claude opus "" - claude:sonnet  # fall back to sonnet when no account has opus left
+bin/commands/roles.sh set  your-app builder claude opus "" "" "" "" up     # ...and move an idle Builder back to opus once it has room
 bin/commands/roles.sh reset your-app thinker                     # back to the default row
 ```
 
 The optional 5th column is **effort** — the model's reasoning effort
 (`low|medium|high|xhigh|max`; blank = the model's default).
+
+The optional 8th column is **return**: `up` moves an idle member back up to a higher
+rung of its row once it has room, `stay` keeps it on its fallback, `-` or omitted inherits
+(the default row, then the base role's row, else `stay`). The default roster moves only the
+Thinker back up; `roles.sh list` shows the resolved value in its `back up` column.
 
 `thinker-deep` is an `elevate` row: it never starts a terminal. It names the model
 the Thinker hands one hard planning step to (`conventions/thinker-routing.md`); its
@@ -572,14 +616,19 @@ Update the host checkout with `/ds-update` in the Studio (pull, relink, and do
 only what the new commits need: skills changed → workers restart once idle; instructions changed →
 workers re-read them, no new session; code only → no worker restarts), or by hand: `git -C
 ~/.dev-studio pull` (or `fetch && reset --hard origin/<its branch>`); re-run
-`bin/host/install.sh` if a command was added/removed. Two things
+`bin/host/install.sh` if a command was added/removed. Three things
 then propagate differently:
 
 - **Scripts** (`bin/*/*.sh`, the backend adapter) — run their latest version on the
   next call. Nothing to do.
+- **Loop code** (`bin/**/*.ts`, the migrations) — the running loop compares its commit with
+  the checkout's between ticks and, when the new commits change loop code, exits for systemd to
+  start the new code (`bin/loop/core/code-watch.ts`, event `loop_code_changed`). A plain `git pull`
+  is enough; the loop restarts itself within about 10 seconds, and a pull of docs or tests alone
+  restarts nothing.
 - **Instructions** (`roles/*.md`, `conventions/*.md`, `AGENTS.md`) — a running agent
   only picks them up when it **re-reads** the file. Agents self-refresh when their
-  `watch.sh` tick prints `INSTRUCTIONS: changed` (a fingerprint of the files), so they
+  `watch.sh` tick prints `INSTRUCTIONS: changed` (a fingerprint of `AGENTS.md` and their own role file), so they
   catch up on their own; to apply an update **immediately**, run
   **`/ds-reload`** in the Studio (or `bin/commands/notify-squads.sh <project>`), which
   writes a reload wish on every roster member; the loop delivers each one to its
@@ -601,6 +650,36 @@ Squads compound learnings into each **worked project's** `docs/solutions/` using
 the existing `ce-compound` skill — the Reviewer captures a non-obvious lesson at
 ship time, the Thinker reads prior learnings when planning. Nothing to maintain
 here; see `conventions/learnings.md`.
+
+## Which backend to pick
+
+A squad's terminals run on one backend, and its working folders come from one worktree tool. Use
+`orca` (Orca with Runs, the default) for real work: it is the only backend that is not on trial.
+The other three are for a trial project.
+
+| Backend | What it is | Worktree tools (first is the default) | The host needs |
+|---|---|---|---|
+| `orca` | Orca with Runs, tasks and dispatch | `orca` | Orca |
+| `orca-lite` | Orca's terminals and worktrees with no Run | `orca` | Orca |
+| `tmux` | One tmux server per project, one session per squad | `git`, `treehouse` | `tmux` on `PATH` |
+| `herdr` | herdr's pinned release: one workspace per squad | `git`, `treehouse` | its release, installed with `bun bin/backend/herdr.ts install` |
+
+- **The trial gate.** A backend on trial starts squads only in a project whose `default_backend` names
+  it. `--backend` anywhere else is refused with a message and never falls back to `orca`. The trial
+  project can still start an `orca` squad.
+- **Choosing.** For a project: `bin/commands/limits.sh set <project> default_backend <name>` (default
+  `orca`). For one squad: `spawn-squad --backend <name>`, or the Backend pick in the board's Start
+  squad dialog; it wins over the project key. The choice is written once, at spawn. A squad keeps its
+  backend and worktree tool for life, and a later change of `default_backend` touches only new squads.
+- **Worktree tool.** `worktree_provider` is `auto` (the default: Orca's own for `orca` and
+  `orca-lite`, `git` for `tmux` and `herdr`), `git`, or `treehouse` (a warm pool of leased worktrees,
+  only on `tmux` and `herdr`; the binary comes from `DS_TREEHOUSE_BIN` or `PATH`). A tool the backend
+  cannot use is refused at spawn. Treehouse's gain on a real repo is not measured yet; see
+  [backends/trial-treehouse.md](backends/trial-treehouse.md).
+- **Which to try next.** The current recommendation is in [backends/trial.md](backends/trial.md)
+  ("Recommendation"). At the time of writing it is `tmux`, with `worktree_provider` left at `git`.
+  Each backend's runbook is in [orca-lite](backends/trial-orca-lite.md), [tmux](backends/trial-tmux.md)
+  and [herdr](backends/trial-herdr.md).
 
 ## Swap the backend
 

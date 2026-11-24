@@ -4,13 +4,13 @@
 // Kept apart from lib.ts so the hook ports that import lib.ts don't load it.
 import { readFileSync, readlinkSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { backendPath, readIfs, run, shq, writeErr, writeOut } from "./shared";
+import { hostBackendPath, readIfs, run, shq, writeErr, writeOut } from "./shared";
 import { accountOwner, canon, exists, isDir, isFile, isLink } from "./install";
 
 /** The skills the roles invoke (roles/*.md). ONE list: the check reads it, and tests/install-ce-accounts.sh
  *  greps roles/*.md so a new role skill can't be added without the check learning it. */
 export const ROLE_CE_SKILLS = ["ce-code-review", "ce-work", "ce-plan", "ce-brainstorm", "ce-babysit-pr", "ce-commit-push-pr",
-  "ce-compound", "ce-doc-review", "ce-debug", "ce-pov", "ce-resolve-pr-feedback", "ce-simplify-code", "ce-test-browser", "lfg"];
+  "ce-compound", "ce-doc-review", "ce-debug", "ce-explain", "ce-pov", "ce-resolve-pr-feedback", "ce-simplify-code", "ce-test-browser", "lfg"];
 /** User skills under <config dir>/skills: missing = broken. */
 export const ROLE_USER_SKILLS = ["no-mistakes"];
 /** Missing only warns. */
@@ -191,7 +191,7 @@ async function adapterOut(adapter: string, args: string[]): Promise<{ ok: boolea
  *  skills ok (<path>)` or a ⚠ block; with tsv `<account>\t<ok|broken|warn>\t<reason>` per account). Accounts
  *  come from the backend's account-list with their claude-config-dir (empty = ~/.claude); backend unreachable or
  *  no Claude account -> the current env only (`claude`, account `current` in tsv). Returns 1 when any is broken. */
-export async function accountSkillsCheck(adapter: string = backendPath(), tsv = false, io: Sink = stdio): Promise<number> {
+export async function accountSkillsCheck(adapter: string = hostBackendPath(), tsv = false, io: Sink = stdio): Promise<number> {
   let accts: string[] = [];
   if ((await run([adapter, "status"])).rc === 0) {
     const list = (await run([adapter, "account-list"])).out;

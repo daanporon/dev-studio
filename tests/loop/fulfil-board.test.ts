@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { LoopActuator, type Fulfiller } from "../../bin/loop/core/actuator.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
 import { creditsHold, holdCredits } from "../../bin/loop/capacity/credits.ts";
+import { holdLogin, loginHold } from "../../bin/loop/capacity/login.ts";
 import { FakeBackend as FakeOrca } from "../../bin/loop/fakes/orca.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
@@ -141,6 +142,33 @@ describe("config", () => {
     expect(result(s, reset)).toMatchObject({ done: true, ok: true });
     // U267: reset drops the project's row, so the role runs the default row again.
     expect(s.db.query("SELECT value FROM config WHERE project = ? AND file = 'roles.conf' AND key = 'builder'").get(RL)).toBeNull();
+  });
+
+  test("configurable-role-elevation U2: a roles edit writes `return` as column 8, and rolesJson shows the resolved value", async () => {
+    const s = imported(), { tick } = rig(s);
+    for (const [k, v] of [["thinker", "claude opus always - - - up"], ["lead", "claude opus always"], ["builder", "claude opus ondemand - - - up"], ["builder-standard", "claude sonnet ondemand"], ["builder-review", "claude opus elevate"]])
+      s.db.run("INSERT OR IGNORE INTO config (project, file, key, value, observed_at) VALUES ('', 'roles.conf', ?, ?, 1)", [k, v]);
+    const row = (role: string) => rolesJson(RL, s.root)!.roles.find((x) => x.role === role)! as any;
+    const stored = (role: string) => String((s.db.query("SELECT value FROM config WHERE project = ? AND file = 'roles.conf' AND key = ?").get(RL, role) as Row | null)?.value);
+    expect(row("thinker")).toMatchObject({ back_up: true, back_up_from: "default" });
+    expect(row("lead")).toMatchObject({ back_up: false, return: "" });
+    expect(row("builder-standard")).toMatchObject({ back_up: true, back_up_from: "builder" });
+    expect(row("builder-review")).toMatchObject({ back_up: false });
+    const up = board(s, "roles", { role: "lead", agent: "claude", model: "opus", spawn: "always", effort: "", fallbacks: "", plan: "", return: "up" }, { project: RL });
+    await tick();
+    expect(result(s, up)).toMatchObject({ done: true, ok: true });
+    expect(stored("lead")).toBe("claude opus always - - - up");
+    expect(row("lead")).toMatchObject({ return: "up", back_up: true, back_up_from: "row" });
+    // an absent return keeps the row's own; "" writes `-` (inherit)
+    board(s, "roles", { role: "lead", agent: "claude", model: "sonnet", spawn: "always", effort: "", fallbacks: "" }, { project: RL });
+    await tick(T + 1);
+    expect(stored("lead")).toBe("claude sonnet always - - - up");
+    board(s, "roles", { role: "lead", agent: "claude", model: "sonnet", spawn: "always", effort: "", fallbacks: "", plan: "", return: "" }, { project: RL });
+    await tick(T + 2);
+    expect(row("lead")).toMatchObject({ return: "", back_up: false });
+    const bad = board(s, "roles", { role: "builder-review", agent: "claude", model: "opus", spawn: "elevate", effort: "", fallbacks: "", plan: "", return: "up" }, { project: RL });
+    await tick(T + 3);
+    expect(result(s, bad)).toMatchObject({ done: true, ok: false });
   });
 
   test("a roles edit upserts a row the project's roster lacks (U85)", async () => {
@@ -404,6 +432,18 @@ describe("studio", () => {
     }
   });
 
+  test("configurable-role-elevation U3: a move-up card (move_up: true) answered \"move it\" records studio:up-approved, not studio:approved", async () => {
+    const s = imported(), { tick } = rig(s);
+    const ids = JSON.parse(readFileSync(join(s.root, "fx", "alerts.json"), "utf8")).alerts.map((x: Row) => String(x.id));
+    const doc = JSON.parse(String((s.db.query("SELECT doc FROM observed_alerts WHERE project = 'fx' AND id = ?").get(ids[0]) as Row).doc));
+    s.db.run("UPDATE observed_alerts SET doc = ? WHERE project = 'fx' AND id = ?", [JSON.stringify({ ...doc, move: true, move_up: true, suggestion: "move it" }), ids[0]]);
+    const id = board(s, "dismiss", { id: ids[0], answer: "move it" }, { project: "fx" });
+    await tick();
+    expect(result(s, id)).toMatchObject({ done: true, ok: true, dismissed: ids[0], move: "approved" });
+    expect(s.get("episodes", { project: "fx", subject: "studio.move", kind: "studio:up-approved" })).toMatchObject({ state: "approved", ended_at: null, source: "board" });
+    expect(s.get("episodes", { project: "fx", subject: "studio.move", kind: "studio:approved" })).toBeNull();
+  });
+
   test("provider-billing-fallback U4: an out-of-credits card answered Fixed ends the hold, Switch it off disables the account, Dismiss only clears", async () => {
     for (const [answer, held, state] of [["Fixed", false, null], [" switch it off ", true, "disabled"], [undefined, true, null], ["something else", true, null]] as const) {
       const s = imported(), { tick } = rig(s);
@@ -419,6 +459,24 @@ describe("studio", () => {
       expect(s.get("accounts", { agent: "muse", account: "default" })?.state ?? null).toBe(state);
       if (answer === "Fixed") expect(result(s, id)).toMatchObject({ account: "muse/default", enabled: true, cleared: true });
       expect(s.db.query("SELECT 1 FROM observed_alerts WHERE project = 'fx' AND id = ?").get(ids[0])).toBeNull();
+    }
+  });
+  test("claude-login-ended U3: a login-ended card answered Logged in ends the hold, Switch it off disables the account, Dismiss only clears", async () => {
+    for (const [answer, held, state] of [["Logged in", false, null], [" switch it off ", true, "disabled"], [undefined, true, null]] as const) {
+      const s = imported(), { tick } = rig(s);
+      holdLogin(s, { agent: "claude", account: "work", from: "screen" }, T);
+      s.upsert("accounts", { agent: "claude", account: "work" }, { observed_at: T });
+      const doc = { kind: "login_ended", login: { agent: "claude", account: "work" }, options: ["Logged in", "Switch it off"] };
+      const aid = "loop-login.card_claude_work-k";
+      s.upsert("observed_alerts", { project: "fx", id: aid }, { doc: JSON.stringify({ id: aid, title: "work: login ended", ...doc }), observed_at: T });
+      const alerts = join(s.root, "fx", "alerts.json");
+      writeFileSync(alerts, JSON.stringify({ alerts: [{ id: aid, title: "work: login ended", status: "open", ...doc }] }));
+      const id = board(s, "dismiss", { id: aid, ...(answer ? { answer } : {}) }, { project: "fx" });
+      await tick();
+      expect(result(s, id)).toMatchObject({ done: true, ok: true, dismissed: aid });
+      expect(loginHold(s, "claude", "work", T) !== null).toBe(held);
+      expect(s.get("accounts", { agent: "claude", account: "work" })?.state ?? null).toBe(state);
+      expect(s.db.query("SELECT 1 FROM observed_alerts WHERE project = 'fx' AND id = ?").get(aid)).toBeNull();
     }
   });
 });

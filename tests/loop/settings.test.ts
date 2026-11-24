@@ -12,6 +12,7 @@ import { configObserver } from "../../bin/loop/observers/config.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
 import { exportFiles, exportSections, exportText, get, historyOf, readGet, readProjectRosterLines, readRoster, readRows, reset, rm, set, SettingsError, type SettingsFile } from "../../bin/loop/settings/settings.ts";
 import { open, type Store } from "../../bin/loop/core/store.ts";
+import { resolveBackUp } from "../../bin/loop/settings/roster.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const DS = join(ROOT, "bin", "ds");
@@ -109,6 +110,49 @@ describe("settings module", () => {
     expect(set(s, P, "roles.conf", "lead", String(get(s, P, "roles.conf", "lead", o).value), "ds", o)).toEqual([]);
     expect(s.db.query("SELECT count(*) AS n FROM config WHERE project = ?").get(P)).toEqual({ n: 0 });
     expect(historyOf(s, P)).toEqual([]);
+  });
+
+  test("roles.conf column 8 (configurable-role-elevation U1, U3): kept on an omitted set, cleared by -, checked, refused on elevate, accepted on studio", () => {
+    const { s, o } = fixture();
+    set(s, P, "roles.conf", "lead", "claude sonnet always - - - up", "ds", o);
+    expect(row(s, "roles.conf", "lead")).toBe("claude sonnet always - - - up");
+    // An omitted column 8 keeps the row's own; `-` clears it (inherit) and drops the trailing dashes.
+    set(s, P, "roles.conf", "lead", "claude opus always high", "ds", o);
+    expect(row(s, "roles.conf", "lead")).toBe("claude opus always high - - up");
+    set(s, P, "roles.conf", "lead", "claude opus always high - - -", "ds", o);
+    expect(row(s, "roles.conf", "lead")).toBe("claude opus always high");
+    set(s, P, "roles.conf", "thinker", "claude opus always - - - stay", "ds", o);
+    expect(row(s, "roles.conf", "thinker")).toBe("claude opus always - - - stay");
+    refused(() => set(s, P, "roles.conf", "lead", "claude opus always - - - yes", "ds", o), /return \(column 8\) must be up, stay or - \(got 'yes' on row 'lead'\)/);
+    refused(() => set(s, P, "roles.conf", "builder-review", "claude opus elevate - - - up", "ds", o), /can't go on 'builder-review': it is an elevate row/);
+    // U3: `up` on studio moves the Studio back up through studio-move.
+    set(s, P, "roles.conf", "studio", "claude sonnet ondemand - - - up", "ds", o);
+    expect(row(s, "roles.conf", "studio")).toBe("claude sonnet ondemand - - - up");
+    // `stay` on an elevate row is allowed (it changes nothing).
+    set(s, P, "roles.conf", "builder-review", "claude opus elevate - - - stay", "ds", o);
+    refused(() => set(s, P, "roles.conf", "lead", "claude opus always - - - up extra", "ds", o), /at most 8 columns/);
+  });
+
+  test("resolveBackUp (configurable-role-elevation U1, U3): own row, default row, base role, else stay; elevate always stays; studio from its own rows", () => {
+    const d = new Map([["thinker", "claude opus always - - - up"], ["builder", "claude opus ondemand"], ["builder-standard", "claude sonnet ondemand"],
+      ["builder-review", "claude opus elevate"], ["builder-review-standard", "claude sonnet elevate medium"], ["studio", "claude sonnet ondemand"], ["lead", "claude sonnet always"]]);
+    const none = new Map<string, string>();
+    expect(resolveBackUp("thinker", none, d)).toEqual({ back_up: true, value: "up", from: "default" });
+    expect(resolveBackUp("lead", none, d)).toEqual({ back_up: false, value: "stay", from: null });
+    expect(resolveBackUp("thinker-standard-babysit", none, d)).toEqual({ back_up: true, value: "up", from: "thinker" });
+    // A project thinker row written before column 8 still moves up.
+    expect(resolveBackUp("thinker", new Map([["thinker", "claude opus always high"]]), d).back_up).toBe(true);
+    expect(resolveBackUp("thinker", new Map([["thinker", "claude opus always - - - stay"]]), d)).toEqual({ back_up: false, value: "stay", from: "row" });
+    const up = new Map([["builder", "claude opus ondemand - - - up"]]);
+    expect(resolveBackUp("builder-standard", up, d)).toEqual({ back_up: true, value: "up", from: "builder" });
+    expect(resolveBackUp("builder-hard-babysit", up, d).back_up).toBe(true);
+    expect(resolveBackUp("builder-standard", new Map([...up, ["builder-standard", "claude sonnet ondemand - - - stay"]]), d).back_up).toBe(false);
+    for (const r of ["builder-review", "builder-review-standard", "studio"]) expect(resolveBackUp(r, up, d).back_up).toBe(false);
+    expect(resolveBackUp("builder-review", new Map([["builder-review", "claude opus elevate - - - up"]]), d).back_up).toBe(false);
+    // U3: studio resolves from its project row, then the default studio row, else stay.
+    expect(resolveBackUp("studio", new Map([["studio", "claude sonnet ondemand - - - up"]]), d)).toEqual({ back_up: true, value: "up", from: "row" });
+    expect(resolveBackUp("studio", none, new Map([...d, ["studio", "claude sonnet ondemand - - - up"]]))).toEqual({ back_up: true, value: "up", from: "default" });
+    expect(resolveBackUp("studio", none, d)).toEqual({ back_up: false, value: "stay", from: null });
   });
 
   test("models.conf: set, get, rm, reset; the value shape confRows makes", () => {
@@ -243,7 +287,8 @@ describe("ds config", () => {
     ds(root, "set", P, "limits.conf", "auto_merge", "squash");
     ds(root, "rm", P, "ship-mode", "mode");
     expect(ds(root, "import", "--project", P, backup).code).toBe(0);
-    expect(ds(root, "export", "--project", P).out).toBe(readFileSync(backup, "utf8"));
+    // `export` is a transfer file: the backup's text under the header line.
+    expect(ds(root, "export", "--project", P).out.split("\n").slice(1).join("\n")).toBe(readFileSync(backup, "utf8"));
     writeFileSync(join(dir, "limits.conf.imported-2026-11-17"), "context_warn 90000\n");
     expect(ds(root, "import", "--project", P, join(dir, "limits.conf.imported-2026-11-17")).code).toBe(0);
     expect(JSON.parse(ds(root, "get", P, "limits.conf", "context_warn").out)).toMatchObject({ value: "90000", source: "project" });

@@ -24,6 +24,11 @@
 //            the member it names is gone or recovered, a refusal card's row (U150) no longer stands.
 //            A kind this cannot judge goes once it is over a day old without a repeat (alerts.sh add
 //            of the same id restamps `since`).
+//   Archive                a card naming a squad (`squad`) whose newest row reads `closed` (or wants `gone` with a
+//            `done…` result) is gone, "its squad was archived"; not the `sweep-debrief-<topic>-…` card, a
+//            `questions_dropped` card or a `Stop command failed` card.
+//   Lifecycle failed       (squad form, "The loop could not make the <want> squad <topic>: …") is gone once the
+//            squad row is gone, its `want` is no longer the one named, or its `status` equals it.
 //   U67, Restart failed    one card per member (fulfil/request.ts giveUp, kind restart_failed, its member's
 //            worktree and episode): gone once the member is gone, its limit episode closed, or it runs on
 //            a listed account; a card from before U67 is matched by its text "<who> of <squad> (…".
@@ -35,6 +40,12 @@
 //   account-skills U3, a broken account   (`sweep-account-skills.<account>-<n>`, reconcilers/account-skills.ts):
 //            gone once the account's skills read `ok` or `warn:`, or its row is gone; skills NULL (a
 //            10-column accounts.tsv) cannot be judged, so the day-old rule applies.
+//   loop-tick-8s U4, slow ticks   (`sweep-tick-alarm.slow-<n>`, reconcilers/tick-alarm.ts):
+//            gone once the spell closed (newest tick_slow avg_ms at or under tick_alarm_ms, no tick_slow row for 2 x DS_LOOP_SLOW_EVERY_S, or the limit 0).
+//   disk-pressure U3, a low disk   (`sweep-disk-pressure.<path>-<n>`, reconcilers/disk-pressure.ts):
+//            gone once the disk's spell closed (free space above disk_card_free_pct + 5 points, the limit 0, or the disk unlisted).
+//   ds-feedback-github-issues U2, no leak word list   (`sweep-feedback.words-<n>`, reconcilers/feedback.ts):
+//            gone once the spell closed (the list holds a word, Feedback is off, or no note is due).
 import { existsSync, readFileSync } from "node:fs";
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
@@ -52,6 +63,7 @@ import { envInt } from "../core/tick.ts";
 import { allDone } from "../pause/wake.ts";
 import { retestDue } from "../squad/retest.ts";
 import { gitDir } from "../io/git-dir.ts";
+import { debriefTopic } from "../../board/card-place.ts";
 import { cancellationReality, cancellationRepository, sharedBuilder, sharedPr, prNumber } from "../squad/cancel.ts";
 
 const PICKER_STALE_S = 120;
@@ -330,7 +342,17 @@ function requestMoot(store: Store, project: string, subject: string): string | n
   }
   return null;
 }
+// A card of an archived squad: its newest squads row reads `closed`, or wants `gone` with a `done…` result.
+// Exempt: the archive's own cards (the debrief and the dropped-questions card are meant to be read) and a
+// failed late stop, which stays because something may still be listening. A refusal card keeps its own rule, which also ends its refusals row.
+function archivedCard(store: Store, project: string, a: Row): boolean {
+  const squad = typeof a.squad === "string" ? a.squad : "";
+  if (!squad || a.kind === REFUSAL_KIND || a.kind === "questions_dropped" || debriefTopic(a) !== null || /(^|[ :·])Stop command failed$/.test(String(a.title ?? ""))) return false;
+  const sq = store.db.query("SELECT status, want, want_result FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, squad) as Row | null;
+  return !!sq && (sq.status === "closed" || (sq.want === "gone" && String(sq.want_result ?? "").startsWith("done")));
+}
 export function alertGone(store: Store, project: string, a: Row, now = Math.floor(Date.now() / 1000)): string | false | null {
+  if (archivedCard(store, project, a)) return "its squad was archived";
   if (a.kind === "cancel_failed") {
     const u = store.get("units", { project, squad: a.squad, slug: a.unit });
     if (u?.status !== "cancelled") return "the unit is no longer cancelled";
@@ -340,7 +362,7 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
       return !prNumber(u.pr) || sharedPr(store, u) || (pr && (pr.state !== "OPEN" || pr.gone_at != null)) ? "the PR no longer needs closing" : false;
     }
     if (sharedBuilder(store, u)) return "another unit owns the Builder";
-    const r = cancellationReality(store, project, String(u.builder_wt ?? ""));
+    const r = cancellationReality(store, project, String(u.builder_wt ?? ""), u);
     if (a.step === "cancel.stop") return !r.live && !!r.tree ? "the Builder is stopped" : false;
     return !r.present && r.tree?.gone_at != null ? "the worktree is removed" : false;
   }
@@ -354,6 +376,13 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
     const m = store.db.query("SELECT * FROM members WHERE project = ? AND wt = ? ORDER BY id DESC").get(project, String(a.member ?? "")) as Row | null;
     if (!m || ["gone", "closed"].includes(String(m.status ?? "")) || m.want === "gone") return "its member no longer exists";
     return recovered(store, project, String(a.member), "exited", since) ? "its member runs again" : false;
+  }
+  // archive-stuck-worktrees U1: Archive slow clears once the member's worktree is removed or its squad is no longer closing.
+  if (a.kind === "archive_slow") {
+    const m = store.db.query("SELECT status, wt FROM members WHERE project = ? AND wt = ? ORDER BY id DESC").get(project, String(a.member ?? "")) as Row | null;
+    if (!m || !m.wt || ["gone", "closed"].includes(String(m.status ?? ""))) return "its worktree is removed";
+    const sq = store.db.query("SELECT want FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, String(a.squad ?? "")) as Row | null;
+    return sq?.want === "gone" ? false : "its squad is no longer closing";
   }
   // U4: the loop no longer raises Loop-stalled cards; the board's loop line shows restarts.
   if (/^loop-stall-\d+$/.test(id)) return "loop stalls are shown on the board's loop line now";
@@ -381,12 +410,35 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
   }
   const failed = /(^|[ :·])Restart failed$/.test(String(a.title)) ? text.match(/^(\S+) of (\S+) \(.* — the loop could not restart it/) : null;
   if (failed) return restartSettled(store, project, memberByLabel(store, project, failed[2], failed[1]), null, now);
+  if (/^sweep-debrief-/.test(id) || debriefTopic(a) !== null) return false;                    // R3: stays until Mark read or Dismiss
   const acct = id.match(/^sweep-account-skills\.(.+)-[0-9]+$/);
   if (acct) {
     const v = skillsOf(store, acct[1]);
     if (v === undefined) return "the account is no longer listed";
     if (v === null) return null;
     return v.startsWith("broken:") ? false : `the account's skills read ${v === "ok" ? "ok" : "warn (no longer broken)"}`;
+  }
+  // disk-pressure U3: a disk's card goes once its spell closed (free space above the limit plus 5 points, the limit off, the disk gone).
+  const disk = id.match(/^sweep-disk-pressure\.(.+)-[0-9]+$/);
+  if (disk) {
+    const ep = store.get("episodes", { project, subject: `disk-pressure.${disk[1]}`, kind: "disk-pressure" });
+    return ep && ep.ended_at == null ? false : "the disk has free space again";
+  }
+  // loop-tick-8s U4: a slow-ticks card goes once its spell closed (the newest tick_slow average at or under the limit, no tick_slow row for 2 windows, the limit off).
+  if (/^sweep-tick-alarm\.slow-[0-9]+$/.test(id)) {
+    const ep = store.get("episodes", { project, subject: "tick-alarm.slow", kind: "tick-alarm" });
+    return ep && ep.ended_at == null ? false : "ticks are fast again";
+  }
+  // ds-feedback-github-issues U2: the drafter's word-list card goes once its spell closed (the list holds a word, the repo is `-`, no note is due).
+  if (/^sweep-feedback\.words-[0-9]+$/.test(id)) {
+    const ep = store.get("episodes", { project, subject: "feedback.words", kind: "feedback-words" });
+    return ep && ep.ended_at == null ? false : "the leak word list is in place";
+  }
+  // studio-chat-queued-busy U2: a send-fail card goes once the member's streak ended (a send worked).
+  const sf = id.match(/^sweep-send-fail\.(.+)-[0-9]+$/);
+  if (sf) {
+    const ep = store.get("episodes", { project, subject: `send-fail:${project}/${sf[1]}`, kind: "send-fail" });
+    return ep && ep.ended_at == null ? false : "typing into the member works again";
   }
   const studio = (store.get("projects", { label: project })?.studio_wt as string | null) ?? null;
   if (/^(sweep|loop)-studio\.limit-/.test(id)) {
@@ -401,6 +453,12 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
   }
   const studioCause = text.match(/^studio \(([^)]*?) since /);
   if (studioCause) return recovered(store, project, studio, studioCause[1], since) ? "the Studio is running again" : false;
+  // Lifecycle failed, squad form (fulfil/squad.ts giveUp): gone once the squad's wish moved on.
+  const lifecycle = text.match(/^The loop could not make the (\S+) squad (\S+): /);
+  if (lifecycle) {
+    const sq = store.db.query("SELECT status, want FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, lifecycle[2]) as Row | null;
+    return !sq || sq.want !== lifecycle[1] || sq.status === lifecycle[1] ? "the squad's wish moved on" : false;
+  }
   const named = text.match(/^(\S+) of (\S+) \((.*?) since /), made = text.match(/^The loop could not make the running (\S+)(?: (\S+))? of ([^\s:]+):/);
   const [who, squad, cause] = named ? [named[1], named[2], named[3]] : made ? [made[2] ? `${made[1]}-${made[2]}` : made[1], made[3], "failed"] : [null, null, null];
   if (!who || !squad) return null;

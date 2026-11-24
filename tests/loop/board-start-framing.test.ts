@@ -2,7 +2,7 @@
 // squad's wish byte for byte. Board server (/api/request) -> studio fulfiller (framing file + request line)
 // -> spawn-squad.sh with the line's arguments, the way the Studio runs /ds-start-squad. Temp state root only.
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import studio from "../../bin/loop/fulfil/studio.ts";
@@ -40,8 +40,13 @@ async function rig() {
     const [out, err] = [await new Response(p.stdout).text(), await new Response(p.stderr).text()];
     expect({ code: await p.exited, err }).toEqual({ code: 0, err: "" }); void out;
   };
+  // chat-image-upload U4: an image for the Start squad dialog (topic _start, no member).
+  const upload = async (bytes: Uint8Array) => {
+    const r = await fetch(url + "/api/chat-file?project=p&topic=_start", { method: "POST", headers: { Origin: url, "Content-Type": "image/png" }, body: bytes });
+    return { status: r.status, body: await r.json() as any };
+  };
   const wish = (topic: string) => store.db.query("SELECT want, want_payload FROM squads WHERE project = 'p' AND topic = ?").get(topic) as Row | null;
-  return { root, store, post, fulfil, spawn, wish };
+  return { root, store, post, fulfil, spawn, wish, upload };
 }
 const argsOf = (line: string) => line.trim().replace(/^board: the operator asks you to run: \/ds-start-squad /, "").split(" ");
 
@@ -99,7 +104,7 @@ test("every refusal in the contract says why and files nothing", async () => {
     ["long slug", { ...ok, slug: "a".repeat(65) }, 400, "topic slug may only use"],
     ["bad type", { ...ok, type: "other" }, 400, "type must be one of feature, testing"],
     ["bad autonomy", { ...ok, autonomy: "yolo" }, 400, "autonomy must be one of checkpoints, lfg"],
-    ["bad start", { ...ok, start: "later" }, 400, "start must be one of plan, brainstorm, ask, investigate, auto"],
+    ["bad start", { ...ok, start: "later" }, 400, "start must be one of plan, brainstorm, ask, investigate, fix, auto"],
     ["start with testing", { ...ok, type: "testing", start: "plan" }, 400, "a testing squad has no start"],
     ["unknown project", { ...ok, project: "nope" }, 409, "no project nope on this board"],
   ];
@@ -111,6 +116,7 @@ test("every refusal in the contract says why and files nothing", async () => {
   expect((f.store.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'").get() as Row).n).toBe(0);
   // auto and testing without start are fine
   expect((await f.post({ ...ok, start: "auto" })).status).toBe(202);
+  expect((await f.post({ ...ok, start: "fix" })).status).toBe(202);
   expect((await f.post({ ...ok, type: "testing", start: "auto" })).status).toBe(202);
 });
 
@@ -128,4 +134,76 @@ test("an old-shape start (no framing) still writes its one line; the other actio
   const row = f.store.requestAny("studio", { action: "start", topic: null, line: "board: the operator asks you to run: /ds-start-squad fix it" }, { project: "p", by: "board" }).row;
   expect(await f.fulfil(Number(row.id))).toBe("board: the operator asks you to run: /ds-start-squad fix it\n");
   expect(existsSync(join(f.root, "p", "framings"))).toBe(false);
+});
+
+// chat-image-upload U4: images uploaded to chat-files/_start/ go with the start; the fulfil copies them next to the
+// brief and lists their absolute paths at its end.
+const png = (tag: string) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Buffer.from(tag)]);
+const SECTION = "\n## Attached images\n\nThe operator attached these images to the brief. Open each with your file-reading tool:\n";
+
+test("a start with two images: the brief ends with their copies' paths, 0600, and a replay copies nothing twice", async () => {
+  const f = await rig();
+  const a = await f.upload(png("one")), b = await f.upload(png("two"));
+  expect([a.status, b.status]).toEqual([200, 200]);
+  const [na, nb] = [a.body.id as string, b.body.id as string];
+  expect(existsSync(join(f.root, "p", "chat-files", "_start", na))).toBe(true);
+  const r = await f.post({ project: "p", action: "start", text: "look at these", files: [na, nb] });
+  expect(r.status).toBe(202);
+  const row = f.store.db.query("SELECT payload FROM requests WHERE id = ?").get(r.body.id) as Row;
+  expect(JSON.parse(String(row.payload)).files).toEqual([na, nb]);
+  await f.fulfil(r.body.id);
+  const dir = join(f.root, "p", "framings", `board-start-${r.body.id}`);
+  const brief = readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8");
+  expect(brief).toBe(`look at these\n${SECTION}- ${join(dir, na)}\n- ${join(dir, nb)}\n`);
+  for (const n of [na, nb]) {
+    expect(statSync(join(dir, n)).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(dir, n)).equals(readFileSync(join(f.root, "p", "chat-files", "_start", n)))).toBe(true);
+  }
+  expect(existsSync(join(f.root, "p", "chat-files", "_start", na))).toBe(true); // copied, not moved
+  const ino = statSync(join(dir, na)).ino;
+  // A replay after the upload was pruned: the copy is kept and listed, nothing is copied again.
+  unlinkSync(join(f.root, "p", "chat-files", "_start", na));
+  await f.fulfil(r.body.id);
+  expect(statSync(join(dir, na)).ino).toBe(ino);
+  expect(readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8")).toBe(brief);
+});
+
+test("an image gone before the start ran gets its own line; a brief ending in a newline gets one blank line", async () => {
+  const f = await rig();
+  const a = await f.upload(png("three")), b = await f.upload(png("four"));
+  const [na, nb] = [a.body.id as string, b.body.id as string];
+  const r = await f.post({ project: "p", action: "start", text: "brief\n", files: [na, nb] });
+  expect(r.status).toBe(202);
+  unlinkSync(join(f.root, "p", "chat-files", "_start", nb));
+  await f.fulfil(r.body.id);
+  const dir = join(f.root, "p", "framings", `board-start-${r.body.id}`);
+  expect(readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8"))
+    .toBe(`brief\n${SECTION}- ${join(dir, na)}\n- ${nb} (removed before the squad started)\n`);
+  expect(existsSync(join(dir, nb))).toBe(false);
+});
+
+test("a start's images: nine, a bad name or a missing one is refused and files nothing; no images is byte for byte as before", async () => {
+  const f = await rig();
+  const a = await f.upload(png("five"));
+  const ok = { project: "p", action: "start", text: "do it" };
+  const nine = Array.from({ length: 9 }, (_, i) => `${String(i).repeat(16)}.png`);
+  const cases: [string, any, number, string][] = [
+    ["nine", { ...ok, files: nine }, 400, "files: at most 8 distinct image names"],
+    ["bad name", { ...ok, files: ["../x.png"] }, 400, "files: at most 8"],
+    ["twice", { ...ok, files: [a.body.id, a.body.id] }, 400, "files: at most 8"],
+    ["not a list", { ...ok, files: "x" }, 400, "files: at most 8"],
+    ["missing", { ...ok, files: ["0123456789abcdef.png"] }, 409, "image 0123456789abcdef.png is gone — attach it again"],
+  ];
+  for (const [name, body, status, msg] of cases) {
+    const r = await f.post(body);
+    expect({ name, status: r.status }).toEqual({ name, status });
+    expect(String(r.body.error)).toContain(msg);
+  }
+  expect((f.store.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'").get() as Row).n).toBe(0);
+  const r = await f.post({ ...ok, files: [] });
+  expect(r.status).toBe(202);
+  expect(JSON.parse(String((f.store.db.query("SELECT payload FROM requests WHERE id = ?").get(r.body.id) as Row).payload))).not.toHaveProperty("files");
+  await f.fulfil(r.body.id);
+  expect(readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8")).toBe("do it");
+  expect(existsSync(join(f.root, "p", "framings", `board-start-${r.body.id}`))).toBe(false);
 });

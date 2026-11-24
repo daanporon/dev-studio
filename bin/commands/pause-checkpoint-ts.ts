@@ -1,5 +1,6 @@
 // ds pause-checkpoint-ts — a pausing agent journals, then acknowledges (U192): what bin/role/pause-checkpoint.sh runs.
 import { ROOT, run as runCmd, writeErr, writeOut } from "../lib/shared";
+import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = `<project> <squad> <role> <suffix|-> <generation> "<checkpoint>" --commands-finished — journal a checkpoint, then acknowledge the pause; a stop-… generation is a stop checkpoint before a restart, journaled only (pause-checkpoint.sh)`;
 
@@ -7,12 +8,15 @@ export async function run(argv: string[]): Promise<number> {
   if (!(argv.length === 7 && argv[6] === "--commands-finished")) {
     writeErr('usage: pause-checkpoint.sh <project> <squad> <role> <suffix|-> <generation> "<checkpoint>" --commands-finished\n'); return 2;
   }
-  const handle = process.env.ORCA_TERMINAL_HANDLE ?? "";
-  if (!handle) { writeErr("pause: checkpoint must run in the instructed agent terminal\n"); return 2; }
+  const me = whoAmI();
+  if (!me.handle && !(me.gen && me.wt)) { writeErr("pause: checkpoint must run in the instructed agent terminal\n"); return 2; }
   const [project, squad, role, sfx, gen, text] = argv;
   if (!text) { writeErr("pause: checkpoint text is required\n"); return 2; }
   const suffix = sfx === "-" ? "" : sfx;
   const ds = `${ROOT}/bin/ds`;
+  // U12b: off Orca there is no handle; the loop finds this terminal by its generation (ds pause session).
+  const handle = me.handle ?? (gen.startsWith("stop-") ? "-" : (await runCmd([ds, "pause", "session"])).out.trim());
+  if (!handle) { writeErr("pause: checkpoint must run in the instructed agent terminal\n"); return 2; }
   const journal = `${ROOT}/bin/role/journal.sh`, jrole = role + (suffix ? `-${suffix}` : "");
   // U266: a stop checkpoint (generation `stop-…`) before a planned restart. The loop proves it from
   // the journal line itself; there is nothing to acknowledge.

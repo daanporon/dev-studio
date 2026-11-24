@@ -7,6 +7,7 @@ import { stopping } from "../squad/cancel.ts";
 // A member is broken when it is
 //   dead            no observed worker (outside the spawn grace)              episode gone|<wt>
 //   hung            working with no output for HUNG_MIN                       hung|<wt>|<last output>
+//                   (not when its transcript's last turn ended or was interrupted: turnEnded)
 //   exited          not working and no agent left in its worktree (outside the spawn grace)
 //                                                                             exited|<wt>
 //   not responding  a Lead idle or done with Run mail unread for SILENT_MIN   silent|<wt>|<first unread>
@@ -85,8 +86,14 @@ import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
 import { tailOf } from "../observers/state.ts";
 import { redact } from "../core/redact.ts";
+import { INTERRUPTED } from "../chat/turns.ts";
 import { wake } from "../pause/wake.ts";
 import { settledDispatch } from "./members.ts";
+import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioView } from "../squad/studio.ts";
+import { memo } from "../capacity/walk-memo.ts";
+import { onContract } from "../squad/backend.ts";
+import { finishOf } from "../squad/finish-read.ts";
+import { UNREAD } from "../messages/messages.ts";
 
 export const POKE_TEXT = "dev-studio loop: you went quiet with unread messages. Check your inbox now and carry on with your work.";
 export const QUIET_POKE_TEXT = "dev-studio loop: you have been working with no output for a while — are you stuck? If you are, ask your Lead; if not, carry on with your work.";
@@ -145,7 +152,7 @@ function noOpenPr(store: Store, project: string, u: { pr: string | null; hold: n
 // U267 (1): the Builder's own worker_done for its current dispatch, as Run mail the loop relayed at
 // least DONE_GRACE_S ago (finish-unit records the PR just before it sends, so a PR seen late is no report).
 // Its outcome and the first lines of its body, for the Lead's report.
-const DONE_GRACE_S = 120;
+export const DONE_GRACE_S = 120;
 export function workerDone(store: Store, project: string, squad: string, dispatch: unknown, now: number): { outcome: string; text: string } | null {
   if (!dispatch) return null;
   const r = store.db.query(`SELECT subject, body, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.outcome') END AS outcome FROM relayed
@@ -153,9 +160,22 @@ export function workerDone(store: Store, project: string, squad: string, dispatc
     ORDER BY seen_at DESC LIMIT 1`)
     .get(project, squad, String(dispatch), now - DONE_GRACE_S) as { subject: string | null; body: string | null; outcome: string | null } | null;
   if (!r) return null;
-  const lines = [r.subject, ...String(r.body ?? "").split("\n")].map((l) => String(l ?? "").trim()).filter(Boolean).slice(0, 3);
-  const text = lines.join(" / ");
-  return { outcome: r.outcome || "unknown", text: text.length > 400 ? `${text.slice(0, 399)}…` : text || "(no body)" };
+  return { outcome: r.outcome || "unknown", text: reportText([r.subject, ...String(r.body ?? "").split("\n")]) };
+}
+
+// A report's first three non-empty lines, joined, at most 400 characters.
+function reportText(lines: unknown[]): string {
+  const text = lines.map((l) => String(l ?? "").trim()).filter(Boolean).slice(0, 3).join(" / ");
+  return text.length > 400 ? `${text.slice(0, 399)}…` : text || "(no body)";
+}
+
+// U12: workerDone for a squad off Orca: the failed or no-PR finish row of the worktree's member's
+// current generation, read once DONE_GRACE_S old (as the relayed worker_done is), with its generation.
+export function finishDone(store: Store, project: string, squad: string, wt: string, now: number): { outcome: string; text: string; gen: string } | null {
+  const m = store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project, squad, wt) as Row | null;
+  const f = m ? finishOf(store, m) : null;
+  if (!f || (f.outcome !== "failed" && f.outcome !== "no-pr") || Number(f.at) > now - DONE_GRACE_S) return null;
+  return { outcome: String(f.outcome), text: reportText(String(f.body ?? "").split("\n")), gen: String(m!.gen) };
 }
 
 // U267 (2): a Builder's branch head, read with one `git rev-parse HEAD` in its worktree when it is due.
@@ -243,13 +263,49 @@ export function foregroundOpen(store: Store, wt: string): boolean | null {
   try { statSync(t.path); } catch { return null; }
   return openCalls(store, wt)?.foreground ?? false;
 }
-// One parse of the newest transcript's last MB: is a foreground tool call open, and which background
-// tasks it started have not reported done (oldest first, with the command each ran). null with no transcript row.
-export type OpenCalls = { foreground: boolean; background: { id: string; command: string }[] };
+// Did the last turn of these transcript lines end (studio-hung-agent-broken U1)? The newest record that
+// says where a turn stands decides: an Esc (a user record starting `[Request interrupted by user`) or a turn
+// end (system `stop_hook_summary` / `turn_duration`) ends it; an assistant record, a tool result or any
+// other user line (a prompt, a typed loop line, a task notification, a slash command, Stop hook feedback)
+// opens it. Records that say nothing about the turn are skipped: meta and compaction-summary user records,
+// a local command's output, other system records (away_summary, compact_boundary) and the bookkeeping
+// types (attachments, snapshots, queue operations). Read from the end, so it stops at the first such record.
+const LOCAL_OUTPUT = /^\s*<local-command-/;
+export function linesEnded(lines: string[]): boolean {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.includes('"assistant"') && !line.includes('"user"') && !line.includes('"system"')) continue;
+    let j: Row;
+    try { j = JSON.parse(line); } catch { continue; } // the cut first line, a half-written last one
+    if (j?.type === "assistant") return false;
+    if (j?.type === "system") {
+      if (j.subtype === "stop_hook_summary" || j.subtype === "turn_duration") return true;
+      continue;
+    }
+    if (j?.type !== "user" || j.isMeta === true || j.isCompactSummary === true) continue;
+    const c = (j.message as Row | undefined)?.content;
+    const texts = typeof c === "string" ? [c] : Array.isArray(c) ? (c as Row[]).filter((x) => x?.type === "text").map((x) => String(x.text ?? "")) : [];
+    if (texts.some((s) => INTERRUPTED.test(s))) return true;
+    if (Array.isArray(c) && (c as Row[]).some((x) => x?.type === "tool_result")) return false;
+    if (texts.length && texts.every((s) => LOCAL_OUTPUT.test(s))) continue;
+    return false;
+  }
+  return false;
+}
+
+// One parse of the newest transcript's last MB: is a foreground tool call open, which background tasks it
+// started have not reported done (oldest first, with the command each ran), and did its last turn end
+// (`linesEnded`). null with no transcript row. One decide parses each worktree's transcript once (walk-memo.ts
+// withDecideMemo: its look() asks up to three times per member, through the switch and stop checks).
+export type OpenCalls = { foreground: boolean; background: { id: string; command: string }[]; ended: boolean };
 export function openCalls(store: Store, wt: string): OpenCalls | null {
+  return memo(store, null, "open-calls", wt, () => openCallsRead(store, wt));
+}
+function openCallsRead(store: Store, wt: string): OpenCalls | null {
   const t = store.db.query("SELECT path FROM observed_transcripts WHERE wt = ? ORDER BY mtime DESC").get(wt) as { path: string } | null;
   if (!t) return null;
   const lines = tailOf(t.path, 1024 * 1024).split("\n");
+  const ended = linesEnded(lines);
   const results = new Set<string>(), bg = new Map<string, string>(), bgIds = new Map<string, string>();
   let last: string | null = null;
   for (const line of lines) {
@@ -280,7 +336,19 @@ export function openCalls(store: Store, wt: string): OpenCalls | null {
       }
     }
   }
-  return { foreground: last !== null && !results.has(last), background: [...bgIds].map(([id, use]) => ({ id, command: bg.get(use) ?? "" })) };
+  return { foreground: last !== null && !results.has(last), background: [...bgIds].map(([id, use]) => ({ id, command: bg.get(use) ?? "" })), ended };
+}
+
+// studio-hung-agent-broken U1: is a Claude member Orca reads `working` really at its prompt? Its newest
+// transcript's last turn ended or was interrupted (Esc runs no Stop hook, so Orca keeps `working` until the
+// next turn ends). false with no transcript (Codex, Muse, none yet), one that can't be read, or one last
+// written before the member's process started (a new session that has not written its own yet).
+export function turnEnded(store: Store, wt: string): boolean {
+  const t = store.db.query("SELECT mtime FROM observed_transcripts WHERE wt = ? ORDER BY mtime DESC").get(wt) as { mtime: number | null } | null;
+  if (!t) return false;
+  const w = store.db.query("SELECT started_at FROM observed_workers WHERE wt = ? AND gone_at IS NULL").get(wt) as { started_at: number | null } | null;
+  if (w?.started_at && t.mtime != null && Number(t.mtime) < Number(w.started_at)) return false;
+  return openCalls(store, wt)?.ended ?? false;
 }
 
 // A Builder at its prompt (builder-idle-no-pr-card U1): Orca reads it `working`, but its turn ended
@@ -348,26 +416,39 @@ export function longStepOpen(store: Store, project: string, wt: string, now: num
   return cap > 0 && now - out < cap * 60 + extra && stepOpen(store, wt);
 }
 
+// U12b: the unread mail of a member of a squad off Orca (no Run, no inbox count on its worker row): its
+// unread `messages` rows (UNREAD). null for a member on Orca, whose worker row's `unread` is Orca's count.
+export function rowsUnread(store: Store, project: string, wt: string): number | null {
+  const m = store.db.query("SELECT squad, role, suffix FROM members WHERE project = ? AND wt = ? ORDER BY id DESC").get(project, wt) as Row | null;
+  if (!m || !onContract(store, project, String(m.squad))) return null;
+  const r = store.db.query(`SELECT COUNT(*) AS n FROM messages m WHERE m.project = ? AND m.squad = ? AND m.to_role = ? AND m.to_suffix = ? AND ${UNREAD}`)
+    .get(project, String(m.squad), String(m.role), String(m.suffix ?? "")) as { n: number };
+  return r.n;
+}
+
 // The board's read of a Lead: the verdict liveness.broken() would reach for it, from the rows
 // alone (writes nothing). null = nothing wrong (or a case the reconciler also leaves alone).
 export type LeadVerdict = { verdict: "not responding" | "hung"; since: number };
 export function leadVerdict(store: Store, project: string, wt: string, now: number): LeadVerdict | null {
-  const sq = store.db.query("SELECT run_id FROM squads WHERE project = ? AND lead_wt = ? ORDER BY rowid DESC").get(project, wt) as { run_id: string | null } | null;
-  if (sq && !sq.run_id) return null;
+  const sq = store.db.query("SELECT run_id, topic FROM squads WHERE project = ? AND lead_wt = ? ORDER BY rowid DESC").get(project, wt) as { run_id: string | null; topic: string } | null;
+  if (sq && !sq.run_id && !onContract(store, project, sq.topic)) return null;
   const w = store.db.query("SELECT * FROM observed_workers WHERE project = ? AND wt = ? AND gone_at IS NULL").get(project, wt) as Row | null;
   if (!w || spawnGrace(store, project, wt, now) || workerLimited(store, project, wt, w, now)) return null;
   const hung = knob(store, project, "HUNG_MIN", 30) * 60, silent = knob(store, project, "SILENT_MIN", 10) * 60;
   if (w.state === "working") {
     const out = Number(w.last_output_at ?? 0);
-    if (out > 0 && now - out >= hung && !longStepOpen(store, project, wt, now, out, hung)) return { verdict: "hung", since: out };
+    if (out > 0 && now - out >= hung && !longStepOpen(store, project, wt, now, out, hung) && !turnEnded(store, wt)) return { verdict: "hung", since: out };
     return null;
   }
   if (w.state !== "idle" && w.state !== "done") return null;
   const ep = store.get("episodes", { project, subject: wt, kind: "unread" });
-  if (!ep || ep.ended_at != null || ep.started_at == null || Number(w.unread ?? 0) <= 0) return null;
+  if (!ep || ep.ended_at != null || ep.started_at == null || (rowsUnread(store, project, wt) ?? Number(w.unread ?? 0)) <= 0) return null;
   const since = Number(ep.started_at);
   return now - since >= silent ? { verdict: "not responding", since } : null;
 }
+
+// broken()'s `run` for a Lead off Orca: its mail is its `messages` rows (U12b).
+const ROWS = "\u0000rows";
 
 class Pass {
   readonly actions: Action[] = [];
@@ -407,9 +488,10 @@ class Pass {
   // Unread Run mail first seen while idle or done. It ends when the mail is gone or the count
   // falls (the member read some); a turn that leaves the same mail unread keeps the clock (the
   // sweep keys the episode on the oldest unread message, which a turn does not change).
-  unreadSince(wt: string, w: Row): number | null {
+  // U12b: off Orca the count is the member's unread `messages` rows (rowsUnread).
+  unreadSince(wt: string, w: Row, rows: number | null = null): number | null {
     const key = { project: this.project, subject: wt, kind: "unread" };
-    const row = this.store.get("episodes", key), unread = Number(w.unread ?? 0);
+    const row = this.store.get("episodes", key), unread = rows ?? Number(w.unread ?? 0);
     const open = row && row.ended_at == null && row.started_at != null;
     if (open && (unread === 0 || unread < Number(row!.count ?? 0))) {
       this.store.upsert("episodes", key, { ended_at: this.now, state: "read", observed_at: this.now });
@@ -426,12 +508,17 @@ class Pass {
 
   broken(wt: string, run: string | null, grace: boolean): Broken | null {
     const w = this.worker(wt), n = this.now;
-    const first = w && run ? this.unreadSince(wt, w) : null;
+    // `run`: the Lead's mail is read: its Run's inbox, or ROWS (a squad off Orca) its `messages` rows.
+    const rows = w && run === ROWS ? rowsUnread(this.store, this.project, wt) : null;
+    const first = w && run && (run !== ROWS || rows != null) ? this.unreadSince(wt, w, rows) : null;
     if (!w) return grace && this.inGrace(wt) ? null : { cause: "dead", since: n, ep: `gone|${wt}` };
     if (w.state === "working") {
       const out = Number(w.last_output_at ?? 0);
-      if (out > 0 && n - out >= this.k.hung * 60 && this.longStep(wt, out, this.k.hung * 60)) return null;
-      return out > 0 && n - out >= this.k.hung * 60 ? { cause: "hung", since: out, ep: `hung|${wt}|${out}` } : null;
+      if (!(out > 0 && n - out >= this.k.hung * 60)) return null;
+      if (this.longStep(wt, out, this.k.hung * 60)) return null;
+      // U1: Esc (or a turn end Orca has not caught up with) leaves the member at its prompt, not hung.
+      if (turnEnded(this.store, wt)) return null;
+      return { cause: "hung", since: out, ep: `hung|${wt}|${out}` };
     }
     if (this.agents(wt) === 0) return grace && this.inGrace(wt) ? null : { cause: "exited", since: n, ep: `exited|${wt}` };
     return first != null && n - first >= this.k.silent * 60 ? { cause: "not responding", since: first, ep: `silent|${wt}|${first}` } : null;
@@ -442,7 +529,8 @@ class Pass {
   longStep(wt: string, out: number, extra = 0): boolean { return longStepOpen(this.store, this.project, wt, this.now, out, extra); }
 
   alert(squad: string | null, key: string, ep: string, text: string, to: "squad" | "@project",
-    option = "look at it, then restart it by hand (restart-role.sh)", why = "the loop does not restart an agent twice in a row or one that did not come back"): void {
+    option = "look at it, then restart it by hand (restart-role.sh)", why = "the loop does not restart an agent twice in a row or one that did not come back",
+    card: { title?: string; fields?: Record<string, unknown> } = {}): void {
     const k = { project: this.project, subject: key, kind: "alerted" };
     const row = this.store.get("episodes", k);
     let seen: string[] = [];
@@ -450,13 +538,32 @@ class Pass {
     if (seen.some((e) => this.same(row, ep, e))) return;
     seen.push(ep);
     this.store.upsert("episodes", k, { squad, started_at: this.now, episode_key: ep, count: seen.length, state: JSON.stringify(seen), source: "loop", observed_at: this.now });
-    this.actions.push({ project: this.project, squad, subject: key, kind: "alert", episode: ep, payload: { title: "Agent broken", card: "agent_broken", text, option, why, to } });
+    this.actions.push({ project: this.project, squad, subject: key, kind: "alert", episode: ep,
+      payload: { title: card.title ?? "Agent broken", card: "agent_broken", text, option, why, to, ...(card.fields ? { fields: card.fields } : {}) } });
+  }
+
+  // studio-hung-agent-broken U2: the Studio's own card. It names the project's Studio terminal and, with an
+  // adopted handle, offers Restart Studio (fulfil/studio.ts records the approval, reconcilers/studio.ts
+  // files the restart). The text keeps starting `studio (<cause> since `, which alertGone (alerts.ts) clears on.
+  studioAlert(key: string, b: Broken, what: string): void {
+    const v = studioView(this.store, this.project), handle = (v?.member?.handle as string | null) || null;
+    const term = handle ? v!.terms.find((t) => t.handle === handle) : undefined;
+    const where = handle ? `your cockpit terminal ${term?.title || "untitled"}, ${handle}` : "your cockpit terminal; the loop has adopted none";
+    const state = b.cause === "hung" ? `has shown no output for ${Math.max(0, Math.round((this.now - b.since) / 60))} min while Orca reads it as working`
+      : b.cause === "exited" ? "has no agent running in its worktree" : b.cause === "dead" ? "is no longer listed by Orca" : `is ${b.cause}`;
+    const text = `${what} — the ${this.project} Studio (${where}) ${state}`;
+    const why = "The loop never restarts the Studio on its own.";
+    // No handle, nothing to restart through: the one acknowledgement, as before.
+    if (!handle) { this.alert(null, key, b.ep, text, "@project", "look at it, then restart it by hand", why, { title: STUDIO_CARD_TITLE }); return; }
+    this.alert(null, key, b.ep, text, "@project", "", why,
+      { title: STUDIO_CARD_TITLE, fields: { restart: true, handle, options: [RESTART_STUDIO, STUDIO_FINE] } });
   }
 
   // handle: one request per episode; a RECHECK_MIN recheck; a second break within REBREAK_MIN goes up.
   handle(squad: string | null, key: string, target: string, member: string, topic: string, b: Broken): void {
     const what = `${member}${topic ? ` of ${topic}` : ""} (${b.cause} since ${hhmm(b.since)})`;
     const to = squad ? "squad" : "@project";
+    if (target === "_operator" && key === "_studio") { this.studioAlert(key, b, what); return; }
     if (target === "_operator") { this.alert(squad, key, b.ep, `${what} — nobody above it can restart it`, to); return; }
     const k = { project: this.project, subject: key, kind: "req" };
     const req = this.store.get("episodes", k), t = Number(req?.started_at ?? 0);
@@ -614,13 +721,16 @@ class Pass {
     const file = (ep: string, text: string) => this.actions.push({ project: this.project, squad, member, subject: `${key}.idle`, kind: "request.file", episode: ep,
       payload: { target: above, path: `requests/${above}/${key}.idle-${this.now}.txt`, text } });
     // (1) The task ended through the Builder's own worker_done with no PR: one report, never a poke.
-    const done = u.pr ? null : workerDone(this.store, this.project, squad, w.dispatch_id, this.now);
+    // U12: off Orca, its failed or no-PR finish row of this generation is that report.
+    const contract = onContract(this.store, this.project, squad);
+    const fin = !u.pr && contract ? finishDone(this.store, this.project, squad, wt, this.now) : null;
+    const done = u.pr ? null : contract ? fin : workerDone(this.store, this.project, squad, w.dispatch_id, this.now);
     if (done) {
-      const ep = `failed|${u.slug}|${w.dispatch_id}`;
+      const ep = `failed|${u.slug}|${fin ? `gen:${fin.gen}` : w.dispatch_id}`;
       if (recorded || (row?.episode_key === ep && row.state === "failed_report")) return;
       this.store.upsert("episodes", k, { squad, started_at: this.now, ended_at: null, count: 1, episode_key: ep, state: "failed_report", source: "loop", observed_at: this.now });
       stall("failed_report", null);
-      file(ep, `${done.outcome === "failed" ? "failed report" : "report with no PR"}: ${member} of ${squad} ended its task on unit ${u.slug} with no PR (worker_done, outcome ${done.outcome}): ${done.text}. Answer it, mark the unit done, dispatch it again, split it or cancel it.\n`);
+      file(ep, `${done.outcome === "failed" ? "failed report" : "report with no PR"}: ${member} of ${squad} ended its task on unit ${u.slug} with no PR (${contract ? "ds finish" : "worker_done"}, outcome ${done.outcome}): ${done.text}. Answer it, mark the unit done, dispatch it again, split it or cancel it.\n`);
       return;
     }
     // A failed report is over once a new dispatch (or a PR) replaced the one it named.
@@ -714,7 +824,8 @@ class Pass {
       const topic = String(sq.topic), lead = leadOf(store, sq);
       if (paused(store, { project, squad: topic })) continue;
       let aboveBuilder = topic;
-      if (lead && this.check(topic, `${topic}.lead`, aboveLead, "lead", lead, (sq.run_id as string | null) ?? null, true).cannot) aboveBuilder = aboveLead;
+      const mail = (sq.run_id as string | null) ?? (onContract(store, project, topic) ? ROWS : null);
+      if (lead && this.check(topic, `${topic}.lead`, aboveLead, "lead", lead, mail, true).cannot) aboveBuilder = aboveLead;
       const members = store.db.query("SELECT role, suffix, wt FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone' AND COALESCE(status, '') != 'gone' ORDER BY id")
         .all(project, topic) as { role: string; suffix: string; wt: string }[];
       for (const m of members.filter((x) => x.role === "thinker")) this.check(topic, `${topic}.${who(m)}`, aboveLead, who(m), m.wt, null, true);

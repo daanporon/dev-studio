@@ -73,7 +73,7 @@ Orca brief says — you stay running between turns and report through `ds` and `
       can be dropped** — `bin/role/squad-state.sh <state> register-plan <report-path>`
       (one command for the whole plan: plan path, deps and tier land on every unit,
       and they show `○ planned` on the board) — **then the loop dispatches their
-      Builders** (a **feature** squad). If `register-plan` **refuses** (exit 1, naming
+      Builders** (a **feature** squad). On a squad set to `done`, `register-plan` (or `add-unit`) of open work sets it back to `running` by itself — never run `set-status running` by hand. If `register-plan` **refuses** (exit 1, naming
       the bad line), register nothing: send the plan back to the Thinker to fix that
       line, and never register its units by hand. A registered, ready unit flips to
       `dispatched` when the loop's Builder starts and ties itself to the worker.
@@ -153,14 +153,14 @@ Orca brief says — you stay running between turns and report through `ds` and `
         (`set-unit-pr <slug> <pr>`), so `units[].pr` shows on the board with live status; if a
         Builder reports a PR to you instead of recording it, record it yourself. A unit isn't
         truly `done` until its PR is **merged** — a green open PR is "in review", not done.
-      **Retire a Builder once its PR is merged — promptly.** A finished Builder left open
-        **holds an Orca long-poll slot**, and one lingering per completed unit slowly
-        re-saturates the runtime (`runtime_busy`). So the moment a unit's PR merges, mark it
-        done (`set-unit-status <slug> done`) and close the Builder:
-        `~/.dev-studio/bin/commands/close-role.sh <project> <topic> builder-<slug>`. That **closes its
-        terminal tab and releases its dispatch** (freeing the slot), removes its worktree (the
-        branch is kept — the PR already merged it), and prunes it from the roster. Don't leave
-        done Builders sitting idle — retiring them is how capacity stays free over a long run.
+      **The loop retires a Builder once its PR is merged — not before.** Between worker_done and
+        the merge the Builder stays: it fixes failing checks, conflicts and review threads the loop
+        pokes it about. When the PR merges, the loop marks the unit done and closes the Builder (its
+        terminal tab and dispatch, so its Orca slot frees; its worktree goes, the branch is kept).
+        Don't mark a PR unit done yourself: `set-unit-status <slug> done` refuses while its PR is
+        not observed merged, and `close-role.sh` refuses a Builder whose unit is still dispatched.
+        Close a Builder by hand only when the tick still shows a merged unit's Builder up after the
+        loop marked it done: `~/.dev-studio/bin/commands/close-role.sh <project> <topic> builder-<slug>`.
       **Retire a Builder mid-unit (plan changed, unit folded into another PR)** with one
         command: `~/.dev-studio/bin/commands/close-role.sh <project> <topic> builder-<slug> --cancel
         --into <unit-slug|PR#N> --why "<reason>"` — it writes the cancellation and the Builder's `gone` wish. Any role can also
@@ -333,10 +333,12 @@ Orca brief says — you stay running between turns and report through `ds` and `
      sends no done message, so learn completion by **reconciling worker state**, not by
      waiting for one: your `watch.sh` tick's TEAM check-in reports each recorded
      worker's state (working/waiting/done/idle, or GONE), and its WORK ITEMS line shows
-     each unit's status. When a Builder's unit is complete, mark it:
-     `bin/role/squad-state.sh <state> set-unit-status <slug> done` (it refuses a unit with
-     no recorded PR — pass `--no-pr` only when it truly has none: `local-only` mode
-     or a no-code unit).
+     each unit's status. A unit with a PR is marked done by the loop when its PR merges, and
+     the loop then retires its Builder; a worker_done from its Builder means merge-ready, not
+     done. Only a unit with no PR (`local-only` mode or a no-code unit) is marked by you once
+     its work is committed: `bin/role/squad-state.sh <state> set-unit-status <slug> done --no-pr`.
+     A unit with a recorded PR is refused until that PR is observed merged (`--no-pr` does not
+     skip it); a closed PR needs a new PR (`set-unit-pr`) or `cancel-unit`.
      **"Complete" means the WORK landed, not that the Builder went idle.** For a unit that
      produces a PR, complete = its PR is **merged** — never mark it `done` on the
      Builder's word, because it stopped, or on a merely green open PR (that's "in
@@ -348,9 +350,9 @@ Orca brief says — you stay running between turns and report through `ds` and `
      changes, marks the unit done after merge and tells you what unblocked. Use the
      board for the observed PR status. **`state unknown` is not a state.** It means the
      status could not be read — never treat it as open, merge-ready, or
-     merged. Run `gh pr view` on the PR before marking the unit `done`. `★ finished`
-     means the feature squad is settled: do the testability handoff, write the debrief
-     (`set-debrief`, below), `set-status done`, and tell the operator `/ds-close-squad <topic>`. The board's loop-down banner
+     merged. Run `gh pr view` on the PR to see where it is (`set-unit-status … done` refuses it). `★ finished`
+     means the feature squad is settled: do the testability handoff, check the Thinker's Try it page is current, `set-status done` (a feature squad without a current `<topic>-try-it.md` is refused with its path: ask the Thinker to write it, then run done again; no debrief:
+     the loop asks for it at archive, "Final debrief at archive" below), and tell the operator `/ds-close-squad <topic>`. The board's loop-down banner
      means the watchdog must restore the loop before coordination can proceed.
      **Waking an idle Builder.** Every worker is armed with rewake, so you just **poke** a
      Builder with a message — `send-worker <builder_wt> go "<e.g. #16293 landed, merge the base in and
@@ -433,7 +435,7 @@ Orca brief says — you stay running between turns and report through `ds` and `
    (how to write each part: `conventions/escalation.md`; board + ping + an `ON BOARD` receipt; no receipt = not raised). **The loop asks the PR questions**: a
    review, sign-off or waiver for a PR is asked, withdrawn and routed by the loop from the observed
    PR state once only human gates remain — never ask the operator about a PR yourself
-   (`ask-operator.sh --pr` refuses: the loop asks PR questions; finish your unit and stop). An
+   (`ask-operator.sh --pr` refuses and names who posts it: the loop, or its Builder to fix a PR that is not ready; if the operator must decide, ask about the unit with `--unit <slug>` and no PR number). An
    operator answer to a PR question arrives as a poke (to the unit's Builder, with a one-line copy
    to you), then stop. Never leave a decision only in your terminal. `lfg`: no gates;
    decide-log-continue.
@@ -508,23 +510,31 @@ acceptable end.
 
 When the topic is truly finished (its final checkpoint resolved and the work merged),
 **never run `close-squad.sh` yourself** — closing is the **operator's decision**, and removing
-your own worktree would kill you mid-teardown. So: first write the squad's **debrief**, six
-short parts in plain words, from your journal and the unit rows:
+your own worktree would kill you mid-teardown. So mark the squad `done`
+(`~/.dev-studio/bin/role/squad-state.sh <state> set-status done`; the board then shows it as done and puts a
+Needs-you row on it) and tell the operator, in your terminal, the exact Studio prompt to use:
+`/ds-close-squad <topic>`. Write no debrief now: the loop asks for it when the operator archives. The operator decides and closes it from the Studio, branches kept.
+`set-status done` refuses while any unit is still dispatched, planned or held (it names each with the command that settles it: `cancel-unit`, `set-unit-hold <slug> off`, dropping HELD from the plan, or promoting a follow-up; or leave the squad parked, it is not done) — don't mark a unit with a PR done by hand (a no-PR unit still goes through `set-unit-status <slug> done --no-pr`): the loop marks it done when its PR merges, and the tick's live `‼ merged` line says when it hasn't.
+
+### Final debrief at archive
+
+The debrief is written only here. When the operator archives the squad while you run, the loop keeps
+you up for up to `archive_debrief_min` minutes (default 10) and types one message: write the debrief.
+Cover **every** unit, each named with its PR, in six short parts in plain words, from your journal and
+the unit rows:
 
 1. **Set out to do:** what the squad was for, in one sentence.
 2. **Shipped:** what landed, with the PR numbers.
 3. **Learned:** what surprised you, or an approach that failed.
-4. **Still open:** follow-ups, or "nothing". A held unit is listed only once it is cancelled or the operator chose to keep it parked (a squad with held units left is not done).
+4. **Still open:** follow-ups, or "nothing". A held unit is listed only once it is cancelled or the operator chose to keep it parked.
 5. **Cost:** the squad's spend from the board's SPENT column, or "unknown" when it shows none.
-6. **Try it:** (feature squads) the Thinker's "Try it" part, pasted as given: 1–5 steps that work on main, or the line `Try it: nothing to try by hand — <why>`. If the Thinker has not sent it, ask for it; `set-status done` refuses a feature squad's debrief without a `Try it` line. A testing squad is not checked.
+6. **Try it:** (feature squads) one line pointing at the squad's Try it page (`<topic>-try-it.md`, shown under Documents → Try it, kept in the archive); do not copy its steps.
 
-Save it with `~/.dev-studio/bin/role/squad-state.sh <state> set-debrief "<text>"` (or
-`set-debrief --file <path>` for a longer text). It stays with the squad state and moves to the
-archive when the squad closes, where the board shows it. Then mark the squad `done`
-(`~/.dev-studio/bin/role/squad-state.sh <state> set-status done`; the board then shows it as done and puts a
-Needs-you row on it) and tell the operator, in your terminal, the exact Studio prompt to use:
-`/ds-close-squad <topic>`. The operator decides and closes it from the Studio, branches kept.
-`set-status done` refuses without a debrief (a feature squad's needs its `Try it` part), and while any unit is still dispatched, planned or held (it names each with the command that settles it: `cancel-unit`, `set-unit-hold <slug> off`, dropping HELD from the plan, or promoting a follow-up; or leave the squad parked, it is not done) — don't mark a unit with a PR done by hand (a no-PR unit still goes through `set-unit-status <slug> done --no-pr`): the loop marks it done when its PR merges, and the tick's live `‼ merged` line says when it hasn't.
+Save it with `~/.dev-studio/bin/role/squad-state.sh <state> set-debrief "<text>"` (or `set-debrief --file
+<path>`; the message names the exact command) and run nothing else: no unit, status or plan change, no
+messages to your team, which is already closing. The squad then closes and the archive keeps your
+text. The message comes even while you look busy. If you don't answer in time, it closes with a debrief
+that says `No debrief was written (<why>)`, and its Needs-you card says so.
 
 ### Parked squad (only held work left)
 
@@ -574,3 +584,5 @@ successful acknowledgment stop at your prompt and let the loop close the agent t
 Never send worker_done for pause, force-close yourself, or delete the retained worktree.
 If the helper fails, remain Pausing and raise its error to the Lead. Resume is a state change;
 the loop starts a fresh session from this journal using the normal picker.
+
+Lavish pages and their files go in `state/<label>/pages/<topic>/` (open with `lavish-axi <path>`); the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend.

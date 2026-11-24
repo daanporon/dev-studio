@@ -50,8 +50,11 @@ import { memberIds, type Row, type Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { accountDisabled, DISABLED } from "./accounts.ts";
 import { creditsHolds, OUT_OF_CREDITS } from "./credits.ts";
+import { LOGIN_ENDED, loginHolds } from "./login.ts";
 import { newBuilderStart, slot, type Asker } from "./slot.ts";
-import { hostCrit } from "./machine-level.ts";
+import { memo } from "./walk-memo.ts";
+import { hostCrit, hostCritHit, sampleState, type CritHit, type SampleState } from "./machine-level.ts";
+import { loopProjects } from "../settings/projects.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 
 export type PickReq = {
@@ -74,7 +77,7 @@ export const rungTag = (r: { agent: string; model: string; plan?: string | null 
 export const accountPlan = (store: Store, agent: string, account: string | null): string | null =>
   account ? (store.get("observed_accounts", { agent, account })?.plan as string | null) ?? null : null;
 export const matchesPlan = (plan: string | null, actual: string | null) => !plan || plan === actual;
-type Acct = { plan: string | null; account: string; pct: number; reset: number | null; weekly: number; wreset: number | null; noWindow: boolean; unknown: boolean; until: number; draining: boolean; disabled: boolean; credits?: boolean };
+type Acct = { plan: string | null; account: string; pct: number; reset: number | null; weekly: number; wreset: number | null; noWindow: boolean; unknown: boolean; until: number; draining: boolean; disabled: boolean; credits?: boolean; login?: boolean };
 
 export const ENV: Record<string, string> = { pick_session_max: "DS_PICK_SESSION_MAX", pick_weekly_max: "DS_PICK_WEEKLY_MAX" };
 const DEFAULTS: Record<string, string> = {
@@ -88,6 +91,9 @@ export const loadKey = (agent: string, account: string | null) => `${agent}\t${a
 export function limit(store: Store, project: string, key: string): string | null {
   const ev = process.env[ENV[key] ?? `DS_LIMIT_${key.toUpperCase()}`];
   if (ev) return ev;
+  return memo(store, null, "limit", `${project}\0${key}`, () => limitRow(store, project, key));
+}
+function limitRow(store: Store, project: string, key: string): string | null {
   for (const p of [project, ""]) {
     const r = store.get("config", { project: p, file: "limits.conf", key });
     const v = r ? String(r.value ?? "").split(/\s+/)[0] : "";
@@ -102,6 +108,9 @@ export const limitNum = (store: Store, project: string, key: string) => Number(l
 function wholeLimit(store: Store, project: string, key: string): number | null {
   const ev = process.env[ENV[key] ?? `DS_LIMIT_${key.toUpperCase()}`];
   if (ev && /^[0-9]+$/.test(ev)) return Number(ev);
+  return memo(store, null, "whole-limit", `${project}\0${key}`, () => wholeRow(store, project, key));
+}
+function wholeRow(store: Store, project: string, key: string): number | null {
   for (const p of [project, ""]) {
     const v = String(store.get("config", { project: p, file: "limits.conf", key })?.value ?? "").trim().split(/\s+/)[0];
     if (/^[0-9]+$/.test(v)) return Number(v);
@@ -113,9 +122,23 @@ function wholeLimit(store: Store, project: string, key: string): number | null {
 // start that needs a new Builder agent; null = go ahead.
 export function hostBrake(store: Store, project: string, who: Asker, now: number, role: string): string | null {
   if (limit(store, project, "builder_host_brake") !== "on") return null;
-  const r = store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null;
+  const r = memo(store, null, "machine", "", () => store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null);
   const crit = hostCrit(r, (k) => wholeLimit(store, project, k), now);
   return crit && newBuilderStart(store, project, who, now, role) ? crit : null;
+}
+
+// The host brake as one host-wide state (board-shows-host-brake U1), for the board: the host's latest
+// sample (`fresh`/`stale`/`missing`, its age), the crit line it crosses (`hit`, null = none or not fresh)
+// and every loop project with its effective `builder_host_brake`. With `hit` set, a new Builder start of a
+// project whose `on` is true waits `WAIT host:` now. The lines are read as `project` reads them (the
+// board passes its own; default: the env and the conventions rows), since a project can move them.
+// Only reads: no pick, no event.
+export type BrakeView = { setting: "builder_host_brake"; sample: SampleState["state"]; age_s: number | null; hit: CritHit | null; projects: { project: string; on: boolean }[] };
+export function brakeView(store: Store, now: number, project = "", projects = loopProjects(store.root)): BrakeView {
+  const r = store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null;
+  const s = sampleState(r, now);
+  return { setting: "builder_host_brake", sample: s.state, age_s: s.age_s, hit: hostCritHit(r, (k) => wholeLimit(store, project, k), now),
+    projects: projects.map((p) => ({ project: p, on: limit(store, p, "builder_host_brake") === "on" })) };
 }
 
 // ds_ship_mode: the project's ship-mode, else the first projects.conf selector that is the label or
@@ -248,6 +271,12 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
     const [a, acct] = k.split("/");
     if (a === agent && acct) { credits.add(acct); later(acct, t); }
   }
+  // claude-login-ended U2: so does a live login hold (login.ts), named `login ended`.
+  const login = new Set<string>();
+  for (const [k, t] of loginHolds(store, now)) {
+    const [a, acct] = k.split("/");
+    if (a === agent && acct) { login.add(acct); later(acct, t); }
+  }
   for (const m of store.db.query("SELECT account, limited_until FROM members WHERE agent = ? AND account IS NOT NULL AND limited_until > ? AND COALESCE(status, '') NOT IN ('gone', 'closed')").all(agent, now) as Row[]) {
     later(String(m.account), n(m.limited_until));
   }
@@ -266,6 +295,7 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
       plan: (r.plan as string | null) || null, account: String(r.account), pct: over ? 0 : sp ?? 0, reset: sr !== null && sr > now ? sr : null, weekly: wr !== null && wr <= now ? 0 : wp ?? 0,
       wreset: wr !== null && wr > now ? wr : null, noWindow, unknown: !!r.unknown || !fetched, until: until.get(String(r.account)) ?? 0, draining: r.state === "draining", disabled: r.state === DISABLED,
       ...(credits.has(String(r.account)) ? { credits: true } : {}),
+      ...(login.has(String(r.account)) ? { login: true } : {}),
     };
   });
 }
@@ -281,6 +311,7 @@ export function accountBlock(store: Store, agent: string, account: string, now: 
   if (!a) return list ? "gone" : null;
   if (a.disabled) return "disabled";
   if (a.credits) return "credits";
+  if (a.login) return "login";
   if (a.until > now) return "limited";
   if (a.draining) return "draining";
   if (["claude", "muse"].includes(agent) && a.weekly >= limitNum(store, project, "pick_weekly_max")) return "weekly";
@@ -304,6 +335,9 @@ export function planLoad(store: Store, project: string, tier: unknown, agent: st
 export const RESERVE = "fallback-reserve";
 export type Reservation = { member: number; project: string; role: string; tier: string | null; agent: string; model: string; account: string | null };
 export function reservations(store: Store, now: number): Reservation[] {
+  return memo(store, now, "reservations", "", () => reservationsRead(store, now));
+}
+function reservationsRead(store: Store, now: number): Reservation[] {
   const out: Reservation[] = [];
   for (const e of store.db.query(`SELECT e.*, m.id AS mid, m.role, m.tier FROM episodes e JOIN members m ON 'member:' || m.id = e.subject
       WHERE e.kind = ? AND e.state = 'reserved' AND e.ended_at > ? AND COALESCE(m.placed_at, 0) <= e.started_at
@@ -411,6 +445,7 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   const tried: string[] = [];
   const skipped: string[] = [];   // each higher rung left and why, for the fallback pick's why
   const broke = new Set<string>();   // U2: <agent>:<account> held out of credits, named in a wait's reason
+  const loggedOut = new Set<string>();   // claude-login-ended U2: <agent>:<account> whose login ended, the same
   let off = false;                // the override's or explicit account is disabled
 
   for (let i = 0; i < floor.n; i++) {
@@ -435,8 +470,9 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
       if (a.draining && !account) { why.push(`${a.account} draining`); continue; }
       const blocks: (number | null)[] = [];
       if (a.until > now) {
-        blocks.push(a.until); why.push(`${a.account} ${a.credits ? OUT_OF_CREDITS : "limited"}`);
+        blocks.push(a.until); why.push(`${a.account} ${a.credits ? OUT_OF_CREDITS : a.login ? LOGIN_ENDED : "limited"}`);
         if (a.credits) broke.add(`${r.agent}:${a.account}`);
+        else if (a.login) loggedOut.add(`${r.agent}:${a.account}`);
       }
       if (["claude", "muse"].includes(r.agent) && a.weekly >= wmax) { blocks.push(a.wreset); why.push(`${a.account} weekly ${a.weekly}% >= ${wmax}%`); }
       if (!account && !a.noWindow) {
@@ -470,7 +506,8 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   const until = `wait until ${known ? at : `${at} (no known reset)`}`;
   if (off) return { wait: at, known, why: "wait", reason: `${how}: account disabled (${account}); ${until}` };
   const credits = broke.size ? `; ${[...broke].join(", ")} ${OUT_OF_CREDITS}` : "";
-  return { wait: at, known, why: "wait", reason: `${how}: no account with room on ${tried.join(", ")}${below}${credits}; ${until}` };
+  const login = loggedOut.size ? `; ${[...loggedOut].join(", ")} ${LOGIN_ENDED}` : "";
+  return { wait: at, known, why: "wait", reason: `${how}: no account with room on ${tried.join(", ")}${below}${credits}${login}; ${until}` };
 }
 
 // Match the running/held place to its step, including the account's plan. A stored step plan

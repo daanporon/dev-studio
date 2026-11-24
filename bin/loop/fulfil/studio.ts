@@ -6,16 +6,22 @@
 //            requests/_studio/briefing-<request id>.txt, its first line "briefing: …".
 //   dismiss  {id, answer?}           a Studio alert answered on the board: bin/lib/alerts.sh resolve <id>;
 //            a card filed with `move: true` (limits.ts, studio_move ask) answered "move it" records the approval
-//            (episode studio.move / studio:approved), and limits.ts then moves the Studio as in auto
+//            (episode studio.move / studio:approved), and limits.ts then moves the Studio as in auto; the
+//            move-up card (configurable-role-elevation U3, `move_up: true`) records studio:up-approved instead
+//            studio-hung-agent-broken U2: the broken Studio's card (liveness.ts, `restart: true`) answered "Restart Studio"
+//            records studio:restart-approved, which reconcilers/studio.ts turns into one studio-move (why "restart");
+//            "It's fine" or any other answer only clears it
 //            U4: a card filed with `credits: {agent, account}` (credits-card.ts) answered "Fixed" ends the
 //            account's credits hold (accounts.ts setAccountEnabled true, which clears it), "Switch it off"
 //            switches the account off (setAccountEnabled false); by "board" either way
-//   studio-move {handle, agent, account, model, effort, from}  U264, from limits.ts: move the Studio to the
+//   studio-move {handle, agent, account, model, effort, from, why}  U264, from limits.ts: move the Studio to the
 //            picked account. Right before it closes anything the handle must still be the Studio's and
 //            studioReady() must still hold, else nothing happens (limits.ts asks again after its settle
 //            window). Then `terminal-close <handle>` (that tab only, never the worktree's), `studio-start`
 //            in the Studio worktree on the pick, briefed from studio.md plus the journal, and the new
-//            handle on the member with one `studio_moved` event. Its steps are kept in the studio:move
+//            handle on the member with one `studio_moved` event (its `why`: `limit`, or `back-up` for U3's move
+//            back up, which also stamps studio:up for the fallback_return_min window; `restart` for the operator's Restart
+//            Studio, which skips studioReady() — a Studio that does not respond is never ready — and keeps its account and model). Its steps are kept in the studio:move
 //            episode, so a replay after a crash never closes twice, and one that finds "starting" records the
 //            terminal that start opened (or waits DS_LOOP_STUDIO_MOVE_START_S, 300) instead of starting again. A start that fails after the close
 //            posts a card (subject studio.move, so limits.ts's studio.limit sweep never drops it) with the
@@ -23,8 +29,9 @@
 // The file is named by the request, so a crash between the write and the claim's settle writes it
 // again in place, never twice. Its requests row (the one the state observer would import, key
 // file:<label>/_studio/<name>) is written at once, so the board refuses a second click meanwhile.
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { closeSync, constants as fsc, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { basename, join, relative, resolve } from "node:path";
+import { CHAT_FILE_NAME, chatFileDir, START_TOPIC } from "../chat/files.ts";
 import { alert, failRequest, finishRequest, requestActions, type Exec, type Fulfiller } from "../core/actuator.ts";
 import type { Action } from "../core/plugins.ts";
 import { errOf, spawn } from "../io/orca.ts";
@@ -32,21 +39,59 @@ import { ROOT, type Row } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { setAccountEnabled } from "../capacity/accounts.ts";
 import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
-import { MOVE, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
+import { LOGGED_IN } from "../capacity/login-card.ts";
+import { clearLogin } from "../capacity/login.ts";
+import { MOVE, RESTART_APPROVED, RESTART_STUDIO, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
+import { memberLabel, startIdentity } from "../core/whoami.ts";
 
-type P = { action?: string; topic?: string; line?: string; framing?: string; id?: string; answer?: string; request?: number };
-type Move = { handle?: string; agent?: string; account?: string; model?: string; effort?: string; from?: string };
+type P = { action?: string; topic?: string; line?: string; framing?: string; files?: string[]; id?: string; answer?: string; request?: number };
+
+// chat-image-upload U4: the images a board start carries, uploaded to `chat-files/_start/`, are copied (never
+// moved) into `framings/board-start-<request>/` so they last as long as the brief, and listed at the brief's
+// end. Plain files in plain folders only, never through a symlink; copies are 0600. A copy already there
+// with the upload's size, or whose upload is gone, is kept, so a replay copies nothing twice. Returns the
+// section to append ("" when no name is an image name: the board files none, a forged row names no path).
+const isDir = (p: string) => lstatSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+function attachImages(root: string, label: string, fdir: string, request: number, names: string[]): string {
+  const src = chatFileDir(root, label, START_TOPIC), dst = join(fdir, `board-start-${request}`);
+  const srcOk = isDir(join(root, label, "chat-files")) && isDir(src);
+  const lines: string[] = [];
+  for (const n of names) {
+    if (!CHAT_FILE_NAME.test(n)) continue;
+    const to = join(dst, n), have = lstatSync(to, { throwIfNoEntry: false });
+    const from = srcOk ? lstatSync(join(src, n), { throwIfNoEntry: false }) : undefined;
+    const up = from?.isFile() ? from : undefined;
+    if (have?.isFile() && (!up || up.size === have.size)) { lines.push(`- ${resolve(to)}`); continue; }
+    if (!up) { lines.push(`- ${n} (removed before the squad started)`); continue; }
+    let fd = -1, bytes: Buffer;
+    try { fd = openSync(join(src, n), fsc.O_RDONLY | fsc.O_NOFOLLOW); bytes = readFileSync(fd); }
+    catch { lines.push(`- ${n} (removed before the squad started)`); continue; }
+    finally { if (fd >= 0) closeSync(fd); }
+    mkdirSync(dst, { recursive: true, mode: 0o700 });
+    if (!isDir(dst)) throw new Error(`${dst} is not a plain folder`);
+    const tmp = join(dst, `.${n}.${process.pid}.tmp`);
+    writeFileSync(tmp, bytes, { mode: 0o600 });
+    renameSync(tmp, to);
+    lines.push(`- ${resolve(to)}`);
+  }
+  return lines.length
+    ? `\n## Attached images\n\nThe operator attached these images to the brief. Open each with your file-reading tool:\n${lines.join("\n")}\n`
+    : "";
+}
+type Move = { handle?: string; agent?: string; account?: string; model?: string; effort?: string; from?: string; why?: string };
 
 // How long a replay that finds the "starting" step waits for that start's terminal before starting again:
 // above the background timeout and studio-start's own wait for the new tab to settle.
 const moveStartS = () => envInt("DS_LOOP_STUDIO_MOVE_START_S", 300);
 
 async function move(a: Action, x: Exec) {
-  const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project;
+  const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project, up = p.why === "back-up", restart = p.why === "restart";
   if (!P || !p.handle || !p.agent || !p.account) return { failed: "a Studio move needs a project, the Studio's handle and a pick" };
   const key = { project: P, subject: MOVE, kind: "studio:move" };
   const step = (state: string, ended = false) => store.upsert("episodes", key, { episode_key: a.episode, state, source: "loop", observed_at: at,
     ...(state === "closing" ? { started_at: at, ended_at: null } : {}), ...(ended ? { ended_at: at } : {}) });
+  // A restart's approval ends with its move, however it went: the operator answers once, the loop tries once.
+  const endRestart = () => { if (restart) endApproval(x, P, RESTART_APPROVED); };
   const row = store.get("episodes", key), was = row?.episode_key === a.episode ? String(row.state) : null;
   if (was === "started" || was === "failed" || was === "not moved") return { done: true, result: `already ${was}` };
   const v = studioView(store, P);
@@ -56,10 +101,11 @@ async function move(a: Action, x: Exec) {
   // one still listed is checked again from the start.
   const closedBefore = was === "closing" && !v.terms.some((t) => t.handle === p.handle);
   if (was !== "closed" && was !== "starting" && !closedBefore) {
-    const ready = studioReady(store, P, at);
-    const why = v.member?.handle !== p.handle ? `${p.handle} is no longer the Studio's terminal` : ready.ready ? null : ready.why;
+    const ready = restart ? null : studioReady(store, P, at);
+    const why = v.member?.handle !== p.handle ? `${p.handle} is no longer the Studio's terminal` : ready && !ready.ready ? ready.why : null;
     if (why) {
       store.upsert("episodes", key, { episode_key: a.episode, state: "not moved", started_at: at, ended_at: at, source: "loop", observed_at: at });
+      endRestart();
       return { done: true, result: `not moved: ${why}` };
     }
     step("closing");
@@ -67,6 +113,13 @@ async function move(a: Action, x: Exec) {
     if (c.code !== 0) {
       step("not moved", true);
       store.event("studio_move_failed", { project: P, squad: "_studio", member: v.wt, payload: { handle: p.handle, to, step: "close", error: errOf(c, "terminal-close") } });
+      // The operator asked for this restart, so a close that fails is theirs to see; a limit move is asked again.
+      if (restart) {
+        endRestart();
+        const cmd = studioRestartCmd(v.wt, p.model, p.account);
+        await alert(store, P, MOVE, `failed|${a.episode}`, `The loop could not close the Studio's tab ${p.handle} to restart it (${errOf(c, "terminal-close")}) — close it and start the Studio yourself: ${cmd}`,
+          { title: "Studio move failed", option: "done — restarted it", why: cmd, fields: { kind: "restart_failed" } });
+      }
       return { done: true, result: `not moved: ${errOf(c, "terminal-close")}` };
     }
     // The tab is closed: no handle until the new one is recorded, and gone for the coordinator (a Run the
@@ -86,32 +139,47 @@ async function move(a: Action, x: Exec) {
     const since = Number(row?.observed_at ?? 0);
     if (!handle && at - since < moveStartS()) return { wait: "the Studio's studio-start may still be running", at: since + moveStartS() };
   }
+  // U4: the new Studio terminal's generation (DS_GEN), kept on the step so a start again after a replay reuses it.
+  const kept = was === "starting" && row?.result ? String(row.result) : "", gen = kept || crypto.randomUUID();
   if (!handle) {
-    store.upsert("episodes", key, { episode_key: a.episode, state: "starting", source: "loop", observed_at: at });
+    store.upsert("episodes", key, { episode_key: a.episode, state: "starting", source: "loop", observed_at: at, result: gen });
     const proj = store.get("projects", { label: P });
-    const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), `${p.from ?? "its account"} hit its limit, now on ${to}`);
-    s = await seat.send("studio-start", [v.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt]);
+    const reason = restart ? `the operator restarted it from the board (it was not responding), on ${to}` : up ? `moved back up from ${p.from ?? "a fallback"} to ${to}` : `${p.from ?? "its account"} hit its limit, now on ${to}`;
+    const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), reason);
+    s = await seat.send("studio-start", [v.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt],
+      startIdentity(memberLabel({ project: P, squad: "_studio", role: "studio" }), gen));
     handle = s.code === 0 ? s.out.trim().split("\n").pop()!.trim() : "";
   }
   if (!handle) {
     step("failed", true);
+    endRestart();
     const err = errOf(s!, "studio-start");
     store.event("studio_move_failed", { project: P, squad: "_studio", member: v.wt, payload: { handle: p.handle, to, step: "start", error: err } });
     const cmd = studioRestartCmd(v.wt, p.model, p.account);
-    await alert(store, P, MOVE, `failed|${a.episode}`, `The loop closed the Studio's tab to move it to ${to}, but could not start it there (${err}) — start it yourself: ${cmd}`,
+    await alert(store, P, MOVE, `failed|${a.episode}`, `The loop closed the Studio's tab to ${restart ? "restart it on" : "move it to"} ${to}, but could not start it there (${err}) — start it yourself: ${cmd}`,
       { title: "Studio move failed", option: "done — restarted it", why: cmd, fields: { kind: "out_of_credits" } });
     return { done: true, result: `closed, not started: ${err}` };
   }
-  const set: Row = { handle, agent: p.agent, account: p.account === "-" ? null : p.account, limited_until: null, observed_at: at, updated_at: at };
+  const set: Row = { handle, agent: p.agent, account: p.account === "-" ? null : p.account, limited_until: null, gen: s || kept ? gen : null, observed_at: at, updated_at: at };
   if (p.model && p.model !== "-") set.model = p.model;
-  const moved = { project: P, squad: "_studio", member: v.wt, payload: { handle, previous: p.handle, from: p.from ?? null, to, model: p.model ?? null } };
+  const moved = { project: P, squad: "_studio", member: v.wt, payload: { handle, previous: p.handle, from: p.from ?? null, to, model: p.model ?? null, why: restart ? "restart" : up ? "back-up" : "limit" } };
   store.db.transaction(() => {
     if (v.member) store.fact("studio_moved", [{ table: "members", key: { id: v.member.id }, set }], moved);
     else store.event("studio_moved", moved);
     step("started", true);
-    store.db.run("UPDATE episodes SET ended_at = ?, state = 'ended', observed_at = ? WHERE project = ? AND subject = ? AND kind = 'studio:approved' AND ended_at IS NULL", [at, at, P, MOVE]);
+    // The started move ends the approval its why names (a restart's studio:restart-approved, a move-up's
+    // studio:up-approved, else studio:approved),
+    // and a move-up stamps studio:up, which starts limits.ts's fallback_return_min window.
+    endApproval(x, P, restart ? RESTART_APPROVED : up ? "studio:up-approved" : "studio:approved");
+    if (up) store.upsert("episodes", { project: P, subject: MOVE, kind: "studio:up" }, { episode_key: a.episode, state: "started", started_at: at, ended_at: at, source: "loop", observed_at: at });
   })();
   return { done: true, result: `moved to ${to}: ${handle}` };
+}
+
+// Ends the open approval of this kind on the Studio's move subject.
+function endApproval(x: Exec, P: string, kind: string): void {
+  x.store.db.run("UPDATE episodes SET ended_at = ?, state = 'ended', observed_at = ? WHERE project = ? AND subject = ? AND kind = ? AND ended_at IS NULL",
+    [x.now, x.now, P, MOVE, kind]);
 }
 
 const studio: Fulfiller = {
@@ -127,23 +195,37 @@ const studio: Fulfiller = {
       const card = store.db.query("SELECT doc FROM observed_alerts WHERE project = ? AND id = ?").get(a.project, p.id) as Row | null;
       // A move card (studio_move ask) approves the move only when answered with its own suggestion
       // ("move it"); Dismiss (an empty answer) or any other text, e.g. after restarting it by hand, only clears it.
-      let askMove = false, credits: { agent: string; account: string; enabled: boolean } | null = null;
+      let askMove = false, moveUp = false, restart: string | null = null, credits: { agent: string; account: string; enabled: boolean } | null = null, loggedIn: { agent: string; account: string } | null = null;
       const said = (p.answer ?? "").trim().toLowerCase();
       try {
         const doc = JSON.parse(String(card?.doc ?? "{}"));
         askMove = doc?.move === true && !!p.answer && said === String(doc.suggestion ?? "move it").trim().toLowerCase();
+        moveUp = doc?.move_up === true;
+        // U2: the broken Studio's card answered Restart Studio approves a restart of the terminal it named.
+        if (doc?.restart === true && said === RESTART_STUDIO.toLowerCase()) restart = typeof doc.handle === "string" ? doc.handle : "";
         // U4: an account out of credits (credits-card.ts) answered Fixed ends the hold, Switch it off disables it.
         const c = doc?.credits, fixed = said === FIXED.toLowerCase();
         if (c && typeof c.agent === "string" && typeof c.account === "string" && (fixed || said === SWITCH_OFF.toLowerCase()))
           credits = { agent: c.agent, account: c.account, enabled: fixed };
+        // claude-login-ended U3: a login-ended card (login-card.ts) answered Logged in ends the hold, Switch it off disables the account.
+        const l = doc?.login;
+        if (l && typeof l.agent === "string" && typeof l.account === "string") {
+          if (said === LOGGED_IN.toLowerCase()) loggedIn = { agent: l.agent, account: l.account };
+          else if (said === SWITCH_OFF.toLowerCase()) credits = { agent: l.agent, account: l.account, enabled: false };
+        }
       } catch { /* not a move card */ }
       const o = await spawn([join(ROOT, "bin", "lib", "alerts.sh"), join(store.root, a.project, "alerts.json"), "resolve", p.id], {}, 30_000);
       if (o.code !== 0) return { retry: errOf(o, "alerts.sh") };
       store.db.run("DELETE FROM observed_alerts WHERE project = ? AND id = ?", [a.project, p.id]);
       const acct = credits ? setAccountEnabled(store, { ...credits, by: "board" }, at) : null;
-      if (askMove) store.fact("studio_move_approved", [{ table: "episodes", key: { project: a.project, subject: MOVE, kind: "studio:approved" },
-        set: { episode_key: p.id, state: "approved", started_at: at, ended_at: null, source: "board", observed_at: at } }], { project: a.project, squad: "_studio", payload: { alert: p.id } });
-      finishRequest(store, a, { ok: true, dismissed: p.id, ...(askMove ? { move: "approved" } : {}),
+      if (loggedIn) clearLogin(store, loggedIn.agent, loggedIn.account, "board", at);
+      // U3: the move-up card (fields.move_up, limits.ts backUp) records its own approval, so neither path clears the other's.
+      if (askMove) store.fact("studio_move_approved", [{ table: "episodes", key: { project: a.project, subject: MOVE, kind: moveUp ? "studio:up-approved" : "studio:approved" },
+        set: { episode_key: p.id, state: "approved", started_at: at, ended_at: null, source: "board", observed_at: at } }], { project: a.project, squad: "_studio", payload: { alert: p.id, ...(moveUp ? { why: "back-up" } : {}) } });
+      if (restart !== null) store.fact("studio_move_approved", [{ table: "episodes", key: { project: a.project, subject: MOVE, kind: RESTART_APPROVED },
+        set: { episode_key: p.id, state: "approved", started_at: at, ended_at: null, result: restart || null, source: "board", observed_at: at } }],
+        { project: a.project, squad: "_studio", payload: { alert: p.id, why: "restart", ...(restart ? { handle: restart } : {}) } });
+      finishRequest(store, a, { ok: true, dismissed: p.id, ...(askMove ? { move: "approved" } : {}), ...(restart !== null ? { restart: "approved" } : {}),
         ...(credits && acct ? { account: `${credits.agent}/${credits.account}`, enabled: credits.enabled, cleared: acct.cleared === true } : {}) }, at);
       return { done: true };
     }
@@ -158,7 +240,8 @@ const studio: Fulfiller = {
     if (p.action === "start" && typeof p.framing === "string") {
       const fdir = join(store.root, a.project, "framings"), ff = join(fdir, `board-start-${p.request}.md`);
       mkdirSync(fdir, { recursive: true });
-      writeFileSync(`${ff}.tmp`, p.framing);
+      const images = p.files?.length ? attachImages(store.root, a.project, fdir, p.request, p.files) : "";
+      writeFileSync(`${ff}.tmp`, images ? `${p.framing}${p.framing.endsWith("\n") ? "" : "\n"}${images}` : p.framing);
       renameSync(`${ff}.tmp`, ff);
       line = `${line} --framing-file ${ff}`;
     }

@@ -49,7 +49,11 @@ printf '{"run_id":"r-uact","status":"running","members":[{"role":"lead","wt":"wL
 printf '# plan x\n' > "$SD/uact-x-plan.md"; printf '# plan y\n' > "$SD/uact-y-plan.md"
 jq --arg p "$DBR/$LBL/squads/uact-x-plan.md" '.approved_plans = [$p]' "$SD/uact.json" > "$TMP/uact.tmp" && mv "$TMP/uact.tmp" "$SD/uact.json"
 # --serve: the page, the JSON and the api routes. Nothing else (no state files) is reachable.
-PORT=$(( 20000 + $$ % 20000 ))
+# The test serves on PORT..PORT+6: a block below Linux's ephemeral range (32768+), so no outgoing connection
+# holds one of them, that nothing listens on yet (another worktree's suite on the same host).
+busy() { local p; for p in $(seq "$1" $(($1 + 6))); do (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && return 0; done; return 1; }
+PORT=$(( 20000 + $$ % 12000 ))
+while busy "$PORT"; do PORT=$(( 20000 + (PORT - 20000 + 7) % 12000 )); done
 # /lavish/<key> asks the loop to start Lavish when it is down; this fake "Lavish" is a bun server on LP.
 LP=$((PORT + 5)); LK=0123456789abcdef; mkdir -p "$TMP/lv2"
 printf '{"sessions":{"%s":{"key":"%s","file":"/x/a.html","url":"http://127.0.0.1:%s/session/%s","status":"open"}}}' "$LK" "$LK" "$LP" "$LK" > "$TMP/lv2/state.json"
@@ -67,8 +71,12 @@ printf '%s\n' 'import { Database } from "bun:sqlite";' \
 dbq(){ bun "$TMP/dbq.ts" "$DBR/loop.db" "$1"; }
 resync
 mkdir -p "$DBR/$LBL"; cp "$DS_STATE_ROOT/$LBL/alerts.json" "$DBR/$LBL/alerts.json"   # what alerts.sh resolves
+# The skills the /api/skills block knows: a listing cache of its own and an empty Claude config dir, so
+# the answer never depends on what the host (or a CI runner, which has none) has installed.
+mkdir -p "$TMP/no-claude"
+printf '{"at":1,"skills":[{"name":"compound-engineering:ce-work","source":"session listing","description":"work a plan"}]}' > "$DBR/skills-listing.json"
 # DS_EVLOG_SEARCH_SLICE: a search reads 6 ids per request, so the event-log-filters U4 block can page one.
-PATH="$TMP/tsbin:$PATH" DS_STATE_ROOT="$DBR" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" DS_EVLOG_SEARCH_SLICE=6 \
+PATH="$TMP/tsbin:$PATH" DS_STATE_ROOT="$DBR" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" DS_EVLOG_SEARCH_SLICE=6 CLAUDE_CONFIG_DIR="$TMP/no-claude" \
   "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$PORT" >"$TMP/serve.log" 2>&1 &
 SPID=$!
 for _ in $(seq 1 300); do curl -s -o /dev/null "http://127.0.0.1:$PORT/" && break; sleep 0.2; done
@@ -252,6 +260,17 @@ jt "answer: the request is done"     <(reqrow "$A7") '.done_at != null and .resu
 eq "answer: unknown id is 409"       "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"nope\",\"answer\":\"x\"}" "$U")" "409"
 eq "answer: path in topic is 400"    "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"../ans\",\"id\":\"q9\",\"answer\":\"x\"}" "$U")" "400"
 eq "answer: empty answer is 400"     "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"  \"}" "$U")" "400"
+# reasked-question-shows-answered U1: two askings share an id (q9: the first answered from the board, the second
+# open); the answer names the asking it saw by `since` and answers that row only.
+bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.argv[1]);
+  d.run("INSERT INTO questions (project, squad, id, asker, blocking, question, asked_at, status, answer, answered_via, answered_at, doc) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
+    [process.argv[2], "ans", "q9", "lead", "notes?", Date.parse("2026-10-08T08:00:00Z") / 1000, "answered", "first", "board", 1, "{}"]);' "$DBR/loop.db" "$LBL"
+eq "answer since: the first asking's since is 409" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"x\",\"since\":\"2026-10-08T08:00:00Z\"}" "$U")" "409"
+has "answer since: 409 says asked again" "$(cat "$TMP/post.out")" "answered or asked again"
+eq "answer since: nothing answered by the 409" "$(dbq "SELECT COUNT(*) AS n FROM questions WHERE squad = 'ans' AND id = 'q9' AND status = 'open'" | jq '.[0].n')" "1"
+eq "answer since: the open asking's since is 202" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q9\",\"answer\":\"second\",\"since\":\"2026-10-08T09:00:00Z\"}" "$U")" "202"
+eq "answer since: only the open row was answered" "$(dbq "SELECT status, answer FROM questions WHERE squad = 'ans' AND id = 'q9' ORDER BY seq" | jq -c '[.[] | [.status, .answer]] | sort')" '[["answered","first"],["answered","second"]]'
+eq "answer since: the first asking's answer is untouched" "$(dbq "SELECT COUNT(*) AS n FROM questions WHERE squad = 'ans' AND id = 'q9' AND answer = 'first'" | jq '.[0].n')" "1"
 # A terminal-picker mirror is answered by keystroke, never prose + Enter (that selects the
 # highlighted option): an option is its digit with no Enter; free text is the "Type
 # something." digit, then the text + Enter.
@@ -382,6 +401,12 @@ ff
 eq "limits: Clear focus is 202"      "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"focus_squad\",\"value\":null}" "$LU")" "202"
 LF2="$(rid)"
 eq "limits: Clear focus row"         "$(reqrow "$LF2" | jq -c '[.kind, .payload.key, .payload.value]')" '["limits","focus_squad",null]'
+# ds-feedback-github-issues U8: `feedback` is an off|on select; feedback_repo is an override the board shows but never writes
+eq "limits: feedback on is 202" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"feedback\",\"value\":\"on\"}" "$LU")" "202"
+LFR="$(rid)"
+eq "limits: feedback row"       "$(reqrow "$LFR" | jq -c '[.kind, .payload]')" '["limits",{"key":"feedback","value":"on"}]'
+eq "limits: feedback_repo is read-only (400)"  "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"feedback_repo\",\"value\":\"acme/tools\"}" "$LU")" "400"
+eq "limits: feedback bad is 400" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"feedback\",\"value\":\"maybe\"}" "$LU")" "400"
 eq "limits: enum set is 202"         "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"compact_mode_lead\",\"value\":\"off\"}" "$LU")" "202"
 ff
 eq "limits: the loop set it"         "$(lim context_compact)" "120000 override"
@@ -481,6 +506,23 @@ ff
 eq "roles: roles.sh list shows minimal" "$(rl builder | cut -d' ' -f1-3)" "muse muse-spark-1.3 minimal"
 eq "roles: put builder back"         "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"reset\":true}")" "202"
 ff
+jt "roles: GET carries return and back_up (thinker up, lead stay, builder-review stay)" <(curl -s "$RU?project=$LBL") '([.roles[]|select(.role=="thinker")|.back_up]==[true]) and ([.roles[]|select(.role=="lead")|.back_up]==[false]) and ([.roles[]|select(.role=="builder-review")|.back_up]==[false]) and (.roles[]|select(.role=="thinker")|.default.back_up)==true'
+eq "roles: return up is 202"         "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"up\"}")" "202"
+eq "roles: the request carries return" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.role, .payload.return]')" '["roles","lead","up"]'
+ff
+eq "roles: roles.sh list shows lead up" "$(DS_STATE_ROOT="$DBR" "$ROOT/bin/commands/roles.sh" list "$LBL" | awk '$1=="lead"{print ($0 ~ /up/)}')" "1"
+eq "roles: return stay is 202"       "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"stay\"}")" "202"
+ff
+eq "roles: bad return is 400"        "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"always\",\"return\":\"maybe\"}")" "400"
+eq "roles: return up on an elevate row is 400" "$(rp "{\"project\":\"$LBL\",\"role\":\"builder-review\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"elevate\",\"return\":\"up\"}")" "400"
+has "roles: the elevate refusal names the row" "$(cat "$TMP/post.out")" "builder-review"
+eq "roles: return up on studio is 202 (configurable-role-elevation U3)" "$(rp "{\"project\":\"$LBL\",\"role\":\"studio\",\"agent\":\"claude\",\"model\":\"sonnet\",\"spawn\":\"ondemand\",\"return\":\"up\"}")" "202"
+ff
+eq "roles: roles.sh list shows studio up" "$(DS_STATE_ROOT="$DBR" "$ROOT/bin/commands/roles.sh" list "$LBL" | awk '$1=="studio"{print $8}')" "up"
+eq "roles: put studio back"          "$(rp "{\"project\":\"$LBL\",\"role\":\"studio\",\"reset\":true}")" "202"
+ff
+eq "roles: put lead back"            "$(rp "{\"project\":\"$LBL\",\"role\":\"lead\",\"reset\":true}")" "202"
+ff
 eq "roles: bad effort is 400"        "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"ondemand\",\"effort\":\"turbo\"}")" "400"
 eq "roles: bad spawn is 400"         "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"agent\":\"claude\",\"model\":\"opus\",\"spawn\":\"never\"}")" "400"
 eq "roles: bad model is 400"         "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"agent\":\"claude\",\"model\":\"a b;rm\",\"spawn\":\"ondemand\"}")" "400"
@@ -508,6 +550,36 @@ has "skills: the refusal says on or off" "$(cat "$TMP/post.out")" "on or off"
 eq "skills: a required MCP server can't be turned off" "$(sp "{\"project\":\"$LBL\",\"role\":\"builder\",\"set\":{\"mcp:context-mode\":\"off\"}}")" "400"
 eq "skills: reset with no edits is 409" "$(sp "{\"project\":\"$LBL\",\"role\":\"builder\",\"reset\":true}")" "409"
 eq "skills: foreign Origin is 403"   "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"role\":\"builder\",\"reset\":true}" "$SU")" "403"
+# Import / Export in Settings (settings-export-import U3): the export text, the plan, the apply.
+bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.argv[1]); for (const [f, k, v] of [["limits.conf", "hooks_ts", "1"], ["limits.conf", "auto_merge", "merge"], ["limits.conf", "limit_pct", "80"], ["limits.conf", "cleanup_on_close", "rm -rf x"]]) d.run("INSERT OR REPLACE INTO config (project, file, key, value, comment, observed_at) VALUES (?, ?, ?, ?, NULL, 1)", ["importsrc", f, k, v])' "$DBR/loop.db"
+IU="http://127.0.0.1:$PORT/api/settings-import"
+EU="http://127.0.0.1:$PORT/api/settings-export"
+ip(){ post -H "$O" -H "$CT" -d "$2" "$1"; }
+eq "import: export is 200" "$(curl -s -D "$TMP/ex.hdr" -o "$TMP/ex.txt" -w '%{http_code}' "$EU?project=importsrc")" "200"
+has "import: export starts with the transfer header" "$(head -1 "$TMP/ex.txt")" "#! ds-settings 1 from=importsrc"
+has "import: export names the download" "$(cat "$TMP/ex.hdr")" "importsrc-settings.txt"
+has "import: export carries the rows" "$(cat "$TMP/ex.txt")" "limit_pct 80"
+eq "import: export without project is 400" "$(curl -s -o /dev/null -w '%{http_code}' "$EU")" "400"
+eq "import: list is 200" "$(curl -s -o "$TMP/il.json" -w '%{http_code}' "$IU?project=$LBL")" "200"
+jt "import: list names the other project, not this one" "$TMP/il.json" '(.projects | index("importsrc") != null) and (.projects | index("'"$LBL"'") == null)'
+eq "import: preview is 200" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"from\":\"importsrc\"}")" "200"
+cp "$TMP/post.out" "$TMP/ip.json"
+jt "import: hooks_ts reads skipped (unknown key)" "$TMP/ip.json" '.rows[] | select(.key=="hooks_ts") | .action=="skip" and .why=="unknown key" and .can_pick==false'
+jt "import: auto_merge is unticked but tickable" "$TMP/ip.json" '.rows[] | select(.key=="auto_merge") | .pick==false and .can_pick==true and .why=="project-specific"'
+jt "import: cleanup_on_close is shell only" "$TMP/ip.json" '.rows[] | select(.key=="cleanup_on_close") | .why=="shell only" and .can_pick==false'
+eq "import: preview from a text that is no export is 400" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"text\":\"hello\"}")" "400"
+has "import: the 400 names why" "$(cat "$TMP/post.out")" "not a settings export"
+eq "import: preview with an unknown section is 400" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"text\":\"#! ds-settings 1 from=x\\n#== nosuch.conf\\nfoo 1\\n\"}")" "400"
+has "import: the 400 names the section" "$(cat "$TMP/post.out")" "nosuch.conf"
+eq "import: apply with an unknown section is 400" "$(ip "$IU" "{\"project\":\"$LBL\",\"text\":\"#! ds-settings 1 from=x\\n#== nosuch.conf\\nfoo 1\\n\",\"picks\":[{\"file\":\"limits.conf\",\"key\":\"a\"}]}")" "400"
+jt "import: auto_merge's skip row carries the incoming value" "$TMP/ip.json" '.rows[] | select(.key=="auto_merge") | .value=="merge"'
+jt "import: hooks_ts carries its raw source text" "$TMP/ip.json" '.rows[] | select(.key=="hooks_ts") | .raw=="1"'
+eq "import: preview with both sources is 400" "$(ip "$IU/preview" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"text\":\"x\"}")" "400"
+eq "import: foreign Origin is 403" "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[{\"file\":\"limits.conf\",\"key\":\"limit_pct\"}]}" "$IU")" "403"
+eq "import: apply without picks is 400" "$(ip "$IU" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[]}")" "400"
+eq "import: apply with a bad file is 400" "$(ip "$IU" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[{\"file\":\"../x\",\"key\":\"a\"}]}")" "400"
+eq "import: apply is 202" "$(ip "$IU" "{\"project\":\"$LBL\",\"from\":\"importsrc\",\"picks\":[{\"file\":\"limits.conf\",\"key\":\"limit_pct\",\"expect\":null}]}")" "202"
+eq "import: one settings-import request row" "$(bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.argv[1], { readonly: true }); const r = d.query("SELECT count(*) n, json_extract(payload, \"$.from\") f, project FROM requests WHERE kind = ?").get("settings-import") as any; console.log(r.n, r.f, r.project)' "$DBR/loop.db")" "1 importsrc $LBL"
 eq "roles: form post is 415"         "$(post -H "$O" -H 'Content-Type: application/x-www-form-urlencoded' -d 'a=b' "$RU")" "415"
 eq "roles: refusals changed nothing" "$(DS_STATE_ROOT="$DBR" "$ROOT/bin/commands/roles.sh" list "$LBL" | awk '$1=="builder"{print $3}')" "opus"
 eq "roles: reset without override is 409" "$(rp "{\"project\":\"$LBL\",\"role\":\"builder\",\"reset\":true}")" "409"
@@ -694,6 +766,24 @@ eq "account-reset: ... and filed one more request"    "$(rr | jq length)" "2"
 eq "account-reset: a second press while paused is 409" "$(rp "{\"project\":\"$LBL\",\"agent\":\"claude\",\"account\":\"system\",\"grant\":\"g-ok\"}")" "409"
 DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); s.db.run("DELETE FROM pause_intents WHERE scope = ?", ["project"]); s.close();'
 eq "web board: the Use button posts api/account-reset after a confirm" "$(grep -cF 'post("api/account-reset"' "$ROOT/web/board.html")$(sed -n '/^async function useReset(/,/^}/p' "$ROOT/web/board.html" | grep -cF 'This cannot be undone.')" "11"
+
+# POST /api/leftover-remove (archive-leftovers U4): a Leftovers box's Remove files one `leftover-remove` request
+# for a leftover the squad names; 404 for none, 409 with one open, 400 for a body that is no JSON or bad fields.
+# The fulfiller's runs are tests/loop/leftover-remove-button.test.ts.
+LT="$(dbq "SELECT topic FROM squads WHERE project = '$LBL' ORDER BY topic LIMIT 1" | jq -r '.[0].topic')"
+dbw "UPDATE squads SET doc = json_set(doc, '\$.leftovers', json('[{\"wt\":\"wt-left::/x/lf\",\"path\":\"/x/lf\",\"branch\":\"work\"}]')) WHERE project = '$LBL' AND topic = '$LT'"
+LU2="http://127.0.0.1:$PORT/api/leftover-remove"
+lp(){ post -H "$O" -H "$CT" -d "$1" "$LU2"; }
+lr(){ dbq "SELECT project, squad, requested_by, payload FROM requests WHERE kind = 'leftover-remove' ORDER BY id" | jq -c '[.[] | [.project, .squad, .requested_by, (.payload | fromjson)]]'; }
+eq "leftover-remove: not JSON is 400"              "$(post -H "$O" -H "$CT" -d 'not json' "$LU2")" "400"
+eq "leftover-remove: a bad fingerprint is 400"     "$(lp "{\"project\":\"$LBL\",\"topic\":\"$LT\",\"wt\":\"wt-left::/x/lf\",\"fingerprint\":\"; rm\"}")" "400"
+eq "leftover-remove: no such leftover is 404"      "$(lp "{\"project\":\"$LBL\",\"topic\":\"$LT\",\"wt\":\"wt-nope\"}")" "404"
+eq "leftover-remove: no such squad is 404"         "$(lp "{\"project\":\"$LBL\",\"topic\":\"zz-none\",\"wt\":\"wt-left::/x/lf\"}")" "404"
+eq "leftover-remove: none of those filed a request" "$(lr | jq length)" "0"
+eq "leftover-remove: a leftover is 202"            "$(lp "{\"project\":\"$LBL\",\"topic\":\"$LT\",\"wt\":\"wt-left::/x/lf\",\"fingerprint\":\"0123456789abcdef01234567\"}")" "202"
+eq "leftover-remove: one request, by the board"    "$(lr)" "[[\"$LBL\",\"$LT\",\"board\",{\"wt\":\"wt-left::/x/lf\",\"fingerprint\":\"0123456789abcdef01234567\"}]]"
+eq "leftover-remove: a second press while open is 409" "$(lp "{\"project\":\"$LBL\",\"topic\":\"$LT\",\"wt\":\"wt-left::/x/lf\"}")" "409"
+eq "leftover-remove: ... and filed nothing"        "$(lr | jq length)" "1"
 resync
 eq "override: bad model is 400"      "$(op "{\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wLd\",\"model\":\"a b;rm\"}")" "400"
 eq "override: foreign Origin is 403" "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wLd\",\"clear\":true}" "$OU")" "403"
@@ -788,7 +878,7 @@ jt "U2: a note carries its allowed action" "$TMP/u2.json" '[.loop_notes[] | sele
 jt "U2: an unknown action is dropped" "$TMP/u2.json" '[.loop_notes[] | select(.id=="loop-u2-bad")][0].act == null'
 jt "U2: a Studio ask carries its squad for Show squad" "$TMP/u2.json" '[.needs_you[] | select(.id=="loop-u2-ask")][0] | .card_squad == "ans" and has("repo_slug") and has("pr") and has("act")'
 eq "web board: a loop note shows its text and why under a title without the squad prefix" "$(grep -cF 'class="lndet">${linkedQ(n.text, n.repo_slug)}' "$ROOT/web/board.html")$(grep -cF 'const noteTitle' "$ROOT/web/board.html")$(grep -cF 'squads.length > 1' "$ROOT/web/board.html")" "211"
-eq "web board: Show squad on a Studio card, the PR chip and the action button" "$(grep -cF 'n.card_squad' "$ROOT/web/board.html")$(grep -cF 'function ActBtn' "$ROOT/web/board.html")$(grep -cF 'onShow(n.project, n.squad)' "$ROOT/web/board.html")" "411"
+eq "web board: Show squad on a Studio card, the PR chip and the action button" "$(grep -cF 'n.card_squad' "$ROOT/web/board.html")$(grep -cF 'function ActBtn' "$ROOT/web/board.html")$(grep -cF 'onShow(n.project, n.squad)' "$ROOT/web/board.html")" "311"
 
 # POST /api/request files a `studio` request; the loop writes it out for the Studio as
 # <state root>/<label>/requests/_studio/board-<action>[-<topic>]-<id>.txt, which the Studio's watch
@@ -828,6 +918,13 @@ eq "request: the brief is in its file, newlines kept" "$(for f in "$DBR/$LBL"/fr
 eq "request: two starts, two files"  "$(find "$RD" -name 'board-start-*.txt' | wc -l | tr -d ' ')" "2"
 has "request: other squad's file"    "$(cat "$RD"/board-close-ans-2-*.txt 2>/dev/null)" "/ds-close-squad ans-2"
 rm -f "$RD"/board-close-ans-2-*.txt "$RD/board-close-ans-$C1.txt"
+# U9: the Start dialog's backend reaches /ds-start-squad as --backend; an unknown one is 400.
+rm -f "$RD"/board-start-*.txt
+eq "request: start on a backend"     "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"on tmux\",\"backend\":\"tmux\"}")" "202"
+eq "request: unknown backend is 400" "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"x\",\"backend\":\"screen\"}")" "400"
+ff
+has "request: start passes backend"  "$(cat "$RD"/board-start-*.txt 2>/dev/null)" "/ds-start-squad --repo $LBL --backend tmux --framing-file $DBR/$LBL/framings/board-start-"
+rm -f "$RD"/board-start-*.txt
 DS_STATE_ROOT="$DBR" bun -e 'import { open } from "'"$ROOT"'/bin/loop/core/store.ts"; import { doneRequests } from "'"$ROOT"'/bin/loop/db/import-json.ts"; const s = open(); doneRequests(s, s.root, process.argv[1]); s.close();' "$LBL"
 eq "request: done once the Studio removed the file" "$(req "{\"project\":\"$LBL\",\"action\":\"close\",\"topic\":\"ans\"}")" "202"
 eq "request: start without brief"    "$(req "{\"project\":\"$LBL\",\"action\":\"start\"}")" "400"
@@ -941,6 +1038,14 @@ eq "chat: an idle member is not working" "$(cq ans wTh)$(jq -c '.working' "$TMP/
 dbw "UPDATE observed_workers SET state = 'working' WHERE project = '$LBL' AND wt = 'wTh'"
 eq "chat: a member mid-turn is working" "$(cq ans wTh)$(jq -c '.working' "$TMP/chat.out")" "200true"
 dbw "UPDATE observed_workers SET state = 'idle' WHERE project = '$LBL' AND wt = 'wTh'"
+# chat-role-switcher U1: `crew` is the squad's live members in the Crew box's order, each with its mail counts and the
+# time of its newest assistant text turn (null without one or on a screen tail); `[]` for the Studio.
+jt "chat: crew lists the live members with counts" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '(.crew | length) >= 1 and ([.crew[] | has("wt","label","role","unread","reply_due","reply_at")] | all) and ((.crew[] | select(.wt == "wTh") | .reply_at) == 2)'
+jt "chat: a screen-tail member's reply_at is null" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '([.crew[] | select(.wt == "wTester") | .reply_at] | all(. == null))'
+jt "chat: the Studio has no crew" <(cq _studio wStudio >/dev/null; cat "$TMP/chat.out") '.crew == []'
+dbw "UPDATE members SET status = 'gone' WHERE project = '$LBL' AND squad = 'ans' AND wt = 'wTester'"
+jt "chat: a gone member is left out of crew" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '([.crew[] | select(.wt == "wTester")] | length) == 0'
+dbw "UPDATE members SET status = 'running' WHERE project = '$LBL' AND squad = 'ans' AND wt = 'wTester'"
 eq "chat: GET an unknown member is 404" "$(cq ans nope)" "404"
 eq "chat: GET a member of another squad is 404" "$(cq board-builders wTh)" "404"
 eq "chat: GET without wt is 400"       "$(curl -s -o /dev/null -w '%{http_code}' "$C?project=$LBL&topic=ans")" "400"
@@ -971,11 +1076,15 @@ eq "chat: a Studio chat row"           "$(reqrow "$(rid)" | jq -c '[.member, .sq
 N1=$(crows)
 eq "chat: foreign Origin is 403"       "$(post -H 'Origin: http://evil.example' -H "$CT" -d "$(cbody wTh hi)" "$C")" "403"
 eq "chat: not JSON is 415"             "$(post -H "$O" -H 'Content-Type: text/plain' -d "$(cbody wTh hi)" "$C")" "415"
-eq "chat: two lines are 400"           "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'one\ntwo')")" "$C")" "400"
-eq "chat: a control character is 400"  "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\tb')")" "$C")" "400"
+eq "chat: a control character is 400"  "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\ab')")" "$C")" "400"
+eq "chat: an escape character is 400"  "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\033[2Jb')")" "$C")" "400"
 eq "chat: blank is 400"                "$(post -H "$O" -H "$CT" -d "$(cbody wTh '   ')" "$C")" "400"
 eq "chat: 2001 characters are 400"     "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(head -c 2001 /dev/zero | tr '\0' x)")" "$C")" "400"
 eq "chat: 2000 characters are fine"    "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'é%.0s' $(seq 2000))")" "$C")" "202"
+N1=$((N1 + 1))
+# board chat U19: a message may span lines (CR LF and CR read as LF) and hold tabs; the loop pastes it whole.
+eq "chat: two lines with a tab are 202" "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'one\r\n\ttwo\rthree')")" "$C")" "202"
+eq "chat: kept with its line breaks"   "$(reqrow "$(rid)" | jq -c '.payload.text')" '"one\n\ttwo\nthree"'
 N1=$((N1 + 1))
 eq "chat: an unknown member is 404"    "$(post -H "$O" -H "$CT" -d "$(cbody nope hi)" "$C")" "404"
 eq "chat: a bad squad name is 400"     "$(post -H "$O" -H "$CT" -d "$(cbody wTh hi '../x')" "$C")" "400"
@@ -984,8 +1093,214 @@ eq "chat: a gone member is 404"        "$(post -H "$O" -H "$CT" -d "$(cbody wRev
 eq "chat: pause the researcher"        "$(post -H "$O" -H "$CT" -d "{\"scope\":\"member\",\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wResearcher\"}" "http://127.0.0.1:$PORT/api/pause")" "200"
 eq "chat: a paused member is 409"      "$(post -H "$O" -H "$CT" -d "$(cbody wResearcher hi)" "$C")" "409"
 eq "chat: no refused POST wrote a row" "$(crows)" "$N1"
-eq "chat: rows written: three plus the 2000-char one" "$((N1 - N0))" "4"
+eq "chat: rows written: three, the 2000-char one and the multi-line one" "$((N1 - N0))" "5"
+# studio-chat-queued-busy U4: /api/chat-cancel and /api/chat-now name an open chat request; a send carries its age and clock.
+CX="http://127.0.0.1:$PORT/api/chat-cancel"; CN="http://127.0.0.1:$PORT/api/chat-now"
+cid(){ jq -nc --arg p "$LBL" --argjson i "$1" '{project: $p, id: $i}'; }
+TK=$(dbq "SELECT id FROM requests WHERE kind = 'chat' AND member = 'wTh' AND done_at IS NULL ORDER BY id LIMIT 1" | jq '.[0].id')
+dbw "UPDATE requests SET created_at = CAST(strftime('%s','now') AS INTEGER) - 420, result = '{\"state\":\"queued\",\"why\":\"busy: working\",\"since\":'||(CAST(strftime('%s','now') AS INTEGER) - 400)||'}' WHERE id = $TK"
+jt "chat: a queued send has age, clock and first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "(.sends[] | select(.id == $TK)) | .state == \"queued\" and .age_s >= 420 and .failing == false and .now == false and .first == true and (.gives_up_at > 0)"
+jt "chat: a queued send behind another has no clock and is not first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "([.sends[] | select(.state == \"queued\" and .id != $TK)] | all(.first == false))"
+NQ=$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind IN ('chat-cancel','chat-now')" | jq '.[0].n')
+eq "chat-now: an open chat is 202"      "$(post -H "$O" -H "$CT" -d "$(cid "$TK")" "$CN")" "202"
+eq "chat-now: its row names the chat"   "$(reqrow "$(rid)" | jq -c '[.kind, .member, .squad, .payload.chat]')" "[\"chat-now\",\"wTh\",\"ans\",$TK]"
+eq "chat-cancel: an open chat is 202"   "$(post -H "$O" -H "$CT" -d "$(cid "$TK")" "$CX")" "202"
+eq "chat-cancel: its row names the chat" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.chat]')" "[\"chat-cancel\",$TK]"
+eq "chat-cancel: a typed chat is 409"   "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CX")" "409"
+eq "chat-now: a typed chat is 409"      "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CN")" "409"
+eq "chat-now: no such request is 404"   "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CN")" "404"
+eq "chat-now: a bad id is 400"          "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"id\":\"x\"}" "$CN")" "400"
+# chat-multiline-send-fails U2: the limit's error text names the rule, a failed send is dismissed (the loop marks it), a queued one is not.
+CDM="http://127.0.0.1:$PORT/api/chat-dismiss"
+eq "chat: 2001 names its length"       "$(curl -s -H "$O" -H "$CT" -d "$(cbody wTh "$(head -c 2001 /dev/zero | tr '\0' x)")" "$C" | jq -r .error)" "a chat is at most 2000 characters; this one has 2001"
+eq "chat: a bell names its line"       "$(curl -s -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\nb\ac')")" "$C" | jq -r .error)" "a chat may hold line breaks and tabs, but no other control character (line 2)"
+ML=$(printf 'para one\n\npara two\r\n\r\n\tpara three')
+eq "chat: blank lines kept byte for byte" "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$ML")" "$C")" "202"
+eq "chat: its text is the multi-line one" "$(reqrow "$(rid)" | jq -r '.payload.text')" "$(printf 'para one\n\npara two\n\n\tpara three')"
+N1=$((N1 + 1))
+FD=$(dbq "SELECT id FROM requests WHERE kind = 'chat' AND member = 'wTh' ORDER BY id DESC LIMIT 1" | jq '.[0].id')
+eq "chat-dismiss: a queued send is 409" "$(post -H "$O" -H "$CT" -d "$(cid "$FD")" "$CDM")" "409"
+dbw "UPDATE requests SET done_at = CAST(strftime('%s','now') AS INTEGER), result = '{\"ok\":false,\"error\":\"never ready\"}' WHERE id = $FD"
+jt "chat-dismiss: a failed send shows first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "[.sends[] | select(.id == $FD)] | length == 1"
+eq "chat-dismiss: a failed send is 202" "$(post -H "$O" -H "$CT" -d "$(cid "$FD")" "$CDM")" "202"
+eq "chat-dismiss: its row names the chat" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.chat]')" "[\"chat-dismiss\",$FD]"
+dbw "UPDATE requests SET result = json_set(result, '$.dismissed_at', 1) WHERE id = $FD"
+jt "chat-dismiss: the loop's mark drops it from the chat" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "[.sends[] | select(.id == $FD)] | length == 0"
+eq "chat-dismiss: no such request is 404" "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CDM")" "404"
+# board chat U19: POST /api/keys files one `keys` request {keys, via: "board"} for a live member, one open per member;
+# GET /api/chat carries the member's newest screen read as `screen`.
+K="http://127.0.0.1:$PORT/api/keys"
+kbody(){ jq -nc --arg p "$LBL" --arg t "${3:-ans}" --arg w "$1" --argjson k "$2" '{project: $p, topic: $t, wt: $w, keys: $k}'; }
+krows(){ dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'keys'" | jq '.[0].n'; }
+K0=$(krows)
+eq "keys: Escape to a live member is 202" "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Escape"]')" "$K")" "202"
+KR=$(rid)
+eq "keys: one keys row with member and squad" "$(reqrow "$KR" | jq -c '[.kind, .member, .squad, .payload.keys, .payload.via]')" '["keys","wTh","ans",["Escape"],"board"]'
+eq "keys: a second press while one is open is 409" "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Down"]')" "$K")" "409"
+dbw "UPDATE requests SET done_at = 1 WHERE id = $KR"
+eq "keys: arrows, Enter and a digit are 202" "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Down","Down","Enter"]')" "$K")$(post -H "$O" -H "$CT" -d "$(kbody wStudio '["2"]' _studio)" "$K")" "202202"
+dbw "UPDATE requests SET done_at = 1 WHERE kind = 'keys' AND done_at IS NULL"
+K1=$(krows)
+eq "keys: an unknown key is 400"       "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Delete"]')" "$K")" "400"
+eq "keys: two characters are 400"      "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["12"]')" "$K")" "400"
+eq "keys: none is 400"                 "$(post -H "$O" -H "$CT" -d "$(kbody wTh '[]')" "$K")" "400"
+eq "keys: nine are 400"                "$(post -H "$O" -H "$CT" -d "$(kbody wTh '["Up","Up","Up","Up","Up","Up","Up","Up","Up"]')" "$K")" "400"
+eq "keys: a string is 400"             "$(post -H "$O" -H "$CT" -d "$(kbody wTh '"Escape"')" "$K")" "400"
+eq "keys: an unknown member is 404"    "$(post -H "$O" -H "$CT" -d "$(kbody nope '["Escape"]')" "$K")" "404"
+eq "keys: a paused member is 409"      "$(post -H "$O" -H "$CT" -d "$(kbody wResearcher '["Escape"]')" "$K")" "409"
+eq "keys: foreign Origin is 403"       "$(post -H 'Origin: http://evil.example' -H "$CT" -d "$(kbody wTh '["Escape"]')" "$K")" "403"
+eq "keys: no refused POST wrote a row" "$(krows)$((K0 + 3))" "$K1$K1"
+eq "chat: no screen read yet is null"  "$(cq ans wTh)$(jq -c '.screen' "$TMP/chat.out")" "200null"
+dbw "UPDATE observed_workers SET tail = 'Pick one:' || char(10) || '❯ 1. Yes', tail_at = CAST(strftime('%s','now') AS INTEGER) - 3 WHERE project = '$LBL' AND wt = 'wTh'"
+jt "chat: the screen read with its age" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") '.screen.tail == "Pick one:\n❯ 1. Yes" and .screen.age_s >= 3 and .screen.age_s < 60 and .screen.at > 0'
+# ds-feedback-github-issues U4: GET /api/feedback lists drafts and notes; POST /api/feedback files one request per action.
+FBU="http://127.0.0.1:$PORT/api/feedback"
+dbw "INSERT INTO feedback_drafts (id, key, kind, title, body, leak, state, created_at, updated_at) VALUES (901, 'fd:s1', 'issue', 'Serve one', 'Body', 'ok', 'review', 1, 1), (902, 'fd:s2', 'issue', 'Serve two', 'Body', 'ok', 'filed', 1, 1)"
+dbw "INSERT INTO feedback_notes (id, key, project, text, source, state, draft_id, at, updated_at) VALUES (801, 'sn1', 'p', 'a new note', 'cli', 'new', NULL, 1, 1), (802, 'sn2', 'p', 'drafted note', 'cli', 'drafted', 901, 1, 1), (803, 'sn3', 'p', 'gone note', 'cli', 'dismissed', NULL, 1, 1), (804, 'sn4', 'p', 'filed note', 'cli', 'filed', 902, 1, 1)"
+eq "feedback: GET is 200" "$(curl -s -o "$TMP/fb.out" -w '%{http_code}' "$FBU")" "200"
+jt "feedback: GET lists the review draft with its notes, and the notes" "$TMP/fb.out" '([.review[] | select(.id == 901)] | length) == 1 and (.review[0].notes[0].id == 802) and ([.notes[].id] | contains([801, 802, 803, 804])) and ([.filed[].id] | contains([902]))'
+fbp(){ post -H "$O" -H "$CT" -d "$1" "$FBU"; }
+fbj(){ jq -nc --arg p "$LBL" "$1"; }
+eq "feedback: Post a draft in review is 202" "$(fbp "$(fbj '{project: $p, action: "post", draft: 901}')")" "202"
+eq "feedback: its row is a feedback-post of the draft" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.draft]')" '["feedback-post",901]'
+eq "feedback: a second action on that draft while one is open is 409" "$(fbp "$(fbj '{project: $p, action: "dismiss", draft: 901}')")" "409"
+eq "feedback: Post a draft already posted is 409" "$(fbp "$(fbj '{project: $p, action: "post", draft: 902}')")" "409"
+eq "feedback: Post an unknown draft is 404" "$(fbp "$(fbj '{project: $p, action: "post", draft: 99999}')")" "404"
+eq "feedback: Dismiss a note is 202" "$(fbp "$(fbj '{project: $p, action: "dismiss", note: 801, why: "stale"}')")" "202"
+eq "feedback: its row carries the note and reason" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.note, .payload.why]')" '["feedback-dismiss",801,"stale"]'
+eq "feedback: Dismiss a filed note is 409" "$(fbp "$(fbj '{project: $p, action: "dismiss", note: 804}')")" "409"
+eq "feedback: Restore a dismissed note is 202" "$(fbp "$(fbj '{project: $p, action: "restore", note: 803}')")" "202"
+eq "feedback: Restore a note that is not dismissed is 409" "$(fbp "$(fbj '{project: $p, action: "restore", note: 804}')")" "409"
+eq "feedback: an unknown action is 400" "$(fbp "$(fbj '{project: $p, action: "nuke", draft: 901}')")" "400"
+eq "feedback: a cross-origin POST is refused" "$(post -H "Origin: http://evil.example" -H "$CT" -d "$(fbj '{project: $p, action: "restore", note: 803}')" "$FBU")" "403"
+eq "chat-now: foreign Origin is 403"    "$(post -H 'Origin: http://evil.example' -H "$CT" -d "$(cid "$TK")" "$CN")" "403"
+eq "chat-cancel: only the two accepted rows" "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind IN ('chat-cancel','chat-now')" | jq '.[0].n')" "$((NQ + 2))"
 eq "chat: resume the researcher"       "$(post -H "$O" -H "$CT" -d "{\"scope\":\"member\",\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wResearcher\"}" "http://127.0.0.1:$PORT/api/resume")" "200"
+
+# chat-image-upload U1: POST /api/chat-file stores one image per content hash under the state root
+# (`<label>/chat-files/<topic>/<sha256[:16]>.<ext>`, 0600), GET serves it back, each upload prunes
+# old ones, and a chat send may name stored images. Fixtures are magic bytes plus padding (no binary
+# is checked in).
+F="http://127.0.0.1:$PORT/api/chat-file"; CF="$DBR/$LBL/chat-files"
+img(){ printf '%b%s' "$1" "$2" > "$TMP/$3"; }   # img <magic, backslash escapes> <padding> <file>
+img '\x89PNG\r\n\x1a\n' 'one' a.png; img '\x89PNG\r\n\x1a\n' 'two' b.png; img '\x89PNG\r\n\x1a\n' 'three' c.png
+img '\xff\xd8\xff\xe0' 'jpeg' d.jpg; img 'RIFF\x04\x00\x00\x00WEBPVP8 ' 'webp' e.webp; img 'GIF89a' 'gif' f.gif
+printf '<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>' > "$TMP/s.svg"
+up(){ # up <file> <content-type> [topic] [wt] [project] [origin header] -> status; the answer in $TMP/up.out
+  curl -s -o "$TMP/up.out" -w '%{http_code}' -X POST -H "${6:-$O}" -H "Content-Type: $2" --data-binary "@$TMP/$1" \
+    "$F?project=${5:-$LBL}&topic=${3:-ans}&wt=${4:-wTh}"; }
+nfiles(){ find "$CF" -type f 2>/dev/null | wc -l | tr -d ' '; }
+eq "chat-file: a PNG for a live member is 200" "$(up a.png image/png)" "200"
+AID=$(jq -r '.id' "$TMP/up.out")
+eq "chat-file: named by its sha256's first 16 hex" "$AID" "$(sha256sum "$TMP/a.png" | cut -c1-16).png"
+eq "chat-file: the answer's url and bytes" "$(jq -c '[.url, .bytes]' "$TMP/up.out")" "[\"api/chat-file?project=$LBL&topic=ans&name=$AID\",$(wc -c < "$TMP/a.png" | tr -d ' ')]"
+eq "chat-file: stored 0600 in 0700 folders" "$(stat -c %a "$CF/ans/$AID") $(stat -c %a "$CF/ans") $(stat -c %a "$CF")" "600 700 700"
+eq "chat-file: the same bytes again, the same name" "$(up a.png image/png)$(jq -r '.id' "$TMP/up.out")" "200$AID"
+eq "chat-file: and one file" "$(nfiles)" "1"
+touch -d '10 days ago' "$CF/ans/$AID"; up a.png image/png >/dev/null
+eq "chat-file: a repeat upload resets the image's age" "$(( $(date +%s) - $(stat -c %Y "$CF/ans/$AID") < 60 ))" "1"
+for t in d.jpg:image/jpeg e.webp:image/webp f.gif:image/gif; do
+  f=${t%%:*}; ty=${t#*:}
+  eq "chat-file: a ${ty#image/} is 200 as .${f#*.}" "$(up "$f" "$ty")$(jq -r '.id | split(".")[1]' "$TMP/up.out")" "200${f#*.}"
+done
+N2=$(nfiles)
+eq "chat-file: a cross-origin upload is 403" "$(up b.png image/png ans wTh "$LBL" 'Origin: http://evil.example')" "403"
+eq "chat-file: no Origin is 403"        "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: image/png' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=ans&wt=wTh")" "403"
+eq "chat-file: text/plain is 415"       "$(up b.png text/plain)" "415"
+eq "chat-file: an SVG is 415"           "$(up s.svg image/svg+xml)" "415"
+eq "chat-file: an SVG labelled png is 415" "$(up s.svg image/png)" "415"
+eq "chat-file: a PNG labelled jpeg is 415" "$(up b.png image/jpeg)$(jq -r '.error' "$TMP/up.out")" "415not a png/jpeg/webp/gif"
+head -c $((6 * 1024 * 1024)) /dev/zero | cat "$TMP/b.png" - > "$TMP/big.png"
+eq "chat-file: a 6 MiB body is 413"     "$(up big.png image/png)" "413"
+head -c $((5 * 1024 * 1024 + 1 - $(wc -c < "$TMP/b.png"))) /dev/zero | cat "$TMP/b.png" - > "$TMP/over.png"
+eq "chat-file: 5 MiB + 1 byte is the handler's own 413" "$(up over.png image/png)$(jq -r '.error' "$TMP/up.out")" "413an image is at most 5 MiB"
+: > "$TMP/empty.png"
+eq "chat-file: an empty body is 400"    "$(up empty.png image/png)" "400"
+eq "chat-file: another project is 403"  "$(up b.png image/png ans wTh zzother)" "403"
+eq "chat-file: a bad topic is 400"      "$(up b.png image/png '../x')" "400"
+eq "chat-file: an ended member is 404"  "$(up b.png image/png ans wReviewer)" "404"
+eq "chat-file: an unknown member is 404" "$(up b.png image/png ans nope)" "404"
+eq "chat-file: GET is not an upload"    "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "$O" -H 'Content-Type: image/png' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=ans&wt=wTh")" "405"
+mkdir -p "$TMP/elsewhere"; ln -s "$TMP/elsewhere" "$CF/_studio"
+eq "chat-file: a symlinked folder is 500" "$(up b.png image/png _studio wStudio)$(jq -r '.error' "$TMP/up.out")" "500chat-files is not a plain folder"
+eq "chat-file: nothing written through it" "$(find "$TMP/elsewhere" -type f | wc -l | tr -d ' ')" "0"
+rm "$CF/_studio"
+eq "chat-file: no refused upload wrote a file" "$(nfiles)" "$N2"
+eq "chat-file: the Studio's folder is _studio" "$(up b.png image/png _studio wStudio)" "200"
+[ -f "$CF/_studio/$(jq -r '.id' "$TMP/up.out")" ]; eq "chat-file: stored under _studio" "$?" "0"
+# Serving: the bytes, with headers that keep a browser from running or sniffing it.
+eq "chat-file: GET is 200"              "$(curl -s -D "$TMP/fh.txt" -o "$TMP/served.png" -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "200"
+cmp -s "$TMP/a.png" "$TMP/served.png"; eq "chat-file: the same bytes" "$?" "0"
+fh(){ grep -i "^$1:" "$TMP/fh.txt" | cut -d' ' -f2- | tr -d '\r'; }
+eq "chat-file: served headers" "$(fh content-type)|$(fh x-content-type-options)|$(fh content-disposition)|$(fh content-security-policy)|$(fh cache-control)" \
+  "image/png|nosniff|inline|default-src 'none'; img-src 'self'|private, max-age=86400"
+eq "chat-file: HEAD is 200"             "$(curl -s -I -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "200"
+eq "chat-file: ../x.png is 400"         "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=../x.png")" "400"
+eq "chat-file: an uppercase name is 400" "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=${AID^^}")" "400"
+eq "chat-file: a .svg name is 400"      "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=0123456789abcdef.svg")" "400"
+eq "chat-file: an unknown name is 404"  "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=0123456789abcdef.png")" "404"
+eq "chat-file: another squad's folder is 404" "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=board-builders&name=$AID")" "404"
+eq "chat-file: another project is 403"  "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=zzother&topic=ans&name=$AID")" "403"
+ln -s "$CF/ans/$AID" "$CF/ans/fedcba9876543210.png"
+eq "chat-file: a symlinked file is 404" "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=fedcba9876543210.png")" "404"
+rm "$CF/ans/fedcba9876543210.png"
+eq "chat-file: an ended member's image still shows" "$(cp "$TMP/a.png" "$CF/ans/aaaaaaaaaaaaaaaa.png"; curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=aaaaaaaaaaaaaaaa.png")" "200"
+# A chat send may name stored images; text may then be empty.
+fbody(){ jq -nc --arg p "$LBL" --arg x "$1" --argjson f "$2" '{project: $p, topic: "ans", wt: "wTh", text: $x, files: $f}'; }
+eq "chat-file: a send with an image and no text is 202" "$(post -H "$O" -H "$CT" -d "$(fbody '' "[\"$AID\"]")" "$C")" "202"
+eq "chat-file: the chat row holds files" "$(reqrow "$(rid)" | jq -c '[.payload.text, .payload.files, .payload.via]')" "[\"\",[\"$AID\"],\"board\"]"
+eq "chat-file: text without files has no files key" "$(post -H "$O" -H "$CT" -d "$(fbody hi '[]')" "$C")$(reqrow "$(rid)" | jq -c '.payload | has("files")')" "202false"
+N3=$(crows)
+eq "chat-file: a send naming a missing image is 409" "$(post -H "$O" -H "$CT" -d "$(fbody hi '["0123456789abcdef.png"]')" "$C")$(jq -r '.error' "$TMP/post.out")" "409image 0123456789abcdef.png is gone — attach it again"
+eq "chat-file: a bad name in files is 400" "$(post -H "$O" -H "$CT" -d "$(fbody hi '["../../x.png"]')" "$C")" "400"
+eq "chat-file: five files are 400"      "$(post -H "$O" -H "$CT" -d "$(fbody hi '["a","b","c","d","e"]')" "$C")" "400"
+eq "chat-file: a name twice is 400"     "$(post -H "$O" -H "$CT" -d "$(fbody hi "[\"$AID\",\"$AID\"]")" "$C")" "400"
+eq "chat-file: files not a list is 400" "$(post -H "$O" -H "$CT" -d "$(fbody hi '"x"')" "$C")" "400"
+eq "chat-file: no text and no files is still 400" "$(post -H "$O" -H "$CT" -d "$(fbody '' '[]')" "$C")" "400"
+eq "chat-file: no refused send wrote a row" "$(crows)" "$N3"
+# Only the upload may send a big body: a 200 KiB JSON post is still 413.
+head -c $((200 * 1024)) /dev/zero | tr '\0' x | jq -Rc --arg p "$LBL" '{project: $p, topic: "ans", wt: "wTh", text: .}' > "$TMP/big.json"
+eq "chat-file: a 200 KiB JSON chat is 413" "$(post -H "$O" -H "$CT" --data-binary "@$TMP/big.json" "$C")" "413"
+eq "chat-file: a 200 KiB answer is 413" "$(post -H "$O" -H "$CT" --data-binary "@$TMP/big.json" "http://127.0.0.1:$PORT/api/answer")" "413"
+# The prune each upload runs first: an image past chat_files_keep_d (14) days goes, a younger one and a
+# file outside the name rule stay, a temp file over an hour old goes.
+B=$(up b.png image/png >/dev/null; jq -r '.id' "$TMP/up.out")
+touch -d '15 days ago' "$CF/ans/$AID"; touch -d '13 days ago' "$CF/ans/$B"
+printf x > "$CF/ans/notes.txt"; touch -d '100 days ago' "$CF/ans/notes.txt"
+printf x > "$CF/ans/.$AID.1.tmp"; touch -d '2 hours ago' "$CF/ans/.$AID.1.tmp"
+printf x > "$CF/ans/.$B.2.tmp"
+eq "chat-file: the next upload is 200"  "$(up c.png image/png)" "200"
+ex(){ [ -e "$CF/ans/$1" ] && echo y || echo n; }
+eq "chat-file: 15 days old gone, 13 kept, other file kept, old tmp gone, new tmp kept" "$(ex "$AID")$(ex "$B")$(ex notes.txt)$(ex ".$AID.1.tmp")$(ex ".$B.2.tmp")" "nyyny"
+eq "chat-file: a pruned image is 404"   "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "404"
+rm -f "$CF/ans/notes.txt" "$CF/ans/.$B.2.tmp"
+# chat-image-upload U4: the Start squad dialog's images go to topic _start with no member (no squad yet),
+# and a start may name up to 8 of them.
+ups(){ # ups <file> [project] [extra query] -> status; the answer in $TMP/up.out
+  curl -s -o "$TMP/up.out" -w '%{http_code}' -X POST -H "$O" -H "Content-Type: image/png" --data-binary "@$TMP/$1" "$F?project=${2:-$LBL}&topic=_start${3:-}"; }
+eq "start-file: an upload to _start with no wt is 200" "$(ups a.png)" "200"
+SID=$(jq -r '.id' "$TMP/up.out")
+eq "start-file: stored under _start, 0600" "$(stat -c %a "$CF/_start/$SID" 2>&1)" "600"
+eq "start-file: with a wt is 400"       "$(ups b.png "$LBL" '&wt=wTh')" "400"
+eq "start-file: another project is 403" "$(ups b.png zzother)" "403"
+eq "start-file: over 5 MiB is 413"      "$(ups big.png)" "413"
+eq "start-file: a cross-origin upload is 403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Origin: http://evil.example' -H 'Content-Type: image/png' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=_start")" "403"
+eq "start-file: an SVG is 415"          "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$O" -H 'Content-Type: image/png' --data-binary "@$TMP/s.svg" "$F?project=$LBL&topic=_start")" "415"
+eq "start-file: GET serves it"          "$(curl -s -o "$TMP/served.png" -w '%{http_code}' "$F?project=$LBL&topic=_start&name=$SID"; cmp -s "$TMP/a.png" "$TMP/served.png" && echo same)" "200same"
+eq "start-file: a second image"         "$(ups b.png)" "200"
+SID2=$(jq -r '.id' "$TMP/up.out")
+sbody(){ jq -nc --arg p "$LBL" --argjson f "$1" '{project: $p, action: "start", text: "look", files: $f}'; }
+eq "start-file: a start with 2 files is 202" "$(req "$(sbody "[\"$SID\",\"$SID2\"]")")" "202"
+eq "start-file: the studio row holds the names" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.action, .payload.files]')" "[\"studio\",\"start\",[\"$SID\",\"$SID2\"]]"
+srows(){ dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'" | jq '.[0].n'; }
+N4=$(srows)
+eq "start-file: 9 files are 400"        "$(req "$(sbody "$(jq -nc '[range(9) | tostring * 16 + ".png"]')")")" "400"
+eq "start-file: a bad name is 400"      "$(req "$(sbody '["../x.png"]')")" "400"
+eq "start-file: a missing one is 409"   "$(req "$(sbody '["0123456789abcdef.png"]')")$(jq -r '.error' "$TMP/post.out")" "409image 0123456789abcdef.png is gone — attach it again"
+CID="$(sha256sum "$TMP/c.png" | cut -c1-16).png"
+eq "start-file: c.png is stored for a chat only" "$([ -f "$CF/ans/$CID" ] && [ ! -e "$CF/_start/$CID" ] && echo y)" "y"
+eq "start-file: a chat image is not a start's" "$(req "$(sbody "[\"$CID\"]")")" "409"
+eq "start-file: no refused start wrote a row" "$(srows)" "$N4"
 
 # GET /lavish/<key>: Lavish stops itself when idle; when it is down the board files one `lavish`
 # request and answers a page that reloads until the loop has started it, then redirects.
@@ -1002,6 +1317,31 @@ ff
 eq "lavish: the loop started it once" "$(wc -l < "$TMP/lvstart.log" | tr -d ' ')" "1"
 eq "lavish: up -> redirect"           "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$L/$LK")" "302 http://127.0.0.1:$LP/session/$LK"
 if [ -s "$TMP/lvfake.pid" ]; then kill "$(cat "$TMP/lvfake.pid")" 2>/dev/null || true; fi
+
+# GET /page/<label>/pages/<topic>/<path> (debrief-in-needs-you pages U2): a review page saved when its worktree
+# closed, read-only from `<label>/pages/<topic>/` only, sandboxed so its scripts cannot call the board's API.
+PG="http://127.0.0.1:$PORT/page"; PD="$DBR/$LBL/pages/pgt"
+mkdir -p "$PD/rescued/b/.lavish" "$DBR/$LBL/pages/pgother"
+printf '<html><link rel="stylesheet" href="s.css"><body>saved</body></html>' > "$PD/rescued/b/.lavish/plan.html"
+printf 'body{color:red}' > "$PD/rescued/b/.lavish/s.css"; printf 'x' > "$PD/rescued/b/.lavish/notes.txt"
+printf 'other' > "$DBR/$LBL/pages/pgother/o.html"; printf 'secret' > "$TMP/outside.html"
+ln -sf "$TMP/outside.html" "$PD/link.html"; ln -sfn "$DBR/$LBL/pages/pgother" "$PD/dir"
+pg(){ curl -s -o "$TMP/pg.out" -w '%{http_code}' "$@"; }
+eq "page: a saved page is 200"          "$(pg "$PG/$LBL/pages/pgt/rescued/b/.lavish/plan.html")" "200"
+has "page: its body"                    "$(cat "$TMP/pg.out")" "saved"
+eq "page: its relative css is 200"      "$(pg "$PG/$LBL/pages/pgt/rescued/b/.lavish/s.css")" "200"
+H="$(curl -s -D - -o /dev/null "$PG/$LBL/pages/pgt/rescued/b/.lavish/plan.html" | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
+has "page: sandboxed, scripts only"     "$H" "content-security-policy: sandbox allow-scripts"
+has "page: nosniff"                     "$H" "x-content-type-options: nosniff"
+has "page: html content type"           "$H" "content-type: text/html"
+eq "page: a .txt is 404"                "$(pg "$PG/$LBL/pages/pgt/rescued/b/.lavish/notes.txt")" "404"
+eq "page: .. is resolved by the URL, never out of the folder" "$(pg --path-as-is "$PG/$LBL/pages/pgt/../../../../../../$TMP/outside.html")" "404"
+eq "page: an encoded slash in a name is 404" "$(pg "$PG/$LBL/pages/pgt/..%2fpgother%2fo.html")" "404"
+eq "page: a symlink out is 404"         "$(pg "$PG/$LBL/pages/pgt/link.html")" "404"
+eq "page: through a symlinked folder is 404" "$(pg "$PG/$LBL/pages/pgt/dir/o.html")" "404"
+eq "page: a folder is 404"              "$(pg "$PG/$LBL/pages/pgt/rescued")" "404"
+eq "page: not under pages/ is 404"      "$(pg "$PG/$LBL/chat-files/pgt/plan.html")" "404"
+eq "page: a bad label is 404"           "$(pg "$PG/../pages/pgt/rescued/b/.lavish/plan.html")" "404"
 
 # The stream carried what the loop did: each request_done, a failed one with its reason. The page
 # toasts those, and refetches the board on every event.
@@ -1051,13 +1391,22 @@ eq "upgrade: its pidfile + files removed" "$(find "$DS_STATE_ROOT/$LBL" -maxdept
 eq "upgrade: new board serves"          "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$((PORT + 3))/")" "200"
 stop_own "$SPID"; SPID=""
 
-# Port taken by something else: say so and exit non-zero — never claim "listening".
+# Port taken by something else (U2 of board-empty-state-and-port): the next free port, said so.
 "$(command -v bun)" -e "Bun.serve({hostname:'127.0.0.1',port:$((PORT + 4)),fetch:()=>new Response('other')}); await Bun.sleep(30000)" & HOG=$!
 sleep 0.5
-rc=0; out="$(PATH="$TMP/tsbin:$PATH" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$((PORT + 4))" 2>&1)" || rc=$?
+PATH="$TMP/tsbin:$PATH" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$((PORT + 4))" >"$TMP/serve6.log" 2>&1 &
+SPID=$!
+for _ in $(seq 1 150); do grep -q 'listening on' "$TMP/serve6.log" && break; sleep 0.2; done
+P6="$(sed -n 's/.*listening on 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$TMP/serve6.log" | head -1)"
+eq "busy port: moves past the held one" "$([ -n "$P6" ] && [ "$P6" -gt "$((PORT + 4))" ] && echo yes || echo no)" "yes"
+has "busy port: says the asked was taken" "$(cat "$TMP/serve6.log")" "($((PORT + 4)) was taken)"
+eq "busy port: the board serves there"  "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${P6:-0}/healthz")" "200"
+stop_own "$SPID"; SPID=""
+# Nothing free within DS_BOARD_PORT_TRIES: say so and exit non-zero — never claim "listening".
+rc=0; out="$(DS_BOARD_PORT_TRIES=0 PATH="$TMP/tsbin:$PATH" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$((PORT + 4))" 2>&1)" || rc=$?
 kill "$HOG" 2>/dev/null || true
 eq "busy port: exits non-zero"         "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
-has "busy port: says it can't bind"    "$out" "could not bind"
+has "busy port: says all are taken"    "$out" "are all taken"
 eq "busy port: never says listening"   "$(printf '%s' "$out" | grep -c 'listening on' || true)" "0"
 
 # Default bind (no DS_BIND): localhost + the tailnet IP only — never every interface (0.0.0.0).

@@ -3,6 +3,7 @@
 // (observed_workers.presence, U149) and gives at most one act. compare() is the act table, pure:
 //
 //   lock held (a lifecycle claim acted/running, an Orca call sent/pending)      nothing
+//   the archive's final-debrief hold (a Lead, squad/archive-debrief.ts)          nothing: no close, no start
 //   stopped/archived/suspended, agent present (U155)                             close: stop
 //   archived/suspended, no agent, worktree present (U155)                        close: remove
 //   paused                                                                       nothing (the pause flow)
@@ -12,8 +13,9 @@
 //   running, a phase wish (or another model) not acted yet                        start (the handoff switches it)
 //   running, a switch owed (switches.ts: limit, fallback, phase, pin)             stop when idle
 //   working, stuck on its limit dialog (or silent past SILENT_MIN)                stop like idle
-//   running, limited with nowhere to go                                           one tell ("carry on"); out of credits: none (U3)
+//   running, limited with nowhere to go                                           one tell ("carry on"); out of credits or login ended: none (U3)
 //   running, its credits hold cleared while it still runs on that account (U3)    one tell ("works again")
+//   running, its login hold cleared while it still runs on that account           one tell ("login works again", claude-login-ended U2)
 //   running, reload pending and idle, no lifecycle act due (U156)                 one reload message with the ack command, once per reload_at
 //   running, clear pending and idle, no lifecycle act due (U156)                  the agent's clear command once per clear_at (/clear, /new; never for Muse)
 //   running                                                                       nothing
@@ -32,24 +34,28 @@ import { graceS } from "../capacity/slot.ts";
 import { crashCapped, lastStart, lastStopSent, lock, startEpisode, view, walkedGone, type View } from "../squad/member-state.ts";
 import { effective, memberKey, intents, quote, type Target } from "../pause/pause.ts";
 import { resumeGate } from "../reconcilers/pause-resume.ts";
-import { knob, limit, stepOpen } from "../reconcilers/liveness.ts";
+import { knob, limit, stepOpen, turnEnded } from "../reconcilers/liveness.ts";
 import { closeBusy } from "../squad/close-busy.ts";
 import { limitStuck, switchFacts, toldAlready, type Switch } from "../capacity/switches.ts";
-import { TELL, worksAgain } from "../squad/handoff.ts";
+import { loginWorksAgain, TELL, worksAgain } from "../squad/handoff.ts";
 import { HEADLESS } from "../observers/codex.ts";
 import { wtPath as wtDir } from "../observers/orca.ts";
-import { driftCleared, stopRetry } from "../squad/close-drift.ts";
+import { driftCleared, removeRetry, stopRetry, type RemoveRetry } from "../squad/close-drift.ts";
 import { wake } from "../pause/wake.ts";
 import { ask as askCheckpoint, owed, pendingWhy, sweep as sweepCheckpoints } from "../pause/stop-checkpoint.ts";
 import { seed } from "../db/seed.ts";
 import { STANDING } from "../drivers/types.ts";
+import { onContract } from "../squad/backend.ts";
+import { finishOf } from "../squad/finish-read.ts";
 
 import type { Action, Reconciler, TickCtx } from "./plugins.ts";
 import { ROOT, type Row, type Store } from "./store.ts";
+import { withDecideMemo } from "../capacity/walk-memo.ts";
 
 export type Reality = "none" | "starting" | "running" | "unknown";
 export type Facts = {
   view: View; lock: boolean; reality: Reality;
+  hold?: boolean;          // the squad archives and its Lead writes the final debrief (effective() why archive-debrief)
   unknownS: number;        // how long reality has read unknown
   recheckS: number;        // RECHECK_MIN in seconds
   resume: boolean | null;  // a pause resume: may it start (null: none)
@@ -60,7 +66,7 @@ export type Facts = {
   idleOK?: boolean;        // idle, nothing undelivered, no live sub-agents
   switchStop?: Switch | null;  // U154: a switch owed on a live agent (limit, fallback, phase, pin)
   tellLimit?: string | null;   // U154: the tell key when it is limited with nowhere to go
-  tellOk?: string | null;      // U3: the "works again" key once its credits hold was cleared
+  tellOk?: string | null;      // U3: the "works again" key once its credits hold was cleared (`login-ok|…`: its login hold)
   switchStuck?: boolean;       // U154: a working member stuck on its limit switches like an idle one
   hasWorktree?: boolean;       // U155: a worktree to remove once its agent is gone
   wt?: boolean;                // U158: a worktree id is recorded (its tree may already be gone)
@@ -71,11 +77,11 @@ export type Facts = {
   clearCmd?: "/clear" | "/new" | null;  // U156: the agent's clear command (null: no signal, e.g. Muse)
   checkpoint?: string | null;  // U266: the why of an owed stop still waiting on its journal checkpoint (stop-checkpoint.ts)
 };
-export type Act = { act: "start" } | { act: "stop"; why: string } | { act: "checkpoint"; why: string } | { act: "tell"; why: "limit" | "credits-ok" } | { act: "card"; why: "unknown" | "rebroke" }
+export type Act = { act: "start" } | { act: "stop"; why: string } | { act: "checkpoint"; why: string } | { act: "tell"; why: "limit" | "credits-ok" | "login-ok" } | { act: "card"; why: "unknown" | "rebroke" }
   | { act: "reload" } | { act: "clear" } | { act: "close"; phase: "stop" | "remove"; why: string } | null;
 
 export function compare(f: Facts): Act {
-  if (f.lock) return null;
+  if (f.lock || f.hold) return null;
   // U155: a stopped member is never restarted; an archived one is closed, then its worktree
   // removed. A cancelled Builder is cancel.ts's, filtered out first.
   if (f.view === "suspended") {
@@ -102,7 +108,7 @@ export function compare(f: Facts): Act {
     if (f.switchStop && (f.idleOK || f.switchStuck) && f.room)
       return f.checkpoint && f.checkpoint === f.switchStop.why ? { act: "checkpoint", why: f.checkpoint } : { act: "stop", why: f.switchStop.why };
     if (f.tellLimit && !f.room) return { act: "tell", why: "limit" };
-    if (f.tellOk) return { act: "tell", why: "credits-ok" };
+    if (f.tellOk) return { act: "tell", why: f.tellOk.startsWith("login-ok|") ? "login-ok" : "credits-ok" };
     // Lifecycle acts win over the confirmation messages below: a fresh session from a start
     // satisfies a pending reload or clear by itself, and an unconfirmed message must never
     // wedge a switch start or a tell behind it.
@@ -119,7 +125,9 @@ export function compare(f: Facts): Act {
 // Reality as the decider reads it: running, none or unknown from presence (U149). A member the loop
 // placed that no walk has read since (no worker row yet, or one older than the start) is "starting"
 // for the spawn grace (DS_SWEEP_SPAWN_GRACE_MIN), then unknown: never a second start beside it.
+// U12: a squad off Orca has no dispatch, so its reality is the process walk alone (walkReality).
 export function reality(store: Store, m: Row, now: number): Reality {
+  if (onContract(store, String(m.project), String(m.squad))) return walkReality(store, m, now);
   const w = m.wt ? store.get("observed_workers", { project: m.project, wt: m.wt }) : null, placed = lastStart(m);
   const unread = !w || w.gone_at != null || Number(w.account_at ?? 0) <= placed;
   // account-move-slow U2: the loop stopped it and a walk read since found no agent, while Orca's
@@ -128,12 +136,56 @@ export function reality(store: Store, m: Row, now: number): Reality {
   if (w && w.gone_at == null && w.walk === "none" && w.presence === "running") {
     const sent = lastStopSent(store, m);
     if (sent > placed && walkedGone(w, sent)) return "none";
+    if (sent <= placed && deadUnderOrca(store, m, w, placed, now)) return "none";
   }
   if (w && w.gone_at == null && w.presence === "running") return "running";
   // U231: the worker went away after the last start: that is a fact, not "started, not seen yet".
   if (w && w.gone_at != null && Number(w.gone_at) > placed) return "none";
   if (placed && unread) return now - placed < graceS() ? "starting" : "unknown";
   if (!w || w.gone_at != null || w.presence === "none") return "none";
+  return "unknown";
+}
+
+// U21a: after a KILL Orca can keep a member `working` (presence running) while no agent runs in its
+// worktree. noAgentSince() is, for a member with a generation, when every successful walk since a time after its last start began finding
+// no agent (walk_none_at, kept by the Orca observer: a failed or split walk keeps it, a walk that finds the
+// agent clears it), while its transcript has not grown since and it has no finish row of its generation;
+// null otherwise. It is gone once that held for GONE_MIN. The caller checks the loop did not stop it (a
+// loop stop is walkedGone's).
+export function noAgentSince(store: Store, m: Row, w: Row, placed: number): number | null {
+  const since = Number(w.walk_none_at ?? 0);
+  // Only a start that carries a generation: a Codex, Muse or `--on` start has none, and an `--on` one runs
+  // on another host, where this host's walk never sees its agent (the shadow leaves them out too).
+  if (!m.gen || w.walk !== "none" || !(since > placed)) return null;
+  const t = store.db.query("SELECT MAX(mtime) AS t FROM observed_transcripts WHERE wt = ?").get(String(m.wt)) as { t: number | null } | null;
+  if (Number(t?.t ?? 0) > since) return null;
+  return finishOf(store, m) ? null : since;
+}
+export const goneMinS = (store: Store, project: string) => knob(store, project, "GONE_MIN", 3) * 60;
+function deadUnderOrca(store: Store, m: Row, w: Row, placed: number, now: number): boolean {
+  const since = noAgentSince(store, m, w, placed);
+  return since != null && now - since >= goneMinS(store, String(m.project));
+}
+// U21c: when reality() reads (or will read) an Orca member's `running` presence as none by U21a's rule
+// (no loop stop since its last start, noAgentSince held for GONE_MIN): that time, else null.
+export function staleWorkingAt(store: Store, m: Row): number | null {
+  if (!m.wt || onContract(store, String(m.project), String(m.squad))) return null;
+  const w = store.get("observed_workers", { project: m.project, wt: m.wt }), placed = lastStart(m);
+  if (!w || w.gone_at != null || w.walk !== "none" || w.presence !== "running" || lastStopSent(store, m) > placed) return null;
+  const since = noAgentSince(store, m, w, placed);
+  return since == null ? null : since + goneMinS(store, String(m.project));
+}
+
+// Reality from the process walk alone (U10's new input, U12's for a squad off Orca): an agent process
+// in the member's worktree is running, none is none, a failed or split walk unknown; a start no walk
+// has read since is starting for the spawn grace, then unknown. A shell left open is no agent.
+export function walkReality(store: Store, m: Row, now: number): Reality {
+  const w = m.wt ? store.get("observed_workers", { project: m.project, wt: m.wt }) : null, placed = lastStart(m);
+  const unread = !w || w.gone_at != null || Number(w.account_at ?? 0) <= placed;
+  if (w && w.gone_at == null && w.walk === "running") return "running";
+  if (w && w.gone_at != null && Number(w.gone_at) > placed) return "none";
+  if (placed && unread) return now - placed < graceS() ? "starting" : "unknown";
+  if (!w || w.gone_at != null || w.walk === "none") return "none";
   return "unknown";
 }
 
@@ -286,7 +338,8 @@ function stopFacts(store: Store, m: Row, now: number): Pick<Facts, "stopDue" | "
   const out = Number(w.last_output_at ?? 0), hungMin = knob(store, String(m.project), "HUNG_MIN", 30);
   const lastRestart = Number(store.get("episodes", { project: m.project, subject: `member:${m.id}`, kind: "restarted" })?.started_at ?? 0);
   if (w.state === "working" && out > 0 && now - out >= hungMin * 60 && !(now - lastRestart < knob(store, String(m.project), "REBREAK_MIN", 30) * 60 && lastRestart > 0)
-    && !/What do you want to do\?/.test(String(w.tail ?? "")) && !(stepOpen(store, String(m.wt)) && now - out < (Number(limit(store, String(m.project), "long_step_min") ?? 60) || 60) * 60 + hungMin * 60))
+    && !/What do you want to do\?/.test(String(w.tail ?? "")) && !(stepOpen(store, String(m.wt)) && now - out < (Number(limit(store, String(m.project), "long_step_min") ?? 60) || 60) * 60 + hungMin * 60)
+    && !turnEnded(store, String(m.wt)))
     return { stopDue: "now", stopWhy: "hung", idleOK };
   const rssGb = limit(store, String(m.project), "restart_rss_gb");
   const gb = rssGb && rssGb !== "-" ? Number(rssGb) : NaN;
@@ -304,13 +357,14 @@ function look(store: Store, m: Row, now: number): Seen {
   const w = payloadOf(m);
   const sw = switchFacts(store, m, now), stops = stopFacts(store, m, now);
   const tree = m.wt ? store.get("observed_worktrees", { project: m.project, wt: m.wt }) : null;
+  const why = effective(store, m).why;
   const wtPath = tree?.path ? String(tree.path) : m.wt && String(m.wt).includes("::") ? String(m.wt).split("::").at(-1)! : "";
   return { m, resume: resuming ? resume : null, f: {
-    view: view(store, m), lock: lock(store, m), reality: r, switchStuck: limitStuck(store, m, now),
-    closeOK: ["stopped", "gone"].includes(String(m.want ?? "")) || effective(store, m).why === "squad" || !closeBusy(store, m),
+    view: view(store, m), lock: lock(store, m), reality: r, hold: why === "archive-debrief", switchStuck: limitStuck(store, m, now),
+    closeOK: ["stopped", "gone"].includes(String(m.want ?? "")) || why === "squad" || !closeBusy(store, m),
     hasWorktree: !!m.wt && ((!!tree && tree.gone_at == null) || (!!wtPath && existsSync(wtPath))),
     wt: !!m.wt,
-    staleWtOk: effective(store, m).why === "squad" || m.want === "gone",
+    staleWtOk: why === "squad" || m.want === "gone",
     unknownS: unknownFor(store, m, r, now), recheckS: knob(store, String(m.project), "RECHECK_MIN", 5) * 60,
     resume: resuming ? resumeGate(store, m, resume!) : null,
     switchDue: m.want_result == null && (!ACTED.includes(w.why as string | undefined) || pinsOther(m, w)),
@@ -334,15 +388,32 @@ export function candidates(store: Store, now: number): Wanting {
 }
 
 const who = (m: Row) => `${m.role}${m.suffix ? ` ${m.suffix}` : ""} of ${m.squad}`;
-function card(m: Row, why: "unknown" | "rebroke", f: Omit<Facts, "room">, store: Store): Action {
+// U20a: one rebroke card per member while its starts keep breaking. The loop starts it again once
+// REBREAK_MIN has passed, so each break would open a new card under `rebroke:<restart time>`; the
+// `rebroke-run` episode keeps the first break's time (the card's key), the tries so far (count) and the
+// last restart counted (ended_at). A break whose restart came right after the last card's window joins the
+// run; a start that survived REBREAK_MIN leaves a gap longer than half of it, so the next break is a new run.
+function rebreakRun(store: Store, m: Row, restart: number, now: number): { first: number; tries: number } {
+  const key = { project: m.project, subject: `member:${m.id}`, kind: "rebroke-run" };
+  const r = store.get("episodes", key), gap = knob(store, String(m.project), "REBREAK_MIN", 30) * 30;
+  let first = restart, tries = 1;
+  if (r && Number(r.ended_at) === restart) { first = Number(r.started_at); tries = Number(r.count ?? 1); }   // the same break, seen again
+  else if (r && restart > Number(r.ended_at) && restart - Number(r.observed_at) <= gap) { first = Number(r.started_at); tries = Number(r.count ?? 1) + 1; }
+  store.upsert("episodes", key, { squad: m.squad, started_at: first, ended_at: restart, count: tries, state: "open", source: "loop", observed_at: now });
+  return { first, tries };
+}
+
+function card(m: Row, why: "unknown" | "rebroke", f: Omit<Facts, "room">, store: Store, now: number): Action {
   const since = store.get("episodes", { project: m.project, subject: `member:${m.id}`, kind: why === "unknown" ? "presence_unknown" : "restarted" })?.started_at;
+  const mins = Math.round(knob(store, String(m.project), "REBREAK_MIN", 30));
+  const run = why === "rebroke" ? rebreakRun(store, m, Number(since ?? 0), now) : null;
   const text = why === "unknown"
     ? `The loop cannot tell whether the ${who(m)} runs (${m.wt}): the process walk has read unknown for ${Math.round(f.unknownS / 60)} min. It starts nothing until it can tell.`
-    : `The ${who(m)} (${m.wt}) is gone again within ${Math.round(knob(store, String(m.project), "REBREAK_MIN", 30))} min of a restart; the loop does not restart it again.`;
+    : `The ${who(m)} (${m.wt}) is gone again within ${mins} min of a restart (${run!.tries} ${run!.tries === 1 ? "try" : "tries"} so far). The loop tries again every ${mins} min and keeps this one card until a start lasts.`;
   return { project: String(m.project), squad: String(m.squad), member: (m.wt as string | null) ?? null, subject: `member:${m.id}`, kind: "alert",
-    episode: `${why}:${since ?? 0}`, payload: { title: why === "unknown" ? "Agent presence unknown" : "Agent broke again", ...(why === "rebroke" ? { card: "agent_rebroke" } : {}), text,
+    episode: `${why}:${run ? run.first : (since ?? 0)}`, payload: { title: why === "unknown" ? "Agent presence unknown" : "Agent broke again", ...(why === "rebroke" ? { card: "agent_rebroke" } : {}), text,
       option: why === "unknown" ? "look at the worktree's processes (orca.sh agent-accounts)" : "look at it, then restart it by hand (ds want member <id> --restart)",
-      why: why === "unknown" ? "a start beside a live agent would make a second session" : "the loop does not restart an agent that did not come back" } };
+      why: why === "unknown" ? "a start beside a live agent would make a second session" : "a start that breaks again within the window is retried, not forgotten" } };
 }
 
 function stopCard(m: Row, tries: number, store: Store): Action {
@@ -351,6 +422,24 @@ function stopCard(m: Row, tries: number, store: Store): Action {
       text: `The ${who(m)} (${m.wt}) still runs after ${tries} stops that reported done. The loop stops asking.`,
       option: "look at the worktree's terminals and processes, stop it by hand (orca.sh worker-stop)",
       why: "its squad cannot close while the agent runs" } };
+}
+
+function closingSquad(store: Store, m: Row): boolean {
+  const sq = store.db.query("SELECT want FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(String(m.project), String(m.squad)) as Row | null;
+  return sq?.want === "gone";
+}
+
+// One card per member and close wish while its worktree removal keeps being skipped; the retries go on.
+// alertGone (kind archive_slow) clears it once the worktree is gone or the squad is no longer wanted gone.
+function removeCard(m: Row, r: RemoveRetry, store: Store): Action {
+  const tree = store.get("observed_worktrees", { project: m.project, wt: m.wt });
+  const path = tree?.path ? String(tree.path) : wtDir(String(m.wt ?? "")) ?? String(m.wt ?? "");
+  const next = r.next_at ? new Date(r.next_at * 1000).toISOString().replace(/\.\d+Z$/, "Z") : "now";
+  return { project: String(m.project), squad: String(m.squad), member: (m.wt as string | null) ?? null, subject: `member:${m.id}`, kind: "alert",
+    episode: `removeslow:${Number(m.want_at ?? 0)}`, payload: { title: `Archive slow: ${m.squad}`, card: "archive_slow",
+      text: `The ${who(m)}'s worktree (${path}) is still not removed: the removal was skipped ${r.tries} times, last as ${r.reason ?? "stale"}. The loop keeps trying (next try ${next}) and clears this card once the worktree is gone.`,
+      option: "Seen",
+      why: "its squad cannot archive while the worktree stands" } };
 }
 
 // U156: the reload instruction typed into an idle member's terminal. It carries the ack command
@@ -368,8 +457,12 @@ function splitAccount(key: string): [string, string] {
   return [acct.slice(0, i), acct.slice(i + 1)];
 }
 
-// Host scope: seed, compare, pick, act.
+// Host scope: seed, compare, pick, act. Every pick() of one decide reads the limits rows and the machine sample
+// once (walk-memo.ts withDecideMemo; the picks walk keeps more, withWalkMemo).
 export function decide(ctx: TickCtx): Action[] {
+  return withDecideMemo(ctx.store, ctx.now, () => decideNow(ctx));
+}
+function decideNow(ctx: TickCtx): Action[] {
   const { store, now } = ctx;
   seed(ctx);
   const seen = members(store).filter((m) => !isCancel(store, m)).filter((m) => !driftCleared(store, m, now)).map((m) => look(store, m, now));
@@ -385,11 +478,11 @@ export function decide(ctx: TickCtx): Action[] {
       if (!step.settled) { out.push(...step.actions); continue; }
       act = { act: "stop", why: act.why };
     }
-    if (act.act === "card") { out.push(card(s.m, act.why, s.f, store)); continue; }
+    if (act.act === "card") { out.push(card(s.m, act.why, s.f, store, now)); continue; }
     if (act.act === "tell") {
       // U3's "works again" names the account its credits episode was on (`<agent>/<account>|<notice>`).
       const wt = String(s.m.wt ?? ""), project = String(s.m.project), key = act.why === "limit" ? s.f.tellLimit! : s.f.tellOk!;
-      const text = act.why === "limit" ? TELL : worksAgain(...splitAccount(key));
+      const text = act.why === "limit" ? TELL : act.why === "login-ok" ? loginWorksAgain : worksAgain(...splitAccount(key));
       if (wt && !toldAlready(store, project, wt, key, act.why))
         out.push(...wake({ ...ctx, project }, wt, text, act.why, key, { allowLimited: true, cap: 1 }).actions);
       continue;
@@ -413,6 +506,13 @@ export function decide(ctx: TickCtx): Action[] {
         const r = stopRetry(store, s.m, episode, now);
         if (r.wait) continue;
         if (r.card) { out.push(stopCard(s.m, r.tries, store)); continue; }
+        episode = r.episode;
+      } else {
+        // A remove close.ts dropped as stale (presence still read running) is tried again under a new
+        // episode, with backoff and no cap; from the third drop on, one card beside the retries.
+        const r = removeRetry(store, s.m, episode, now);
+        if (r.card && closingSquad(store, s.m)) out.push(removeCard(s.m, r, store));
+        if (r.wait) continue;
         episode = r.episode;
       }
       out.push({ project: String(s.m.project), squad: String(s.m.squad), member: (s.m.wt as string | null) ?? null, subject: `member:${s.m.id}`, kind: "member.close",

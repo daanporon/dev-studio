@@ -18,9 +18,17 @@
 //               an urgent unit before every non-urgent one, then a unit that blocks started work (a dep
 //               of another `dispatched` unit, U221) before one that does not, then a unit of the focus
 //               squad while its focus key is on (squad-priority U1: `focus_squad`, see Focus below), then a
-//               dispatched unit before a planned (or unit-less) one, then the lower units.id, then the lower
-//               member id (an asker with no row yet last). Blocking and focus never go over the limit; only urgent does. An urgent unit's Builder always gets one: the project goes one over
-//               the limit until a Builder finishes (U168).
+//               dispatched unit before a planned (or unit-less) one, then the unit that unlocks the most while its unlock key is on (see Unlock below), then the
+//               lower units.id, then the lower member id (an asker with no row yet last). Blocking, focus and
+//               unlocks never go over the limit; only urgent does. An urgent unit's Builder always gets one:
+//               the project goes one over the limit until a Builder finishes (U168).
+// Unlock (picker-prefers-unblocking-units U1; `unblock_first on|off`, default on): a unit's open dependents are
+// the units that wait on it through the whole chain (same-squad `deps`, `ext_deps` `<squad>/<slug>`), each counted
+// once (a cycle stops), only `planned` or `dispatched`, not held, not superseded, in a live squad (builders()'
+// filter); the chain stops at a unit that does not count. A unit holding the focus key always ranks by that count,
+// so the focus squad's own units go by unlocks; any other unit only while its lane's unlock room is above 0:
+// that lane's seats − 1 − its live seats whose unit has open dependents, each such entry taken in line using one.
+// So unlocking never fills a lane's last seat, and a one-seat lane ignores it. Off: the count ranks 0, today's line.
 // A Builder that is already live (a hung restart, a run-switch, a limit move, a phase switch)
 // replaces its own agent and is never refused; Studio, Leads, Thinkers and the rest are never limited.
 // Light lane (adaptive-builder-capacity U3), on when `max_light_builders` > 0 (0, the default, takes the
@@ -31,13 +39,19 @@
 //   light       starts while the live total < that sum: in a light slot while live light < max_light_builders,
 //               else in a normal slot, only while no normal unit of the project waits
 // An urgent unit still always starts. The wait names both lanes: `WAIT slot: <p> normal 6/6, light 2/2`.
+// Read-only views for the board (board-shows-host-brake U1), from the same line and seat walk (`walk`):
+//   seats()     each live seat with why it is held (liveWhy: starting, pausing, restarting, working, idle;
+//               builderLive is liveWhy != null), the `ds pick` holds and the seats used per lane
+//   seatable()  the queue() entries the walk seats now, less a planned unit whose Builder is live and a
+//               Builder whose pick waits on an account: what the host brake keeps from starting
 import { failedResume, intents, type Target } from "../pause/pause.ts";
 import { lastStart, lock, view } from "../squad/member-state.ts";
 import { existsSync } from "node:fs";
 import { dependencyReasons, memberUnit } from "../pause/pause-conditions.ts";
-import { limit } from "./pick.ts";
-import { focusSquad } from "../squad/focus.ts";
+import { limit, reservationOf } from "./pick.ts";
+import { focusSquad, NOT_LIVE } from "../squad/focus.ts";
 import type { Row, Store } from "../core/store.ts";
+import { memo } from "./walk-memo.ts";
 
 export type Slot = { ok: true; limit: number | null } | { ok: false; limit: number; live: number; ahead: number; why: string };
 // Who asks: a member row, or (a start with no row yet) squad + suffix.
@@ -70,7 +84,7 @@ const iso = (v: unknown) => (v ? Date.parse(String(v)) / 1000 : NaN);
 // Wished running and not given up (the decider's standing wish, U152).
 const open = (m: Row) => m.want === "running" && !String(m.want_result ?? "").startsWith("failed");
 const target = (m: Row): Target => ({ project: String(m.project), squad: String(m.squad), role: String(m.role), suffix: String(m.suffix ?? ""), member: (m.wt as string | null) ?? null });
-const hardPaused = (store: Store, m: Row) => intents(store, target(m)).length > 0;
+const hardPaused = (store: Store, m: Row) => memo(store, null, "paused", String(m.id), () => intents(store, target(m)).length > 0);
 
 // Is this Builder's worker present (U149)? `strict`: unknown presence is not proof.
 function agentRuns(store: Store, project: string, wt: string, strict: boolean): boolean {
@@ -79,20 +93,43 @@ function agentRuns(store: Store, project: string, wt: string, strict: boolean): 
   return strict ? w.presence === "running" : w.presence !== "none";
 }
 
-// Does this Builder member hold a live agent now?
-function builderLive(store: Store, m: Row, now: number): boolean {
-  if (m.status === "gone" || m.want === "gone") return false;
-  if (lock(store, m)) return true;
+// Why a live Builder holds its seat (the board explains each seat with it, through seats()):
+//   starting    its lifecycle lock is held, it holds a loop start slot (picks.slot = 1), a start or restart
+//               in the spawn grace, or a `running` member the observer has not seen yet
+//   pausing     a pause intent is on it and its agent still runs
+//   restarting  U153: a restart newer than its observed process start keeps the seat; a Builder stopped
+//               to move back up keeps it while its fallback-reserve is open (configurable-role-elevation U1)
+//   working     its agent runs and the observer reads it working
+//   idle        its agent runs in any other state (at its prompt, waiting for its PR's merge, unknown)
+export type SeatWhy = "starting" | "pausing" | "restarting" | "working" | "idle";
+
+// Does this Builder member hold a live agent now, and why? null: it holds no seat. Read in three steps: the
+// checks before the start slot and those after it are facts a picks walk keeps (walk-memo.ts); the start
+// slot itself is read every time, since a pick earlier in the same walk may have given it one.
+export function liveWhy(store: Store, m: Row, now: number): SeatWhy | null {
+  const before = memo(store, now, "live-before", String(m.id), () => liveBefore(store, m));
+  if (before !== undefined) return before;
+  if (open(m) && store.get("picks", { member: m.id })?.slot === 1) return "starting";
+  return memo(store, now, "live-after", String(m.id), () => liveAfter(store, m, now));
+}
+// liveWhy's checks before the start slot; undefined: they decide nothing.
+function liveBefore(store: Store, m: Row): SeatWhy | null | undefined {
+  if (m.status === "gone" || m.want === "gone") return null;
+  if (lock(store, m)) return "starting";
   const wt = m.wt ? String(m.wt) : "";
   // Being paused: live until its agent is seen gone (a paused one reads idle with no agent).
-  if (hardPaused(store, m)) return !!wt && agentRuns(store, String(m.project), wt, true);
-  if (open(m) && store.get("picks", { member: m.id })?.slot === 1) return true;
+  if (hardPaused(store, m)) return wt && agentRuns(store, String(m.project), wt, true) ? "pausing" : null;
+  return undefined;
+}
+// liveWhy's checks after the start slot.
+function liveAfter(store: Store, m: Row, now: number): SeatWhy | null {
+  const wt = m.wt ? String(m.wt) : "";
   // A start the loop just placed (placed_at) or a restart that stamped `started`/`restarting`, not
   // parked since (`waiting`): its worker may not be observed yet, until a walk after it reads none.
   const t = Math.max(...[Number(m.placed_at ?? NaN), iso(m.started), iso(m.restarting)].filter((v) => !Number.isNaN(v)), -Infinity);
   if (m.status !== "waiting" && t > now - graceS()) {
     const w = wt ? store.get("observed_workers", { project: m.project, wt }) : null;
-    if (!(w && w.presence === "none" && Number(w.account_at ?? 0) > t)) return true;
+    if (!(w && w.presence === "none" && Number(w.account_at ?? 0) > t)) return "starting";
   }
   // U153: a restarting Builder keeps its slot: wished running with a restart newer than the
   // observed process start counts live across the close and the start. No stored reservation.
@@ -100,16 +137,27 @@ function builderLive(store: Store, m: Row, now: number): boolean {
   // queued start like any other, not a slot to keep.
   if (open(m) && Number(m.restart_at ?? 0) > 0 && lastStart(m) > 0) {
     const w = store.db.query("SELECT started_at FROM observed_workers WHERE project = ? AND wt = ?").get(String(m.project), wt) as { started_at: number | null } | null;
-    if (Number(m.restart_at) > Math.max(Number(w?.started_at ?? 0), lastStart(m))) return true;
+    if (Number(m.restart_at) > Math.max(Number(w?.started_at ?? 0), lastStart(m))) return "restarting";
   }
-  if (!wt) return false;
+  // configurable-role-elevation U1: a Builder stopped to move back up (switches.ts fallbackStop) holds
+  // its seat while its fallback-reserve is open (until it is placed or pick_ttl_s ends), so its
+  // restart never queues behind other units at max_builders. The stop sets no restart_at.
+  if (open(m) && reservationOf(store, Number(m.id), now)) return "restarting";
+  if (!wt) return null;
+  const w = store.db.query("SELECT presence, gone_at, state FROM observed_workers WHERE project = ? AND wt = ?").get(String(m.project), wt) as { presence: string | null; gone_at: number | null; state: string | null } | null;
   // Never observed yet (a start the observer has not seen): its `running` status says so.
-  if (!store.db.query("SELECT 1 FROM observed_workers WHERE project = ? AND wt = ?").get(String(m.project), wt)) return m.status === "running";
-  return agentRuns(store, String(m.project), wt, false);
+  if (!w) return m.status === "running" ? "starting" : null;
+  // Its worker is present unless it is gone or its presence reads none (unknown counts, U149).
+  if (w.gone_at != null || w.presence === "none") return null;
+  return w.state === "working" ? "working" : "idle";
 }
+const builderLive = (store: Store, m: Row, now: number) => liveWhy(store, m, now) != null;
 
 // The (squad, suffix) keys of `ds pick` Builder slots given in the spawn grace (see `held` above).
 function holds(store: Store, project: string, now: number): Set<string> {
+  return memo(store, now, "holds", project, () => holdsRead(store, project, now));
+}
+function holdsRead(store: Store, project: string, now: number): Set<string> {
   const rows = store.db.query(`SELECT id, squad, json_extract(payload, '$.suffix') AS suffix FROM events WHERE kind = 'pick' AND at > ? AND project = ?
       AND json_extract(payload, '$.source') = 'ds pick' AND json_extract(payload, '$.role') = 'builder' AND json_extract(payload, '$.wait') IS NULL`)
     .all(now - graceS(), project) as { id: number; squad: string | null; suffix: string | null }[];
@@ -127,24 +175,29 @@ function resumable(store: Store, m: Row): boolean {
 // Does this Builder ask to run? With a `resuming` pause row (open wish or not), only when that resume
 // can go ahead; otherwise an open start wish.
 function asks(store: Store, m: Row, resume: Row | undefined): boolean {
+  return memo(store, null, "asks", String(m.id), () => asksRead(store, m, resume));
+}
+function asksRead(store: Store, m: Row, resume: Row | undefined): boolean {
   return resume ? !failedResume(m, resume) && resumable(store, m) : open(m) && view(store, m) === "running";
 }
 
 // The project's Builder members in live squads: the latest row per (squad, suffix), never a gone one.
 function builders(store: Store, project: string): Row[] {
-  return store.db.query(`SELECT * FROM members WHERE project = ?1 AND role = 'builder'
+  return memo(store, null, "builders", project, () => store.db.query(`SELECT * FROM members WHERE project = ?1 AND role = 'builder'
       AND id IN (SELECT MAX(id) FROM members WHERE project = ?1 AND role = 'builder' GROUP BY squad, suffix)
       AND COALESCE(status, '') != 'gone' AND COALESCE(want, '') != 'gone'
       AND squad IN (SELECT topic FROM squads WHERE project = ?1 AND COALESCE(status, 'running') NOT IN ('suspended', 'on-hold', 'done', 'failed', 'closed', 'gone'))
-    ORDER BY id`).all(project) as Row[];
+    ORDER BY id`).all(project) as Row[]);
 }
+
+// A units.deps / ext_deps cell as a list of strings; [] when empty or it does not parse.
+const list = (v: unknown): string[] => { try { const a = JSON.parse(String(v ?? "[]")); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
 
 // The dispatched units that wait on this unit (U221): it blocks started work. Their `deps` hold its
 // slug (same squad) or `<squad>/<slug>` in `ext_deps`; a done or cancelled dependent no longer waits.
 export function blocksOf(store: Store, project: string, u: Row | null): string[] {
   if (!u) return [];
-  const rows = store.db.query("SELECT squad, slug, deps, ext_deps FROM units WHERE project = ? AND status = 'dispatched'").all(project) as Row[];
-  const list = (v: unknown): string[] => { try { const a = JSON.parse(String(v ?? "[]")); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } };
+  const rows = memo(store, null, "dispatched", project, () => store.db.query("SELECT squad, slug, deps, ext_deps FROM units WHERE project = ? AND status = 'dispatched'").all(project) as Row[]);
   return rows.filter((r) => !(r.squad === u.squad && r.slug === u.slug)
     && ((r.squad === u.squad && list(r.deps).includes(String(u.slug))) || list(r.ext_deps).includes(`${u.squad}/${u.slug}`))).map((r) => String(r.slug));
 }
@@ -152,55 +205,103 @@ export function blocksOf(store: Store, project: string, u: Row | null): string[]
 // A candidate's place in line: an urgent unit first (U168, read from the unit row's doc, as
 // memberUnit returns it — urgent is a doc-only flag, no column), then a unit that blocks started
 // work (U221), then a unit of the focus squad while its focus key is on (squad-priority U1, lineOrder),
-// then a dispatched unit, then the lower unit id (no unit = last), then the lower member id, so no two
-// candidates tie.
-type Rank = [number, number, number, number, number, number];
+// then a dispatched unit, then the unit with more open dependents while its unlock key is on (stored as
+// minus the count, so more ranks first; 0 when off), then the lower unit id (no unit = last), then the
+// lower member id, so no two candidates tie.
+type Rank = [number, number, number, number, number, number, number];
 // A unit row's doc (urgent, lane: doc-only flags, no column); {} when it has none or it does not parse.
 const docOf = (u: Row | null): Row => { try { return (u?.doc ? JSON.parse(String(u.doc)) : {}) ?? {}; } catch { return {}; } };
 const urgentOf = (u: Row | null) => docOf(u).urgent === true;
-// The unit part of a candidate's place: [urgent, blocks started work, focus, dispatched, units.id].
-// `focused`: the focus key is on for this unit (lineOrder decides). The board reads it too
-// (bin/board/board-data.ts, through queue()), so the board and the loop rank the same way. Only reads.
-export function placeOf(store: Store, project: string, u: Row | null, focused = false): [number, number, number, number, number] {
-  return [urgentOf(u) ? 0 : 1, blocksOf(store, project, u).length ? 0 : 1, focused ? 0 : 1, u?.status === "dispatched" ? 0 : 1, u ? Number(u.id) : Number.MAX_SAFE_INTEGER];
+// The unit part of a candidate's place: [urgent, blocks started work, focus, dispatched, −unlocks, units.id].
+// `focused`: the focus key is on for this unit; `unlocks`: its open dependents while its unlock key is on, else 0
+// (lineOrder decides both). The board reads it too (bin/board/board-data.ts, through queue()), so the board and the
+// loop rank the same way. Only reads.
+export function placeOf(store: Store, project: string, u: Row | null, focused = false, unlocks = 0): [number, number, number, number, number, number] {
+  return [urgentOf(u) ? 0 : 1, blocksOf(store, project, u).length ? 0 : 1, focused ? 0 : 1, u?.status === "dispatched" ? 0 : 1, -unlocks || 0, u ? Number(u.id) : Number.MAX_SAFE_INTEGER];
 }
 const older = (a: Rank, b: Rank) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
 
+// Is the unlock key in use (`unblock_first`, default on)? Off gives today's line exactly.
+export function unblockFirst(store: Store, project: string): boolean {
+  return String(limit(store, project, "unblock_first") ?? "on").trim() !== "off";
+}
+// The project's open-dependents counter (see Unlock in the header): one query of the open units, each count
+// memoized, so a line reads the graph once. A unit with no row counts 0. Only reads.
+export type Unlocks = (u: Row | null) => number;
+export function unlocksOf(store: Store, project: string): Unlocks {
+  return memo(store, null, "unlocks", project, () => unlocksRead(store, project));
+}
+function unlocksRead(store: Store, project: string): Unlocks {
+  const rows = store.db.query(`SELECT u.squad, u.slug, u.deps, u.ext_deps, u.hold, u.superseded_by, s.status AS sq_status, s.topic AS sq
+      FROM units u LEFT JOIN squads s ON s.project = u.project AND s.topic = u.squad
+      WHERE u.project = ? AND u.status IN ('planned', 'dispatched')`).all(project) as Row[];
+  // Who waits on each `<squad>/<slug>`: the open units that count, by their deps and ext_deps.
+  const waiters = new Map<string, string[]>();
+  for (const r of rows) {
+    if (r.hold || r.superseded_by || r.sq == null || NOT_LIVE.includes(String(r.sq_status ?? "running"))) continue;
+    const me = `${r.squad}/${r.slug}`;
+    for (const dep of new Set([...list(r.deps).map((d) => `${r.squad}/${d}`), ...list(r.ext_deps)])) {
+      const w = waiters.get(dep) ?? [];
+      w.push(me); waiters.set(dep, w);
+    }
+  }
+  const memo = new Map<string, number>();
+  return (u) => {
+    if (!u) return 0;
+    const start = `${u.squad}/${u.slug}`;
+    const got = memo.get(start);
+    if (got != null) return got;
+    const seen = new Set([start]), todo = [start];
+    while (todo.length) for (const w of waiters.get(todo.pop()!) ?? []) if (!seen.has(w)) { seen.add(w); todo.push(w); }
+    memo.set(start, seen.size - 1);
+    return seen.size - 1;
+  };
+}
+
 // One candidate in line: who asks (squad, suffix, its member row when it has one), its unit and lane.
 export type Entry = { squad: string; suffix: string; m: Row | null; u: Row | null; lane: Lane };
-export type Placed<E extends Entry = Entry> = E & { rank: Rank; focus: boolean };
+// `unlocks`: the unit's open dependents; `unlock`: the line ranked it by them (its unlock key was on).
+export type Placed<E extends Entry = Entry> = E & { rank: Rank; focus: boolean; unlock: boolean; unlocks: number };
 // The focus squad (squad-priority U1) and, per lane, how many of its units still get the focus key:
 // that lane's seats − 1 − what the squad holds there, at least 0 (normal seats = max_builders, light seats =
 // max_light_builders; with the light lane off every unit is normal). So a lane with one seat gives none,
 // and the last seat of each lane always goes by the usual order. null: no focus that counts.
 type Focus = { squad: string; room: Record<Lane, number> } | null;
+// The unlock key (see Unlock in the header): the counter and, per lane, how many non-focus units may still rank by
+// it (that lane's seats − 1 − its live seats whose unit has open dependents, at least 0). `on`: `unblock_first`; off,
+// no unit ranks by it, though each Placed still carries its count. null: no counts (every unit 0).
+export type Unlock = { on: boolean; count: Unlocks; room: Record<Lane, number> } | null;
 
 function focusFor(store: Store, project: string, n: number, light: number, held: (squad: string) => Record<Lane, number>): Focus {
-  const squad = focusSquad(store, project);
+  const squad = memo(store, null, "focus", project, () => focusSquad(store, project));
   if (!squad) return null;
   const h = held(squad);
   return { squad, room: { normal: Math.max(0, n - 1 - h.normal), light: light > 0 ? Math.max(0, light - 1 - h.light) : 0 } };
 }
 
-// The line in place order. Without a focus it is a sort on placeOf, then the member id. With one, each
-// focus squad unit taken in order (an urgent or unblocking one too: it takes a seat as well) uses one of
-// its lane's room; once that room is used up, its later units rank by age like everyone else's.
-export function lineOrder<E extends Entry>(store: Store, project: string, entries: E[], focus: Focus): Placed<E>[] {
-  const left = entries.map((e) => ({ e, p: placeOf(store, project, e.u), mid: e.m ? Number(e.m.id) : Number.MAX_SAFE_INTEGER }));
-  const room = focus ? { ...focus.room } : null;
+// The line in place order. Without a focus or unlock it is a sort on placeOf, then the member id. With a focus,
+// each focus squad unit taken in order (an urgent or unblocking one too: it takes a seat as well) uses one of
+// its lane's room; once that room is used up, its later units rank by age like everyone else's. A unit with
+// the focus key ranks by its open dependents always; any other unit only while its lane's unlock room lasts,
+// and each such unit taken uses one of it.
+export function lineOrder<E extends Entry>(store: Store, project: string, entries: E[], focus: Focus, unlock: Unlock = null): Placed<E>[] {
+  const left = entries.map((e) => ({ e, p: placeOf(store, project, e.u), n: unlock ? unlock.count(e.u) : 0, mid: e.m ? Number(e.m.id) : Number.MAX_SAFE_INTEGER }));
+  const room = focus ? { ...focus.room } : null, uroom = unlock ? { ...unlock.room } : null;
   const mine = (e: E) => !!focus && e.squad === focus.squad;
   const out: Placed<E>[] = [];
   while (left.length) {
-    let best = 0, bestRank: Rank | null = null, bestFocus = false;
+    let best = 0, bestRank: Rank | null = null, bestFocus = false, bestUnlock = false;
     for (let i = 0; i < left.length; i++) {
-      const { e, p, mid } = left[i];
+      const { e, p, n, mid } = left[i];
       const f = !!room && mine(e) && room[e.lane] > 0;
-      const r: Rank = [p[0], p[1], f ? 0 : 1, p[3], p[4], mid];
-      if (!bestRank || older(r, bestRank)) { best = i; bestRank = r; bestFocus = f; }
+      const ul = !!unlock?.on && n > 0 && (f || uroom![e.lane] > 0);
+      const r: Rank = [p[0], p[1], f ? 0 : 1, p[3], ul ? -n : 0, p[5], mid];
+      if (!bestRank || older(r, bestRank)) { best = i; bestRank = r; bestFocus = f; bestUnlock = ul; }
     }
-    const [{ e }] = left.splice(best, 1);
+    const [{ e, n }] = left.splice(best, 1);
     if (room && mine(e)) room[e.lane] = Math.max(0, room[e.lane] - 1);
-    out.push({ ...e, rank: bestRank!, focus: bestFocus });
+    if (uroom && bestUnlock && !bestFocus) uroom[e.lane] = Math.max(0, uroom[e.lane] - 1);
+    out.push({ ...e, rank: bestRank!, focus: bestFocus, unlock: bestUnlock, unlocks: n });
   }
   return out;
 }
@@ -249,8 +350,10 @@ export function noteLaneMove(store: Store, project: string, squad: string, slug:
 // The asker's member row: the one named, else the latest Builder row of its squad + suffix.
 function askerRow(store: Store, project: string, who: Asker): Row | null {
   if (who.member) return who.member;
-  if (!who.squad || who.suffix == null) return null;
-  return store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND role = 'builder' AND suffix = ? ORDER BY id DESC").get(project, who.squad, who.suffix) as Row | null;
+  const { squad, suffix } = who;
+  if (!squad || suffix == null) return null;
+  return memo(store, null, "asker", `${project}\0${squad}\0${suffix}`, () =>
+    store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND role = 'builder' AND suffix = ? ORDER BY id DESC").get(project, squad, suffix) as Row | null);
 }
 
 // Does this pick start a new Builder agent? A Builder asker with no live agent; a live Builder that
@@ -263,33 +366,68 @@ export function newBuilderStart(store: Store, project: string, who: Asker, now: 
 // Who is in line now, as slot() and queue() see it: every Builder that waits for a seat (not `exclude`,
 // the asker), the live seats per lane and per squad, the lane of a unit, and the focus.
 function lineCtx(store: Store, project: string, n: number, now: number, exclude: string, record: boolean) {
-  const all = builders(store, project).map((m) => ({ m, live: builderLive(store, m, now) }));
+  const all = builders(store, project).map((m) => { const why = liveWhy(store, m, now); return { m, why, live: why != null }; });
   const key = (m: Row) => `${m.squad}\0${m.suffix ?? ""}`, liveKeys = new Set(all.filter((b) => b.live).map((b) => key(b.m)));
   const heldKeys = [...holds(store, project, now)].filter((k) => k !== exclude && !liveKeys.has(k));
-  const resuming = new Map((store.db.query("SELECT * FROM pause_members WHERE project = ? AND role = 'builder' AND state = 'resuming'").all(project) as Row[])
-    .map((r) => [key(r), r]));
+  const resuming = memo(store, null, "resuming", project, () => new Map((store.db.query("SELECT * FROM pause_members WHERE project = ? AND role = 'builder' AND state = 'resuming'").all(project) as Row[])
+    .map((r) => [key(r), r])));
   const waiting = all.filter(({ m, live }) => !live && key(m) !== exclude && asks(store, m, resuming.get(key(m))) && !hardPaused(store, m)).map(({ m }) => m);
   const light = maxLight(store, project), cpuH = light > 0 ? lightCpuH(store, project) : 0;
-  const unitOf = (sq: string, sf: string, m: Row | null) => memberUnit(store, { project, squad: sq, role: "builder", suffix: sf, member: (m?.wt as string | null) ?? null });
+  const unitOf = (sq: string, sf: string, m: Row | null) => { const wt = (m?.wt as string | null) ?? null;
+    return memo(store, null, "unit", `${project}\0${sq}\0${sf}\0${wt ?? ""}`, () => memberUnit(store, { project, squad: sq, role: "builder", suffix: sf, member: wt })); };
   // With the light lane off every unit is normal (and no lane move is recorded).
-  const laneAt = (u: Row | null): Lane => (light <= 0 ? "normal" : record ? laneOf(store, project, u, cpuH) : laneRead(store, project, u, cpuH));
+  // A walk reads each unit's lane once (laneOf records its move at most once anyway).
+  const laneAt = (u: Row | null): Lane => (light <= 0 || !u ? "normal"
+    : memo(store, null, record ? "lane-record" : "lane", `${project}\0${u.id}`, () => record ? laneOf(store, project, u, cpuH) : laneRead(store, project, u, cpuH)));
   // Live now, per lane and per squad: the live members, plus the `ds pick` holds (a hold with no squad/suffix counts normal).
   const used = { normal: 0, light: 0 };
+  // Live seats per lane whose unit has open dependents: what the unlock room takes off (see Unlock).
+  const count = unlocksOf(store, project), unlocking = { normal: 0, light: 0 };
   const bySquad = new Map<string, Record<Lane, number>>();
-  const take = (sq: string | null, lane: Lane) => {
+  const take = (sq: string | null, lane: Lane, u: Row | null = null) => {
     used[lane]++;
+    if (count(u) > 0) unlocking[lane]++;
     if (sq == null) return;
     const h = bySquad.get(sq) ?? { normal: 0, light: 0 };
     h[lane]++; bySquad.set(sq, h);
   };
-  for (const b of all) if (b.live) take(String(b.m.squad), laneAt(unitOf(String(b.m.squad), String(b.m.suffix ?? ""), b.m)));
-  for (const k of heldKeys) { const [sq, sf = ""] = k.startsWith("#") ? [] : k.split("\0"); take(sq ?? null, sq == null ? "normal" : laneAt(unitOf(sq, sf, null))); }
+  // Who holds each member seat and why (seats()); the holds are only counted.
+  const holders: SeatHolder[] = [];
+  for (const b of all) {
+    if (!b.why) continue;
+    const sq = String(b.m.squad), sf = String(b.m.suffix ?? ""), u = unitOf(sq, sf, b.m), lane = laneAt(u);
+    take(sq, lane, u);
+    holders.push({ squad: sq, suffix: sf, unit: u ? String(u.slug) : null, lane, why: b.why });
+  }
+  for (const k of heldKeys) {
+    const [sq, sf = ""] = k.startsWith("#") ? [] : k.split("\0"), u = sq == null ? null : unitOf(sq, sf, null);
+    take(sq ?? null, sq == null ? "normal" : laneAt(u), u);
+  }
   const focus = focusFor(store, project, n, light, (sq) => bySquad.get(sq) ?? { normal: 0, light: 0 });
+  const unlock: Unlock = { on: unblockFirst(store, project), count,
+    room: { normal: Math.max(0, n - 1 - unlocking.normal), light: light > 0 ? Math.max(0, light - 1 - unlocking.light) : 0 } };
   const entry = (sq: string, sf: string, m: Row | null): Entry => { const u = unitOf(sq, sf, m); return { squad: sq, suffix: sf, m, u, lane: laneAt(u) }; };
   // A planned unit whose Builder already waits is in the line once, as that member (so it takes focus room once).
   const waitingKeys = new Set(waiting.map(key));
   const unwished = (p: Asker) => !waitingKeys.has(`${p.squad}\0${p.suffix ?? ""}`);
-  return { live: liveKeys.size + heldKeys.length, used, waiting, unwished, light, focus, entry, unitOf };
+  return { live: liveKeys.size + heldKeys.length, used, waiting, unwished, light, focus, unlock, entry, unitOf, liveKeys, holders, holds: heldKeys.length };
+}
+
+// The seat walk slot() gives free seats by, oldest first: does each entry of the line get a seat now?
+// Single lane: an urgent unit always (over the limit, U168), else the first `n − live` places. Light lane:
+// seat by seat (the rules in the header), an urgent unit always. seatable() walks the same line.
+function walk<P extends Placed>(line: P[], n: number, light: number, used: Record<Lane, number>, live: number): boolean[] {
+  if (light <= 0) return line.map((p, i) => p.rank[0] === 0 || i < n - live);
+  const u = { ...used }, cap = n + light, placed = line.map(() => false);
+  const fits = (i: number) => {
+    const p = line[i];
+    if (p.rank[0] === 0) return true;                                  // urgent: always, over the limit
+    if (u.normal + u.light >= cap) return false;
+    if (p.lane === "normal") return u.normal < n;
+    return u.light < light || !line.some((q, j) => j !== i && !placed[j] && q.lane === "normal");
+  };
+  for (let i = 0; i < line.length; i++) if (fits(i)) { placed[i] = true; u[line[i].lane]++; }
+  return placed;
 }
 
 // The line a free seat is given by, oldest first: every waiting Builder and the `planned` units (one entry
@@ -298,13 +436,50 @@ function lineCtx(store: Store, project: string, n: number, now: number, exclude:
 // the three never disagree. Empty when the project has no limit. Only reads: a lane is read with
 // laneNow, never recorded, so the board's read-only store can call it.
 export function queue(store: Store, project: string, now: number, planned: Asker[] = []): Placed[] {
+  return lineOf(store, project, now, planned)?.line ?? [];
+}
+function lineOf(store: Store, project: string, now: number, planned: Asker[]) {
   const n = maxBuilders(store, project);
-  if (n == null) return [];
+  if (n == null) return null;
   const c = lineCtx(store, project, n, now, "\0\0", false);
-  return lineOrder(store, project, [
+  const line = lineOrder(store, project, [
     ...c.waiting.map((m) => c.entry(String(m.squad), String(m.suffix ?? ""), m)),
     ...planned.filter(c.unwished).map((p) => c.entry(String(p.squad), String(p.suffix ?? ""), null)),
-  ], c.focus);
+  ], c.focus, c.unlock);
+  return { n, c, line };
+}
+
+// One live Builder seat: whose it is, its unit (null: none found) and lane, and why it is held.
+export type SeatHolder = { squad: string; suffix: string; unit: string | null; lane: Lane; why: SeatWhy };
+// The project's Builder seats as slot() counts them: `limit` (max_builders, null = none), `light`
+// (max_light_builders, 0 = no light lane), each live member's seat with its why, the `ds pick` holds
+// (only counted) and `used` per lane (members and holds; with the light lane off all normal).
+export type Seats = { limit: number | null; light: number; holders: SeatHolder[]; holds: number; used: Record<Lane, number> };
+// Only reads, like queue(): the board's read-only store calls it.
+export function seats(store: Store, project: string, now: number): Seats {
+  const n = maxBuilders(store, project);
+  const c = lineCtx(store, project, n ?? 0, now, "\0\0", false);
+  return { limit: n, light: c.light, holders: c.holders, holds: c.holds, used: c.used };
+}
+
+// The entries of queue() that would get a seat now, by the same walk slot() uses: the queued units the
+// host brake keeps from starting while it holds (the board's `held`). Two entries are dropped before the
+// walk because they would not start with the brake off either: a planned unit whose Builder is already
+// live (the line lists it again, as a planned entry), and a waiting Builder whose latest pick waits on an
+// account. Empty when the project has no limit. Only reads.
+export function seatable(store: Store, project: string, now: number, planned: Asker[] = []): Placed[] {
+  const q = lineOf(store, project, now, planned);
+  if (!q) return [];
+  const { n, c } = q;
+  const line = q.line.filter((e) => (e.m ? !accountWait(store, e.m) : !c.liveKeys.has(`${e.squad}\0${e.suffix}`)));
+  const seat = walk(line, n, c.light, c.used, c.live);
+  return line.filter((_, i) => seat[i]);
+}
+// A pick that waits on an account's room (the pick reconciler's `no account free`, with a wait time),
+// not on a start (a slot or the host brake).
+function accountWait(store: Store, m: Row): boolean {
+  const p = store.get("picks", { member: m.id });
+  return !!p && p.wait_until != null && !SLOT_WAIT.test(String(p.reason ?? ""));
 }
 
 // May this Builder start now? `role` is the asker's role when no member row says it. `planned`: the
@@ -322,35 +497,24 @@ export function slot(store: Store, project: string, who: Asker, now: number, rol
   // urgent units at once each start; the rest wait as usual.
   const myUnit = c.unitOf(squad, suffix, me);
   if (urgentOf(myUnit)) return { ok: true, limit: n };
-  // The board shows the line as is: a blocker that waits says why it is next (U221).
-  const next = () => { const b = blocksOf(store, project, myUnit); return b.length ? ` (next: blocks ${b.join(", ")})` : ""; };
-  const cand = (sq: string, sf: string, m: Row | null, isMe = false) => ({ ...c.entry(sq, sf, m), me: isMe, placed: false });
+  const cand = (sq: string, sf: string, m: Row | null, isMe = false) => ({ ...c.entry(sq, sf, m), me: isMe });
   const line = lineOrder(store, project, [
     ...c.waiting.map((m) => cand(String(m.squad), String(m.suffix ?? ""), m)),
     ...planned.filter((p) => !(p.squad === squad && p.suffix === suffix) && c.unwished(p)).map((p) => cand(String(p.squad), String(p.suffix ?? ""), null)),
     cand(squad, suffix, me, true),
-  ], c.focus);
-  const light = c.light;
+  ], c.focus, c.unlock);
+  const light = c.light, seat = walk(line, n, light, c.used, c.live), mine = line.findIndex((p) => p.me);
+  // Why the asker is next when it waits: it blocks started work (U221), else it unlocks open units (its key on).
+  const next = () => {
+    const b = blocksOf(store, project, myUnit);
+    return b.length ? ` (next: blocks ${b.join(", ")})` : line[mine].unlock ? ` (next: unlocks ${line[mine].unlocks})` : "";
+  };
   if (light > 0) {
-    // The line is walked seat by seat, oldest first.
-    const used = { ...c.used }, liveNow = { ...c.used };
-    const cap = n + light;
-    const fits = (p: (typeof line)[number]) => {
-      if (p.rank[0] === 0) return true;                                  // urgent: always, over the limit
-      if (used.normal + used.light >= cap) return false;
-      if (p.lane === "normal") return used.normal < n;
-      return used.light < light || !line.some((q) => q !== p && !q.placed && q.lane === "normal");
-    };
-    let ahead = 0;
-    for (const p of line) {
-      if (!fits(p)) continue;
-      if (p.me) return { ok: true, limit: cap };
-      p.placed = true; used[p.lane]++; ahead++;
-    }
-    return { ok: false, limit: cap, live: liveNow.normal + liveNow.light, ahead,
-      why: `WAIT slot: ${project} normal ${liveNow.normal}/${n}, light ${liveNow.light}/${light}${next()}` };
+    // Ahead: the entries before the asker that the walk seats.
+    if (seat[mine]) return { ok: true, limit: n + light };
+    return { ok: false, limit: n + light, live: c.used.normal + c.used.light, ahead: seat.slice(0, mine).filter(Boolean).length,
+      why: `WAIT slot: ${project} normal ${c.used.normal}/${n}, light ${c.used.light}/${light}${next()}` };
   }
-  const ahead = line.findIndex((p) => p.me);
-  if (ahead < n - c.live) return { ok: true, limit: n };
-  return { ok: false, limit: n, live: c.live, ahead, why: `WAIT slot: ${project} at max_builders ${n}${next()}` };
+  if (seat[mine]) return { ok: true, limit: n };
+  return { ok: false, limit: n, live: c.live, ahead: mine, why: `WAIT slot: ${project} at max_builders ${n}${next()}` };
 }

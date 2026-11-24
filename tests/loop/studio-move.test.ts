@@ -16,7 +16,8 @@ import { since } from "../../bin/loop/core/events.ts";
 import { makeLimits, type Pick, type PickArgs } from "../../bin/loop/reconcilers/limits.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import studio from "../../bin/loop/fulfil/studio.ts";
-import { MOVE } from "../../bin/loop/squad/studio.ts";
+import { MOVE, RESTART_APPROVED, studioReady } from "../../bin/loop/squad/studio.ts";
+import studioRec from "../../bin/loop/reconcilers/studio.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -98,6 +99,27 @@ describe("deciding a Studio move (limits.ts)", () => {
     expect(d.moves()).toHaveLength(1);
     expect(d.moves()[0]).toMatchObject({ subject: MOVE, member: STUDIO, payload: { handle: "term_s", account: "acct-b", from: "claude:acct-a" } });
     expect(d.cards()).toEqual([]);
+  });
+
+  test("claude-login-ended U2: auto, a Studio whose login ended is moved off the held account; ask names it on the card", async () => {
+    const login = readFileSync(join(ROOT, "tests", "fixtures", "login", "claude-login-ended.txt"), "utf8");
+    // U3 adds the login-ended card (login-card.ts); only the Studio's own cards are asserted here.
+    const own = (x: { cards(): Action[] }) => x.cards().filter((c) => !c.subject.startsWith("login."));
+    const s = rig(), d = decider(s, OTHER);
+    s.upsert("observed_workers", { project: "fx", wt: STUDIO }, { tail: login });
+    await d.loop.tick(T);
+    expect(s.get("episodes", { project: "fx", subject: STUDIO, kind: "limited" })?.state).toBe("login");
+    expect(s.get("episodes", { project: "", subject: "login|claude/acct-a", kind: "account" })?.ended_at).toBe(T + 3600);
+    expect(d.moves()).toHaveLength(1);
+    expect(d.moves()[0]).toMatchObject({ subject: MOVE, member: STUDIO, payload: { handle: "term_s", account: "acct-b", from: "claude:acct-a" } });
+    expect(own(d)).toEqual([]);
+    const a = rig(), e = decider(a, OTHER);
+    conf(a, "studio_move", "ask");
+    a.upsert("observed_workers", { project: "fx", wt: STUDIO }, { tail: login });
+    await e.loop.tick(T);
+    expect(e.moves()).toEqual([]);
+    expect(own(e)[0]!.payload).toMatchObject({ title: "Studio's login ended", option: "move it" });
+    expect(String((own(e)[0]!.payload as Row).text)).toStartWith("Studio's account claude/acct-a: login ended");
   });
 
   test("U267: the loop's own picker on a project roster without a studio row moves it on the default row", async () => {
@@ -256,7 +278,7 @@ describe("moving the Studio (fulfil/studio.ts)", () => {
     const handle = String(studioMember(s).handle);
     expect(handle).toMatch(/^term_\d+$/);
     expect(studioMember(s)).toMatchObject({ account: "acct-b", agent: "claude", model: "sonnet", limited_until: null });
-    expect(payloads(s, "studio_moved")).toEqual([{ handle, previous: "term_s", from: "claude:acct-a", to: "claude:acct-b", model: "sonnet" }]);
+    expect(payloads(s, "studio_moved")).toEqual([{ handle, previous: "term_s", from: "claude:acct-a", to: "claude:acct-b", model: "sonnet", why: "limit" }]);
     // The old tab reads gone at once (the coordinator re-binds a Run it held; adoption won't keep it).
     expect(s.get("observed_terminals", { project: "fx", handle: "term_s" })!.gone_at).toBe(T);
     expect(s.get("observed_terminals", { project: "fx", handle: "term_l" })!.gone_at).toBeNull();
@@ -378,5 +400,262 @@ describe("moving the Studio (fulfil/studio.ts)", () => {
     const card = String(cardsIn(s, `loop-${MOVE}-`)[0]!.question);
     expect(card).toContain(`never came up in wt_studio (screen in event start_failed ${id})`);
     expect(card).not.toContain("start_failed {");
+  });
+});
+
+describe("configurable-role-elevation U3: the Studio moves back up", () => {
+  const TOP: Pick = { agent: "claude", model: "opus", effort: "-", account: "acct-b", fallback: false, rung: 1 };
+  const LOW: Pick = { agent: "claude", model: "sonnet", effort: "-", account: "acct-a", fallback: true, rung: 2 };
+  const ROW = "claude opus ondemand - claude:sonnet -";
+  // The rig's Studio, not limited (no notice on screen), on rung 2 of its ladder (sonnet on acct-a), its
+  // studio row `row` (column 8 `up` by default) and studio_move `mode` (auto by default).
+  function low(o: { row?: string; mode?: string; model?: string; draft?: string } = {}): Store {
+    const s = rig(o.draft ? { draft: o.draft } : {});
+    s.upsert("observed_workers", { project: "fx", wt: STUDIO }, { tail: "❯ " });
+    s.upsert("members", { project: "fx", squad: "_studio", wt: STUDIO }, { model: o.model ?? "sonnet" });
+    s.upsert("config", { project: "fx", file: "roles.conf", key: "studio" }, { value: o.row ?? `${ROW} up`, observed_at: T });
+    if (o.mode) conf(s, "studio_move", o.mode);
+    return s;
+  }
+  const upCards = (d: ReturnType<typeof decider>) => d.cards().filter((a) => a.subject === "studio.up");
+
+  test("the default stay: no move, no card", async () => {
+    const s = low({ row: ROW }), d = decider(s, TOP);
+    await d.loop.tick(T);
+    expect(d.moves()).toEqual([]);
+    expect(d.cards()).toEqual([]);
+  });
+
+  test("up with auto: one move from rung 2 to rung 1 when ready, why back-up, picked for the studio role; no card", async () => {
+    const s = low(), d = decider(s, TOP);
+    await d.loop.tick(T);
+    expect(d.calls.map((c) => [c.role, c.limited])).toEqual([["studio", undefined]]);
+    expect(d.moves()).toHaveLength(1);
+    expect(d.moves()[0]).toMatchObject({ subject: MOVE, member: STUDIO, payload: { handle: "term_s", agent: "claude", account: "acct-b", model: "opus",
+      from: "claude:acct-a", why: "back-up", notice: "moving back up to opus" } });
+    expect(d.cards()).toEqual([]);
+  });
+
+  test("not ready (text at the prompt, or busy): it waits with no time limit and never posts the held card", async () => {
+    process.env.DS_LOOP_STUDIO_MOVE_HOLD_S = "600";
+    const s = low({ draft: "half a thought" }), d = decider(s, TOP);
+    for (const at of [T, T + 700, T + 1900, T + 7200]) await d.loop.tick(at);
+    expect(d.moves()).toEqual([]);
+    expect(d.cards()).toEqual([]);
+    s.upsert("observed_terminals", { project: "fx", handle: "term_s" }, { tail: "│ ❯  │\n" });
+    await d.loop.tick(T + 7300);
+    expect(d.moves()).toHaveLength(1);
+  });
+
+  test("at most once per fallback_return_min: the studio:up marker holds the next one; 0 never moves", async () => {
+    const s = low(), d = decider(s, TOP);
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:up" }, { episode_key: "x", state: "started", started_at: T, ended_at: T, source: "loop", observed_at: T });
+    await d.loop.tick(T + 400);
+    expect(d.moves()).toEqual([]);
+    await d.loop.tick(T + 15 * 60 + 1);
+    expect(d.moves()).toHaveLength(1);
+    const z = low(), e = decider(z, TOP);
+    conf(z, "fallback_return_min", "0");
+    await e.loop.tick(T);
+    expect(e.moves()).toEqual([]);
+  });
+
+  test("ask: one \"move it\" card on studio.up (move_up); once approved it moves as in auto; off: nothing", async () => {
+    const s = low({ mode: "ask" }), d = decider(s, TOP);
+    await d.loop.tick(T);
+    await d.loop.tick(T + 60);
+    expect(d.moves()).toEqual([]);
+    expect(upCards(d)).toHaveLength(1);
+    expect(upCards(d)[0]!.payload).toMatchObject({ card: "studio_move_up", option: "move it", fields: { move: true, move_up: true, acts_on_answer: true } });
+    expect(String((upCards(d)[0]!.payload as Row).text)).toContain("claude:opus@acct-b");
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" }, { episode_key: "x", state: "approved", started_at: T + 90, ended_at: null, source: "board", observed_at: T + 90 });
+    await d.loop.tick(T + 120);
+    expect(d.moves()).toHaveLength(1);
+    expect(d.moves()[0]!.payload).toMatchObject({ why: "back-up" });
+    const off = low({ mode: "off" }), e = decider(off, TOP);
+    await e.loop.tick(T);
+    expect(e.moves()).toEqual([]);
+    expect(e.cards()).toEqual([]);
+  });
+
+  test("ask: the card and the approval clear once the move is no longer owed", async () => {
+    const s = low({ mode: "ask" }), m = mover(s, TOP);
+    await m.tick(T);
+    expect(cardsIn(s, "loop-studio.up-")).toHaveLength(1);
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" }, { episode_key: "x", state: "approved", started_at: T + 30, ended_at: null, source: "board", observed_at: T + 30 });
+    s.upsert("config", { project: "fx", file: "roles.conf", key: "studio" }, { value: ROW });
+    await m.tick(T + 60);
+    expect(cardsIn(s, "loop-studio.up-")).toEqual([]);
+    expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" })!.ended_at).toBe(T + 60);
+    expect(m.orca.of("terminal-close")).toEqual([]);
+    // Owed again on the same place and rung: a new card, not the cleared one's key.
+    s.upsert("config", { project: "fx", file: "roles.conf", key: "studio" }, { value: `${ROW} up` });
+    await m.tick(T + 120);
+    await m.tick(T + 180);
+    expect(cardsIn(s, "loop-studio.up-")).toHaveLength(1);
+  });
+
+  test("a limited Studio takes the limit move, and its studio:approved is not cleared by the move-up", async () => {
+    const s = low({ mode: "ask" });
+    s.upsert("observed_workers", { project: "fx", wt: STUDIO }, { tail: notice });
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:approved" }, { episode_key: "x", state: "approved", started_at: T - 5, ended_at: null, source: "board", observed_at: T - 5 });
+    const d = decider(s, OTHER);
+    await d.loop.tick(T);
+    expect(d.moves()).toHaveLength(1);
+    expect(d.moves()[0]!.payload).toMatchObject({ why: "limit", account: "acct-b" });
+    expect(upCards(d)).toEqual([]);
+    expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:approved" })!.ended_at).toBeNull();
+  });
+
+  test("no move: rung 1 full (the pick stays on rung 2), an unplaceable Studio, rungs that differ only in effort, a Studio on rung 1", async () => {
+    const cases: [Store, Pick][] = [
+      [low(), LOW],
+      [low({ model: "haiku" }), TOP],
+      [low({ row: "claude opus ondemand high claude:opus:low - up", model: "opus" }), { ...TOP, rung: 1 }],
+      [low({ model: "opus" }), TOP],
+    ];
+    for (const [s, p] of cases) {
+      const d = decider(s, p);
+      await d.loop.tick(T);
+      expect(d.moves()).toEqual([]);
+      expect(d.cards()).toEqual([]);
+    }
+  });
+
+  test("moved back up: the new tab on the pick, studio_moved why back-up, studio:up stamped, studio:up-approved ended", async () => {
+    const s = low({ mode: "ask" }), m = mover(s, TOP);
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" }, { episode_key: "x", state: "approved", started_at: T - 5, ended_at: null, source: "board", observed_at: T - 5 });
+    await m.tick(T);
+    expect(m.orca.of("terminal-close").map((c) => c.args)).toEqual([["term_s"]]);
+    const start = m.orca.of("studio-start");
+    expect(start).toHaveLength(1);
+    expect(start[0]!.args.slice(0, 3)).toEqual([STUDIO, "acct-b", "opus"]);
+    expect(start[0]!.args[5]).toContain("moved back up from claude:acct-a to claude:acct-b");
+    expect(payloads(s, "studio_moved")).toMatchObject([{ previous: "term_s", from: "claude:acct-a", to: "claude:acct-b", model: "opus", why: "back-up" }]);
+    expect(studioMember(s)).toMatchObject({ account: "acct-b", model: "opus" });
+    expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:up" })).toMatchObject({ state: "started", started_at: T });
+    expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" })!.ended_at).toBe(T);
+  });
+
+  test("the started move-up ends only studio:up-approved, never the limit path's studio:approved", async () => {
+    const s = low({ mode: "ask" }), d = decider(s, TOP);
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" }, { episode_key: "x", state: "approved", started_at: T - 5, ended_at: null, source: "board", observed_at: T - 5 });
+    await d.loop.tick(T);
+    const a = d.moves()[0]!;
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:approved" }, { episode_key: "y", state: "approved", started_at: T, ended_at: null, source: "board", observed_at: T });
+    const orca = new FakeBackend(), act = new LoopActuator({ orca });
+    expect(await studio.exec(a, { store: s, project: "fx", tick: 1, now: T + 5, fired: [], poked: new Set<string>(), act })).toMatchObject({ done: true });
+    expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:up-approved" })!.ended_at).toBe(T + 5);
+    expect(s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:approved" })!.ended_at).toBeNull();
+  });
+});
+
+describe("studio-hung-agent-broken U2: the operator's Restart Studio", () => {
+  // The broken Studio's card as liveness.ts files it, stood in observed_alerts the way the observer keeps it.
+  const card = (s: Store, handle = "term_s") => s.upsert("observed_alerts", { project: "fx", id: "loop-_studio-x" },
+    { doc: JSON.stringify({ id: "loop-_studio-x", title: "Studio not responding", kind: "agent_broken", restart: true, handle, options: ["Restart Studio", "It's fine"] }), observed_at: T });
+  const x = (s: Store, act = new LoopActuator({ orca: new FakeBackend() })) => ({ store: s, project: "fx", tick: 1, now: T, fired: [], poked: new Set<string>(), act });
+  const answer = (s: Store, said?: string) => studio.exec({ project: "fx", squad: null, member: null, subject: "req:1", kind: "dismiss", episode: "req:1",
+    payload: { id: "loop-_studio-x", ...(said === undefined ? {} : { answer: said }) } }, x(s));
+  // The Studio reconciler with the real actuator and fulfillers over a fake Orca.
+  function restarter(s: Store) {
+    const orca = new FakeBackend();
+    orca.agents = [{ wt: STUDIO, handle: "term_s", title: "claude" }, { wt: STUDIO, handle: "term_l", title: "ds-loop briefing" }];
+    const act = new LoopActuator({ orca });
+    const loop = new Loop(s, { observers: [], reconcilers: [studioRec] }, act, { projects: () => ["fx"] });
+    return { orca, tick: async (at: number) => { await loop.tick(at); await act.drain(); } };
+  }
+  const approval = (s: Store) => s.get("episodes", { project: "fx", subject: MOVE, kind: RESTART_APPROVED });
+
+  test("answered Restart Studio while it is not ready: one restart on its own account and model, its tab closed once, the approval ended", async () => {
+    const s = rig({ draft: "half a thought" }), r = restarter(s);
+    expect(studioReady(s, "fx", T).ready).toBe(false);
+    card(s);
+    expect(await answer(s, " restart studio ")).toMatchObject({ done: true });
+    expect(approval(s)).toMatchObject({ state: "approved", ended_at: null, source: "board", result: "term_s" });
+    expect(payloads(s, "studio_move_approved")).toEqual([{ alert: "loop-_studio-x", why: "restart", handle: "term_s" }]);
+    await r.tick(T + 10);
+    expect(r.orca.of("terminal-close").map((c) => c.args)).toEqual([["term_s"]]);
+    const start = r.orca.of("studio-start");
+    expect(start).toHaveLength(1);
+    expect(start[0]!.args.slice(0, 4)).toEqual([STUDIO, "acct-a", "opus", "-"]);
+    expect(start[0]!.args[5]).toContain("the operator restarted it from the board");
+    const handle = String(studioMember(s).handle);
+    expect(handle).toMatch(/^term_\d+$/);
+    expect(studioMember(s)).toMatchObject({ account: "acct-a", agent: "claude", model: "opus" });
+    expect(payloads(s, "studio_moved")).toEqual([{ handle, previous: "term_s", from: "claude:acct-a", to: "claude:acct-a", model: "opus", why: "restart" }]);
+    expect(approval(s)).toMatchObject({ state: "ended", ended_at: T + 10 });
+    await r.tick(T + 400);
+    expect(r.orca.of("terminal-close")).toHaveLength(1);
+    expect(r.orca.of("studio-start")).toHaveLength(1);
+  });
+
+  test("a restart whose close fails: nothing started, the approval ended, one Needs-you Studio move failed card", async () => {
+    const s = rig({ draft: "half a thought" }), r = restarter(s);
+    r.orca.closeFails.add("term_s");
+    card(s);
+    await answer(s, "Restart Studio");
+    await r.tick(T + 10);
+    expect(r.orca.of("studio-start")).toEqual([]);
+    expect(approval(s)).toMatchObject({ state: "ended" });
+    const cards = cardsIn(s, "loop-studio.move-");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ title: "Studio move failed", kind: "restart_failed" });
+    expect(String(cards[0]!.question)).toContain("could not close the Studio's tab term_s to restart it");
+    await r.tick(T + 400);
+    expect(r.orca.of("terminal-close")).toHaveLength(1);
+  });
+
+  test("a restart whose own claim ended without move() ending it: the approval is ended, nothing filed again", async () => {
+    const s = rig({ draft: "half a thought" });
+    card(s);
+    await answer(s, "Restart Studio");
+    const ep = `restart|term_s@${approval(s)!.started_at}`;
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "action:studio-move" }, { episode_key: ep, state: "failed", started_at: T, ended_at: T + 5, source: "loop", observed_at: T + 5 });
+    const ctx = { store: s, project: "fx", tick: 1, now: T + 10, fired: [], poked: new Set() } as never;
+    expect(studioRec.run(ctx).filter((y) => y.kind === "studio-move")).toEqual([]);
+    expect(approval(s)).toMatchObject({ state: "ended", ended_at: T + 10 });
+  });
+
+  test("a replay of the restart closes nothing: after the close it only starts, after the start it does nothing", async () => {
+    const s = rig({ draft: "half a thought" });
+    card(s);
+    await answer(s, "Restart Studio");
+    const a = studioRec.run({ store: s, project: "fx", tick: 1, now: T + 5, fired: [], poked: new Set() } as never).find((y) => y.kind === "studio-move")!;
+    expect(a.payload).toMatchObject({ handle: "term_s", agent: "claude", account: "acct-a", model: "opus", why: "restart" });
+    const orca = new FakeBackend(), ex = x(s, new LoopActuator({ orca }));
+    s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:move" }, { episode_key: a.episode, state: "closed", started_at: T, source: "loop", observed_at: T });
+    expect(await studio.exec(a, ex)).toMatchObject({ done: true });
+    expect(orca.of("terminal-close")).toEqual([]);
+    expect(orca.of("studio-start")).toHaveLength(1);
+    expect(await studio.exec(a, ex)).toMatchObject({ done: true, result: "already started" });
+    expect(orca.of("terminal-close")).toEqual([]);
+    expect(orca.of("studio-start")).toHaveLength(1);
+  });
+
+  test("It's fine, Dismiss or any other answer only clears the card: no approval, no move", async () => {
+    for (const said of ["It's fine", undefined, "restarted it myself"]) {
+      const s = rig(), r = restarter(s);
+      card(s);
+      expect(await answer(s, said)).toMatchObject({ done: true });
+      expect(s.db.query("SELECT 1 FROM observed_alerts WHERE project = 'fx' AND id = 'loop-_studio-x'").get()).toBeNull();
+      expect(approval(s)).toBeNull();
+      await r.tick(T + 10);
+      expect(r.orca.of("terminal-close")).toEqual([]);
+      expect(r.orca.of("studio-start")).toEqual([]);
+    }
+  });
+
+  test("an approval for a terminal that is no longer the Studio's ends with no move; a limit card's \"move it\" files no restart", async () => {
+    const s = rig(), r = restarter(s);
+    card(s, "term_old");
+    await answer(s, "Restart Studio");
+    await r.tick(T + 10);
+    expect(r.orca.of("terminal-close")).toEqual([]);
+    expect(approval(s)).toMatchObject({ state: "ended", ended_at: T + 10 });
+    const u = rig(), ru = restarter(u);
+    u.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:approved" }, { episode_key: "x", state: "approved", started_at: T - 5, ended_at: null, source: "board", observed_at: T - 5 });
+    await ru.tick(T + 10);
+    expect(ru.orca.of("terminal-close")).toEqual([]);
   });
 });

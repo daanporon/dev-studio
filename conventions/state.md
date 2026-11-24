@@ -31,7 +31,7 @@ Per-project role notes live beside it in `state/<project>/notes/<role>.md`, writ
 Carries only the gaps Orca leaves:
 
 - `task_id` — the squad's orchestration task (checkpoint gates target it).
-- `status` — the semantic status enum (`running` / `blocked` / `waiting-on-you` / `done`). `set-status done` on a feature squad refuses while any unit is dispatched, planned or held (each named with the command that settles it) without a debrief, and (feature squad) a debrief without a `Try it` line; a Tester member or no units does not refuse, and a testing squad refuses only for a dispatched unit.
+- `status` — the semantic status enum (`running` / `blocked` / `waiting-on-you` / `done`). `set-status done` on a feature squad refuses while any unit is dispatched, planned or held (each named with the command that settles it); it needs no debrief (debrief-in-needs-you U2: the Lead writes it only when the loop asks at archive, `set-debrief`); a Tester member or no units does not refuse, and a testing squad refuses only for a dispatched unit. `register-plan` or `add-unit` that leaves a planned or dispatched unit (a held one alone does not count) on a `done` squad sets it back to `running` in the same write (note on stderr, a Lead journal decision); a suspended, failed or closing (`want = 'gone'`) squad keeps its status.
 - `waiting_on_you` — pending questions, for the board's blocked-first queue.
 - `lfg_assumptions` — assumptions an `lfg` squad logged instead of blocking.
 - `units[].title`, `about`, `done`, `check` — the unit's text for the board's unit overlay (click a row
@@ -89,6 +89,13 @@ Carries only the gaps Orca leaves:
   of one seat ignores it. Only a live feature squad can be the focus; a suspended one keeps the key
   without effect, a closed, done or gone one has it cleared by the loop. Each change logs one
   `focus_set` event (`from`, `to`, `by`).
+- **Unlocks first** (picker-prefers-unblocking-units U1) is not a state field either: the limits key
+  `unblock_first` (default `on`). After urgent, blocks-started, focus and resumed work, a queued unit
+  with more open dependents (the `planned` or `dispatched` units that wait on it through `deps` and
+  `ext_deps`, each once, not held or superseded, in a live squad) takes the next free seat before an
+  older one. Inside the focus squad's room it always counts; outside it only while the lane has
+  unlock room (its seats − 1 − its live seats whose unit has open dependents), so the last seat of
+  each lane still goes oldest first. `off` gives the oldest-first order back.
 
 - `units[].wait_on` — a started unit that waits on another unit: `squad-state.sh <file> wait-on
   <slug> <dep-slug> [--ext-dep <squad>/<slug>] --why "<text>"` adds the dep to `deps` (or

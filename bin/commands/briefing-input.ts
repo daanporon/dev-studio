@@ -6,9 +6,13 @@
 // Output: one bounded markdown bundle (at most MAX_LINES lines), or --json. Accounts are named
 // <agent>:<account>, never by label (accounts.tsv's label holds email addresses, KTD9), and any
 // email address left in free text is masked.
+import { readFileSync } from "node:fs";
 import { now, openReadOnly, type Row, type Store } from "../loop/core/store.ts";
 import { parse } from "../loop/core/cli.ts";
 import { limitInt } from "../loop/settings/limits.ts";
+import { entryOf, pending } from "../loop/messages/questions.ts";
+import { budgetCard, githubView } from "../board/github-view.ts";
+import { doneWaits, dropMergeCopies, mergePrOf, placeAlert, proposalsOf, questionItems, questionsCount, shownStatus, squadListed } from "../board/needs-rules.ts";
 
 export const help = "<label> --date <YYYY-MM-DD> | --since <epoch> [--json] — the facts for the Studio's morning brief (read-only)";
 
@@ -28,7 +32,13 @@ type Pull = { pr: number; title: string };
 type SquadFacts = { squad: string; status: string; live: boolean; before: number | null; now: number | null; added: number };
 export type Facts = {
   label: string; date: string; since: number; until: number;
+  // `count` is the board's `needs_count`: questions + Studio cards + done squads (the board lists proposals but does not count them).
+  // `notes` are the board's loop notes (no answer needed), grouped by title; `squads` are blocked squads.
   needs: {
+    count: number;
+    notes: { title: string; count: number }[];
+    proposals: { squad: string; topic: string | null }[];
+    done: string[];
     questions: { squad: string; id: string; title: string; age: string; blocking: boolean; new: boolean }[];
     alerts: { id: string; title: string; text: string; age: string | null; new: boolean }[];
     squads: { squad: string; status: string }[];
@@ -178,18 +188,44 @@ export function collect(s: Store, w: Window): Facts {
   const inWin = (t: number | null) => t !== null && t >= since && t < until;
   const inPrev = (t: number | null) => t !== null && t >= prevSince && t < since;
 
-  // 1. Needs you, now: each item new (raised in the window) or still waiting.
-  const questions = (s.db.query("SELECT squad, id, title, question, asked_at, blocking FROM questions WHERE project = ? AND status = 'open' ORDER BY asked_at, seq").all(label) as Row[])
-    .map((q) => ({ squad: String(q.squad), id: String(q.id), title: oneLine(q.title || q.question), age: q.asked_at ? age(until - Number(q.asked_at)) : "?", blocking: Number(q.blocking ?? 0) === 1, new: inWin(num(q.asked_at)) }));
-  const alerts = (s.db.query("SELECT id, doc FROM observed_alerts WHERE project = ? ORDER BY id").all(label) as Row[])
+  // 1. Needs you, now: what the board's Needs-you lists (bin/board/needs-rules.ts), each item new
+  // (raised in the window) or still waiting. A squad's questions come from its doc's queue, as on the board.
+  const squadRows = (s.db.query("SELECT topic, status, doc, want, want_result FROM squads WHERE project = ? ORDER BY id").all(label) as Row[])
+    .filter((q) => squadListed(q.status) && q.doc != null);
+  const docOf = (q: Row) => obj(q.doc) ?? {};
+  // The queue is the open question rows (what the board's squadDoc overlays), whatever the squad doc says.
+  const queueOf = (q: Row) => ({ waiting_on_you: pending(s, label, String(q.topic)).map(entryOf) });
+  const ageOf = (since: unknown) => { const t = typeof since === "string" ? Math.floor(Date.parse(since) / 1000) : NaN; return Number.isFinite(t) ? t : null; };
+  const graceMin = limitInt(s, label, "needs_grace_min", 10), refusalMin = limitInt(s, label, "refusal_needs_min", 240);
+  const cardRows = (s.db.query("SELECT id, doc FROM observed_alerts WHERE project = ? ORDER BY id").all(label) as Row[])
     .filter((a) => !String(a.id).startsWith("brief-"))   // the brief's own "New morning brief" alert
     .map((a) => {
       const d = obj(a.doc) ?? {};
-      const at = typeof d.since === "string" ? Math.floor(Date.parse(d.since) / 1000) : NaN;
-      return { id: String(a.id), title: oneLine(d.title ?? a.id, 80), text: oneLine(d.question ?? d.text ?? ""), age: Number.isFinite(at) ? age(until - at) : null, new: Number.isFinite(at) && inWin(at) };
+      const text = String(d.question ?? d.text ?? "");
+      const at = ageOf(d.since);
+      return { id: String(a.id), title: oneLine(d.title ?? a.id, 80), text: oneLine(text), age: at !== null ? age(until - at) : null, new: at !== null && inWin(at), ref: d.ref,
+        place: placeAlert({ ...d, id: a.id, text }, until, graceMin, refusalMin), card: d.kind };
     });
-  const squadRows = s.db.query("SELECT topic, status, doc FROM squads WHERE project = ? ORDER BY id").all(label) as Row[];
-  const needSquads = squadRows.filter((q) => q.status === "blocked" || q.status === "waiting-on-you").map((q) => ({ squad: String(q.topic), status: String(q.status) }));
+  // The GitHub budget card (one per project while the budget is used up and a merge-ready PR waits).
+  try {
+    const g = githubView(s.db.query("SELECT * FROM observed_github WHERE repo = ''").get() as never, until);
+    const waiting = g?.level === "out" ? (s.db.query("SELECT pr FROM observed_prs WHERE project = ? AND verdict = 'ready' AND state = 'OPEN' AND gone_at IS NULL ORDER BY pr").all(label) as Row[]).map((r) => ({ project: label, num: String(r.pr) })) : [];
+    const c = budgetCard(label, g, waiting);
+    if (c) cardRows.push({ id: c.id, title: oneLine(c.title, 80), text: oneLine(c.text), age: null, new: false, ref: undefined, place: "needs", card: c.kind });
+  } catch { /* no GitHub schedule row: no budget card */ }
+  const alerts = cardRows.filter((a) => a.place === "needs");
+  const noteGroups = new Map<string, number>();
+  for (const a of cardRows) if (a.place === "note") noteGroups.set(a.title, (noteGroups.get(a.title) ?? 0) + 1);
+  const notes = [...noteGroups].map(([title, count]) => ({ title, count })).sort((x, y) => y.count - x.count || x.title.localeCompare(y.title));
+  const mergePrs = new Set(cardRows.filter((a) => a.place === "needs" && a.card === "merge_card").map((a) => mergePrOf(a.ref)).filter((n): n is string => !!n));
+  const questions = squadRows.filter((q) => questionsCount(q.status)).flatMap((q) => dropMergeCopies(questionItems(queueOf(q)), mergePrs).map((x) => {
+    const at = ageOf(x.since);
+    return { squad: String(q.topic), id: String(x.id ?? ""), title: oneLine(x.title || x.question), age: at !== null ? age(until - at) : "?", blocking: x.blocking, new: at !== null && inWin(at), at: at ?? 0 };
+  })).sort((x, y) => x.at - y.at).map(({ at: _at, ...x }) => x);
+  const proposals = squadRows.filter((q) => questionsCount(q.status)).flatMap((q) => proposalsOf(docOf(q)).map((p) => ({ squad: String(q.topic), topic: p.topic })));
+  const done = squadRows.filter((q) => doneWaits(q.status, q.want === "gone" && !String(q.want_result ?? "").startsWith("done") ? "archiving" : q.status, false)).map((q) => String(q.topic));
+  // A squad stored as waiting-on-you with nothing queued shows as running on the board: only `blocked` gets its own line.
+  const needSquads = squadRows.filter((q) => shownStatus(String(q.status), questionItems(queueOf(q)).length) === "blocked").map((q) => ({ squad: String(q.topic), status: "blocked" }));
   const disabled = new Set((s.db.query("SELECT agent, account FROM accounts WHERE state = 'disabled'").all() as Row[]).map((r) => `${r.agent}:${r.account}`));
   const acctRows = s.db.query("SELECT agent, account, session_pct, weekly_pct, limited_until, note, skills FROM observed_accounts ORDER BY agent, account").all() as Row[];
   const accounts: Facts["needs"]["accounts"] = [];
@@ -304,13 +340,16 @@ export function collect(s: Store, w: Window): Facts {
   const quiet = all.filter((p) => p.live && p.status !== "done" && !mergedSquad.has(p.squad)).map((p) => p.squad);
 
   const finished: Facts["finished"] = [];
-  const entry = (squad: string, how: "done" | "closed", at: number, debrief: string | null) => ({ squad, how, at, debrief, try_it: tryItOf(debrief) });
+  // No debrief at done (debrief-in-needs-you U2): a done squad's Try it comes from its newest approved plan's "## Try it" section.
+  const entry = (squad: string, how: "done" | "closed", at: number, debrief: string | null, doc: Row | null = null) => ({ squad, how, at, debrief, try_it: tryItPage(pageOf(squad)) ?? (debrief ? tryItOf(debrief) : tryItOf(planTryIt(doc))) });
+  // debrief-in-needs-you pages U1: the squad's Try it page (live in squads/, after archive in archive/) comes first.
+  const pageOf = (t: string) => ((s.db.query("SELECT body FROM documents WHERE project = ? AND path IN (?, ?) ORDER BY path LIMIT 1").get(label, `${label}/archive/${t}-try-it.md`, `${label}/squads/${t}-try-it.md`) as Row | null)?.body as string | undefined) ?? null;
   const debriefOf = (d: Row | null) => (typeof d?.debrief === "string" && d.debrief.trim() ? d.debrief.trim() : null);
   for (const q of squadRows) {
     const t = String(q.topic);
-    if (q.status === "done" && doneAt.has(t)) finished.push(entry(t, "done", doneAt.get(t)!, debriefOf(obj(q.doc))));
+    if (q.status === "done" && doneAt.has(t)) finished.push(entry(t, "done", doneAt.get(t)!, debriefOf(obj(q.doc)), obj(q.doc)));
   }
-  for (const a of archived) finished.push(entry(String(a.doc.topic), "closed", a.at, debriefOf(a.doc)));
+  for (const a of archived) finished.push(entry(String(a.doc.topic), "closed", a.at, debriefOf(a.doc), a.doc));
 
   // 5. Spend over the window: this snapshot minus the previous brief's (KTD4); the day before the same way.
   const live = new Set(all.map((p) => p.squad));
@@ -339,7 +378,7 @@ export function collect(s: Store, w: Window): Facts {
 
   return {
     label, date: w.date, since, until,
-    needs: { questions, alerts, squads: needSquads, accounts },
+    needs: { count: questions.length + alerts.length + done.length, notes, proposals, done, questions, alerts, squads: needSquads, accounts },
     progress,
     merged: { total: mergedTotal, before: mergedBefore, squads: mergedSquads },
     elsewhere: elsewhereOf(s, label, since, until, w.prev_upto),
@@ -443,6 +482,36 @@ function elsewhereOf(s: Store, label: string, since: number, until: number, prev
   return out;
 }
 
+// The "## Try it" section of the newest approved plan in the doc's `approved_plans` (the `<plan>.approved.md` copy, else the plan),
+// shaped as a debrief's Try it part for tryItOf; null when there is none.
+export function planTryIt(doc: Row | null): string | null {
+  const plans = Array.isArray(doc?.approved_plans) ? (doc!.approved_plans as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  for (const p of [...plans].reverse()) {
+    for (const f of [p.replace(/\.md$/, "") + ".approved.md", p]) {
+      let text: string;
+      try { text = readFileSync(f, "utf8"); } catch { continue; }
+      const lines = text.split("\n");
+      const i = lines.findIndex((l) => /^##\s+try it\b/i.test(l));
+      if (i < 0) continue;
+      let j = i + 1;
+      while (j < lines.length && !/^##\s/.test(lines[j])) j++;
+      const body = lines.slice(i + 1, j).join("\n").trim();
+      if (body) return "Try it:\n" + body;
+    }
+  }
+  return null;
+}
+
+// The Try it page of a squad (`<topic>-try-it.md`): the one line `Try it: nothing to try by hand — <why>` is `nothing`, else
+// every numbered step across its dated sections counts; null when there is no page or no step in it (the caller falls back).
+export function tryItPage(text: string | null): TryIt | null {
+  if (!text) return null;
+  const none = text.split("\n").find((l) => /^\s*try it\s*:\s*nothing to try/i.test(l));
+  if (none) return tryItOf(none);
+  const steps = text.split("\n").filter((l) => /^\s*\d{1,2}[.)]\s+\S/.test(l)).length;
+  return steps ? { kind: "steps", steps } : null;
+}
+
 // The debrief's "Try it" part: a line starting (after a list marker or **) with "Try it".
 export function tryItOf(debrief: string | null): TryIt {
   if (!debrief) return { kind: "missing" };
@@ -466,14 +535,19 @@ export function render(f: Facts): string[] {
 
   L.push("## 1. Needs you, now");
   const n = f.needs;
-  if (!n.questions.length && !n.alerts.length && !n.squads.length && !n.accounts.length) L.push("- nothing");
+  L.push(`Needs you: ${n.count}`);
+  if (!n.count && !n.squads.length && !n.accounts.length) L.push("- nothing");
   for (const q of n.questions.slice(0, CAP.questions)) L.push(`- ${q.new ? "new" : `waiting ${q.age}`} question (${q.squad}${q.blocking ? ", blocking" : ""}): ${q.title}`);
   L.push(...more(n.questions.length, CAP.questions, "open questions"));
-  for (const a of n.alerts.slice(0, CAP.alerts)) L.push(`- ${a.new ? "new" : `waiting${a.age ? " " + a.age : ""}`} alert: ${a.title}${a.text ? ` — ${a.text}` : ""}`);
-  L.push(...more(n.alerts.length, CAP.alerts, "alerts"));
-  for (const q of n.squads) L.push(`- waiting: squad ${q.squad} is ${q.status}`);
-  for (const a of n.accounts.slice(0, CAP.accounts)) L.push(`- waiting: account ${a.account}: ${a.problem}`);
-  L.push(...more(n.accounts.length, CAP.accounts, "accounts"), "");
+  for (const a of n.alerts.slice(0, CAP.alerts)) L.push(`- ${a.new ? "new" : `waiting${a.age ? " " + a.age : ""}`} card: ${a.title}${a.text ? ` — ${a.text}` : ""}`);
+  L.push(...more(n.alerts.length, CAP.alerts, "cards"));
+  for (const p of n.proposals) L.push(`- proposed fix squad (${p.squad}): ${p.topic ?? "?"} (listed on the board, not in its count)`);
+  for (const d of n.done) L.push(`- squad ${d} is done: try it, then close it (the debrief is written at close)`);
+  for (const q of n.squads) L.push(`- waiting: squad ${q.squad} is ${q.status} (not counted above)`);
+  for (const a of n.accounts.slice(0, CAP.accounts)) L.push(`- waiting: account ${a.account}: ${a.problem} (not counted above)`);
+  L.push(...more(n.accounts.length, CAP.accounts, "accounts"));
+  if (n.notes.length) L.push(`- Loop notes (no answer needed; on the board under Loop notes): ${n.notes.map((x) => `${x.count} × ${x.title}`).join(", ")}`);
+  L.push("");
 
   L.push("## 2. Progress per squad (% of units done, cancelled left out; only squads that moved or grew)");
   if (!f.progress.length) L.push("- no squad's progress changed");
@@ -521,7 +595,7 @@ export function render(f: Facts): string[] {
   L.push("## 4. Done or closed in the window");
   if (!f.finished.length) L.push("- none");
   for (const x of f.finished.slice(0, CAP.finished)) {
-    L.push(`- ${x.squad} (${x.how} ${dayTime(x.at)}): ${x.debrief ? "debrief:" : "no debrief"}`);
+    L.push(`- ${x.squad} (${x.how} ${dayTime(x.at)}): ${x.debrief ? "debrief:" : x.how === "done" ? "debrief at archive" : "no debrief"}`);
     if (x.debrief) {
       const lines = x.debrief.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim());
       for (const l of lines.slice(0, CAP.debrief)) L.push(`  > ${oneLine(l, 200)}`);

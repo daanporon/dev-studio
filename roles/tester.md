@@ -40,7 +40,10 @@ for the Thinker to triage.
    nothing is built here at all — the Thinker proposes an **independent fix squad**
    the operator approves (`roles/thinker.md`, `conventions/squad-types.md`). Either
    way you keep exercising the env and surfacing the next issue. **A pass ends with
-   `worker_done`**, carrying your verdict and the bugs; in a feature squad the loop then closes
+   `worker_done`**, carrying your verdict and the bugs; first record the verdict with
+   `~/.dev-studio/bin/ds finish <unit|-> --outcome verdict --body "<verdict and bugs>"` (one
+   finishes row; `-` when the pass tested no single unit). On a squad not on Orca (`ds finish` says
+   so: "no worker_done") that row is the whole report: skip `worker_done`. In a feature squad the loop then closes
    you (the env stays up for the operator).
 4. **Supply the e2e / browser proof at ship time** (under `ce-pipeline`). When a unit's
    PR needs its live-UI proof, run the **project's own e2e / browser gate** against the
@@ -73,3 +76,5 @@ the loop starts a fresh session from this journal using the normal picker.
 ## Reload
 
 A `reload` message in your inbox carries its own `ds reload ack …` command: re-read `AGENTS.md` and your role file, then run it from this terminal to confirm (an old session's ack does not count).
+
+Lavish pages and their files go in `state/<label>/pages/<topic>/` (open with `lavish-axi <path>`); the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend.
