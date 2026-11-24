@@ -446,7 +446,7 @@ eq "text board: a running squad's held badge" "$(tb "zzrdy_$$" 2>/dev/null | gre
 # squad-done-definition U4: every state explains itself; a stored done squad is a Needs-you row.
 jt "explain: wrapping up has means, set_by, you_can" "$TMP/rdy.json" '.squads[] | select(.topic=="bbb-ready") | .display_key=="wrapping-up" and .display_status=="wrapping up" and (.explain.means|length)>0 and (.explain.set_by|length)>0 and (.explain.you_can|length)>0'
 jt "explain: parked and done have one" "$TMP/rdy.json" '[.squads[] | select(.topic=="ccc-parked" or .topic=="zzz-done") | .explain.you_can|length>0] | all'
-jt "done: a Needs-you row with Close squad" "$TMP/rdy.json" '[.needs_you[] | select(.kind=="done" and .squad=="zzz-done")] | length==1 and (.[0].act.label=="Close squad") and (.[0].title|test("read the debrief, then Close squad"))'
+jt "done: a Needs-you row with Close squad" "$TMP/rdy.json" '[.needs_you[] | select(.kind=="done" and .squad=="zzz-done")] | length==1 and (.[0].act.label=="Close squad") and (.[0].title|test("try it out, then Close squad")) and ((.[0].title|test("read the debrief"))|not)'
 jt "done: the row sorts after the questions and is counted" "$TMP/rdy.json" '(.needs_you|last|.kind)=="done" and .needs_count==([.needs_you[]]|length)'
 jt "no board text says ready to close" "$TMP/rdy.json" '[.. | strings | select(test("ready to close"))] | length==0'
 TXT="$(tb "zzrdy_$$" 2>/dev/null)"

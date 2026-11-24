@@ -674,7 +674,7 @@ const EXPLAIN: Record<string, StateExplain> = {
     you_can: "release the held units, cancel them, suspend the squad, or leave it parked" },
   "wrapping-up": { means: "every unit is done or cancelled with no open PR and no Tester; the Lead owes the test check and the debrief",
     set_by: "the loop (computed)", you_can: "nothing; a \"Wrap-up stalled\" card comes only if the Lead stops answering" },
-  done: { means: "finished; the Lead wrote the debrief and the squad waits only for you", set_by: "the Lead", you_can: "read the debrief, then Close squad" },
+  done: { means: "finished; the Lead marked it done and the squad waits only for you", set_by: "the Lead", you_can: "try it out (Documents → Try it), then Close squad; the Lead writes the debrief when you close it" },
   pausing: { means: "its agents are being stopped", set_by: "you (Pause)", you_can: "Resume" },
   paused: { means: "its agents are stopped; its worktrees are kept", set_by: "you (Pause)", you_can: "Resume" },
   resuming: { means: "its agents are being started again", set_by: "you (Resume)", you_can: "wait" },
@@ -2113,8 +2113,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const doneRows = squads.filter((s) => doneWaits(s.status, s.display_status, !!s.error)).map((s) => ({
     squad: s.topic, label: s.label, kind: "done", id: null, from: "lead", card_squad: s.topic, repo_slug: s.repo_slug ?? null, pr: null,
     act: { action: "close", topic: s.topic, label: "Close squad" }, open: true,
-    title: `${s.topic} is done — read the debrief, then Close squad`, titled: true,
-    text: `${s.topic} is done — read the debrief, then Close squad`, choices: [], suggestion: null, why: null, options: [], age_min: null, command: null,
+    title: `${s.topic} is done — try it out, then Close squad (the Lead writes the debrief then)`, titled: true,
+    text: `${s.topic} is done — try it out, then Close squad (the Lead writes the debrief then)`, choices: [], suggestion: null, why: null, options: [], age_min: null, command: null,
   }));
   const loopNotes = allAlerts.filter((a) => a.place === "note").sort((a, b) => (a.age_min ?? 0) - (b.age_min ?? 0))
 ;
