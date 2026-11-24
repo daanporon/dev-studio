@@ -172,13 +172,13 @@ describe("disagreements", () => {
   test("a disagreement that agrees again within two ticks is logged transient", () => {
     const b = member("builder", "u8-h");
     step(live(b));
-    finish(b, "ok");
-    step(live(b));            // the finish row is here, the worker_done not yet
     workerDone(b, "ok");
+    step(live(b));            // the worker_done is here, the finish row not yet
+    finish(b, "ok");
     step(live(b));
     const d = disagreements();
     expect(d).toHaveLength(1);
-    expect(d[0].p).toMatchObject({ point: "finished", old: "no", new: "ok", transient: true, ticks: 1 });
+    expect(d[0].p).toMatchObject({ point: "finished", old: "ok", new: "no", transient: true, ticks: 1 });
     expect(report(s, { project: P, now }).points.finished).toEqual({ counted: 0, transient: 1, explained: 0 });
   });
 
@@ -213,7 +213,7 @@ describe("disagreements", () => {
   test("an explained event leaves the unexplained count; a transient or unknown one is refused", () => {
     const b = member("builder", "u10-j");
     step(live(b)); finish(b, "ok");
-    for (let i = 0; i < 3; i++) step(live(b));
+    for (let i = 0; i < 6; i++) step(live(b));   // past the grace a finish row gets before its worker_done
     const [d] = disagreements();
     let r = report(s, { project: P, now });
     expect(r.unexplained.map((u) => u.id)).toEqual([d.id]);
@@ -233,6 +233,90 @@ describe("disagreements", () => {
     expect(pairs(s, P, tick, now)).toEqual([]);
     expect(disagreements()).toEqual([]);
     expect(s.db.query("SELECT COUNT(*) AS n FROM episodes WHERE kind IN ('shadow', 'shadow-gen')").get()).toEqual({ n: 0 });
+  });
+});
+
+// U21a: the patterns `ds shadow report --since 2026-11-24T09:05:32Z` listed, each a lag between two
+// signals that would come back every day; each now agrees (docs/backends/shadow.md, "Patterns").
+describe("U21a patterns agree", () => {
+  const unit = (b: Row, set: Row) => s.upsert("units", { project: P, squad: SQ, slug: String(b.suffix) }, { status: "dispatched", builder_wt: b.wt, observed_at: now, updated_at: now, ...set });
+
+  test("A: the finish row lands just before the relayed worker_done (old no, new ok within the grace)", () => {
+    const b = member("builder", "pa");
+    step(live(b));
+    finish(b, "no-pr");
+    for (let i = 0; i < 3; i++) step(live(b));                     // 90 s: the relay is late
+    workerDone(b, "ok");
+    for (let i = 0; i < 3; i++) step(live(b));
+    expect(disagreements()).toEqual([]);
+  });
+
+  test("B: a Builder with a PR sends worker_done at the PR; its finish row comes from the babysit generation", () => {
+    const b = member("builder", "pb");
+    unit(b, { pr: "#77" });
+    step(live(b));
+    workerDone(b, "ok");                                            // the PR is open: the loop ignores this report
+    for (let i = 0; i < 4; i++) step(live(b));
+    restart(b, "pb-2");                                             // the phase restart: a new generation, no finish row yet
+    for (let i = 0; i < 4; i++) step(live(m(b.id)));
+    expect(pairs(s, P, tick, now).find((p) => p.point === "finished")).toBeUndefined();
+    expect(disagreements()).toEqual([]);
+  });
+
+  test("C: a Tester that sends worker_done with no verdict finish row is still flagged (a role gap, not a lag)", () => {
+    const t = member("tester", "pc");
+    step(live(t));
+    workerDone(t, "ok");
+    for (let i = 0; i < 6; i++) step(live(t));
+    expect(disagreements().map((d) => [d.p.point, d.p.old, d.p.new, d.p.transient])).toEqual([["finished", "ok", "no", false]]);
+  });
+
+  test("D: the loop already wants the member gone (retired), the new side reads its end a tick later", () => {
+    const t = member("tester", "pd");
+    finish(t, "verdict");
+    s.upsert("members", { id: t.id }, { want: "gone" });
+    const done: RunWorker = { wt: String(t.wt), live: false, dispatch: null, task: "task_pd", status: "completed", reported: true };
+    for (let i = 0; i < 3; i++) step([done]);                        // its agent still runs: the new side would keep it
+    expect(pairs(s, P, tick, now).filter((p) => p.point === "retire")).toEqual([]);
+    expect(disagreements()).toEqual([]);
+  });
+
+  test("E: a phase switch's stop in flight, and a squad archived with the member's wish still running", () => {
+    const b = member("builder", "pe");
+    s.event("member_phase", { project: P, squad: SQ, unit: "pe", member: String(b.wt), payload: { phase: "babysit", was: "build" } });
+    const dropped: RunWorker = { wt: String(b.wt), live: false, dispatch: null, task: "task_pe", status: "failed" };
+    for (let i = 0; i < 3; i++) step([dropped]);
+    expect(disagreements()).toEqual([]);
+    const lead = member("lead");
+    s.upsert("squads", { project: P, topic: SQ }, { status: "closed" });
+    const gone: RunWorker = { wt: String(lead.wt), live: false, dispatch: null, task: "task_l", status: "failed" };
+    for (let i = 0; i < 3; i++) step([gone]);
+    expect(pairs(s, P, tick, now).filter((p) => p.point === "member")).toEqual([]);
+    expect(disagreements()).toEqual([]);
+  });
+
+  test("F: a start Orca already lists that no walk has read yet (running against starting)", () => {
+    const b = member("builder", "pf", { placed_at: now + 1 });
+    work(String(b.wt), { walk: "none", presence: "running", account_at: now - 5 });   // the walk ran before the start
+    for (let i = 0; i < 3; i++) step(live(b));
+    const st = pairs(s, P, tick, now).find((p) => p.point === "start")!;
+    expect([st.old, st.new]).toEqual(["running", "running"]);
+    expect(disagreements()).toEqual([]);
+  });
+
+  test("a Builder killed mid-work under a stale Orca view: both sides read it gone past GONE_MIN, and its restart is a crash", () => {
+    const b = member("builder", "pk");
+    step(live(b));
+    work(String(b.wt), { walk: "none", walk_none_at: now, account_at: now });   // KILLed; Orca still reads it working
+    step(live(b));
+    // Under GONE_MIN the old side still reads it running: a known lag, so the pair agrees.
+    expect(pairs(s, P, tick, now).find((p) => p.point === "start")).toMatchObject({ old: "running", new: "running" });
+    for (let i = 0; i < 6; i++) { work(String(b.wt), { account_at: now }); step(live(b)); }
+    expect(pairs(s, P, tick, now).find((p) => p.point === "start")).toMatchObject({ old: "none", new: "none" });
+    expect(disagreements()).toEqual([]);
+    restart(b, "pk-2");
+    step(live(m(b.id)));
+    expect(events("shadow_crash").map((e) => e.p.gen)).toEqual([String(b.gen)]);
   });
 });
 
@@ -265,7 +349,7 @@ describe("ds shadow report", () => {
   test("the CLI prints the report and records an explanation", () => {
     const b = member("builder", "u12-l");
     step(live(b)); finish(b, "ok");
-    for (let i = 0; i < 3; i++) step(live(b));
+    for (let i = 0; i < 6; i++) step(live(b));
     const [d] = disagreements();
     s.close();
     const env = { ...process.env, DS_STATE_ROOT: dir } as Record<string, string>;

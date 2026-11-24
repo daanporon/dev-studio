@@ -2113,7 +2113,9 @@ const chatTouch = () => typeof matchMedia === "function" && matchMedia("(pointer
 // The key strip (U19): each button is one api/keys press, typed with no Enter even while the member works:
 // Esc stops a turn, the arrows, Enter and a digit pick in a menu.
 const CHAT_KEYS = [["Escape", "Esc", "Press Esc: stops a working agent, closes a menu"], ["Up", "↑", "Up arrow"], ["Down", "↓", "Down arrow"],
-  ["Enter", "⏎", "Enter: picks the marked option"], ["Tab", "⇥", "Tab"], ...["1", "2", "3", "4", "5"].map((d) => [d, d, "Press " + d + ": picks option " + d])];
+  ["Enter", "⏎", "Enter: picks the marked option"], ["Tab", "⇥", "Tab"], ];
+// U19b: the digits show only while the screen read shows a numbered menu, 1 up to its option count (at most 5).
+const chatDigits = (n) => ["1", "2", "3", "4", "5"].slice(0, Math.max(0, Math.min(5, Number(n) || 0))).map((d) => [d, d, "Press " + d + ": picks option " + d]);
 // ---- images in the chat (chat-image-upload U3) ----
 // An image is shrunk in the page when it is big (over 3.5 MiB, a long side over 2000 px) or of a type the server refuses
 // (an iPhone HEIC), uploaded the moment it is attached (api/chat-file, answered with its name), and only the names ride
@@ -2439,7 +2441,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
         ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
         ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
       <div class="qfoot">
-        <div class="chat-keys" role="toolbar" aria-label=${"Keys for " + shown.label}>${CHAT_KEYS.map(([k, l, tip]) => html`<button key=${k} type="button"
+        <div class="chat-keys" role="toolbar" aria-label=${"Keys for " + shown.label}>${CHAT_KEYS.concat(chatDigits(scr && scr.menu)).map(([k, l, tip]) => html`<button key=${k} type="button"
           class=${"btn sm chat-key" + (k === "Escape" && data && data.working ? " stop" : "")} title=${tip} aria-label=${tip} disabled=${pressing === shown.wt}
           onClick=${() => press([k], l)}>${k === "Escape" && data && data.working ? "■ Stop" : l}</button>`)}
           ${scr && html`<button type="button" class="btn sm chat-scr" aria-pressed=${showScreen ? "true" : "false"} title="Show the member's live screen" onClick=${() => setScreenOn(!showScreen)}>${showScreen ? "Chat" : "Screen"}</button>`}</div>
