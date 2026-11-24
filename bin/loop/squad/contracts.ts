@@ -2,7 +2,8 @@
 // backend and project, shared by the actuator (starts, pokes, closes) and the contract observer
 // (observers/contract.ts: lists, reads, state). tmux, orca-lite (U13) with its facts in
 // <root>/<project>/loop/orca-lite-terminals.json, and herdr (U16c) with its server's files in
-// <root>/<project>/loop/herdr/. A test passes its fake as `make`.
+// <root>/<project>/loop/herdr/. The registry (bin/backend/registry.ts) starts a squad on a backend on
+// trial only on its trial project (U16a). A test passes its fake as `make`.
 import { checked, type Backend, type Capabilities } from "../../backend/contract.ts";
 import { projectTmux, TMUX_CAPS } from "../../backend/tmux.ts";
 import { ORCA_LITE_CAPS, orcaLite } from "../../backend/orca-lite.ts";

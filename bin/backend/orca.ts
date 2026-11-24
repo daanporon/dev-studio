@@ -489,8 +489,11 @@ export function nameUnlock(env: Env, key: string): void {
 }
 
 /** The fields of an Orca worktree the `orca` worktree provider reads (wt-make, wt-show, wt-list). */
+// `childWorktreeIds` only when Orca gives it (worktree show does; docs/backends/orca-probe.md): the nesting the
+// trial record shows (`ds trial snapshot`, orca-backend-alternatives U16a).
 const wtSlim = (w: Record<string, unknown>) => ({ id: w.id ?? null, path: w.path ?? null, branch: w.branch ?? null,
-  head: w.head ?? null, parentWorktreeId: w.parentWorktreeId ?? null });
+  head: w.head ?? null, parentWorktreeId: w.parentWorktreeId ?? null,
+  ...(Array.isArray(w.childWorktreeIds) ? { childWorktreeIds: w.childWorktreeIds as unknown[] } : {}) });
 /** `result.worktree` of an Orca JSON answer, slimmed; null when the answer holds none. */
 function wtJson(out: string): ReturnType<typeof wtSlim> | null {
   try {

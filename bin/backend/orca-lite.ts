@@ -37,6 +37,7 @@ export const ORCA_LITE_VERSION = "1";
 export type OrcaLiteOptions = {
   orca?: Orca;                 // the Orca runner (default: the adapter, bin/backend/orca.sh, in process)
   keep?: string;               // the facts file
+  readOnly?: boolean;          // never write the facts file (role scripts: only the loop writes it; create and close refuse)
   now?: () => number;          // epoch seconds
 };
 
@@ -75,7 +76,7 @@ const lastLine = (o: Out): string => (o.err || o.out).trim().split("\n").pop() |
 const defaultKeep = (): string => join(process.env.DS_STATE_ROOT || join(import.meta.dir, "..", "..", "state"), "loop", "orca-lite-terminals.json");
 
 export function orcaLite(o: OrcaLiteOptions = {}): Backend {
-  const keep = o.keep ?? defaultKeep(), now = o.now ?? (() => Math.floor(Date.now() / 1000));
+  const keep = o.keep ?? defaultKeep(), now = o.now ?? (() => Math.floor(Date.now() / 1000)), ro = o.readOnly === true;
   let runner = o.orca ?? null;
   const run = (op: string, args: string[]): Promise<Out> => (runner ??= shell()).run(op, args);
 
@@ -125,7 +126,7 @@ export function orcaLite(o: OrcaLiteOptions = {}): Backend {
     if (!k) return null;
     const row = rowOf(k, await panes());
     if (!row) return null;
-    if (row.handle !== k.handle || (!k.pane && row.pane)) {
+    if (!ro && (row.handle !== k.handle || (!k.pane && row.pane))) {
       await edit((ks) => { const e = ks.find((x) => x.id === id); if (e) { e.handle = row.handle; e.pane = row.pane || e.pane; } });
     }
     return { k: { ...k, handle: row.handle, pane: row.pane || k.pane }, row };
@@ -133,7 +134,10 @@ export function orcaLite(o: OrcaLiteOptions = {}): Backend {
   const terminalOf = (k: Kept): Terminal =>
     ({ id: k.id, cwd: k.cwd, label: k.label, group: null, parent: k.parent, gen: k.gen, created_at: k.created_at });
 
+  const readOnly = () => fail("failed", "orca-lite: this backend is read-only here (only the loop writes the facts file)");
+
   async function create(req: Request<"terminal.create">): Promise<Answer<"terminal.create">> {
+    if (ro) return readOnly();
     const cmd = envCommand(req.env);
     if (cmd === null) return fail("bad_request", "orca-lite: an env value holds a control character");
     const cwd = resolve(req.cwd);
@@ -157,15 +161,16 @@ export function orcaLite(o: OrcaLiteOptions = {}): Backend {
   }
 
   async function list(): Promise<Answer<"terminal.list">> {
-    const rows = await panes(), kept = read(), live: Kept[] = [];
+    // An entry made at or after the panes read may be a tab the read missed: never dropped by this list.
+    const asOf = now(), rows = await panes(), kept = read(), live: Kept[] = [];
     for (const k of kept) {
       const row = rowOf(k, rows);
       if (row) live.push({ ...k, handle: row.handle, pane: row.pane || k.pane });
     }
     const changed = live.length !== kept.length || live.some((k, i) => k.handle !== kept[i]?.handle || k.pane !== kept[i]?.pane);
-    if (changed) {
+    if (changed && !ro) {
       // Only what this list saw: an entry another call added meanwhile is kept.
-      const gone = new Set(kept.filter((k) => !live.some((x) => x.id === k.id)).map((k) => k.id));
+      const gone = new Set(kept.filter((k) => k.created_at < asOf && !live.some((x) => x.id === k.id)).map((k) => k.id));
       await edit((ks) => {
         for (let i = ks.length - 1; i >= 0; i--) {
           const e = ks[i]!, l = live.find((x) => x.id === e.id);
@@ -178,6 +183,7 @@ export function orcaLite(o: OrcaLiteOptions = {}): Backend {
   }
 
   async function close(id: string): Promise<Answer<"terminal.close">> {
+    if (ro) return readOnly();
     if (!read().some((x) => x.id === id)) return okAnswer("terminal.close", { closed: false });
     const got = await resolveId(id);
     if (got) {
