@@ -245,6 +245,14 @@ board "$LBL" > "$TMP/big.json" 2>"$TMP/big.err" || true
 jt "try it: a live squad carries its page"     "$TMP/big.json" '.squads[] | select(.topic=="big") | .try_it.name == "big-try-it.md" and (.try_it.markdown | contains("see it.")) and .try_it.mtime > 0'
 jt "try it: an archived squad carries its page" "$TMP/big.json" '.archived[] | select(.topic=="big") | .try_it.markdown | contains("archived")'
 jt "try it: a squad without a page has null"   "$TMP/big.json" '[.squads[] | select(.topic!="big") | .try_it] | all(. == null)'
+# archive-leftovers U2: an archived squad's kept worktree stays in sight: `archived[].leftovers` and the text board's line.
+printf '{"topic":"big","closed_at":"2026-10-01T00:00:00Z","units":[],"leftovers":[{"wt":"wt-arch","path":"/tmp/wt-arch","branch":"br-arch","n_files":1,"unpushed":2,"reason":"kept: 1 uncommitted, 2 unpushed","unit":"u1"}]}' > "$DS_STATE_ROOT/$LBL/archive/big-1.json"
+board "$LBL" > "$TMP/big.json" 2>"$TMP/big.err" || true
+jt "archived leftovers: board.json carries the record" "$TMP/big.json" '.archived[] | select(.topic=="big") | .leftovers | length == 1 and .[0].path=="/tmp/wt-arch" and .[0].branch=="br-arch" and .[0].unpushed==2'
+jt "archived leftovers: a squad with none has []"      "$TMP/big.json" '[.archived[] | select(.topic!="big") | .leftovers] | all(. == [])'
+BIGT="$(tb "$LBL" 2>/dev/null)"
+eq "archived leftovers: text board names the squad"   "$(printf '%s' "$BIGT" | grep -cF -- 'ARCHIVED big')" "1"
+eq "archived leftovers: text board line"              "$(printf '%s' "$BIGT" | grep -cF -- '⚑ /tmp/wt-arch  (br-arch, 1 uncommitted, 2 unpushed)')" "1"
 rm -rf "$SD/big.json" "$SD/big-alpha-plan.md" "$SD/big-try-it.md" "$DS_STATE_ROOT/$LBL/archive"
 
 # A suspended squad: its question is NOT counted and NOT in the inbox; it sorts after running.

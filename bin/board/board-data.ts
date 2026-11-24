@@ -1822,16 +1822,19 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
     })),
     // Kept worktrees (close-role couldn't remove one without losing work): path, branch, dirty
     // files, why it was kept, what it waits on. The sweep removes them when provably safe.
-    leftovers: arr(st.leftovers).map((l) => ({
-      wt: l?.wt ?? null, path: l?.path ?? null, branch: l?.branch ?? null,
-      n_files: l?.n_files ?? 0, files: arr(l?.files).map(String), unpushed: l?.unpushed ?? 0,
-      reason: l?.reason ?? null, waits_on: l?.waits_on ?? null, unit: l?.unit ?? null,
-      age_min: ageMin(l?.recorded_at),
-    })),
+    leftovers: leftoversOf(st),
   };
   flowUnitsOf.set(out, flowUnits.sort((a, b) => a.order - b.order).map(({ order, ...f }) => f));
   return out;
 }
+
+// Kept worktrees of a squad's state (live or archived): path, branch, dirty files, why it was kept, what it waits on.
+const leftoversOf = (st: any) => arr(st.leftovers).map((l: any) => ({
+  wt: l?.wt ?? null, path: l?.path ?? null, branch: l?.branch ?? null,
+  n_files: l?.n_files ?? 0, files: arr(l?.files).map(String), unpushed: l?.unpushed ?? 0,
+  reason: l?.reason ?? null, waits_on: l?.waits_on ?? null, unit: l?.unit ?? null,
+  age_min: ageMin(l?.recorded_at),
+}));
 
 // The open units squad() handed the Flow, per squad object (kept off the squad's JSON).
 const flowUnitsOf = new WeakMap<object, FlowUnit[]>();
@@ -2052,6 +2055,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       prs: squadPrs(db, l, st, repoSlug(db, l, String(st.repo ?? ""))), plans: plans(db, l, `${l}/archive/${t}`),
       try_it: tryIt(db, l, `${l}/archive/${t}`),
       lavish: lavish(db, null, l, t),
+      leftovers: leftoversOf(st),
     };
   })) : [];
 
@@ -2480,20 +2484,28 @@ export function renderText(b: Board): string {
         : `      ? ${cell}  (${u.status})`));
       if (u.status !== "done") for (const d of waits) o.push(`        waits on ${d.ref} (${d.status})`);
     }
-    if ((s.leftovers ?? []).length) {
-      o.push(`   LEFTOVERS`);
-      for (const l of (s.leftovers ?? [])) {
-        const la = l.age_min;
-        const lag = la == null || la < 0 ? "?" : la >= 60 ? `${Math.floor(la / 60)}h` : `${la}m`;
-        o.push(`      ⚑ ${l.path}  (${l.branch ?? "?"}, ${l.n_files} uncommitted${l.unpushed ? `, ${l.unpushed} unpushed` : ""}) — ${l.reason ?? "?"}; waits on ${l.waits_on ?? "?"} · ${lag}`);
-      }
-    }
+    leftoverText(o, s.leftovers);
     const ut = (s as any).unit_tokens;
     if (ut?.spent) o.push(`      spent ≈${compact(ut.spent)} over ${ut.units} units (7 days)`);
     if ((s as any).spent_since) o.push(`      ${sinceLine((s as any).spent_since)}`);
   }
   if (!b.squads.length) o.push("  (no squads)");
+  // archive-leftovers U2: an archived squad still holding kept worktrees stays in sight.
+  for (const a of (b.archived ?? []).filter((x: any) => (x.leftovers ?? []).length)) {
+    o.push(`  ARCHIVED ${a.topic}${a.closed_at ? ` (closed ${String(a.closed_at).slice(0, 10)})` : ""}`);
+    leftoverText(o, a.leftovers);
+  }
   return o.join("\n") + "\n";
+}
+
+function leftoverText(o: string[], leftovers: any[] | undefined): void {
+  if (!(leftovers ?? []).length) return;
+  o.push(`   LEFTOVERS`);
+  for (const l of leftovers!) {
+    const la = l.age_min;
+    const lag = la == null || la < 0 ? "?" : la >= 60 ? `${Math.floor(la / 60)}h` : `${la}m`;
+    o.push(`      ⚑ ${l.path}  (${l.branch ?? "?"}, ${l.n_files} uncommitted${l.unpushed ? `, ${l.unpushed} unpushed` : ""}) — ${l.reason ?? "?"}; waits on ${l.waits_on ?? "?"} · ${lag}`);
+  }
 }
 
 // --- the server's other reads (board-server.ts GET routes) ----------------------------------------

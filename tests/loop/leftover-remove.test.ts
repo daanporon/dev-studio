@@ -12,6 +12,7 @@ import { importJson } from "../../bin/loop/db/import-json.ts";
 import { DIRS, load, type Action, type Reconciler } from "../../bin/loop/core/plugins.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
+import lifecycle from "../../bin/loop/reconcilers/lifecycle.ts";
 import { actionBlock, gateBlock } from "../../bin/loop/pause/pause.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -28,7 +29,7 @@ const tmp = () => { const d = mkdtempSync(join(tmpdir(), "zzleftover-")); temps.
 const fulfillers = await load<Fulfiller & Reconciler>(DIRS.fulfil);
 
 // Squad t1 of project fx: a Lead and Builder u1 (wtb, unit done), with one leftover.
-function rig(wt: string, path: string) {
+function rig(wt: string, path: string, opts: { closed?: boolean; lifecycle?: boolean } = {}) {
   const t = tmp(), S = join(t, "state");
   for (const f of ["bin", "conventions", "roles", "AGENTS.md"]) symlinkSync(join(REPO, f), join(t, f));
   mkdirSync(join(S, "fx", "squads"), { recursive: true });
@@ -42,6 +43,15 @@ function rig(wt: string, path: string) {
   stores.push(s);
   importJson(s);
   writeFileSync(join(S, ".loop-migrated"), "");
+  // A closed squad: its row reads closed and its state file lives in archive/ (what fulfil/squad.ts archive leaves).
+  const archived = join(S, "fx", "archive", "t1-20261120-101500.json");
+  if (opts.closed) {
+    mkdirSync(join(S, "fx", "archive"), { recursive: true });
+    const live = join(S, "fx", "squads", "t1.json"), doc = JSON.parse(readFileSync(live, "utf8"));
+    writeFileSync(archived, JSON.stringify({ ...doc, status: "closed" }));
+    rmSync(live);
+    s.db.run("UPDATE squads SET status = 'closed' WHERE project = 'fx' AND topic = 't1'");
+  }
   const fake = join(t, "fakeb");
   writeFileSync(fake, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$FAKE_LOG"\ncase "$1" in current) echo wt-elsewhere ;; ps) echo '{"result":{"worktrees":[]}}' ;; *) echo '{}' ;; esac\n`);
   chmodSync(fake, 0o755);
@@ -49,13 +59,14 @@ function rig(wt: string, path: string) {
   const orca = new FakeOrca(), queue: Action[] = [];
   const emit: Reconciler = { name: "emit", run: () => queue.splice(0) };
   const act = new LoopActuator({ orca, fulfillers: fulfillers.filter((f) => f.kinds) });
-  const loop = new Loop(s, { observers: [], reconcilers: [...fulfillers, emit] }, act, { projects: () => ["fx"] });
+  const loop = new Loop(s, { observers: [], reconcilers: [...fulfillers, emit, ...(opts.lifecycle ? [lifecycle] : [])] }, act, { projects: () => ["fx"] });
   loop.boot(T);
   let at = T;
   const action: Action = { project: "fx", squad: "t1", subject: wt, kind: "worktree.remove", episode: `leftover:${wt}@1`,
     payload: { label: "fx", topic: "t1", wt, path, branch: "work", unit: "u1", merged: true } };
   const send = async () => { queue.push({ ...action }); at += 1; await loop.tick(at); await act.drain(); };
-  return { s, orca, send, action };
+  const tick = async () => { at += 1; await loop.tick(at); await act.drain(); };
+  return { s, orca, send, tick, action, archived, live: join(S, "fx", "squads", "t1.json") };
 }
 const events = (s: Store, kind: string) => (s.db.query("SELECT payload FROM events WHERE kind = ? ORDER BY id").all(kind) as { payload: string }[]).map((e) => JSON.parse(e.payload));
 const results = (s: Store) => events(s, "action_done").filter((e) => e.kind === "worktree.remove").map((e) => e.result);
@@ -268,5 +279,49 @@ describe("leftover rule (archive-leftovers U1)", () => {
     expect(readFileSync(copy, "utf8")).toBe("<p>page</p>");
     expect(events(r.s, "pages_rescued").map((e) => e.count)).toEqual([1]);
     expect(existsSync(g.wt)).toBe(true);   // fake Orca's worktree-rm leaves the folder: the copy came first
+  });
+});
+
+describe("archived squads' leftovers (archive-leftovers U2)", () => {
+  const inFile = (f: string) => (JSON.parse(readFileSync(f, "utf8")).leftovers ?? []) as Row[];
+
+  test("a closed squad's safe leftover is removed and dropped from its archived file and row", async () => {
+    const g = repos(), r = rig("wtx", g.wt, { closed: true, lifecycle: true });
+    expect(inFile(r.archived)).toHaveLength(1);
+    await r.tick();
+    expect(r.orca.of("worktree-rm").map((c) => c.args)).toEqual([["id:wtx", "force"]]);
+    expect(results(r.s)).toEqual(["removed: all on main"]);
+    expect(inFile(r.archived)).toEqual([]);
+    rmSync(g.wt, { recursive: true, force: true }); // the fake Orca leaves the folder: the real one removes it
+    await r.tick(); // the folder is gone: the reconciler drops the row's record
+    expect(leftovers(r.s)).toEqual([]);
+  });
+
+  test("a closed squad's leftover with work stays, in the file and the row", async () => {
+    const g = repos(), r = rig("wtx", g.wt, { closed: true, lifecycle: true });
+    g.commit({ "a.txt": "base\nmine\n" });
+    await r.tick();
+    expect(r.orca.of("worktree-rm")).toEqual([]);
+    expect(results(r.s)).toEqual(["left: 1 commit, 1 file not on main"]);
+    expect(inFile(r.archived)).toHaveLength(1);
+    expect(leftovers(r.s)).toHaveLength(1);
+  });
+
+  test("a gone folder's record is dropped for an archived squad, row and file", async () => {
+    const g = repos(), r = rig("wtx", join(g.wt, "..", "nowhere"), { closed: true, lifecycle: true });
+    await r.tick();
+    expect(r.orca.of("worktree-rm")).toEqual([]);
+    expect(results(r.s)).toEqual(["dropped: folder gone"]);
+    expect(inFile(r.archived)).toEqual([]);
+    expect(leftovers(r.s)).toEqual([]);
+  });
+
+  test("a gone folder's record is dropped for a live squad, row and file", async () => {
+    const g = repos(), r = rig("wtx", join(g.wt, "..", "nowhere"), { lifecycle: true });
+    expect(inFile(r.live)).toHaveLength(1);
+    await r.tick();
+    expect(results(r.s)).toEqual(["dropped: folder gone"]);
+    expect(inFile(r.live)).toEqual([]);
+    expect(leftovers(r.s)).toEqual([]);
   });
 });

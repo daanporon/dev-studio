@@ -254,6 +254,30 @@ const pullFirst = (store: Store, project: string, pr: Row): string => {
   return c?.state === "done" && c.result === "updated" ? " The loop merged the base into this branch on GitHub: git pull --no-rebase before you push." : "";
 };
 
+// 1d leftovers: kept worktrees of a squad (live or closed). A record whose tree is gone is dropped from the squad's row and,
+// through a `gone` removal, from its state file (live or archived); a tree still there goes through the removal check.
+function leftoverStep(ctx: TickCtx, s: Row, nwo: string | null, out: Action[]): void {
+  const { store, project, now: t } = ctx, topic = String(s.topic);
+  const retry = Math.floor(t / envInt("DS_LOOP_LIFECYCLE_RETRY_S", 600));
+  const member = (wt: unknown): Row | null => (wt ? store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? AND COALESCE(status, '') != 'gone'").get(project, topic, String(wt)) as Row | null : null);
+  const doc = JSON.parse(String(s.doc)) as Row, left = Array.isArray(doc.leftovers) ? (doc.leftovers as Row[]) : [];
+  const keep = left.filter((l) => paused(store, { project, squad: topic, member: String(l.wt) }) || !(member(l.wt) || !existsSync(String(l.path ?? ""))));
+  if (keep.length !== left.length) {
+    const next = JSON.stringify({ ...doc, leftovers: keep });
+    fact(store, "squads", Number(s.id), "doc", next, s.doc, "leftover_dropped", { project, squad: topic, payload: { dropped: left.filter((l) => !keep.includes(l)).map((l) => l.wt) } });
+    // The state file keeps the record until the removal's drop-leftover writes it out (the folder is gone: nothing to check).
+    for (const l of left) if (!keep.includes(l) && !member(l.wt) && !existsSync(String(l.path ?? "")))
+      out.push({ project, squad: topic, subject: String(l.wt), kind: "worktree.remove", episode: `leftover-gone:${l.wt}@${retry}`,
+        payload: { label: project, topic, wt: l.wt, path: l.path, branch: String(l.branch ?? ""), unit: l.unit ?? null, merged: false, gone: true } });
+  }
+  for (const l of keep) {
+    if (paused(store, { project, squad: topic, member: String(l.wt) })) continue;
+    const branch = String(l.branch ?? ""), merged = !!branch && !!nwo && !!store.db.query("SELECT 1 FROM observed_prs WHERE project = ? AND repo = ? AND head = ? AND state = 'MERGED'").get(project, nwo, branch);
+    out.push({ project, squad: topic, subject: String(l.wt), kind: "worktree.remove", episode: `leftover:${l.wt}@${retry}`,
+      payload: { label: project, topic, wt: l.wt, path: l.path, branch, unit: l.unit ?? null, merged } });
+  }
+}
+
 export function run(ctx: TickCtx): Action[] {
   const { store, project, now: t } = ctx, out: Action[] = cancellationActions(ctx);
   const retry = Math.floor(t / envInt("DS_LOOP_LIFECYCLE_RETRY_S", 600));
@@ -741,19 +765,8 @@ export function run(ctx: TickCtx): Action[] {
       if (w.status === "sent") store.upsert("episodes", { project, subject: String(e.subject), kind: "lifecycle:qclose" }, { state: "sent", ended_at: t, observed_at: t });
     }
 
-    // 1d leftovers
-    const doc = JSON.parse(String(s.doc)) as Row, left = Array.isArray(doc.leftovers) ? (doc.leftovers as Row[]) : [];
-    const keep = left.filter((l) => paused(store, { project, squad: topic, member: String(l.wt) }) || !(member(l.wt) || !existsSync(String(l.path ?? ""))));
-    if (keep.length !== left.length) {
-      const next = JSON.stringify({ ...doc, leftovers: keep });
-      fact(store, "squads", Number(s.id), "doc", next, s.doc, "leftover_dropped", { project, squad: topic, payload: { dropped: left.filter((l) => !keep.includes(l)).map((l) => l.wt) } });
-    }
-    for (const l of keep) {
-      if (paused(store, { project, squad: topic, member: String(l.wt) })) continue;
-      const branch = String(l.branch ?? ""), merged = !!branch && !!nwo && !!store.db.query("SELECT 1 FROM observed_prs WHERE project = ? AND repo = ? AND head = ? AND state = 'MERGED'").get(project, nwo, branch);
-      out.push({ project, squad: topic, subject: String(l.wt), kind: "worktree.remove", episode: `leftover:${l.wt}@${retry}`,
-        payload: { label: project, topic, wt: l.wt, path: l.path, branch, unit: l.unit ?? null, merged } });
-    }
+    // 1d leftovers (a closed squad's too: see the end of run())
+    leftoverStep(ctx, s, nwo, out);
 
     // 10 all done, parked (only held work left), or a retest due (U238): one rule for the units (squad-finish.ts via retest.ts, the same as
     // wake.ts, the board and the Lead tick). A held unit is open work: a held-only squad is not all done.
@@ -785,6 +798,11 @@ export function run(ctx: TickCtx): Action[] {
     out.push(...wake(ctx, lead, text, "all-done", ep).actions);
   }
   out.push(...updateQueue(store, project, t, updates, onTrack));
+  // archive-leftovers U2: a closed squad's leftovers are checked too (only this step reads closed squads).
+  for (const s of store.db.query("SELECT * FROM squads WHERE project = ? AND doc IS NOT NULL AND status = 'closed' AND doc LIKE '%\"leftovers\"%' ORDER BY topic").all(project) as Row[]) {
+    const nwo = (store.get("config", { project, file: "github", key: `repo:${s.repo}` })?.value as string) || null;
+    leftoverStep(ctx, s, nwo, out);
+  }
   return out;
 }
 
