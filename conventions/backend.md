@@ -237,9 +237,10 @@ runs a squad on it through `projectHerdr` (U16c, below), on a trial project only
   `squad/contracts.ts` (the actuator and the contract observer) and `bin/lib/contract-roles.ts` (the role
   scripts) make: its server is the unit `ds-herdr-<project>` (session `ds-herdr-<project>`), its files in
   `<state root>/<project>/loop/herdr/` (or a short folder under the runtime dir when that socket path
-  would pass 100 bytes). Only a `terminal.create` starts the server; with none answering a list is empty,
-  a close closes nothing and any other op on a terminal is `not_found`, so the observer reads the members
-  gone and the loop starts them again. A server a previous loop process started is used as it is, and
+  would pass 100 bytes). Only a `terminal.create` starts the server; with none listening (no socket, or
+  a refused connect) a list is empty, a close closes nothing and any other op on a terminal is
+  `not_found`, so the observer reads the members gone and the loop starts them again. A server that
+  listens but is slow or failing keeps its `failed` answers, so the observer writes nothing. A server a previous loop process started is used as it is, and
   its protocol is checked again after it was gone. A create with no binary fails naming the install command.
 - `bun bin/backend/herdr.ts states <state root> <project>` prints what herdr says each of a project's terminals
   is doing (read only, no server started), the trial's sampler.
