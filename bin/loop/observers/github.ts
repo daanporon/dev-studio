@@ -526,7 +526,7 @@ export function targets(store: Store, at: number, resolve = repoOf): Target {
 }
 
 // The issues this host filed that can still change: filed, or fixed in a PR the checkout does not hold yet.
-// None while `feedback_repo` is unset, so the query then carries no issue field.
+// None while Feedback is off, so the query then carries no issue field.
 export function feedbackIssues(store: Store): { repo: Nwo; issues: number[] } | null {
   const repo = feedbackRepo(store) as Nwo | null;
   if (!repo) return null;

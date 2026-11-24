@@ -21,7 +21,7 @@ import { accountRows } from "../../bin/loop/db/import-json.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const T = 1_900_000_000;
-const ENV = ["PATH", "DS_LEAK_WORDS", "STUB_ANSWER", "STUB_ISSUES", "STUB_PROMPT", "STUB_CALLS"] as const;
+const ENV = ["PATH", "DS_LEAK_WORDS", "STUB_ANSWER", "STUB_ISSUES", "STUB_PROMPT", "STUB_CALLS", "DS_FEEDBACK_ORIGIN"] as const;
 const saved: Record<string, string | undefined> = {};
 const temps: string[] = [], stores: Store[] = [];
 beforeEach(() => { for (const k of ENV) saved[k] = process.env[k]; });
@@ -40,7 +40,9 @@ function fixture(opts: { words?: string | null } = {}) {
   const s = open(state); stores.push(s);
   importConfig(s, state, conv);
   for (const r of accountRows(state)) s.upsert(r.table, r.key, r.set);
-  s.upsert("config", { project: "", file: "limits.conf", key: "feedback_repo" }, { value: "example-org/dev-studio", observed_at: T });
+  // Feedback on, the repo from a stub origin (U8): no feedback_repo override.
+  process.env.DS_FEEDBACK_ORIGIN = "https://github.com/example-org/dev-studio.git";
+  s.upsert("config", { project: "", file: "limits.conf", key: "feedback" }, { value: "on", observed_at: T });
 
   const words = join(d, "leak-words.txt");
   if (opts.words !== null) writeFileSync(words, opts.words ?? "zebraquux\n");
@@ -191,12 +193,12 @@ test("no word list: one Studio card and no pass; the card clears once the list h
   expect(alertGone(f.s, "realp", { id }, T + 1)).toBe("the leak word list is in place");
 });
 
-test("feedback_repo '-' offers nothing; a pass in flight blocks the next; a failed pass waits", () => {
+test("Feedback off offers nothing; a pass in flight blocks the next; a failed pass waits", () => {
   const f = fixture();
   f.note("a snag", T - 10);
-  f.s.upsert("config", { project: "", file: "limits.conf", key: "feedback_repo" }, { value: "-", observed_at: T });
+  f.s.upsert("config", { project: "", file: "limits.conf", key: "feedback" }, { value: "off", observed_at: T });
   expect(reconciler.run(f.ctx())).toEqual([]);
-  f.s.upsert("config", { project: "", file: "limits.conf", key: "feedback_repo" }, { value: "example-org/dev-studio", observed_at: T });
+  f.s.upsert("config", { project: "", file: "limits.conf", key: "feedback" }, { value: "on", observed_at: T });
   const claim = { project: "", subject: "feedback.draft", kind: "action:feedback.draft" };
   f.s.upsert("episodes", claim, { state: "running", started_at: T, ended_at: null, episode_key: "x", source: "loop", observed_at: T });
   expect(drafts(reconciler.run(f.ctx()))).toEqual([]);
@@ -207,10 +209,10 @@ test("feedback_repo '-' offers nothing; a pass in flight blocks the next; a fail
   expect(later[0].episode).toEndWith(`|${T}`);
 });
 
-test("project row only: the reconciler offers a pass; with no word list, the card and no pass", () => {
+test("a project row switches it on: the reconciler offers a pass; with no word list, the card and no pass", () => {
   const f = fixture();
-  f.s.db.query("DELETE FROM config WHERE project = '' AND key = 'feedback_repo'").run();
-  f.s.upsert("config", { project: "realp", file: "limits.conf", key: "feedback_repo" }, { value: "example-org/dev-studio", observed_at: T });
+  f.s.db.query("DELETE FROM config WHERE project = '' AND key = 'feedback'").run();
+  f.s.upsert("config", { project: "realp", file: "limits.conf", key: "feedback" }, { value: "on", observed_at: T });
   f.note("a snag", T - 10);
   expect(drafts(reconciler.run(f.ctx()))).toHaveLength(1);
   rmSync(process.env.DS_LEAK_WORDS!);

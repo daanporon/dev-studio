@@ -8,13 +8,13 @@ import { join } from "node:path";
 import { LoopActuator } from "../../bin/loop/core/actuator.ts";
 import { FakeBackend as FakeOrca } from "../../bin/loop/fakes/orca.ts";
 import { feedback } from "../../bin/loop/fulfil/feedback.ts";
-import { feedbackRepo, finalText } from "../../bin/loop/feedback/post.ts";
+import { feedbackOn, feedbackRepo, finalText } from "../../bin/loop/feedback/post.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const T = 1_800_000_000;
-const ENV = ["DS_GH", "DS_LEAK_WORDS", "DS_LIMIT_FEEDBACK_REPO", "STUB_DIR", "DS_STATE_ROOT"];
+const ENV = ["DS_GH", "DS_LEAK_WORDS", "DS_LIMIT_FEEDBACK_REPO", "DS_LIMIT_FEEDBACK", "DS_FEEDBACK_ORIGIN", "STUB_DIR", "DS_STATE_ROOT"];
 const saved: Record<string, string | undefined> = {};
 const base = mkdtempSync(join(process.env.XDG_RUNTIME_DIR || tmpdir(), "zzfb-"));
 const temps: string[] = [], stores: Store[] = [];
@@ -64,7 +64,9 @@ beforeEach(() => {
   process.env.STUB_DIR = stub;
   process.env.DS_GH = join(stub, "gh");
   process.env.DS_LEAK_WORDS = join(stub, "words");
+  process.env.DS_LIMIT_FEEDBACK = "on";
   process.env.DS_LIMIT_FEEDBACK_REPO = "o/r";
+  delete process.env.DS_FEEDBACK_ORIGIN;
 });
 afterEach(() => {
   for (const s of stores.splice(0)) { try { s.close(); } catch { /* closed */ } }
@@ -193,22 +195,47 @@ describe("feedback-post", () => {
     expect(d(s, id).leak).toBe("blocked");
   });
 
-  test("feedback_repo `-` refuses and leaves the draft in review", async () => {
+  test("Feedback off refuses and leaves the draft in review", async () => {
     const { s, tick } = rig();
-    process.env.DS_LIMIT_FEEDBACK_REPO = "-";
+    process.env.DS_LIMIT_FEEDBACK = "off";
     const id = draft(s);
     const req = file(s, "feedback-post", { draft: id });
     await tick();
-    expect(request(s, req)).toMatchObject({ ok: false, error: expect.stringContaining("feedback_repo is -") });
+    expect(request(s, req)).toMatchObject({ ok: false, error: expect.stringContaining("Feedback is off") });
     expect(calls()).toEqual([]);
     expect(d(s, id).state).toBe("review");
   });
 
-  test("feedback_repo: the env var, else the default row, else a project row", () => {
+  test("feedbackOn: off by default; the env var, else the row written last from any project", () => {
+    const { s } = rig();
+    delete process.env.DS_LIMIT_FEEDBACK;
+    process.env.DS_FEEDBACK_ORIGIN = "https://github.com/o/n.git";
+    const row = (project: string, value: string, at: number) => s.upsert("config", { project, file: "limits.conf", key: "feedback" }, { value, observed_at: at });
+    expect(feedbackOn(s)).toBe(false);
+    expect(feedbackRepo(s)).toBeNull();
+    row("", "off", T);
+    row("a", "on", T + 10);
+    expect(feedbackOn(s)).toBe(true);
+    row("b", "off", T + 20);
+    expect(feedbackOn(s)).toBe(false);
+    expect(feedbackRepo(s)).toBeNull();
+    row("b", "on", T + 30);
+    expect(feedbackOn(s)).toBe(true);
+    process.env.DS_LIMIT_FEEDBACK = "off";
+    expect(feedbackOn(s)).toBe(false);
+  });
+
+  test("feedback_repo: on takes the checkout's origin, an override beats it, a non-GitHub origin gives null", () => {
     const { s } = rig();
     delete process.env.DS_LIMIT_FEEDBACK_REPO;
     const row = (project: string, value: string) => s.upsert("config", { project, file: "limits.conf", key: "feedback_repo" }, { value, observed_at: T });
+    process.env.DS_FEEDBACK_ORIGIN = "https://github.com/o/n.git";
+    expect(feedbackRepo(s)).toBe("o/n");
+    process.env.DS_FEEDBACK_ORIGIN = "git@github.com:o/n2.git";
+    expect(feedbackRepo(s)).toBe("o/n2");
+    process.env.DS_FEEDBACK_ORIGIN = "https://gitlab.com/o/n.git";
     expect(feedbackRepo(s)).toBeNull();
+    process.env.DS_FEEDBACK_ORIGIN = "https://github.com/o/n.git";
     row("", "-");
     row("fx", "own/proj");
     expect(feedbackRepo(s)).toBe("own/proj");

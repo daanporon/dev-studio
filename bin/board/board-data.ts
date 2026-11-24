@@ -50,7 +50,7 @@ import { settle, type Finish } from "../loop/squad/squad-finish.ts";
 import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
 import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
-import { feedbackRepo } from "../loop/feedback/post.ts";
+import { feedbackOn, feedbackRepo } from "../loop/feedback/post.ts";
 import { BACKEND_NAMES, DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
@@ -2324,21 +2324,22 @@ export function brakeText(br: any): string | null {
 // the drafts waiting for review (`blocked` of them with a leak hit) and the notes by state. Host-wide, so a
 // project board shows the same numbers; an older loop.db without the tables reads as none.
 export function feedbackSummary(db: Db | null) {
-  const none = { on: false, repo: null as string | null, review: 0, blocked: 0, notes: 0, new: 0, drafted: 0, filed: 0, fixed: 0, closed: 0, dismissed: 0 };
+  const none = { on: false, switch: false, repo: null as string | null, review: 0, blocked: 0, notes: 0, new: 0, drafted: 0, filed: 0, fixed: 0, closed: 0, dismissed: 0 };
   if (!db) return none;
   try {
-    const repo = feedbackRepo(db.s);
+    const repo = feedbackRepo(db.s), sw = feedbackOn(db.s);
     const d = db.one("SELECT COUNT(*) AS n, COALESCE(SUM(leak = 'blocked'), 0) AS b FROM feedback_drafts WHERE state IN ('review', 'posting')");
     const by: Record<string, number> = {};
     for (const r of db.all("SELECT state, COUNT(*) AS n FROM feedback_notes GROUP BY state")) by[String(r.state)] = Number(r.n);
     const sum = Object.values(by).reduce((a, b) => a + b, 0);
-    return { on: repo != null, repo, review: Number(d?.n ?? 0), blocked: Number(d?.b ?? 0), notes: sum, new: by.new ?? 0, drafted: by.drafted ?? 0,
+    return { on: repo != null, switch: sw, repo, review: Number(d?.n ?? 0), blocked: Number(d?.b ?? 0), notes: sum, new: by.new ?? 0, drafted: by.drafted ?? 0,
       filed: by.filed ?? 0, fixed: by.fixed ?? 0, closed: by.closed ?? 0, dismissed: by.dismissed ?? 0 };
   } catch { return none; }
 }
 export function feedbackLine(f: ReturnType<typeof feedbackSummary> | undefined): string | null {
   if (!f || (!f.on && f.notes === 0)) return null;
-  const head = f.on ? `${f.review} draft${f.review === 1 ? "" : "s"} to review${f.blocked ? ` (${f.blocked} blocked by the leak check)` : ""}` : "off (feedback_repo is -)";
+  const head = f.on ? `${f.review} draft${f.review === 1 ? "" : "s"} to review${f.blocked ? ` (${f.blocked} blocked by the leak check)` : ""}`
+    : f.switch ? "on, but this checkout's origin is not a GitHub repo (set feedback_repo with ds config)" : "off (turn Feedback on in Settings → Limits)";
   return `FEEDBACK  ${head} · notes: ${f.notes} (${f.new} new, ${f.drafted} drafted, ${f.filed} filed, ${f.fixed} fixed, ${f.closed} closed, ${f.dismissed} dismissed)`;
 }
 
@@ -2508,7 +2509,7 @@ export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] 
   { name: "Board & machine", keys: ["board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
   { name: "Morning brief", prefixes: ["briefing_"] },
   { name: "Host tidy", keys: ["host_tidy"], prefixes: ["cleanup_", "disk_"] },
-  { name: "Feedback", prefixes: ["feedback_"] },
+  { name: "Feedback", keys: ["feedback"], prefixes: ["feedback_"] },
 ];
 export function limitGroup(key: string): string {
   return (LIMIT_GROUPS.find((g) => g.keys?.includes(key)) ?? LIMIT_GROUPS.find((g) => g.prefixes?.some((p) => key.startsWith(p))))?.name ?? "Other";
@@ -2530,7 +2531,7 @@ export function lastChange(db: Db, project: string, file: string, key: string) {
 // of conventions/limits.conf with its value and source (env | override | default | unset).
 // Limits the board shows as read-only text: globs and a command run in worktrees are edited in
 // through `ds config import` (docs/settings.md), never from a web form. `reset` of an override stays allowed.
-export const FILE_ONLY_LIMITS = new Set(["cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths"]);
+export const FILE_ONLY_LIMITS = new Set(["cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths", "feedback_repo"]);
 export function limitsJson(project: string, root = stateRoot()) {
   return withDb((db) => {
     const limits = db.all("SELECT key, value, comment FROM config WHERE project = '' AND file = 'limits.conf' ORDER BY rowid").map((d) => {
@@ -2541,9 +2542,9 @@ export function limitsJson(project: string, root = stateRoot()) {
       const first = (v: unknown) => fileOnly ? String(v ?? "").trim() : String(v ?? "").trim().split(/\s+/)[0] ?? "";
       const [value, source] = process.env[env] ? [process.env[env]!, "env"]
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
-      const hint = key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
+      const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
-      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : key === "default_backend" ? [...BACKEND_NAMES] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
+      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" ? ["on", "off"] : key === "default_backend" ? [...BACKEND_NAMES] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
     const used = new Set(limits.map((l) => l.group));
     return { project, groups: [...LIMIT_GROUPS.map((g) => g.name).filter((n) => used.has(n)), ...(used.has("Other") ? ["Other"] : [])], limits };

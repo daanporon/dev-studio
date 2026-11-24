@@ -138,6 +138,7 @@ export function limitValueProblem(key: string, val: string): string {
   else if (key.startsWith("compact_mode_")) { if (!["compact", "clear", "off"].includes(val)) return `${key} must be compact, clear or off (got '${val}')`; }
   if (key === "auto_merge" && !["off", "squash", "merge", "rebase"].includes(val)) return `${key} must be off, squash, merge or rebase (got '${val}')`;
   if (key === "base_update" && !["merge", "rebase"].includes(val)) return `${key} must be merge or rebase (got '${val}')`;
+  if (key === "feedback" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
   if (key === "builder_host_brake" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
   if (key === "unblock_first" && !["on", "off"].includes(val)) return `${key} must be on or off (got '${val}')`;
   if (key === "default_backend" && !(BACKEND_NAMES as readonly string[]).includes(val)) return `${key} must be ${BACKEND_NAMES.join(", ")} (got '${val}')`;
