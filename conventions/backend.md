@@ -274,7 +274,8 @@ contract backend (U11, "Started" below).
   runbook and record are `docs/backends/trial-tmux.md`; `ds tmux-drill` is its helper (the
   version-change drill and the before/after snapshot). The treehouse trial (U16e: a tmux squad with `worktree_provider
   treehouse`) is `docs/backends/trial-treehouse.md`, with `ds treehouse-drill` (start to first test, pooled
-  against fresh, and the lease check).
+  against fresh, and the lease check). The comparison of the three backends, Treehouse's measured gain and
+  the recommendation for what new squads try next are `docs/backends/trial.md` (U16d).
 
 - **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
   pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
