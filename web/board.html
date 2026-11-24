@@ -1624,7 +1624,10 @@ function LeftoversBox({ s, toast }) {
       const b = await post("api/leftover-remove", { project: s.label, topic: s.topic, wt: l.wt, ...(fp ? { fingerprint: fp } : {}) });
       setSent((o) => ({ ...o, [l.wt]: b.queued ? "queued: runs when the squad resumes" : "removing…" }));
       say(b.queued ? "queued: runs when the squad resumes (#" + b.id + ")" : "removal of " + l.path + " requested (#" + b.id + ")");
-    } catch (e) { setSent((o) => ({ ...o, [l.wt]: "not sent: " + (e.message || e) })); say("not sent: " + (e.message || e)); }
+    } catch (e) {
+      if (e.status === 409) { setSent((o) => ({ ...o, [l.wt]: "removing…" })); return; }   // a press already open: that one runs
+      setSent((o) => ({ ...o, [l.wt]: "not sent: " + (e.message || e) })); say("not sent: " + (e.message || e));
+    }
   };
   return html`<div class="box"><h3>Leftovers <span>kept because they hold work not on main</span></h3>
     ${(s.leftovers || []).map((l) => {

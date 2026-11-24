@@ -94,6 +94,9 @@ function lookFirst(wt: string) {
   writeFileSync(join(wt, "a.txt"), "base\nmine\nmore\n");
   writeFileSync(join(wt, "new.txt"), "new\n");
   writeFileSync(join(wt, ".env"), "K=1\n");
+  mkdirSync(join(wt, "build"));
+  writeFileSync(join(wt, "build", "release.sh"), "echo hi\n");   // untracked, not ignored, in a rebuildable dir's name
+  writeFileSync(join(wt, "CLAUDE.local.md"), "brief\n");          // dev-studio's own: not saved
 }
 
 describe("the board's Remove of a leftover (archive-leftovers U4)", () => {
@@ -115,7 +118,7 @@ describe("the board's Remove of a leftover (archive-leftovers U4)", () => {
     git(fresh, "apply", join(dir, "changes.patch"));
     expect(readFileSync(join(fresh, "a.txt"), "utf8")).toBe("base\nmine\nmore\n");
     const list = Bun.spawnSync(["tar", "-tf", join(dir, "untracked.tar")]).stdout.toString().split("\n").filter(Boolean).sort();
-    expect(list).toEqual([".env", "new.txt"]);
+    expect(list).toEqual([".env", "build/release.sh", "new.txt"]);
     const ev = events(r.s, "leftover_removed");
     expect(ev).toHaveLength(1);
     expect(ev[0]).toMatchObject({ wt: "wtx", by: "board", safe: false, commits: 1, saved: dir });

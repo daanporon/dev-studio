@@ -20,6 +20,7 @@ import { failRequest, finishRequest, requestActions, type Exec, type Fulfiller, 
 import { payloadOf } from "../core/kinds.ts";
 import type { Action } from "../core/plugins.ts";
 import { spawn } from "../io/orca.ts";
+import { OURS } from "../io/wt-probe.ts";
 import { fetchTarget, leftoverCheck, leftoverFingerprint, type LeftoverCheck } from "../io/tidy.ts";
 import { ALLOWED, leftText, note, record, removeLeftover, stray, type Checked, type P } from "./worktree.ts";
 
@@ -36,15 +37,16 @@ function leftoverOf(x: Exec, a: Action, wt: string): { path: string; branch?: st
   } catch { return null; }
 }
 
-// Untracked paths the removal would lose: every untracked file and each ignored one (an ignored folder whole)
-// outside the rebuildable dirs and dev-studio's own files (ALLOWED holds both).
+// Untracked paths the removal would lose: every untracked file but dev-studio's own (OURS, as leftoverCheck
+// counts them), and each ignored one (an ignored folder whole) outside the rebuildable dirs (ALLOWED).
 async function untracked(path: string): Promise<string[] | null> {
   const [plain, ignored] = await Promise.all([
     spawn(["git", "-C", path, "ls-files", "--others", "--exclude-standard", "-z"], {}, 60_000),
     spawn(["git", "-C", path, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], {}, 60_000)]);
   if (plain.code !== 0 || ignored.code !== 0) return null;
   const top = (f: string) => f.includes("/") ? f.replace(/\/.*$/, "/") : f;
-  return [...plain.out.split("\0"), ...ignored.out.split("\0")].filter((f) => f && !ALLOWED.has(top(f)));
+  return [...plain.out.split("\0").filter((f) => f && !OURS.test(`?? ${f}`)),
+    ...ignored.out.split("\0").filter((f) => f && !ALLOWED.has(top(f)))];
 }
 
 // The patch, the tar and the ref; why it failed, or null.
