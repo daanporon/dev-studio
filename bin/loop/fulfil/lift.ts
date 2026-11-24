@@ -2,13 +2,15 @@
 // U107). A limit that should never have counted (a quoted notice) or one the operator knows has
 // passed would otherwise park the account until its until. account-lift.ts liftAccount clears all three
 // things the picker reads; an account with a live credits hold is cleared through credits.ts clearCredits
-// instead (U2). It logs one `account_limit_lifted` event. A new real notice blocks the account again as
+// instead (U2), and one with a live login hold through login.ts clearLogin (claude-login-ended U2). It logs
+// one `account_limit_lifted` event. A new real notice blocks the account again as
 // before.
 import type { Row } from "../core/store.ts";
 import { failRequest, finishRequest, requestActions, type Fulfiller } from "../core/actuator.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
 import { liftAccount } from "../capacity/account-lift.ts";
 import { clearCredits, creditsHold } from "../capacity/credits.ts";
+import { clearLogin, loginHold } from "../capacity/login.ts";
 
 const lift: Fulfiller = {
   name: "lift",
@@ -22,9 +24,11 @@ const lift: Fulfiller = {
     const { agent, account } = p;
     const reqId = (a.payload as { request?: number } | undefined)?.request;
     const by = reqId == null ? "ds" : String((store.db.query("SELECT requested_by FROM requests WHERE id = ?").get(reqId) as Row | null)?.requested_by ?? "ds");
-    // U2: a credits hold is cleared the same way `ds account enable` clears it, so the billing notice
+    // U2: a credits or login hold is cleared the same way `ds account enable` clears it, so the line
     // still on a member's screen does not hold the account again on the next tick.
-    const lifted = creditsHold(store, agent, account, at) !== null ? clearCredits(store, agent, account, by, at) : liftAccount(store, agent, account, at);
+    const credits = creditsHold(store, agent, account, at) !== null ? clearCredits(store, agent, account, by, at) : null;
+    const login = loginHold(store, agent, account, at) !== null ? clearLogin(store, agent, account, by, at) : null;
+    const lifted = credits ?? login ?? liftAccount(store, agent, account, at);
     store.event("account_limit_lifted", { project: a.project || null, payload: { ...lifted, by } });
     finishRequest(store, a, { ok: true, ...lifted }, at);
     return { done: true, result: lifted.episodes + lifted.observed + lifted.members + lifted.files };

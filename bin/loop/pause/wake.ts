@@ -59,6 +59,7 @@ export function pokeAsk(reason: string): string {
     reload: "The poke asked it to re-read its instructions and confirm with ds reload ack.",
     limit: "The poke told it its usage limit had passed.",
     "credits-ok": "The poke told it its account works again.",
+    "login-ok": "The poke told it its account's login works again.",
     held: "The poke told it a held message was waiting.",
     msg: "The poke told it a message was waiting in its ds msg inbox.",
     ready: "The poke told it a unit was ready to start.",

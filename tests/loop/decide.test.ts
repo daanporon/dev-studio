@@ -88,6 +88,7 @@ describe("compare: the act table", () => {
     ["running, an unconfirmed reload never wedges a tell (U156)", { reality: "running", tellLimit: "k", room: false, reloadDue: true, idleOK: true }, { act: "tell", why: "limit" }],
     ["running, out of credits with nowhere to go: no tell (U3)", { reality: "running", tellLimit: null, tellOk: null, room: false }, null],
     ["running, its credits hold cleared: one works-again tell, room or not (U3)", { reality: "running", tellOk: "credits-ok|k", room: false }, { act: "tell", why: "credits-ok" }],
+    ["running, its login hold cleared: one login-ok tell (claude-login-ended U2)", { reality: "running", tellOk: "login-ok|k", room: false }, { act: "tell", why: "login-ok" }],
     ["running, a clear waits behind a switch start (U156)", { reality: "running", clearDue: true, clearCmd: "/clear", idleOK: true, switchDue: true, room: true }, { act: "start" }],
     ["stopped with reload+clear due, agent present (U156)", { view: "stopped", reality: "running", closeOK: true, reloadDue: true, clearDue: true, clearCmd: "/clear", idleOK: true },
       { act: "close", phase: "stop", why: "stopped" }],
