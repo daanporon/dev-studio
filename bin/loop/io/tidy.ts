@@ -483,27 +483,42 @@ export async function leftoverCheck(path: string): Promise<LeftoverCheck | null>
   const plain = all.filter((p) => !differ.has(p));
   if (!target) for (const p of plain) differ.add(p);
   else if (plain.length) {
-    const theirs = new Map<string, string>();
-    const ls = await chunks(plain, 500, async (part) => { const r = await git(path, ["ls-tree", "-r", "-z", target, "--", ...part]); return r.code === 0 ? r.out : null; });
-    if (!ls) return null;
-    for (const e of ls.join("").split("\0").filter(Boolean)) { const [meta, p] = e.split("\t"); theirs.set(p, meta.split(" ")[2]); }
-    const files: string[] = [], links: string[] = [];
+    // Each side as `<mode> <blob>`: main's tree, HEAD's, the index and the working file. The working file
+    // must equal main, mode included; so must the index wherever it differs from HEAD (staged content a forced
+    // removal would lose: HEAD's own content stays on the branch, which the removal keeps).
+    const entries = async (args: string[], at: number) => {
+      const out = await chunks(plain, 500, async (part) => { const r = await git(path, [...args, "--", ...part]); return r.code === 0 ? r.out : null; });
+      if (!out) return null;
+      const m = new Map<string, string>();
+      for (const e of out.join("").split("\0").filter(Boolean)) { const [meta, p] = e.split("\t"); const f = meta.split(" "); m.set(p, `${f[0]} ${f[at]}`); }
+      return m;
+    };
+    const [theirs, head, staged, fm] = await Promise.all([entries(["ls-tree", "-r", "-z", target], 2), entries(["ls-tree", "-r", "-z", "HEAD"], 2),
+      entries(["ls-files", "-s", "-z"], 1), git(path, ["config", "--bool", "core.fileMode"], 30_000)]);
+    if (!theirs || !head || !staged) return null;
+    const fileMode = fm.out.trim() !== "false";
+    for (const [p, e] of staged) if (e !== head.get(p) && e !== theirs.get(p)) differ.add(p);
+    const files: string[] = [], links: string[] = [], exec = new Map<string, string>();
     for (const p of plain) {
       const s = await lstat(join(path, p)).catch(() => null);
       if (!s) { if (theirs.has(p)) differ.add(p); }   // absent here: equal only when absent there too
       else if (s.isSymbolicLink()) links.push(p);
-      else if (s.isFile()) files.push(p);
+      else if (s.isFile()) { files.push(p); exec.set(p, s.mode & 0o100 ? "100755" : "100644"); }
       else differ.add(p);                              // a folder (a nested repo, a submodule): never equal
     }
     const hashed = await chunks(files, 500, async (part) => { const r = await git(path, ["hash-object", "--", ...part], 120_000); return r.code === 0 ? r.out.split("\n").filter(Boolean) : null; });
     if (!hashed) return null;
-    hashed.flat().forEach((h, i) => { if (theirs.get(files[i]) !== h) differ.add(files[i]); });
+    for (const [i, h] of hashed.flat().entries()) {
+      const p = files[i], [mode, blob] = (theirs.get(p) ?? " ").split(" ");
+      // With core.fileMode false git keeps the index's mode, which the staged check above compared.
+      if (blob !== h || !["100644", "100755"].includes(mode) || (fileMode && mode !== exec.get(p))) differ.add(p);
+    }
     if (links.length) {
       const fmt = await git(path, ["rev-parse", "--show-object-format"], 30_000);
       const algo = fmt.code === 0 && fmt.out.trim() === "sha256" ? "sha256" : "sha1";
       for (const p of links) {
         const id = await linkBlob(join(path, p), algo);
-        if (id == null || theirs.get(p) !== id) differ.add(p);
+        if (id == null || theirs.get(p) !== `120000 ${id}`) differ.add(p);
       }
     }
   }

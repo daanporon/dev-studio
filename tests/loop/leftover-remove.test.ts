@@ -98,7 +98,7 @@ function repos() {
 
 describe("leftover rule (archive-leftovers U1)", () => {
   const removed = (r: ReturnType<typeof rig>, wt = "wtx") => {
-    expect(r.orca.of("worktree-rm").map((c) => c.args)).toEqual([[`id:${wt}`]]);
+    expect(r.orca.of("worktree-rm").map((c) => c.args)).toEqual([[`id:${wt}`, "force"]]);
     expect(results(r.s)).toEqual(["removed: all on main"]);
     expect(leftovers(r.s)).toEqual([]);
   };
@@ -164,6 +164,22 @@ describe("leftover rule (archive-leftovers U1)", () => {
     kept(r, "left: 0 commits, 1 file not on main");
   });
 
+  test("staged content not on main is kept, though the working file equals main", async () => {
+    const g = repos(), r = rig("wtx", g.wt);
+    writeFileSync(join(g.wt, "a.txt"), "staged\n");
+    git(g.wt, "add", "a.txt");
+    writeFileSync(join(g.wt, "a.txt"), "base\n");
+    await r.send();
+    kept(r, "left: 0 commits, 1 file not on main");
+  });
+
+  test("a mode change not on main is kept", async () => {
+    const g = repos(), r = rig("wtx", g.wt);
+    chmodSync(join(g.wt, "a.txt"), 0o755);
+    await r.send();
+    kept(r, "left: 0 commits, 1 file not on main");
+  });
+
   test("(f) an untracked .env is kept", async () => {
     const g = repos(), r = rig("wtx", g.wt);
     writeFileSync(join(g.wt, ".env"), "SECRET=1\n");
@@ -201,6 +217,7 @@ describe("leftover rule (archive-leftovers U1)", () => {
     git(g.wt, "config", "remote.origin.pushurl", url);
     await r.send();
     kept(r, "left: 1 commit, 1 file not on main");
+    expect(events(r.s, "leftover_fetch_failed")).toHaveLength(1);
   });
 
   test("(j) a plain merge of origin/main as the only unpushed commit is removed, main moved on", async () => {

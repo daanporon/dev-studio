@@ -9,9 +9,11 @@
 //   an ignored file outside the sweep's allowed top-level dirs (.env)         left
 //   (whether its PR merged plays no part: a squash merge leaves commits on the branch that main may not hold)
 //   the worktree's exposed entries end and their stop commands run (squad/exposed.ts removalHold: waits)
+//   (a failed fetch is one `leftover_fetch_failed` event; the stale local ref only keeps more trees)
 //   then terminal-close-worktree, the close-time tidy (tidy.ts closeTidy.before: cleanup_on_close and
 //   leftover processes), the same check again, the close's rescue of its pages and notes (io/rescue.ts;
-//   a failed or capped copy leaves it), worktree-rm                          refused: left, with a note
+//   a failed or capped copy leaves it), worktree-rm, forced since the check
+//   proved everything it drops is on main or rebuildable                    refused: left, with a note
 //   and on success the Claude temp dir (closeTidy.after) and drop-leftover
 //   (U11c: a squad on a contract backend: the contract's terminal.close and its provider's removal, by path)
 //
@@ -79,7 +81,8 @@ async function safe(a: Action, x: Exec, p: P, path: string): Promise<Result | { 
 
 async function remove(a: Action, x: Exec, p: P): Promise<Result> {
   const { wt, path } = p as { wt: string; path: string };
-  await fetchTarget(path, x.now);
+  const fetched = await fetchTarget(path, x.now);
+  if (fetched.error) x.store.event("leftover_fetch_failed", { project: a.project, squad: a.squad, unit: p.unit ?? null, payload: { wt, path, error: fetched.error } });
   const first = await safe(a, x, p, path);
   if (!("check" in first)) return first;
 
@@ -108,7 +111,9 @@ async function remove(a: Action, x: Exec, p: P): Promise<Result> {
   if (!saved.ok) return note(a, x, p, "rescue-failed", `leftover ${path}: its pages could not be copied out (${saved.why}) — left as is`);
   if (!saved.listed || saved.capped > 0) return note(a, x, p, "rescue-incomplete", `leftover ${path}: not every page could be copied out — left as is`);
   if (actionBlock(x.store, a)) return { wait: "activity changed before removal" };
-  const rm = contract ? await contractRemoveTree(a, x, w) : await x.act.orca.run("worktree-rm", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
+  // Forced: the check just proved every change it would drop is on main (index, mode and untracked files
+  // included) and every ignored file rebuildable; a non-forced removal refuses any dirty tree.
+  const rm = contract ? await contractRemoveTree(a, x, w, true) : await x.act.orca.run("worktree-rm", [`id:${wt}`, "force"], { env: x.act.childActivity(x.store, a) });
   if (rm.code !== 0) return note(a, x, p, "rm-refused", `leftover ${path} still refused by worktree-rm — left as is`);
   await closeTidy.after(a, x, path, tidy);
   x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, "leftover-note"]);

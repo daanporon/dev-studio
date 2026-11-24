@@ -229,7 +229,7 @@ const left = (path: string): Leftover[] => [{ wt: "wtx", path, branch: "work", u
 describe("worktree.remove", () => {
   const removed = (r: ReturnType<typeof rig>) => {
     expect(r.orca.of("terminal-close-worktree").map((c) => c.args)).toEqual([["id:wtx"]]);
-    expect(r.orca.of("worktree-rm").map((c) => c.args)).toEqual([["id:wtx"]]);
+    expect(r.orca.of("worktree-rm").map((c) => c.args)).toEqual([["id:wtx", "force"]]);
     expect(leftovers(r.s)).toEqual([]);
   };
   const kept = (r: ReturnType<typeof rig>, why: string) => {
