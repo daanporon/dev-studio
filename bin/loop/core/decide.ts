@@ -166,6 +166,15 @@ function deadUnderOrca(store: Store, m: Row, w: Row, placed: number, now: number
   const since = noAgentSince(store, m, w, placed);
   return since != null && now - since >= goneMinS(store, String(m.project));
 }
+// U21c: when reality() reads (or will read) an Orca member's `running` presence as none by U21a's rule
+// (no loop stop since its last start, noAgentSince held for GONE_MIN): that time, else null.
+export function staleWorkingAt(store: Store, m: Row): number | null {
+  if (!m.wt || onContract(store, String(m.project), String(m.squad))) return null;
+  const w = store.get("observed_workers", { project: m.project, wt: m.wt }), placed = lastStart(m);
+  if (!w || w.gone_at != null || w.walk !== "none" || w.presence !== "running" || lastStopSent(store, m) > placed) return null;
+  const since = noAgentSince(store, m, w, placed);
+  return since == null ? null : since + goneMinS(store, String(m.project));
+}
 
 // Reality from the process walk alone (U10's new input, U12's for a squad off Orca): an agent process
 // in the member's worktree is running, none is none, a failed or split walk unknown; a start no walk
