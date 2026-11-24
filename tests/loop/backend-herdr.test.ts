@@ -4,16 +4,21 @@
 // binary is fetched to a temp dir (sha256 checked); when it can't be (no network, another platform,
 // DS_HERDR_FETCH=0) those cases are skipped with the reason printed. DS_HERDR_BIN uses a local binary.
 // The mappings and the protocol pin need no binary and always run.
+// U16c: the loop's per-project backend (projectHerdr: the server started on the first create only, the
+// binary from herdrBin) and the resolvers that make it (contracts.ts, contract-roles.ts).
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KEYS, checked } from "../../bin/backend/contract.ts";
 import {
   HERDR_CAPS, HERDR_PROTOCOL, agentState, fetchHerdr, groupKey, herdrBackend, herdrConfig, herdrKey, metaTokens,
-  rpc, startHerdr, tail, tokensMeta,
+  herdrBin, herdrPinnedDir, projectHerdr, rpc, startHerdr, tail, tokensMeta,
 } from "../../bin/backend/herdr.ts";
+import { contracts } from "../../bin/loop/squad/contracts.ts";
+import { makeBackend } from "../../bin/lib/contract-roles.ts";
+import type { Store } from "../../bin/loop/core/store.ts";
 import { stopServer, stopServerSync, unitName } from "../../bin/backend/server-unit.ts";
 import { conformance } from "./backend-conformance.ts";
 
@@ -107,6 +112,73 @@ describe("herdr protocol pin", () => {
   });
 });
 
+describe("herdr for a project, no server", () => {
+  test("herdrBin: DS_HERDR_BIN, else the pinned install, else PATH", () => {
+    const data = join(dir, "data"), pinned = join(herdrPinnedDir(undefined, { XDG_DATA_HOME: data }), "herdr");
+    const given = join(dir, "given-herdr");
+    writeFileSync(given, "");
+    const onPath = () => "/usr/bin/herdr";
+    expect(herdrBin({ env: { DS_HERDR_BIN: given, XDG_DATA_HOME: data }, which: onPath })).toBe(given);
+    expect(herdrBin({ env: { DS_HERDR_BIN: join(dir, "gone"), XDG_DATA_HOME: data }, which: onPath })).toBeNull();
+    expect(herdrBin({ env: { XDG_DATA_HOME: data }, which: onPath })).toBe("/usr/bin/herdr");
+    mkdirSync(join(pinned, ".."), { recursive: true });
+    writeFileSync(pinned, "");
+    expect(pinned).toBe(join(data, "dev-studio", "herdr", "0.9.5", "herdr"));
+    expect(herdrBin({ env: { XDG_DATA_HOME: data }, which: onPath })).toBe(pinned);
+    expect(herdrBin({ env: { HOME: join(dir, "nohome") }, which: () => null })).toBeNull();
+  });
+
+  test("a read starts no server: an empty list, nothing closed, a terminal not found", async () => {
+    const raw = projectHerdr("realp", { stateRoot: join(dir, "state") }), b = checked(raw);
+    expect(raw.dir).toBe(join(dir, "state", "realp", "loop", "herdr"));
+    expect(await b.call("terminal.list", {})).toEqual({ ok: true, terminals: [] });
+    expect(await b.call("terminal.close", { id: "h-1" })).toEqual({ ok: true, closed: false });
+    for (const a of [await b.call("agent.state", { id: "h-1" }), await b.call("terminal.read", { id: "h-1" })])
+      expect(a.ok ? "ok" : a.error.code).toBe("not_found");
+    expect(existsSync(raw.dir)).toBe(false);
+  });
+
+  test("a server that accepts but never answers stays failed: not read as no terminals, no second server", async () => {
+    const stateRoot = join(dir, "slow-state"), project = "realp";
+    const sockDir = join(stateRoot, project, "loop", "herdr");
+    mkdirSync(sockDir, { recursive: true });
+    const held: import("node:net").Socket[] = [];
+    const srv = createServer((c) => { held.push(c); });   // takes the connection, never answers
+    await new Promise<void>((r) => srv.listen(join(sockDir, "herdr.sock"), r));
+    try {
+      const b = projectHerdr(project, { stateRoot, bin: join(dir, "never-run"), timeoutMs: 300 });
+      const l = await b.call("terminal.list", {});
+      expect(l.ok ? "ok" : l.error.code).toBe("failed");
+      expect(await b.ensureServer()).toBeNull();
+      expect(b.server()).toBeNull();
+    } finally { held.forEach((c) => c.destroy()); await new Promise((r) => srv.close(r)); }
+  });
+
+  test("a create with no binary fails naming how to install it, and starts nothing", async () => {
+    const was = process.env.DS_HERDR_BIN;
+    process.env.DS_HERDR_BIN = join(dir, "no-such-herdr");
+    try {
+      const a = await projectHerdr("realp", { stateRoot: join(dir, "state") }).call("terminal.create", { cwd: dir, label: "lead", group: "sq" });
+      expect(a.ok ? "ok" : a.error.message).toContain("install it with: bun bin/backend/herdr.ts install");
+    } finally { if (was === undefined) delete process.env.DS_HERDR_BIN; else process.env.DS_HERDR_BIN = was; }
+  });
+
+  test("a state root too deep for a unix socket puts the server's files in a short folder", () => {
+    const deep = join(dir, "x".repeat(90));
+    const b = projectHerdr("realp", { stateRoot: deep });
+    expect(b.dir.startsWith(deep)).toBe(false);
+    expect(Buffer.byteLength(b.socket)).toBeLessThanOrEqual(100);
+    expect(projectHerdr("realp", { stateRoot: deep }).socket).toBe(b.socket);
+  });
+
+  test("the loop and the role scripts make herdr for a squad on it", () => {
+    const store = { root: join(dir, "state") } as Store;
+    const c = contracts()(store, "herdr", "realp");
+    expect(c.caps).toEqual(HERDR_CAPS);
+    expect(makeBackend(join(dir, "state"))("herdr", "realp")).not.toBeNull();
+  });
+});
+
 const got = await fetchHerdr(join(dir, "bin"));
 if ("skip" in got) {
   console.log(`backend-herdr: the herdr server cases are skipped: ${got.skip}`);
@@ -171,6 +243,36 @@ if ("skip" in got) {
       expect((await panes()).find((p) => p.tokens?.ds_id === again)!.workspace_id).not.toBe(po.workspace_id);
       for (const id of [again, other]) await b.call("terminal.close", { id });
     }, 30_000);
+
+    test("a project's backend starts its server on the first create; a new client finds it; a gone server reads empty and starts again", async () => {
+      const project = `realp-${process.pid}`, stateRoot = join(dir, "pstate");
+      const opts = { stateRoot, bin, home, shell: "/bin/bash", maxRuntimeS: MAX_RUNTIME_S };
+      const b = projectHerdr(project, opts);
+      const stop = async () => { const s = b.server(); if (s) await stopServer(s.handle); };
+      process.on("exit", () => { const s = b.server(); if (s) stopServerSync(s.handle); });
+      try {
+        expect(await b.call("terminal.list", {})).toEqual({ ok: true, terminals: [] });
+        const a = await b.call("terminal.create", { cwd: dir, label: "lead", group: "sq", env: { DS_GEN: "g1" } });
+        if (!a.ok) throw new Error(a.error.message);
+        expect(b.server()?.session).toBe(`ds-herdr-${project}`);
+        expect(readFileSync(join(b.dir, "config.toml"), "utf8")).toContain("resume_agents_on_restore = false");
+        // A new loop process: another client of the same project lists the terminal and starts nothing.
+        const again = projectHerdr(project, opts);
+        expect((await again.call("terminal.list", {})).ok && (await again.call("terminal.list", {}) as { terminals: { id: string; gen: string | null }[] }).terminals.map((t) => [t.id, t.gen])).toEqual([[a.terminal.id, "g1"]]);
+        expect(await again.ensureServer()).toBeNull();
+        // The trial's sampler reads the same server and prints one line per terminal.
+        const sampled = Bun.spawnSync(["bun", join(import.meta.dir, "../../bin/backend/herdr.ts"), "states", stateRoot, project]);
+        expect(sampled.exitCode).toBe(0);
+        expect(sampled.stdout.toString().trim().split("\t").slice(1, 4)).toEqual([a.terminal.id, "sq/lead", "g1"]);
+        // The server gone (a crash, an upgrade): reads are empty, the next create starts a new one.
+        await stop();
+        expect(await again.call("terminal.list", {})).toEqual({ ok: true, terminals: [] });
+        const c = await again.call("terminal.create", { cwd: dir, label: "lead", group: "sq" });
+        if (!c.ok) throw new Error(c.error.message);
+        expect(again.server()).not.toBeNull();
+        await stopServer(again.server()!.handle);
+      } finally { await stop().catch(() => {}); }
+    }, 60_000);
 
     test("the server runs on the loop's config, in its own session", () => {
       expect(readFileSync(srv.config, "utf8")).toContain("resume_agents_on_restore = false");

@@ -202,11 +202,14 @@ project on its own runner (`core/actuator.ts` `contracted`); the registry still 
 The first v2 backend (orca-backend-alternatives U15). [herdr](https://github.com/herdrdev/herdr) is a
 terminal multiplexer for agents: a server owns workspaces, tabs and panes, and sees which agent runs in a
 pane and whether it is working. The adapter speaks herdr's socket API (newline-delimited JSON). The loop
-does not use it yet.
+runs a squad on it through `projectHerdr` (U16c, below), on a trial project only.
 
 - **Pinned.** `HERDR_VERSION` 0.9.5, protocol 22. A server that answers another protocol fails every op.
   `fetchHerdr(dir)` downloads that release's Linux binary and checks its sha256. `DS_HERDR_BIN` names a
-  local binary instead, and `DS_HERDR_FETCH=0` downloads nothing.
+  local binary instead, and `DS_HERDR_FETCH=0` downloads nothing. `bun bin/backend/herdr.ts install`
+  downloads it into `herdrPinnedDir()`, `$XDG_DATA_HOME` (else `~/.local/share`)`/dev-studio/herdr/<version>/herdr`,
+  and touches nothing else (no PATH entry, no `herdr integration install`). The loop's binary is
+  `herdrBin()` (`bin/backend/herdr-bin.ts`): `DS_HERDR_BIN`, else that install, else `herdr` on PATH.
 - **Its server.** `startHerdr({bin, dir, name})` writes `<dir>/config.toml`, starts `herdr server` through
   `server-unit.ts` and waits for an answer on `<dir>/herdr.sock`. The server runs in its own session
   (`HERDR_SESSION=ds-<name>`, `HERDR_SOCKET_PATH`, `HERDR_CONFIG_PATH`), apart from any herdr the
@@ -230,27 +233,46 @@ does not use it yet.
   for an agent herdr already recognises.
 - **`last_output`** hashes the visible screen and keeps the hash and the time it changed in pane tokens
   (`ds_oh`, `ds_oa`). The time is when a read first saw the change.
+- **The loop's backend for a project (U16c).** `projectHerdr(project, {stateRoot})` is what
+  `squad/contracts.ts` (the actuator and the contract observer) and `bin/lib/contract-roles.ts` (the role
+  scripts) make: its server is the unit `ds-herdr-<project>` (session `ds-herdr-<project>`), its files in
+  `<state root>/<project>/loop/herdr/` (or a short folder under the runtime dir when that socket path
+  would pass 100 bytes). Only a `terminal.create` starts the server; with none listening (no socket, or
+  a refused connect) a list is empty, a close closes nothing and any other op on a terminal is
+  `not_found`, so the observer reads the members gone and the loop starts them again. A server that
+  listens but is slow or failing keeps its `failed` answers, so the observer writes nothing. A server a previous loop process started is used as it is, and
+  its protocol is checked again after it was gone. A create with no binary fails naming the install command.
+- `bun bin/backend/herdr.ts states <state root> <project>` prints what herdr says each of a project's terminals
+  is doing (read only, no server started), the trial's sampler.
 - `bun bin/backend/herdr.ts caller <bin> <dir> <name> [home]` is the conformance suite's survive caller.
 - `tests/loop/backend-herdr.test.ts` runs the conformance suite (the server outliving its caller
   included) and layout B against the pinned binary in a temp HOME. When the binary can't be fetched,
-  it skips those cases and prints why. The mappings and the protocol pin always run. How well herdr
-  reads agent state is a trial of its own (U16c).
+  it skips those cases and prints why. The mappings and the protocol pin always run, and so do
+  `projectHerdr`'s no-server cases; with the binary it also starts a project's server on a create, finds
+  it from a second client and starts it again after it was stopped. How well herdr reads agent state
+  without its hooks is the trial's to record (`docs/backends/trial-herdr.md`, not run yet).
 
 ## A backend per squad
 
 Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
 lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
 `herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
-others, the first being its default). Only `orca` is one a spawn can pick today (herdr's v2 adapter,
-above, is not wired to squad starts yet); the rest are listed so a project can name them, and a spawn on
-one is refused with a line that says it is not built yet. The loop itself can run a squad on any contract
-backend (U11, "Started" below).
+others, the first being its default). `orca` is the one a spawn picks by default. `herdr` (U16c) can be
+picked on a trial project; the others with no adapter yet are listed so a project can name them, and a
+spawn on one is refused with a line that says it is not built yet. The loop itself can run a squad on any
+contract backend (U11, "Started" below).
+
+- **On trial (U16).** A backend marked `trial` (orca-lite, tmux, herdr) starts squads only in a project
+  whose `default_backend` names it: `--backend herdr` in any other project is refused (`is on trial: only
+  a project whose default_backend is herdr starts squads on it`), so a trial stays on its trial project.
+  An entry's `find` looks for its binary where PATH would not (herdr: `herdrBin()`), and `install` is
+  named when it is missing.
 
 - **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
   pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
   project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
-  refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet and a
-  binary missing on PATH; a refused spawn writes no wish and never falls back to `orca`.
+  refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet, a
+  backend on trial outside its trial project and a binary missing on PATH; a refused spawn writes no wish and never falls back to `orca`.
 - **Written once.** The squad's row keeps `backend`, `backend_host` (`local`; the machine it runs on) and
   `worktree_provider` (migration 0054; every existing squad reads `orca`/`local`/`orca`). Once the loop
   has started the squad the columns cannot change (a table trigger), and `spawn-squad` refuses a different
@@ -265,10 +287,9 @@ backend (U11, "Started" below).
   not Orca: `fulfil/squad.ts` makes no Run, task, dispatch, coordinator pane or sender for it, and wishes
   its roles; the actuator's contract seat (`core/actuator.ts` `contractSeat`) starts, pokes, stops and
   closes them with the contract driver (`drivers/contract.ts`). The actuator reaches `tmux` through
-  `bin/backend/tmux.ts` and `orca-lite` through `bin/backend/orca-lite.ts` (U13), and has no adapter for
-  `herdr`; the registry still marks all three
-  not built (their `adapter` is null until the observer lands, U12), so a spawn on
-  one is still refused. A test reaches this path through `LoopActuator`'s `backends` option and the
+  `bin/backend/tmux.ts`, `orca-lite` through `bin/backend/orca-lite.ts` (U13) and `herdr` through
+  `projectHerdr` in `bin/backend/herdr.ts` (U16c). The registry marks tmux and orca-lite not built (their
+  `adapter` is null), so a spawn on one is still refused; herdr is on trial. A test reaches this path through `LoopActuator`'s `backends` option and the
   contract fake.
   - **Start.** The member's worktree comes from the squad's recorded `worktree_provider` through
     `io/worktrees.ts`, its parent the Lead's (the Lead's own is none while the Studio is on Orca); its `wt`
