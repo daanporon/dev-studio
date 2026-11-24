@@ -145,6 +145,17 @@ function leftoverRows(db: Db, label: string, list: unknown, units: unknown) {
     }
     return m;
   });
+  // archive-leftovers U4: each leftover's newest Remove press (open: `result` null), shown on its row until it goes.
+  const presses = db.memo(`leftover-removes:${label}`, () => {
+    const m = new Map<string, Row>();
+    for (const r of db.all("SELECT id, created_at, done_at, payload, result FROM requests WHERE project = ? AND kind = 'leftover-remove' ORDER BY id", label)) {
+      try {
+        const wt = JSON.parse(String(r.payload ?? "{}")).wt;
+        if (typeof wt === "string") m.set(wt, { id: Number(r.id), at: r.created_at ?? null, done_at: r.done_at ?? null, result: r.result == null ? null : JSON.parse(String(r.result)) });
+      } catch { /* an unreadable row shows no press */ }
+    }
+    return m;
+  });
   return arr(list).map((l) => ({
     wt: l?.wt ?? null, path: l?.path ?? null, branch: l?.branch ?? null,
     n_files: l?.n_files ?? 0, files: arr(l?.files).map(String), unpushed: l?.unpushed ?? 0,
@@ -152,6 +163,7 @@ function leftoverRows(db: Db, label: string, list: unknown, units: unknown) {
     pr: l?.unit ? (arr(units).find((u) => u?.slug === l.unit)?.pr ?? null) : null,
     age_min: ageMin(l?.recorded_at),
     check: checks.get(String(l?.wt ?? "")) ?? null,
+    remove: presses.get(String(l?.wt ?? "")) ?? null,
   }));
 }
 
@@ -2064,7 +2076,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const archived = db ? labels.flatMap((l) => archivedDocs(db, l).filter((a) => a.st && typeof a.st === "object").map((a) => {
     const st = a.st, t = String(st.topic ?? "?");
     return {
-      spent_since: squadSpentFor(db, l).get(t) ?? null,
+      label: l, spent_since: squadSpentFor(db, l).get(t) ?? null,
       topic: st.topic ?? "?", closed_at: st.closed_at ?? null, type: st.type ?? "feature",
       framing: String(st.framing ?? "").slice(0, 160), progress: progress(arr(st.units)),
       debrief: typeof st.debrief === "string" && st.debrief.trim() ? st.debrief : null,

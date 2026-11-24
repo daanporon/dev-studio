@@ -34,13 +34,13 @@ import { removalHold } from "../squad/exposed.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
 import { byContract, contractCloseTerminals, contractRemoveTree } from "../squad/removal.ts";
 
-type P = ActionPayload<"worktree.remove">;
+export type P = ActionPayload<"worktree.remove">;
 
 // Rebuildable top-level dirs, and dev-studio's own per-worktree files (OURS in bin/loop/io/wt-probe.ts).
-const ALLOWED = new Set(["node_modules/", ".devenv/", ".direnv/", "dist/", "build/", "target/", ".turbo/", ".next/", "CLAUDE.local.md", ".claude/"]);
+export const ALLOWED = new Set(["node_modules/", ".devenv/", ".direnv/", "dist/", "build/", "target/", ".turbo/", ".next/", "CLAUDE.local.md", ".claude/"]);
 const noteKey = (a: Action, wt: string) => ({ project: a.project, subject: wt, kind: "leftover-note" });
 
-function note(a: Action, x: Exec, p: P, cause: string, text: string): Result {
+export function note(a: Action, x: Exec, p: P, cause: string, text: string): Result {
   const key = noteKey(a, p.wt!);
   if (x.store.get("episodes", key)?.state !== cause) {
     x.store.upsert("episodes", key, { squad: a.squad ?? null, state: cause, source: "loop", observed_at: x.now });
@@ -51,7 +51,7 @@ function note(a: Action, x: Exec, p: P, cause: string, text: string): Result {
 
 // The `git status --porcelain --ignored=matching` lines for ignored files the removal would lose: outside
 // the allowed dirs, and not a note the rescue copies out first (a folder of notes is listed file by file).
-async function stray(path: string, status: string): Promise<boolean | null> {
+export async function stray(path: string, status: string): Promise<boolean | null> {
   const lines = status.split("\n").filter((l) => l.startsWith("!! ") && !ALLOWED.has(l.slice(3).replace(/\/.*$/, "/")));
   for (const l of lines) {
     const p = l.slice(3);
@@ -64,12 +64,12 @@ async function stray(path: string, status: string): Promise<boolean | null> {
   return false;
 }
 
-const leftText = (c: LeftoverCheck) => `left: ${c.commits.length} commit${c.commits.length === 1 ? "" : "s"}, ${c.n_differ} file${c.n_differ === 1 ? "" : "s"} not on main`;
+export const leftText = (c: LeftoverCheck) => `left: ${c.commits.length} commit${c.commits.length === 1 ? "" : "s"}, ${c.n_differ} file${c.n_differ === 1 ? "" : "s"} not on main`;
 
 // archive-leftovers U3: the check's result, one episode per leftover (kind `leftover-check`, subject the worktree).
 // `result` holds it and `episode_key` its fingerprint; both are written only when the fingerprint changes, so
 // `observed_at` (bumped on every probe) says when the tree was last looked at. It goes with the tree.
-async function record(a: Action, x: Exec, p: P, path: string, check: LeftoverCheck): Promise<void> {
+export async function record(a: Action, x: Exec, p: P, path: string, check: LeftoverCheck): Promise<void> {
   const fingerprint = await leftoverFingerprint(path, check);
   if (!fingerprint) return;
   const key = { project: a.project, subject: p.wt!, kind: "leftover-check" };
@@ -114,17 +114,15 @@ async function dropRecord(x: Exec, project: string, topic: string, wt: string): 
   if (state) await spawn([join(ROOT, "bin", "role", "squad-state.sh"), state, "drop-leftover", wt], { DS_STATE_ROOT: x.store.root }, 30_000);
 }
 
-async function remove(a: Action, x: Exec, p: P): Promise<Result> {
+export type Checked = Result | { check: LeftoverCheck };
+// archive-leftovers U4: the removal's steps after the fetch, shared with the board's Remove (fulfil/leftover-remove.ts).
+// `gate` is the check run before anything is touched and again after the tidy (it returns why to leave the tree, or
+// the check); `save` runs after the rescue, right before the removal, and returns why it failed (nothing is removed).
+// Returns the check the tree was removed on, or the Result that left it.
+export async function removeLeftover(a: Action, x: Exec, p: P, gate: (path: string) => Promise<Checked>,
+  save?: (path: string, check: LeftoverCheck) => Promise<string | null>): Promise<Result | { removed: LeftoverCheck }> {
   const { wt, path } = p as { wt: string; path: string };
-  // The reconciler saw the folder gone: only the state file still names it.
-  if (p.gone && !existsSync(path)) {
-    x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, "leftover-note"]);
-    await dropRecord(x, a.project, p.topic!, wt);
-    return { done: true, result: "dropped: folder gone" };
-  }
-  const fetched = await fetchTarget(path, x.now);
-  if (fetched.error) x.store.event("leftover_fetch_failed", { project: a.project, squad: a.squad, unit: p.unit ?? null, payload: { wt, path, error: fetched.error } });
-  const first = await safe(a, x, p, path);
+  const first = await gate(path);
   if (!("check" in first)) return first;
 
   const block = actionBlock(x.store, a);
@@ -141,7 +139,7 @@ async function remove(a: Action, x: Exec, p: P): Promise<Result> {
   if (actionBlock(x.store, a)) return { wait: "activity changed before removal" };
   // U1 (KTD10): the project's cleanup_on_close, then stop what is still running in the tree, then probe again.
   const tidy = await closeTidy.before(a, x, path);
-  const again = await safe(a, x, p, path);
+  const again = await gate(path);
   if (!("check" in again)) return again;
   // As a close does (lavish-docs-not-stored U3): its pages and notes are copied out before the tree goes.
   const m = x.store.db.query("SELECT role, suffix FROM members WHERE project = ? AND wt = ? ORDER BY id DESC").get(a.project, wt) as { role: string; suffix: string | null } | null;
@@ -151,16 +149,34 @@ async function remove(a: Action, x: Exec, p: P): Promise<Result> {
     payload: { wt, path, dest: saved.dest, count: saved.count, bytes: saved.bytes, same: saved.same, capped: saved.capped, listed: saved.listed, files: saved.files.slice(0, 20) } });
   if (!saved.ok) return note(a, x, p, "rescue-failed", `leftover ${path}: its pages could not be copied out (${saved.why}) — left as is`);
   if (!saved.listed || saved.capped > 0) return note(a, x, p, "rescue-incomplete", `leftover ${path}: not every page could be copied out — left as is`);
+  if (save) {
+    const failed = await save(path, again.check);
+    if (failed) return { done: true, result: `left: save failed: ${failed}` };
+  }
   if (actionBlock(x.store, a)) return { wait: "activity changed before removal" };
-  // Forced: the check just proved every change it would drop is on main (index, mode and untracked files
-  // included) and every ignored file rebuildable; a non-forced removal refuses any dirty tree.
+  // Forced: the gate just proved every change it would drop is on main (index, mode and untracked files
+  // included) and every ignored file rebuildable, or saved; a non-forced removal refuses any dirty tree.
   const rm = contract ? await contractRemoveTree(a, x, w, true) : await x.act.orca.run("worktree-rm", [`id:${wt}`, "force"], { env: x.act.childActivity(x.store, a) });
   if (rm.code !== 0) return note(a, x, p, "rm-refused", `leftover ${path} still refused by worktree-rm — left as is`);
   await closeTidy.after(a, x, path, tidy);
   for (const kind of ["leftover-note", "leftover-check"]) x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, kind]);
   // The tree is gone either way: a record this could not drop, the reconciler drops as gone.
   await dropRecord(x, a.project, p.topic!, wt);
-  return { done: true, result: "removed: all on main" };
+  return { removed: again.check };
+}
+
+async function remove(a: Action, x: Exec, p: P): Promise<Result> {
+  const { wt, path } = p as { wt: string; path: string };
+  // The reconciler saw the folder gone: only the state file still names it.
+  if (p.gone && !existsSync(path)) {
+    x.store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = ?", [a.project, wt, "leftover-note"]);
+    await dropRecord(x, a.project, p.topic!, wt);
+    return { done: true, result: "dropped: folder gone" };
+  }
+  const fetched = await fetchTarget(path, x.now);
+  if (fetched.error) x.store.event("leftover_fetch_failed", { project: a.project, squad: a.squad, unit: p.unit ?? null, payload: { wt, path, error: fetched.error } });
+  const r = await removeLeftover(a, x, p, (path) => safe(a, x, p, path));
+  return "removed" in r ? { done: true, result: "removed: all on main" } : r;
 }
 
 const worktree: Fulfiller = {
