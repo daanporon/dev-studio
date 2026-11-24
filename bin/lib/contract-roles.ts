@@ -23,7 +23,7 @@ export const isLocalWt = (wt: string | null | undefined): boolean => !!wt && wt.
 export type MakeBackend = (name: string, project: string) => Backend | null;
 export const makeBackend = (root: string): MakeBackend => (name, project) => {
   if (name === "tmux") return checked(projectTmux(project, { stateRoot: root }));
-  if (name === "orca-lite") return checked(orcaLite({ keep: join(root, project, "loop", "orca-lite-terminals.json") }));
+  if (name === "orca-lite") return checked(orcaLite({ keep: join(root, project, "loop", "orca-lite-terminals.json"), readOnly: true }));
   return null;
 };
 

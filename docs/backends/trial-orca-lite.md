@@ -18,7 +18,9 @@ Nothing below the "Record" heading is filled in yet.
   `default_backend` names it. A `--backend orca-lite` on any other project is refused with
   `backend orca-lite (--backend) is on trial: …`, so the trial cannot spread past the trial project.
 - `bin/lib/contract-roles.ts` `makeBackend`: the role scripts read an orca-lite squad's terminals through the same
-  adapter and facts file as the loop (`<state root>/<project>/loop/orca-lite-terminals.json`).
+  adapter and facts file as the loop (`<state root>/<project>/loop/orca-lite-terminals.json`), read-only
+  (`readOnly`: only the loop writes the file; their create and close refuse). A list never drops the facts of a
+  terminal made at or after its own pane read, so a list cannot lose a tab a create made meanwhile.
 - `bin/backend/orca.ts` `wt-show` keeps Orca's `childWorktreeIds`, which shows the nesting Orca's window draws.
 - `ds trial snapshot|events` (`bin/commands/trial.ts`): the record below, read-only.
 - `tests/loop/orca-lite-squad.test.ts`: a squad on orca-lite runs on the fake Orca through the real adapter and the

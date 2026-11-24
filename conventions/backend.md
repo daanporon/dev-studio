@@ -175,8 +175,11 @@ project on its own runner (`core/actuator.ts` `contracted`). A spawn picks it on
   (`<state root>/<project>/loop/orca-lite-terminals.json`, written whole through a rename). The terminal id
   is the handle Orca gave at create. A restarted Orca hands out new handles for the same tabs: the entry
   keeps the tab's pane key (`tabId:leafId`) and follows it to the new handle. `terminal.list` lists only
-  the tabs of the file that `terminal-panes` still shows, and drops the others' entries; every other op on
-  such an id is `not_found` (a closed handle still reads `ok` in Orca, so liveness is the list).
+  the tabs of the file that `terminal-panes` still shows, and drops the others' entries (never one made at or
+  after its own pane read: a create it raced); every other op on such an id is `not_found` (a closed handle
+  still reads `ok` in Orca, so liveness is the list). Only the loop writes the file: the role scripts open the
+  backend `readOnly` (`bin/lib/contract-roles.ts`), follow a new handle in memory, and their create and close
+  refuse.
 - **send** is `terminal-type`: text as is, keys as their bytes (Enter `\r`, Escape `\x1b`, Backspace
   `\x7f`, arrows `\x1b[A`…, `C-c` `\x03`, `C-d` `\x04`), and with `submit` Enter through
   `--enter --wait-submit 10`. **read** is `terminal-read` (`--screen` for `screen`), **last_output** the
