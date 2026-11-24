@@ -61,4 +61,7 @@ forbid() { # <file> <fixed string>
 }
 forbid bin/lib/watch.sh "skip it for docs-only"
 forbid roles/lead.md "skip it for docs-only"
+need AGENTS.md "A unit documents its scripts, tables and events in \`docs/scripts.md\`."
+agents_bytes="$(wc -c < "$ROOT/AGENTS.md")"
+if [ "$agents_bytes" -gt 40000 ]; then echo "FAIL AGENTS.md is $agents_bytes bytes (limit 40000): move the detail to docs/scripts.md and keep one index line"; fail=1; else echo "ok   AGENTS.md is $agents_bytes bytes (limit 40000)"; fi
 exit "$fail"
