@@ -278,12 +278,13 @@ test("U19: the key strip posts one api/keys press per button, Esc reads Stop whi
   p.render();
   p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: false });
   const keys = keyButtons(p.render());
-  expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab", "1", "2", "3", "4", "5"]);
+  expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab"]);
   expect(keys[0][1]).toBe("Esc");
   await fnIn(keys[0][2])();
   expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
   expect(p.h.states).toContain("pressed Esc");
   await fnIn(keyButtons(p.render())[2][2])();
+  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: false, screen: { tail: "❯ 1. Yes\n  2. No\n  3. Other", menu: 3, at: T, age_s: 1 } });
   await fnIn(keyButtons(p.render())[6][2])();
   expect(p.posts.slice(1)).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Down"] }], ["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]]);
   // Mid-turn the Esc button is the red Stop.
@@ -449,4 +450,24 @@ test("studio-chat-queued-busy U4: a press posts once, disables both buttons and 
     expect(after.filter((n) => n.strings.includes("<button")).every((n) => n.values.includes(true))).toBe(true);
     expect(textOf(after)).toContain(msg);
   }
+});
+
+// Board chat U19b: the digit keys show only while the screen read shows a numbered menu.
+test("U19b: digits 1 to N show only for a numbered menu on screen", async () => {
+  const { menuOptions } = await import("../../bin/board/board-data.ts");
+  const keysFor = (tail: string | null) => {
+    const p = panel();
+    p.render();
+    p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], screen: tail === null ? null : { tail, menu: menuOptions(tail), at: T, age_s: 1 } });
+    return keyButtons(p.render()).map((k) => k[0]);
+  };
+  const base = ["Escape", "Up", "Down", "Enter", "Tab"];
+  expect(keysFor("● Working on it…\n\n> \n")).toEqual(base);
+  expect(keysFor(null)).toEqual(base);
+  const perm = " Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again\n   3. No, and tell Claude what to do differently (esc)\n";
+  expect(keysFor(perm)).toEqual([...base, "1", "2", "3"]);
+  // A numbered list in ordinary output has no selection marker.
+  expect(keysFor("Steps:\n1. first\n2. second\n3. third\n\n> ")).toEqual(base);
+  expect(menuOptions(" ❯ 1. Yes, I trust this folder\n   2. No, exit\n")).toBe(2);
+  expect(menuOptions("❯ 1. a\n  2. b\n  3. c\n  4. d\n  5. e\n  6. f\n")).toBe(6);
 });

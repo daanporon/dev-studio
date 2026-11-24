@@ -3048,6 +3048,22 @@ function chatCrew(db: Db, project: string, topic: string) {
   });
 }
 
+// Board chat U19b: the option count of a numbered menu at the bottom of a screen (a Claude permission prompt,
+// the folder-trust prompt), else 0. The last run of option lines numbered 1, 2, 3… within the last 25 non-blank
+// lines counts, and only when one of them carries the selection marker; a numbered list in plain output has none.
+export function menuOptions(tail: string): number {
+  const lines = tail.split("\n").filter((l) => l.trim() !== "").slice(-25);
+  let run: boolean[] = [];
+  let last: boolean[] = [];
+  for (const l of lines) {
+    const m = /^\s*([❯>›▶»])?\s*(\d{1,2})\.\s+\S/.exec(l);
+    if (!m) continue;
+    if (Number(m[2]) === 1) run = [];
+    if (Number(m[2]) === run.length + 1) { run.push(!!m[1]); last = run.slice(); }
+  }
+  return last.length >= 2 && last.some(Boolean) ? last.length : 0;
+}
+
 // GET /api/chat: one member's recent turns (observed_chat, redacted and capped by the loop) and its last
 // 10 chat requests, newest last. U19: `screen` {tail, at, age_s} is the loop's newest screen read (redacted
 // by the loop): observed_workers.tail by worktree, the Studio's observed_terminals.tail by its adopted handle;
@@ -3074,7 +3090,7 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
       agent: (c?.agent as string | null) ?? (m.agent as string | null) ?? null, source: (c?.source as string | null) ?? null,
       turns: c && c.gone_at == null ? (parse(String(c.turns ?? "[]")) ?? []) : [], updated_at: c?.updated_at == null ? null : Number(c.updated_at),
       working: w?.gone_at == null && w?.state === "working", sends,
-      screen: t && t.tail != null ? { tail: String(t.tail), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
+      screen: t && t.tail != null ? { tail: String(t.tail), menu: menuOptions(String(t.tail)), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
     };
   }, root);
 }
