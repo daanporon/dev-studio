@@ -485,7 +485,7 @@ export class LoopActuator implements Actuator {
   // generation, the call's retry id, to the adapter (startIdentity), which puts them on the terminal's launch line; `gen` hears the
   // generation the call ran (or, settled before, ran) under. The same id on a replay keeps the same generation.
   async call(store: Store, op: string, args: string[], o: { key: string; project: string; squad: string | null; member: string | null; sender: string; at: number;
-    ident?: string | null; gen?: (gen: string) => void }): Promise<Out> {
+    ident?: string | null; gen?: (gen: string) => void; env?: Record<string, string> }): Promise<Out> {
     const target = { project: o.project, squad: o.squad, member: o.member }, block = this.block(store, target);
     if (block) return { code: 75, out: "", err: `activity: ${block}` };
     // U200: a row under this key is this call's only when it is for the same project and member: an
@@ -508,7 +508,7 @@ export class LoopActuator implements Actuator {
     const sent = replay && last!.op === op && last!.payload ? JSON.parse(String(last!.payload)) as string[] : args;
     // U270: a failed Claude launch's screen becomes a start_failed event; the answer keeps a pointer to it.
     const ident = identified(o.ident, op, sent);
-    const env = { ...this.callEnv(store, target), ...(ident ? startIdentity(ident, retry) : {}) };
+    const env = { ...this.callEnv(store, target), ...(ident ? startIdentity(ident, retry) : {}), ...o.env };
     const out = keepStartFailed(store, await this.orca.run(op, sent, { from: o.sender, retry, env }), target);
     if (out.code === 0) {
       store.db.run("UPDATE orca_calls SET state = 'completed', result = ?, settled_at = ? WHERE retry_id = ?", [out.out, o.at, retry]);
@@ -529,8 +529,9 @@ export class LoopActuator implements Actuator {
 
   // What a driver acts through for one action: its squad, its sender terminal (made on the first
   // mutating call), and `key` for the write-ahead row. `ident` is the member's DS_MEMBER for a start
-  // (fulfil/member.ts): a Claude start then carries its identity, and `gen()` is its generation.
-  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null): Seat {
+  // (fulfil/member.ts): a Claude start then carries its identity, and `gen()` is its generation. `env` goes on
+  // every call of an Orca seat (U21c: squad/old-gone.ts's flag on a start).
+  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null, env?: Record<string, string>): Seat {
     let gen: string | null = null;
     const row = squad ? store.db.query("SELECT project, topic, run_id, repo, lead_wt, backend, worktree_provider FROM squads WHERE project = ? AND topic = ?").get(project, squad) as (Squad & { backend?: string; worktree_provider?: string }) | null : null;
     const studio_wt = (store.get("projects", { label: project })?.studio_wt as string | null | undefined) ?? null;
@@ -543,7 +544,7 @@ export class LoopActuator implements Actuator {
       call: async (op, args) => {
         const block = this.block(store, { project, squad, member });
         if (block) return { code: 75, out: "", err: `activity: ${block}` };
-        const via = (from: string) => this.call(store, op, args, { key, project, squad, member, sender: from, at, ident, gen: (g) => { gen = g; } });
+        const via = (from: string) => this.call(store, op, args, { key, project, squad, member, sender: from, at, ident, env, gen: (g) => { gen = g; } });
         const out = await via(await this.sender(store, project, squad ?? "", at));
         if (out.code === 0 || !/consumer_fenced|not bound to Run|run_not_bound|terminal_not_found|stable_pane_required/.test(out.err + out.out)) return out;
         if (squad) this.seatFailed.add(`${project}/${squad}`); // U244: seats() asks Orca who holds the Run next tick

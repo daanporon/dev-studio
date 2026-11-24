@@ -484,6 +484,9 @@ export class FakeBackend implements Orca {
         d.status = "failed";
         return ok(`dispatch-abandon: fenced ${d.id}\n`);
       }
+      case "agent-accounts":   // the process walk (U21c's fresh one): main lines from procs; null fails
+        if (!this.procs) return no("agent-accounts: unsupported");
+        return ok(this.procs.map((p) => `${p.cwd}\t${p.kind ?? "main"}\t${p.agent}\t${p.model ?? "-"}\t${p.account}\t${p.effort ?? "-"}\t${p.pid ?? ""}\t${p.start ?? ""}\t${p.rss ?? ""}\n`).join(""));
       default: return no(`fake orca: no op ${op}`);
     }
   }
@@ -496,7 +499,8 @@ export class FakeBackend implements Orca {
     // (exit 3, nothing started), a close that fails refuses with the reason.
     if (op !== "role-start") {
       const wt = args[1], old = this.agents.filter((a) => a.wt === wt && !/^ds-loop\b/.test(a.title));
-      if (old.some((a) => a.busy)) return no(`orca adapter: agent_busy: worktree ${wt} has an agent mid-turn; refusing to start a second session`, 3);
+      // U21c: DS_START_OLD_GONE (the loop's fresh walk found no agent) closes a busy one as an idle one.
+      if (via.env?.DS_START_OLD_GONE !== "1" && old.some((a) => a.busy)) return no(`orca adapter: agent_busy: worktree ${wt} has an agent mid-turn; refusing to start a second session`, 3);
       const stuck = old.find((a) => this.closeFails.has(a.handle));
       if (stuck) return no(`orca adapter: start in ${wt} refused: could not close the old agent terminal ${stuck.handle}`);
       if (old.length) this.agents = this.agents.filter((a) => !old.includes(a));

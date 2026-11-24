@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compare, decide, reality, type Facts } from "../../bin/loop/core/decide.ts";
+import { compare, decide, reality, staleWorkingAt, type Facts } from "../../bin/loop/core/decide.ts";
 import { startEpisode, view } from "../../bin/loop/squad/member-state.ts";
 import { seedWish } from "../../bin/loop/db/seed.ts";
 import { mainAgents, parseAgentAccounts } from "../../bin/loop/observers/orca.ts";
@@ -166,6 +166,16 @@ describe("reality", () => {
     test("no generation (a Codex, Muse or `--on` start, whose agent this host's walk may never see): running", () => {
       const { s, b } = dead(T - 10 * 60, { gen: null });
       expect(reality(s, b, T)).toBe("running");
+    });
+    // U21c: when the rule starts to hold (the member start's agent_busy wait and its fresh walk read it).
+    test("staleWorkingAt: walk_none_at + GONE_MIN, null while the rule cannot hold", () => {
+      expect(staleWorkingAt(dead(T - 60).s, dead(T - 60).b)).toBe(T - 60 + 3 * 60);
+      expect(staleWorkingAt(dead(null).s, dead(null).b)).toBeNull();
+      const g = dead(T - 60, { gen: null });
+      expect(staleWorkingAt(g.s, g.b)).toBeNull();
+      const f = dead(T - 60);
+      f.s.upsert("observed_workers", { project: "p", wt: f.b.wt }, { walk: "unknown" });
+      expect(staleWorkingAt(f.s, f.b)).toBeNull();
     });
   });
 });
