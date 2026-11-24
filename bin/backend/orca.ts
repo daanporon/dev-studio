@@ -752,14 +752,23 @@ export function claudeResets(d: unknown, now: number): Record<string, unknown> {
  *  `resets` is the account's free-resets JSON from the same answer, or null when there was no readable
  *  answer (the last one read stays). */
 /** An account's OAuth access token and its expiresAt (ms, "" when absent) from `<home>/.credentials.json`;
- *  `tok` is "" when there is none. */
-function claudeToken(home: string): { tok: string; exp: string } {
+ *  `tok` is "" when there is none. `ended` is true when Claude Code ended the login: `claudeAiOauth.loginEnded`
+ *  is a non-empty string, or `claudeAiOauth` is there with an empty access token and an empty refresh token.
+ *  Only those three fields are read; the refresh token's value is never kept or printed. */
+function claudeToken(home: string): { tok: string; exp: string; ended: boolean } {
   let cred: any;
   try { cred = docs(readFileSync(`${home}/.credentials.json`, "utf8"))[0]; } catch { cred = undefined; }
-  let tok = "", exp = "";
+  let tok = "", exp = "", ended = false;
   try { const t = idx(idx(cred, "claudeAiOauth"), "accessToken"); tok = truthy(t) ? raw(t) : ""; } catch { tok = ""; }
   try { const x = idx(idx(cred, "claudeAiOauth"), "expiresAt"); exp = truthy(x) ? raw(x) : ""; } catch { exp = ""; }
-  return { tok, exp };
+  try {
+    const oa = idx(cred, "claudeAiOauth");
+    if (isObj(oa)) {
+      const le = oa.loginEnded, rt = oa.refreshToken;
+      ended = (typeof le === "string" && le !== "") || (!tok && !(typeof rt === "string" && rt !== ""));
+    }
+  } catch { ended = false; }
+  return { tok, exp, ended };
 }
 const tokenExpired = (exp: string, now: number): boolean => isNum(exp) && !(Math.floor(Number(exp) / 1000) > now);
 /** One Claude API call with an account's token: curl with the token on stdin (`-K -`, never in argv where
@@ -1004,9 +1013,19 @@ export async function accountUsage(ctx: Ctx): Promise<void> {
     const [agent, id] = readTabs(l, 3);
     if (agent !== "claude" || !id) continue;
     const f = `${dir}/claude-${id}.tsv`;
+    const home = accountHome(env, id);
+    // An ended login is read from the credentials file before the cache: it needs no usage call, replaces any
+    // old figures, and a cached `login ended` row is dropped once the file has a token again.
+    if (claudeToken(home).ended) {
+      const ended = `-\t-\t-\t-\tlogin ended · ${id === "system" ? "default config" : `CLAUDE_CONFIG_DIR=${home}`}`;
+      cache(f, ended);
+      ctx.out(`claude\t${id}\t${ended}\n`);
+      continue;
+    }
     let row = cached(f, ttl, now, failTtl);
+    if (row !== null && row.split("\t")[4]?.startsWith("login ended")) row = null;
     if (row === null) {
-      const got = await usageFetch(ctx, accountHome(env, id));
+      const got = await usageFetch(ctx, home);
       row = keepStale(f, got.row, now); cache(f, row);
       if (got.resets !== null) cache(`${dir}/claude-${id}.resets.json`, got.resets, "utf8");
     }
@@ -1142,6 +1161,8 @@ const MUSE_LIMIT_RE = `^${SP}*${B("◆")} Usage limit reached ${B("·")} /upgrad
 // A billing error (kind credits): the provider's exact phrase, each on its own agent's worker (Claude's on one
 // with no known agent too); keep in step with fingerprints.ts.
 const CLAUDE_CREDITS_RE = `^${SP}*${B("⎿")}(${SP}|${NBSP})*(API Error: 402([^A-Za-z0-9_]|$)|Credit balance is too low)`;
+// An ended Claude login: the last line of the entry ends `· Please run /login` (Claude's own agent only).
+const CLAUDE_LOGIN_RE = `^${SP}*${B("⎿")}(${SP}|${NBSP})*.*${B("·")} Please run /login${SP}*$`;
 const MUSE_CREDITS_RE = `^${SP}*${B("◆")} model failed: API error 402([^A-Za-z0-9_]|$)`;
 const CODEX_CREDITS_RE = `^${SP}*${B("■")}${SP}*.*insufficient_quota`;
 const MUSE_ENTRY_RE = new RegExp(`^${SP}*${B("◆")}`, "s");
@@ -1274,11 +1295,13 @@ export async function limited(ctx: Ctx): Promise<Uint8Array> {
     const wagent = agentRows.find(([cwd]) => p !== "" && (cwd === p || cwd.startsWith(p + "/")))?.[1] ?? "";
     const lre = new RegExp(wagent === "muse" ? `${LIMIT_RE}|${MUSE_LIMIT_RE}` : wagent === "codex" ? `${LIMIT_RE}|${CODEX_LIMIT_RE}` : LIMIT_RE, "is");
     const cre = new RegExp(wagent === "muse" ? MUSE_CREDITS_RE : wagent === "codex" ? CODEX_CREDITS_RE : wagent === "" || wagent === "claude" ? CLAUDE_CREDITS_RE : "(?!)", "is");
+    const gre = new RegExp(wagent === "" || wagent === "claude" ? CLAUDE_LOGIN_RE : "(?!)", "is");
     let at = -1;
-    tailw.forEach((l, i) => { if (lre.test(l) || cre.test(l)) at = i; });
+    tailw.forEach((l, i) => { if (lre.test(l) || cre.test(l) || gre.test(l)) at = i; });
     if (at < 0) continue;
     if (tailw.slice(at + 1).some((l) => ENTRY_RE.test(l) || (wagent === "muse" && MUSE_ENTRY_RE.test(l)))) continue;
-    const credits = cre.test(tailw[at]);
+    const login = gre.test(tailw[at]);
+    const credits = cre.test(tailw[at]) || login;
     if (recent && !credits) continue;
     // A narrow pane wraps the notice ("resets Nov 2,\n     6pm (Europe/Berlin)"): the reset is read across
     // the lines indented under it; the notice stays its first line.
@@ -1295,7 +1318,7 @@ export async function limited(ctx: Ctx): Promise<Uint8Array> {
     const reset = credits ? "-" : limitReset(env, notice + wrap, anchor, dlg);
     if (st === "working" && !dlg && now - anchor < silent * 60) continue;
     // 4th field `dialog` or `-`, 5th `credits`: `-` keeps bash `read` from merging two tabs in a row.
-    out.push(Buffer.from(`${wt}\t${reset}\t${notice.slice(0, 160)}${credits ? "\t-\tcredits" : dlg ? "\tdialog" : ""}\n`, "latin1"));
+    out.push(Buffer.from(`${wt}\t${reset}\t${notice.slice(0, 160)}${login ? "\t-\tlogin" : credits ? "\t-\tcredits" : dlg ? "\tdialog" : ""}\n`, "latin1"));
   }
   screensSave(kept);
   return Buffer.concat(out);
