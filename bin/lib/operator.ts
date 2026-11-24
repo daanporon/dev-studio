@@ -153,7 +153,7 @@ export function limitValueProblem(key: string, val: string): string {
     case "review_skip_lenses":
       return skipLensesProblem(val);
     case "review_delta_wide_lines": case "review_delta_full_lines": case "flow_stuck_floor_min": case "flow_quiet_min": case "needs_grace_min": case "refusal_needs_min":
-    case "loop_stall_banner_n": case "loop_stall_banner_min": case "expose_down_min": case "expose_warn_min": case "chat_quiet_s": case "chat_queue_min": case "msg_chase_min": case "msg_reply_alert_min": case "archive_debrief_min": case "prompt_wait_min":
+    case "loop_stall_banner_n": case "loop_stall_banner_min": case "expose_down_min": case "expose_warn_min": case "chat_quiet_s": case "chat_queue_min": case "msg_chase_min": case "msg_reply_alert_min": case "archive_debrief_min": case "prompt_wait_min": case "gone_min":
       if (/[^0-9]/.test(val)) return `${key} must be a non-negative integer (got '${val}')`;
       break;
     case "feedback_draft_batch":

@@ -3,7 +3,7 @@
 // backfill copies today's rows; after it the triggers copy every write, so a fake-Orca squad's start,
 // dispatch and coordinator land in both places and agree, and the core tables gain no Orca column.
 import { afterEach, describe, expect, test } from "bun:test";
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LoopActuator, type Fulfiller } from "../../bin/loop/core/actuator.ts";
@@ -138,7 +138,10 @@ describe("0056 orca tables", () => {
   test("the core tables gain no Orca column: the copies live in orca_* tables only", () => {
     const old = before(), had = Object.fromEntries(["squads", "coordinators", "dispatches", "observed_workers", "pause_members", "members"].map((t) => [t, columns(old, t)]));
     after(old);
-    for (const [t, cols] of Object.entries(had)) expect([t, columns(old, t)]).toEqual([t, cols]);
+    // Up to and with 0056 only: a later migration may add a backend-neutral column (0058 walk_none_at).
+    const later = readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql") && f > FILE)
+      .flatMap((f) => [...readFileSync(join(MIGRATIONS, f), "utf8").matchAll(/ALTER TABLE (\w+) ADD COLUMN (\w+)/g)].map((x) => `${x[1]}.${x[2]}`));
+    for (const [t, cols] of Object.entries(had)) expect([t, columns(old, t).filter((c) => !later.includes(`${t}.${c}`))]).toEqual([t, cols]);
     expect(all(old, "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'orca\\_%' ESCAPE '\\' ORDER BY name").map((r) => r.name))
       .toEqual(["orca_calls", "orca_coordinators", "orca_dispatches", "orca_pauses", "orca_runs", "orca_workers"]);
   });

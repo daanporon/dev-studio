@@ -46,6 +46,7 @@ import { ask as askCheckpoint, owed, pendingWhy, sweep as sweepCheckpoints } fro
 import { seed } from "../db/seed.ts";
 import { STANDING } from "../drivers/types.ts";
 import { onContract } from "../squad/backend.ts";
+import { finishOf } from "../squad/finish-read.ts";
 
 import type { Action, Reconciler, TickCtx } from "./plugins.ts";
 import { ROOT, type Row, type Store } from "./store.ts";
@@ -135,6 +136,7 @@ export function reality(store: Store, m: Row, now: number): Reality {
   if (w && w.gone_at == null && w.walk === "none" && w.presence === "running") {
     const sent = lastStopSent(store, m);
     if (sent > placed && walkedGone(w, sent)) return "none";
+    if (sent <= placed && deadUnderOrca(store, m, w, placed, now)) return "none";
   }
   if (w && w.gone_at == null && w.presence === "running") return "running";
   // U231: the worker went away after the last start: that is a fact, not "started, not seen yet".
@@ -142,6 +144,25 @@ export function reality(store: Store, m: Row, now: number): Reality {
   if (placed && unread) return now - placed < graceS() ? "starting" : "unknown";
   if (!w || w.gone_at != null || w.presence === "none") return "none";
   return "unknown";
+}
+
+// U21a: after a KILL Orca can keep a member `working` (presence running) while no agent runs in its
+// worktree. noAgentSince() is when every successful walk since a time after its last start began finding
+// no agent (walk_none_at, kept by the Orca observer: a failed or split walk keeps it, a walk that finds the
+// agent clears it), while its transcript has not grown since and it has no finish row of its generation;
+// null otherwise. It is gone once that held for GONE_MIN. The caller checks the loop did not stop it (a
+// loop stop is walkedGone's).
+export function noAgentSince(store: Store, m: Row, w: Row, placed: number): number | null {
+  const since = Number(w.walk_none_at ?? 0);
+  if (w.walk !== "none" || !(since > placed)) return null;
+  const t = store.db.query("SELECT MAX(mtime) AS t FROM observed_transcripts WHERE wt = ?").get(String(m.wt)) as { t: number | null } | null;
+  if (Number(t?.t ?? 0) > since) return null;
+  return finishOf(store, m) ? null : since;
+}
+export const goneMinS = (store: Store, project: string) => knob(store, project, "GONE_MIN", 3) * 60;
+function deadUnderOrca(store: Store, m: Row, w: Row, placed: number, now: number): boolean {
+  const since = noAgentSince(store, m, w, placed);
+  return since != null && now - since >= goneMinS(store, String(m.project));
 }
 
 // Reality from the process walk alone (U10's new input, U12's for a squad off Orca): an agent process
