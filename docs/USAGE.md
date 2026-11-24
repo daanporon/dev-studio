@@ -646,6 +646,36 @@ the existing `ce-compound` skill — the Reviewer captures a non-obvious lesson 
 ship time, the Thinker reads prior learnings when planning. Nothing to maintain
 here; see `conventions/learnings.md`.
 
+## Which backend to pick
+
+A squad's terminals run on one backend, and its working folders come from one worktree tool. Use
+`orca` (Orca with Runs, the default) for real work: it is the only backend that is not on trial.
+The other three are for a trial project.
+
+| Backend | What it is | Worktree tools (first is the default) | The host needs |
+|---|---|---|---|
+| `orca` | Orca with Runs, tasks and dispatch | `orca` | Orca |
+| `orca-lite` | Orca's terminals and worktrees with no Run | `orca` | Orca |
+| `tmux` | One tmux server per project, one session per squad | `git`, `treehouse` | `tmux` on `PATH` |
+| `herdr` | herdr's pinned release: one workspace per squad | `git`, `treehouse` | its release, installed with `bun bin/backend/herdr.ts install` |
+
+- **The trial gate.** A backend on trial starts squads only in a project whose `default_backend` names
+  it. `--backend` anywhere else is refused with a message and never falls back to `orca`. The trial
+  project can still start an `orca` squad.
+- **Choosing.** For a project: `bin/commands/limits.sh set <project> default_backend <name>` (default
+  `orca`). For one squad: `spawn-squad --backend <name>`, or the Backend pick in the board's Start
+  squad dialog; it wins over the project key. The choice is written once, at spawn. A squad keeps its
+  backend and worktree tool for life, and a later change of `default_backend` touches only new squads.
+- **Worktree tool.** `worktree_provider` is `auto` (the default: Orca's own for `orca` and
+  `orca-lite`, `git` for `tmux` and `herdr`), `git`, or `treehouse` (a warm pool of leased worktrees,
+  only on `tmux` and `herdr`; the binary comes from `DS_TREEHOUSE_BIN` or `PATH`). A tool the backend
+  cannot use is refused at spawn. Treehouse's gain on a real repo is not measured yet; see
+  [backends/trial-treehouse.md](backends/trial-treehouse.md).
+- **Which to try next.** The current recommendation is in [backends/trial.md](backends/trial.md)
+  ("Recommendation"). At the time of writing it is `tmux`, with `worktree_provider` left at `git`.
+  Each backend's runbook is in [orca-lite](backends/trial-orca-lite.md), [tmux](backends/trial-tmux.md)
+  and [herdr](backends/trial-herdr.md).
+
 ## Swap the backend
 
 All `orca` access is behind `bin/backend/orca.sh`. To run on another backend,
