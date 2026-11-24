@@ -1,8 +1,12 @@
 // bun test preload: DS_TOKEN_DIR defaults to an empty temp dir, so no test's tokens reconciler scans the
 // host's real ~/.claude/projects (KTD4). An explicit DS_TOKEN_DIR is kept.
+import { setDefaultTimeout } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// U233: every test gets 30 s unless it sets its own limit (an explicit one still wins). Set here because
+// bun 1.4.4 ignores `[test] timeout` in bunfig.toml, while it does apply `preload`.
+setDefaultTimeout(30_000);
 // The dir is ours when we made it: each file makes it in beforeAll and removes it in afterAll (bun test never
 // fires process exit handlers), so a run leaves no temp dir behind.
 const ownToken = !process.env.DS_TOKEN_DIR;
