@@ -114,8 +114,9 @@ export function snapshot(project: string, o: { root?: string } = {}) {
   const sock = ["-L", `ds-${project.replace(/[^A-Za-z0-9_.-]/g, "-")}`], bin = Bun.which("tmux") ?? "tmux";
   const { procs } = scanProc();
   const at = new Date().toISOString();
-  const srv = tmux(bin, sock, ["list-sessions", "-F", "#{pid} #{version}"]);
-  const [pid, version] = srv.code === 0 ? (srv.out.split("\n")[0] ?? "").split(" ") : [];
+  // display-message answers for a server with no session left too (exit-empty is off); list-sessions would print nothing.
+  const srv = tmux(bin, sock, ["display-message", "-p", "#{pid} #{version}"]);
+  const [pid, version] = srv.code === 0 ? srv.out.split(" ") : [];
   const windows = srv.code !== 0 ? [] : tmux(bin, sock, ["list-panes", "-a", "-F", "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{@ds_meta}"])
     .out.split("\n").filter(Boolean).map((line) => {
       const [session, pane, panePid, meta] = line.split("\t");

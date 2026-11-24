@@ -57,4 +57,9 @@ test.skipIf(!tmux)("snapshot: a project with no server says it is down; with one
   expect(up.windows[0]).toMatchObject({ session: expect.stringContaining("sq"), pane: made.terminal.id, label: "builder-x", gen: "snap-gen" });
   expect(up.windows[0].processes.some((p) => p.includes("sleep 300"))).toBe(true);
   expect(up.members).toEqual([]);
+  // The squad's last window closed: the server stays up with no session and the snapshot still names it.
+  expect((await back.call("terminal.close", { id: made.terminal.id })).ok).toBe(true);
+  const empty = snapshot(project, { root });
+  expect(empty.windows).toEqual([]);
+  expect(empty.server).toMatchObject({ pid: (up.server as { pid: number }).pid, version: expect.stringMatching(/\d/) });
 });
