@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compare, decide, reality, type Facts } from "../../bin/loop/core/decide.ts";
+import { compare, decide, reality, staleWorkingAt, type Facts } from "../../bin/loop/core/decide.ts";
 import { startEpisode, view } from "../../bin/loop/squad/member-state.ts";
 import { seedWish } from "../../bin/loop/db/seed.ts";
 import { mainAgents, parseAgentAccounts } from "../../bin/loop/observers/orca.ts";
@@ -111,6 +111,73 @@ describe("reality", () => {
     s.upsert("observed_workers", { project: "p", wt: b.wt }, { presence: "unknown" });
     expect(reality(s, b, T)).toBe("unknown");
   });
+
+  // U21a: after a KILL Orca keeps the member `working` (presence running) while the walk finds no agent.
+  describe("presence running, walk none (a dead agent under a stale Orca view)", () => {
+    const START = T - 30 * 60;
+    function dead(walkNoneAt: number | null, set: Row = {}): { s: Store; b: Row } {
+      const s = fixture();
+      const b = member(s, "builder", { placed_at: START, gen: "g1", ...set }, { unit: "dispatched" });
+      s.upsert("observed_workers", { project: "p", wt: b.wt }, { presence: "running", walk: "none", walk_none_at: walkNoneAt, account_at: T - 5, state: "working", observed_at: T });
+      return { s, b };
+    }
+    afterEach(() => { delete process.env.DS_SWEEP_GONE_MIN; });
+
+    test("every walk since after its start found none for GONE_MIN (3 min): none", () => {
+      const { s, b } = dead(T - 3 * 60);
+      expect(reality(s, b, T)).toBe("none");
+    });
+    test("under GONE_MIN: running", () => {
+      const { s, b } = dead(T - 2 * 60);
+      expect(reality(s, b, T)).toBe("running");
+    });
+    test("gone_min from the limits row and DS_SWEEP_GONE_MIN", () => {
+      const { s, b } = dead(T - 2 * 60);
+      s.upsert("config", { project: "p", file: "limits.conf", key: "gone_min" }, { value: "1", observed_at: T });
+      expect(reality(s, b, T)).toBe("none");
+      process.env.DS_SWEEP_GONE_MIN = "10";
+      expect(reality(s, b, T)).toBe("running");
+    });
+    test("a failed walk (walk unknown) keeps it running, whatever the kept time", () => {
+      const { s, b } = dead(T - 20 * 60);
+      s.upsert("observed_workers", { project: "p", wt: b.wt }, { walk: "unknown" });
+      expect(reality(s, b, T)).toBe("running");
+    });
+    test("no walk_none_at (no walk read none since the observer kept it): running", () => {
+      const { s, b } = dead(null);
+      expect(reality(s, b, T)).toBe("running");
+    });
+    test("a spell begun at or before its last start proves nothing about this start: running", () => {
+      const { s, b } = dead(START);
+      expect(reality(s, b, T)).toBe("running");
+    });
+    test("a transcript that grew since the walk first read none: running", () => {
+      const { s, b } = dead(T - 10 * 60);
+      s.upsert("observed_transcripts", { path: "/t/a.jsonl" }, { project: "p", wt: b.wt, mtime: T - 60, size: 9, observed_at: T });
+      expect(reality(s, b, T)).toBe("running");
+      s.upsert("observed_transcripts", { path: "/t/a.jsonl" }, { mtime: T - 11 * 60 });
+      expect(reality(s, b, T)).toBe("none");
+    });
+    test("a finish row of its generation: running (it ended its work; the finish points decide)", () => {
+      const { s, b } = dead(T - 10 * 60);
+      s.db.run("INSERT INTO finishes (key, project, squad, member, unit, gen, outcome, body, at) VALUES ('k1', 'p', 'one', 'p/one/builder-u1', 'u1', 'g1', 'no-pr', '', ?)", [T - 600]);
+      expect(reality(s, b, T)).toBe("running");
+    });
+    test("no generation (a Codex, Muse or `--on` start, whose agent this host's walk may never see): running", () => {
+      const { s, b } = dead(T - 10 * 60, { gen: null });
+      expect(reality(s, b, T)).toBe("running");
+    });
+    // U21c: when the rule starts to hold (the member start's agent_busy wait and its fresh walk read it).
+    test("staleWorkingAt: walk_none_at + GONE_MIN, null while the rule cannot hold", () => {
+      expect(staleWorkingAt(dead(T - 60).s, dead(T - 60).b)).toBe(T - 60 + 3 * 60);
+      expect(staleWorkingAt(dead(null).s, dead(null).b)).toBeNull();
+      const g = dead(T - 60, { gen: null });
+      expect(staleWorkingAt(g.s, g.b)).toBeNull();
+      const f = dead(T - 60);
+      f.s.upsert("observed_workers", { project: "p", wt: f.b.wt }, { walk: "unknown" });
+      expect(staleWorkingAt(f.s, f.b)).toBeNull();
+    });
+  });
 });
 
 describe("seed: each member's standing wish from reality, once", () => {
@@ -179,6 +246,20 @@ describe("decide", () => {
     expect(run(s, T + 3)).toEqual([]);                                // starting: no second start beside it
   });
 
+  test("U21a: a Builder killed mid-work that Orca still reads working is started GONE_MIN after the walk first read none; a failed walk starts nothing", () => {
+    const s = fixture();
+    const b = member(s, "builder", { want: "running", want_at: T - 3600, placed_at: T - 3600, gen: "g1" }, { unit: "dispatched" });
+    const walk = (at: number, v: string, noneAt: number | null) => s.upsert("observed_workers", { project: "p", wt: b.wt },
+      { presence: "running", walk: v, walk_none_at: noneAt, account_at: at, state: "working", observed_at: at });
+    walk(T, "none", T);
+    expect(run(s, T)).toEqual([]);
+    expect(run(s, T + 2 * 60)).toEqual([]);
+    walk(T + 3 * 60 - 5, "unknown", T);                               // a failed walk: running, no start beside a live one
+    expect(run(s, T + 3 * 60)).toEqual([]);
+    walk(T + 3 * 60 + 5, "none", T);
+    expect(run(s, T + 3 * 60 + 8)).toEqual([`member:member:${b.id}`]);
+  });
+
   test("a pre-U159 wish still carrying a script replay is a plain wish: one start, never a child (U159)", () => {
     const s = fixture();
     const b = member(s, "builder", { want: "running", want_at: T - 100,
@@ -216,6 +297,34 @@ describe("decide", () => {
     const b = member(r, "builder", { want: "running", want_at: T - 3600 }, { unit: "dispatched", presence: "none" });
     r.upsert("episodes", { project: "p", subject: `member:${b.id}`, kind: "restarted" }, { started_at: T - 60, state: "done", source: "loop", observed_at: T - 60 });
     expect(run(r)).toEqual(["alert:Agent broke again"]);
+  });
+
+  test("U20a: three rebreaks in a row are one card with the try count; a start that lasted opens a new one", () => {
+    const r = fixture();
+    const b = member(r, "builder", { want: "running", want_at: T - 3600 }, { unit: "dispatched", presence: "none" });
+    const card = (now: number) => decide(ctx(r, now)).find((a) => a.kind === "alert")!;
+    const restart = (at: number) => r.upsert("episodes", { project: "p", subject: `member:${b.id}`, kind: "restarted" }, { started_at: at, state: "done", source: "loop", observed_at: at });
+    restart(T - 60);
+    const c1 = card(T) as unknown as { episode: string; payload: Row };
+    expect(c1.payload.text).toContain("(1 try so far)");
+    expect(c1.payload.text).toContain("tries again every 30 min");
+    card(T + 600);                       // later ticks of the same break: no new try
+    card(T + 28 * 60 + 50);
+    restart(T + 30 * 60 + 5);            // REBREAK_MIN passed: the loop starts it again, and it breaks again
+    const c2 = card(T + 30 * 60 + 60) as unknown as { episode: string; payload: Row };
+    card(T + 59 * 60);
+    restart(T + 60 * 60 + 20);
+    const c3 = card(T + 60 * 60 + 90) as unknown as { episode: string; payload: Row };
+    expect(c2.episode).toBe(c1.episode);
+    expect(c3.episode).toBe(c1.episode);
+    expect(c2.payload.text).toContain("(2 tries so far)");
+    expect(c3.payload.text).toContain("(3 tries so far)");
+    // a start that lasted well past REBREAK_MIN before it broke: a new run, a new card
+    const later = T + 5 * 3600;
+    restart(later - 60);
+    const c4 = card(later) as unknown as { episode: string; payload: Row };
+    expect(c4.episode).not.toBe(c1.episode);
+    expect(c4.payload.text).toContain("(1 try so far)");
   });
 
   test("U288: restart, then a loop stop (phase switch), then gone -> a start, no rebroke card; no loop stop -> the card", () => {

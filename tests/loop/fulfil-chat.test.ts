@@ -339,6 +339,38 @@ describe("chat fulfiller", () => {
     expect(typed(orca)).toHaveLength(1);
     expect(result(s, bad)).toMatchObject({ ok: false });
   });
+
+  // chat-multiline-send-fails U2: one count rule (code points of the trimmed text) and an error that names its rule.
+  test("U2: a ~400-character message with blank lines is typed whole in one poke, line breaks kept", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    idleAt(s, B, T);
+    const text = Array.from({ length: 4 }, (_, i) => `paragraph ${i + 1}: ` + "word ".repeat(18).trim()).join("\n\n");
+    expect(text.length).toBeGreaterThan(380);
+    const id = chat(s, text);
+    await tick(T);
+    expect(typed(orca)).toEqual([`${SAYS}${text}`]);
+    expect(result(s, id)).toMatchObject({ ok: true });
+  });
+
+  test("U2: 2000 characters pass, 2001 fail naming 2001, an emoji counts one, a bell names its line", async () => {
+    const s = imported(), { orca, tick } = rig(s);
+    idleAt(s, B, T);
+    const ok = chat(s, "x".repeat(2000));
+    await tick(T);
+    expect(result(s, ok)).toMatchObject({ ok: true });
+    idleAt(s, B, T + 100);
+    const emoji = chat(s, "😀".repeat(2000), B, T + 100);
+    await tick(T + 101);
+    expect(result(s, emoji)).toMatchObject({ ok: true });
+    idleAt(s, B, T + 200);
+    const over = chat(s, "x".repeat(2001), B, T + 200);
+    await tick(T + 201);
+    expect(result(s, over)).toEqual({ ok: false, error: "a chat is at most 2000 characters; this one has 2001" });
+    const bell = chat(s, "ok\nfine\nbe\u0007ll", B, T + 202);
+    await tick(T + 203);
+    expect(result(s, bell)).toEqual({ ok: false, error: "a chat may hold line breaks and tabs, but no other control character (line 3)" });
+    expect(typed(orca)).toHaveLength(2);
+  });
 });
 
 // U19: the board's key strip. A `keys` request {keys, via: "board"} presses named keys with no Enter added,
@@ -495,6 +527,23 @@ describe("chat with images", () => {
     await tick(T + 102);
     expect(result(s, t)).toMatchObject({ ok: true, state: "turn started" });
     expect(result(s, c2)).toMatchObject({ state: "already done" });
+  });
+
+  test("U2: Dismiss marks a failed or cancelled send dismissed and leaves a queued or sent one alone", async () => {
+    const s = imported(), { tick } = rig(s);
+    working(s, B, T);
+    const failed = chat(s, "x".repeat(2001));
+    await tick(T);
+    const queued = chat(s, "waiting", B, T + 1);
+    await tick(T + 1);
+    const dismiss = (id: number) => Number(s.request("chat-dismiss", { chat: id }, { project: "fx", squad: "demo", member: B }).row.id);
+    expect(req(s, queued).done_at).toBeNull();
+    const dq = dismiss(queued), df = dismiss(failed);
+    await tick(T + 2);
+    expect(result(s, failed)).toMatchObject({ ok: false, dismissed_at: T + 2 });
+    expect(result(s, df)).toMatchObject({ ok: true, state: "dismissed" });
+    expect(result(s, dq)).toMatchObject({ ok: false });   // a still-queued send is not dismissable (it has Cancel)
+    expect(result(s, queued)).not.toHaveProperty("dismissed_at");
   });
 
   test("Send now skips the quiet window only: a transcript written 6 s ago holds a plain chat, not a `now` one", async () => {

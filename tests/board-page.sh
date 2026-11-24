@@ -323,8 +323,8 @@ has "text: cancelled row folds into PR"  "$CXT" "folded into PR#19717"
 hasre "text: ✗ marks the cancelled row"  "$CXT" '✗ u1 '
 has "text: blocked names work dropped"   "$CXT" "blocked by u3 (work dropped)"
 has "text: LEFTOVERS block"              "$CXT" "LEFTOVERS"
-has "text: leftover names path+branch"   "$CXT" "⚑ /tmp/wt-keep  (br-keep, 2 uncommitted, 1 unpushed)"
-has "text: leftover waits on the PR"     "$CXT" "waits on PR#19717"
+has "text: leftover names path+branch"   "$CXT" "⚑ /tmp/wt-keep  (br-keep) — not checked yet"
+case "$CXT" in *"waits on PR#19717"*) fail=$((fail+1)); echo "  FAIL: text still shows waits on" >&2;; *) pass=$((pass+1));; esac
 # Same dep without into_merged -> blocked; dropped-cancelled dep -> blocked.
 jq '(.units[] | select(.slug=="u1") | .into_merged) = false' "$SD/cx-sq.json" > "$TMP/cx2" && mv "$TMP/cx2" "$SD/cx-sq.json"
 board "$LBL" > "$TMP/cx2.json"
@@ -334,7 +334,7 @@ eq "web board: cancelled counts as finished" "$(grep -cF 'u.state === "cancelled
 eq "board-data: open units exclude cancelled" "$(grep -cF 'u.state !== "done" && u.state !== "cancelled"' "$ROOT/bin/board/board-data.ts")" "2"
 eq "web board: units total excludes cancelled" "$(grep -cF 'total: n((x) => x.state !== "cancelled")' "$ROOT/web/board.html")" "1"
 eq "web board: LeftoversBox under UnitsBox" "$(grep -cF "<\${LeftoversBox} s=" "$ROOT/web/board.html")" "1"
-eq "web board: leftover files in a title tooltip" "$(grep -cF '(l.files || []).join("\n")' "$ROOT/web/board.html")" "1"
+eq "web board: leftover files in a title tooltip" "$(grep -cF '(c.differ || []).join("\n")' "$ROOT/web/board.html")" "1"
 eq "web board: cancelled dot + state styles" "$(grep -cF '.dot.cancelled' "$ROOT/web/board.html")$(grep -cF '.ust.cancelled' "$ROOT/web/board.html")" "11"
 
 # The loop's health row: a fresh tick -> no banner; older than board_stale_ticks (12) ticks of
@@ -778,13 +778,13 @@ chat_fn=$(sed -n '/^function ChatPanel(/,/^}/p' "$BP")
 eq "U3 page: a crew member with a worktree has chat in its actions menu" "$(sed -n '/^function MemberActions(/,/^}/p' "$BP" | grep -cF '${m.wt && onChat && html`<button class="btn sm chat-btn"')$(grep -cF 'onChat=${() => setChatWith(m)}' "$BP")$(grep -cF '<${ChatPanel} project=${s.label} topic=${s.topic} wt=${chatWith.wt}' "$BP")" "111"
 eq "U3 page: a squad question card chats with the member its answer goes to" "$(printf '%s' "$ask_fn" | grep -c 'n.squad !== "_studio" && n.chat_wt')$(printf '%s' "$ask_fn" | grep -c 'wt: n.chat_wt, label: n.chat_label')$(printf '%s' "$ask_fn" | grep -cF '<${ChatPanel} ...${chat}')" "111"
 eq "U3 page: the panel reads api/chat every 3 s and stops on close" "$(printf '%s' "$chat_fn" | grep -c 'setInterval(load, 3000)')$(printf '%s' "$chat_fn" | grep -c 'clearInterval(t)')" "11"
-eq "U3/U5/U19 page: a wrapping input capped at 2000, sent with its line breaks to api/chat" "$(printf '%s' "$chat_fn" | grep -c '<textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX}')$(grep -c '^const CHAT_MAX = 2000;' "$BP")$(printf '%s' "$chat_fn" | grep -c 'post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t })')$(printf '%s' "$chat_fn" | grep -c 'const t = chatText(text);')" "1111"
+eq "U3/U5/U19 page: a wrapping input counted to 2000 by code points, sent with its line breaks to api/chat" "$(printf '%s' "$chat_fn" | grep -c '<textarea class="chat-in" rows="1" ref=${input} enterkeyhint')$(grep -c '^const CHAT_MAX = 2000;' "$BP")$(printf '%s' "$chat_fn" | grep -c 'post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t })')$(printf '%s' "$chat_fn" | grep -c 'const t = chatText(text);')" "1111"
 eq "U19 page: the key strip posts api/keys, Esc first; a screen toggle reads data.screen" "$(grep -c '^const CHAT_KEYS = \[\["Escape", "Esc"' "$BP")$(printf '%s' "$chat_fn" | grep -cF 'await post("api/keys", { project, topic, wt: to, keys })')$(printf '%s' "$chat_fn" | grep -cF 'class="chat-keys" role="toolbar"')$(printf '%s' "$chat_fn" | grep -cF 'data.screen && typeof data.screen.tail === "string"')" "1111"
 # crew-terminal-access U5: the panel reads as a conversation.
 chat_row_fn=$(sed -n '/^function chatTurn(/,/^}/p' "$BP")
 eq "U5 page: only a reply is HTML, and only through mdToHtml (it escapes first)" "$(printf '%s%s' "$chat_fn" "$chat_row_fn" | grep -ci 'innerHTML')$(printf '%s' "$chat_row_fn" | grep -cF 'dangerouslySetInnerHTML=${{ __html: mdToHtml(text) }}')" "11"
 eq "U5 page: at phone width the panel fills the screen" "$(grep -cF '@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none' "$BP")" "1"
-eq "U5 page: a counter, Working…, the ↓ button, no send strip" "$(printf '%s' "$chat_fn" | grep -c '} left</span>')$(printf '%s' "$chat_fn" | grep -c 'data.working && html')$(printf '%s' "$chat_fn" | grep -c 'class="btn chat-down"')$(grep -c 'chat-sends\|chat-send ' "$BP")" "1110"
+eq "U5 page: a counter, Working…, the ↓ button, no send strip" "$(printf '%s' "$chat_fn" | grep -c '} left`}</span>')$(printf '%s' "$chat_fn" | grep -c 'data.working && html')$(printf '%s' "$chat_fn" | grep -c 'class="btn chat-down"')$(grep -c 'chat-sends\|chat-send ' "$BP")" "1110"
 # crew-terminal-access U4: the Flow card opens the unit details window, which names the Builder and offers Chat / Show in squad / Answer.
 ud_fn=$(sed -n '/^function UnitDetails(/,/^}/p' "$BP")
 eq "U4 page: the window's Builder row names the member and its state, or says why it is gone" "$(printf '%s' "$ud_fn" | grep -cF '<b>${bm.label}</b> <span class="mut">· ${bm.state')$(printf '%s' "$ud_fn" | grep -cF 'gone — its worktree')" "11"

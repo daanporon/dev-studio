@@ -766,6 +766,24 @@ eq "account-reset: ... and filed one more request"    "$(rr | jq length)" "2"
 eq "account-reset: a second press while paused is 409" "$(rp "{\"project\":\"$LBL\",\"agent\":\"claude\",\"account\":\"system\",\"grant\":\"g-ok\"}")" "409"
 DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); s.db.run("DELETE FROM pause_intents WHERE scope = ?", ["project"]); s.close();'
 eq "web board: the Use button posts api/account-reset after a confirm" "$(grep -cF 'post("api/account-reset"' "$ROOT/web/board.html")$(sed -n '/^async function useReset(/,/^}/p' "$ROOT/web/board.html" | grep -cF 'This cannot be undone.')" "11"
+
+# POST /api/leftover-remove (archive-leftovers U4): a Leftovers box's Remove files one `leftover-remove` request
+# for a leftover the squad names; 404 for none, 409 with one open, 400 for a body that is no JSON or bad fields.
+# The fulfiller's runs are tests/loop/leftover-remove-button.test.ts.
+LT="$(dbq "SELECT topic FROM squads WHERE project = '$LBL' ORDER BY topic LIMIT 1" | jq -r '.[0].topic')"
+dbw "UPDATE squads SET doc = json_set(doc, '\$.leftovers', json('[{\"wt\":\"wt-left::/x/lf\",\"path\":\"/x/lf\",\"branch\":\"work\"}]')) WHERE project = '$LBL' AND topic = '$LT'"
+LU2="http://127.0.0.1:$PORT/api/leftover-remove"
+lp(){ post -H "$O" -H "$CT" -d "$1" "$LU2"; }
+lr(){ dbq "SELECT project, squad, requested_by, payload FROM requests WHERE kind = 'leftover-remove' ORDER BY id" | jq -c '[.[] | [.project, .squad, .requested_by, (.payload | fromjson)]]'; }
+eq "leftover-remove: not JSON is 400"              "$(post -H "$O" -H "$CT" -d 'not json' "$LU2")" "400"
+eq "leftover-remove: a bad fingerprint is 400"     "$(lp "{\"project\":\"$LBL\",\"topic\":\"$LT\",\"wt\":\"wt-left::/x/lf\",\"fingerprint\":\"; rm\"}")" "400"
+eq "leftover-remove: no such leftover is 404"      "$(lp "{\"project\":\"$LBL\",\"topic\":\"$LT\",\"wt\":\"wt-nope\"}")" "404"
+eq "leftover-remove: no such squad is 404"         "$(lp "{\"project\":\"$LBL\",\"topic\":\"zz-none\",\"wt\":\"wt-left::/x/lf\"}")" "404"
+eq "leftover-remove: none of those filed a request" "$(lr | jq length)" "0"
+eq "leftover-remove: a leftover is 202"            "$(lp "{\"project\":\"$LBL\",\"topic\":\"$LT\",\"wt\":\"wt-left::/x/lf\",\"fingerprint\":\"0123456789abcdef01234567\"}")" "202"
+eq "leftover-remove: one request, by the board"    "$(lr)" "[[\"$LBL\",\"$LT\",\"board\",{\"wt\":\"wt-left::/x/lf\",\"fingerprint\":\"0123456789abcdef01234567\"}]]"
+eq "leftover-remove: a second press while open is 409" "$(lp "{\"project\":\"$LBL\",\"topic\":\"$LT\",\"wt\":\"wt-left::/x/lf\"}")" "409"
+eq "leftover-remove: ... and filed nothing"        "$(lr | jq length)" "1"
 resync
 eq "override: bad model is 400"      "$(op "{\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wLd\",\"model\":\"a b;rm\"}")" "400"
 eq "override: foreign Origin is 403" "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"wt\":\"wLd\",\"clear\":true}" "$OU")" "403"
@@ -1092,6 +1110,23 @@ eq "chat-cancel: a typed chat is 409"   "$(post -H "$O" -H "$CT" -d "$(cid "$CH"
 eq "chat-now: a typed chat is 409"      "$(post -H "$O" -H "$CT" -d "$(cid "$CH")" "$CN")" "409"
 eq "chat-now: no such request is 404"   "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CN")" "404"
 eq "chat-now: a bad id is 400"          "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"id\":\"x\"}" "$CN")" "400"
+# chat-multiline-send-fails U2: the limit's error text names the rule, a failed send is dismissed (the loop marks it), a queued one is not.
+CDM="http://127.0.0.1:$PORT/api/chat-dismiss"
+eq "chat: 2001 names its length"       "$(curl -s -H "$O" -H "$CT" -d "$(cbody wTh "$(head -c 2001 /dev/zero | tr '\0' x)")" "$C" | jq -r .error)" "a chat is at most 2000 characters; this one has 2001"
+eq "chat: a bell names its line"       "$(curl -s -H "$O" -H "$CT" -d "$(cbody wTh "$(printf 'a\nb\ac')")" "$C" | jq -r .error)" "a chat may hold line breaks and tabs, but no other control character (line 2)"
+ML=$(printf 'para one\n\npara two\r\n\r\n\tpara three')
+eq "chat: blank lines kept byte for byte" "$(post -H "$O" -H "$CT" -d "$(cbody wTh "$ML")" "$C")" "202"
+eq "chat: its text is the multi-line one" "$(reqrow "$(rid)" | jq -r '.payload.text')" "$(printf 'para one\n\npara two\n\n\tpara three')"
+N1=$((N1 + 1))
+FD=$(dbq "SELECT id FROM requests WHERE kind = 'chat' AND member = 'wTh' ORDER BY id DESC LIMIT 1" | jq '.[0].id')
+eq "chat-dismiss: a queued send is 409" "$(post -H "$O" -H "$CT" -d "$(cid "$FD")" "$CDM")" "409"
+dbw "UPDATE requests SET done_at = CAST(strftime('%s','now') AS INTEGER), result = '{\"ok\":false,\"error\":\"never ready\"}' WHERE id = $FD"
+jt "chat-dismiss: a failed send shows first" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "[.sends[] | select(.id == $FD)] | length == 1"
+eq "chat-dismiss: a failed send is 202" "$(post -H "$O" -H "$CT" -d "$(cid "$FD")" "$CDM")" "202"
+eq "chat-dismiss: its row names the chat" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.chat]')" "[\"chat-dismiss\",$FD]"
+dbw "UPDATE requests SET result = json_set(result, '$.dismissed_at', 1) WHERE id = $FD"
+jt "chat-dismiss: the loop's mark drops it from the chat" <(cq ans wTh >/dev/null; cat "$TMP/chat.out") "[.sends[] | select(.id == $FD)] | length == 0"
+eq "chat-dismiss: no such request is 404" "$(post -H "$O" -H "$CT" -d "$(cid 99999)" "$CDM")" "404"
 # board chat U19: POST /api/keys files one `keys` request {keys, via: "board"} for a live member, one open per member;
 # GET /api/chat carries the member's newest screen read as `screen`.
 K="http://127.0.0.1:$PORT/api/keys"

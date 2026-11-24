@@ -63,6 +63,7 @@ import { envInt } from "./tick.ts";
 import { loopStopping } from "./stopping.ts";
 import { carded, classify, clear, causeOf, fingerprint, lapse, launchRetryAt, LAUNCH_TRIES, refuse, REFUSAL_KIND, standing } from "../io/refusals.ts";
 import { keepStartFailed } from "../squad/start-failed.ts";
+import { removeLaunch, writeLaunch } from "../squad/launch-file.ts";
 import { redact, redactPayload } from "./redact.ts";
 
 export type Result =
@@ -484,7 +485,7 @@ export class LoopActuator implements Actuator {
   // generation, the call's retry id, to the adapter (startIdentity), which puts them on the terminal's launch line; `gen` hears the
   // generation the call ran (or, settled before, ran) under. The same id on a replay keeps the same generation.
   async call(store: Store, op: string, args: string[], o: { key: string; project: string; squad: string | null; member: string | null; sender: string; at: number;
-    ident?: string | null; gen?: (gen: string) => void }): Promise<Out> {
+    ident?: string | null; gen?: (gen: string) => void; env?: Record<string, string> }): Promise<Out> {
     const target = { project: o.project, squad: o.squad, member: o.member }, block = this.block(store, target);
     if (block) return { code: 75, out: "", err: `activity: ${block}` };
     // U200: a row under this key is this call's only when it is for the same project and member: an
@@ -507,7 +508,7 @@ export class LoopActuator implements Actuator {
     const sent = replay && last!.op === op && last!.payload ? JSON.parse(String(last!.payload)) as string[] : args;
     // U270: a failed Claude launch's screen becomes a start_failed event; the answer keeps a pointer to it.
     const ident = identified(o.ident, op, sent);
-    const env = { ...this.callEnv(store, target), ...(ident ? startIdentity(ident, retry) : {}) };
+    const env = { ...this.callEnv(store, target), ...(ident ? startIdentity(ident, retry) : {}), ...o.env };
     const out = keepStartFailed(store, await this.orca.run(op, sent, { from: o.sender, retry, env }), target);
     if (out.code === 0) {
       store.db.run("UPDATE orca_calls SET state = 'completed', result = ?, settled_at = ? WHERE retry_id = ?", [out.out, o.at, retry]);
@@ -528,8 +529,9 @@ export class LoopActuator implements Actuator {
 
   // What a driver acts through for one action: its squad, its sender terminal (made on the first
   // mutating call), and `key` for the write-ahead row. `ident` is the member's DS_MEMBER for a start
-  // (fulfil/member.ts): a Claude start then carries its identity, and `gen()` is its generation.
-  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null): Seat {
+  // (fulfil/member.ts): a Claude start then carries its identity, and `gen()` is its generation. `env` goes on
+  // every call of an Orca seat (U21c: squad/old-gone.ts's flag on a start).
+  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null, env?: Record<string, string>): Seat {
     let gen: string | null = null;
     const row = squad ? store.db.query("SELECT project, topic, run_id, repo, lead_wt, backend, worktree_provider FROM squads WHERE project = ? AND topic = ?").get(project, squad) as (Squad & { backend?: string; worktree_provider?: string }) | null : null;
     const studio_wt = (store.get("projects", { label: project })?.studio_wt as string | null | undefined) ?? null;
@@ -542,7 +544,7 @@ export class LoopActuator implements Actuator {
       call: async (op, args) => {
         const block = this.block(store, { project, squad, member });
         if (block) return { code: 75, out: "", err: `activity: ${block}` };
-        const via = (from: string) => this.call(store, op, args, { key, project, squad, member, sender: from, at, ident, gen: (g) => { gen = g; } });
+        const via = (from: string) => this.call(store, op, args, { key, project, squad, member, sender: from, at, ident, env, gen: (g) => { gen = g; } });
         const out = await via(await this.sender(store, project, squad ?? "", at));
         if (out.code === 0 || !/consumer_fenced|not bound to Run|run_not_bound|terminal_not_found|stable_pane_required/.test(out.err + out.out)) return out;
         if (squad) this.seatFailed.add(`${project}/${squad}`); // U244: seats() asks Orca who holds the Run next tick
@@ -719,11 +721,11 @@ export class LoopActuator implements Actuator {
         const b = blocked();
         if (b) return Promise.resolve({ ok: false, error: b, busy: true });
         return this.contractStart(store, c().backend, { ...req, env: { ...req.env, DS_BACKEND: name, DS_WT: req.cwd, ...(ident ? { DS_MEMBER: ident } : {}) } }, meta,
-          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen);
+          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen, req.cwd);
       },
       close: (cwd, id) => {
         const b = blocked();
-        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` }, id);
+        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` }, id, cwd);
       },
       ask: (op, req) => c().backend.call(op, req),
       worktree: async (m) => {
@@ -771,7 +773,7 @@ export class LoopActuator implements Actuator {
   // other is an old agent's, closed first (a crashed member's restart). The launch line is typed once:
   // the row notes `typed` before the send, and a replay that finds it set never types again. A thrown
   // call leaves the row unsettled and out of the member lock (`absent`), so the replay keeps the id.
-  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void): ReturnType<ContractSeat["start"]> {
+  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string): ReturnType<ContractSeat["start"]> {
     const last = this.lastCall(store, o);
     if (last?.op === "terminal.create" && last.state === "completed") {
       setGen(String(last.retry_id));
@@ -804,7 +806,11 @@ export class LoopActuator implements Actuator {
       if (!progress.typed) {
         progress = { terminal: t, typed: true };
         store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [JSON.stringify(progress), retry]);
-        const s = await b.call("terminal.send", { id: t.id, text: m0.line, submit: true });
+        // U20a: the full line goes to a file; the terminal gets a short one that fits a shell with no prompt yet.
+        let text: string;
+        try { text = writeLaunch(store.root, o.project, who, retry, m0.line); }
+        catch (e) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: `launch file: ${(e as Error).message}` }), o.at); return { ok: false, error: `launch file: ${(e as Error).message}` }; }
+        const s = await b.call("terminal.send", { id: t.id, text, submit: true });
         if (!s.ok) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: s.error.message }), o.at); return { ok: false, error: `terminal.send: ${s.error.message}` }; }
       }
       this.settleCall(store, retry, "completed", JSON.stringify({ terminal: t, typed: true }), o.at);
@@ -819,7 +825,7 @@ export class LoopActuator implements Actuator {
   // U11: close every terminal in a folder (U12b: only `id`, a pause's agent terminal), one orca_calls row
   // (op terminal.close) under the seat's key.
   // A gone terminal answers closed:false (or not_found between the list and the close): a replay is safe.
-  private async contractClose(store: Store, b: Backend, cwd: string, o: CallAt, id?: string): Promise<{ ok: boolean; error?: string }> {
+  private async contractClose(store: Store, b: Backend, cwd: string, o: CallAt, id?: string, who?: string): Promise<{ ok: boolean; error?: string }> {
     const last = this.lastCall(store, o);
     if (last?.op === "terminal.close" && last.state === "completed") return { ok: true };
     if (last?.op === "terminal.close" && last.settled_at == null && this.inFlight.has(String(last.retry_id))) return { ok: false, error: "close still in flight" };
@@ -834,6 +840,7 @@ export class LoopActuator implements Actuator {
         if (!c.ok && c.error.code !== "not_found") { this.settleCall(store, retry, "failed", c.error.message, o.at); return { ok: false, error: `terminal.close ${t.id}: ${c.error.message}` }; }
         closed.push(t.id);
       }
+      if (who) { try { removeLaunch(store.root, o.project, who); } catch { /* a leftover file is dropped by the next start */ } }   // U20a
       this.settleCall(store, retry, "completed", JSON.stringify({ closed }), o.at);
       return { ok: true };
     } catch (e) {

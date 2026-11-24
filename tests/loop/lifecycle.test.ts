@@ -363,8 +363,10 @@ describe("1d: leftovers and into-PR", () => {
     worker(s, B, "working");
     const l = loop(s);
     const acted = await l.tick(T);
-    expect(eps(acted)).toEqual([`worktree.remove leftover:wt-old::${keep}@3000000`]);
-    expect((acted[0].payload as Row).merged).toBe(true);
+    // The present tree gets its removal check; the gone one a `gone` removal that clears the state file (archive-leftovers U2).
+    expect(eps(acted).filter((e) => e.includes("leftover:"))).toEqual([`worktree.remove leftover:wt-old::${keep}@3000000`]);
+    expect(eps(acted).filter((e) => e.includes("leftover-gone:"))).toEqual(["worktree.remove leftover-gone:wt-gone::/nope@3000000"]);
+    expect((acted.find((a) => a.episode.startsWith("leftover:"))!.payload as Row).merged).toBe(true);
     expect(exported(root).leftovers.map((x: Row) => x.wt)).toEqual([`wt-old::${keep}`]);
     expect(await l.tick(T + 5)).toEqual([]);
     expect(events(s, "leftover_dropped").length).toBe(1);

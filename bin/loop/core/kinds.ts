@@ -39,6 +39,7 @@ export const REQUESTS = {
   account: obj({ agent: str, account: str, enabled: opt(bool) }),
   // account-free-resets U4: one press of a grant's Use button; `key` is the idempotency key every try reuses.
   "account-reset": obj({ agent: str, account: str, grant: str, key: str, ...THROUGH }),
+  "leftover-remove": obj({ wt: str, fingerprint: opt(str), ...THROUGH }),   // archive-leftovers U4: the board's Remove
   alert: obj({ id: opt(str), title: opt(str), text: opt(str), option: opt(str), why: opt(str), unit: opt(str), card: opt(str), reason: opt(str), fields: opt(rec) }),
   "alert-clear": obj({ prefix: opt(str), id: opt(str) }),
   answer: obj({ id: str, answer: str, seq: opt(num), card_wt: opt(str), choices: opt(arr(any)), transcript: opt(str), tool_use_id: opt(str), via: opt(str) }),
@@ -46,6 +47,7 @@ export const REQUESTS = {
   chat: obj({ text: str, via: opt(str), request: opt(num), files: opt(arr(str)) }),
   "chat-cancel": obj({ chat: num, request: opt(num) }),
   "chat-now": obj({ chat: num, request: opt(num) }),
+  "chat-dismiss": obj({ chat: num, request: opt(num) }),
   dismiss: obj({ id: str, answer: opt(str) }),
   duplicate: obj({ wt: opt(str), handle: opt(str), newest: opt(str), runHandle: opt(str), mismatch: opt(bool), first: opt(num) }),
   // ds-feedback-github-issues U3: the operator's review of one feedback draft or note (fulfil/feedback.ts).
@@ -81,7 +83,7 @@ export const REQUESTS = {
   studio: obj({ action: str, topic: opt(str), line: opt(str), framing: opt(str), files: opt(arr(str)), id: opt(str), answer: opt(str), request: opt(num), label: opt(str), date: opt(str), since: opt(num), until: opt(num), spend: opt(any), merges_upto: opt(any) }),
   "studio-move": obj({ handle: opt(str), agent: opt(str), account: opt(str), model: opt(str), effort: opt(str), from: opt(str), why: opt(str), notice: opt(str) }),
   withdraw: obj({ of: opt(str), key: opt(str), episode: opt(str) }),
-  "worktree.remove": obj({ label: opt(str), topic: opt(str), wt: opt(str), path: opt(str), unit: opt(str), merged: opt(bool) }),
+  "worktree.remove": obj({ label: opt(str), topic: opt(str), wt: opt(str), path: opt(str), unit: opt(str), merged: opt(bool), gone: opt(bool) }),
   "plan-revoke": obj({ plan: str, why: str, keep_started: opt(bool) }),
   "unit-action": obj({ action: str, slug: str, why: opt(str) }),
   "wt-set-parent": obj({ wt: str, parent: str, request: opt(num) }),
@@ -168,6 +170,8 @@ export const FACTS = {
   worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
   worktree_gone: obj({ path: str, provider: str, why: str }),
   // U10 (squad/shadow.ts): the shadow signals.
+  // chat-multiline-send-fails U1 (core/code-watch.ts): the checkout's HEAD moved loop code; the loop exits 75.
+  loop_code_changed: obj({ from_rev: str, to_rev: str, files: arr(str), count: num }),
   shadow_started: obj({}),
   shadow_disagree: obj({ point: str, old: str, new: str, member: str, id: opt(num), gen: opt(str), wt: opt(str), transient: bool, ticks: num, first_at: num }),
   shadow_explained: obj({ event: num, why: str, by: opt(str) }),

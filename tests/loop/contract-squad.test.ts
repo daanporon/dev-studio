@@ -5,7 +5,7 @@
 // verb) the member lock reads, and makes no Orca call for it. Hermetic: a copy of the fixture state, a
 // temp HOME whose .claude.json the folder trust is written to, DS_WORKTREE_ROOT under the temp dir.
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LoopActuator, memberOf, type Fulfiller, type Picker } from "../../bin/loop/core/actuator.ts";
@@ -85,6 +85,8 @@ const lead = (s: Store) => members(s).find((m) => m.role === "lead")!;
 const pathOf = (m: Row) => String(m.wt).replace(/^local::/, "");
 const creates = (f: FakeContract) => f.calls.filter((c) => c.op === "terminal.create").map((c) => c.req as { cwd: string; label: string; group?: string; parent?: string; env: Record<string, string> });
 const sends = (f: FakeContract) => f.calls.filter((c) => c.op === "terminal.send").map((c) => c.req as { id: string; text: string; submit?: boolean });
+// U20a: the file the short `exec bash '<file>'` line names.
+const launchFile = (text: string): string => /^exec bash '(.*)'$/.exec(text)![1]!;
 const live = (f: FakeContract, cwd: string) => [...f.terms.values()].filter((x) => x.t.cwd === cwd);
 // No Orca call of any kind is about this squad (the fixture's own `demo` squad is on Orca).
 const orcaFor = (r: Rig) => r.orca.calls.filter((c) => [SQ, join(r.d, "wts"), r.repo].some((x) => JSON.stringify(c.args).includes(x)) || c.via?.env?.DS_START_MEMBER?.includes(`/${SQ}/`));
@@ -141,9 +143,15 @@ describe("a squad on a contract backend (U11)", () => {
       const typed = sends(r.fake).filter((x) => x.id === t[0].t.id);
       expect(typed).toHaveLength(1);
       expect(typed[0].submit).toBe(true);
-      expect(typed[0].text).toStartWith("exec env -u CLAUDE_CONFIG_DIR ");   // claude replaces the shell: none is left for a poke
-      expect(typed[0].text).toContain("claude --dangerously-skip-permissions --model opus");
-      expect(typed[0].text).toContain("build\\ u1");
+      // U20a: the terminal gets a short `exec bash <file>`; the file (0600) holds the full line.
+      expect(typed[0].text).toStartWith("exec bash '");
+      expect(Buffer.byteLength(typed[0].text)).toBeLessThan(512);
+      const file = launchFile(typed[0].text);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      const full = readFileSync(file, "utf8");
+      expect(full).toStartWith("exec env -u CLAUDE_CONFIG_DIR ");   // claude replaces the shell: none is left for a poke
+      expect(full).toContain("claude --dangerously-skip-permissions --model opus");
+      expect(full).toContain("build\\ u1");
       // The folder was trusted in the account's .claude.json before the terminal was made; other keys kept.
       expect(r.trustAtCreate[lp]).toBe(true);
       expect(r.trustAtCreate[bp]).toBe(true);
@@ -176,7 +184,7 @@ describe("a squad on a contract backend (U11)", () => {
     const t = live(r.fake, bp);
     expect(t).toHaveLength(1);
     expect(t[0].t.gen).toBe(String(rows[0].retry_id));
-    expect(sends(r.fake).filter((x) => x.id === t[0].t.id && x.text.includes("claude --"))).toHaveLength(1);
+    expect(sends(r.fake).filter((x) => x.id === t[0].t.id && x.text.startsWith("exec bash "))).toHaveLength(1);
     expect(live(r.fake, pathOf(l))).toHaveLength(1);
   });
 
@@ -246,7 +254,7 @@ describe("a squad on a contract backend (U11)", () => {
     let thrown = 0;
     r.fake.call = (async (op: Op, req: unknown) => {
       const res = await call(op, req as never);
-      if (op === "terminal.send" && String((req as { text: string }).text).includes("claude --") && !thrown++) throw new Error("the loop died here");
+      if (op === "terminal.send" && String((req as { text: string }).text).startsWith("exec bash ") && !thrown++) throw new Error("the loop died here");
       return res;
     }) as FakeContract["call"];
     const id = builder(r, "u7");
@@ -270,7 +278,7 @@ describe("a squad on a contract backend (U11)", () => {
     expect(row()).toMatchObject({ state: "completed", retry_id: first.retry_id });
     const cwd = pathOf(member(r.s, id));
     expect(creates(r.fake).filter((c) => c.cwd === cwd)).toHaveLength(1);
-    expect(sends(r.fake).filter((x) => x.text.includes("claude --") && live(r.fake, cwd).some((t) => t.t.id === x.id))).toHaveLength(1);
+    expect(sends(r.fake).filter((x) => x.text.startsWith("exec bash ") && live(r.fake, cwd).some((t) => t.t.id === x.id))).toHaveLength(1);
   });
 
   test("a restart closes the old terminal first; a stop closes the member's terminals", async () => {
@@ -278,28 +286,27 @@ describe("a squad on a contract backend (U11)", () => {
     await startLead(r);
     const b = await startBuilder(r, "u4"), bp = pathOf(b);
     const first = live(r.fake, bp)[0].t;
+    const file1 = launchFile(sends(r.fake).find((x) => x.id === first.id && x.text.startsWith("exec bash "))!.text);
+    expect(existsSync(file1)).toBe(true);
     // The agent crashed, its shell stays: the walk finds no agent, the decider restarts it (U12: off Orca it reads the walk).
     r.s.upsert("observed_workers", { project: "fx", wt: String(b.wt) }, { state: "idle", walk: "none", presence: "none", account_at: r.now() + 1, observed_at: r.now() });
     await r.tick(3);
     const after = live(r.fake, bp);
     expect(after).toHaveLength(1);
     expect(after[0].t.id).not.toBe(first.id);
+    // the next generation's file replaces the old one
+    const file2 = launchFile(sends(r.fake).find((x) => x.id === after[0].t.id && x.text.startsWith("exec bash "))!.text);
+    expect(file2).not.toBe(file1);
+    expect(existsSync(file1)).toBe(false);
+    expect(existsSync(file2)).toBe(true);
     expect(r.fake.calls.some((c) => c.op === "terminal.close" && (c.req as { id: string }).id === first.id)).toBe(true);
     running(r, member(r.s, Number(b.id)));
     r.s.want("member", String(b.id), "stopped", { by: "test" });
     await r.tick(3);
     expect(live(r.fake, bp)).toEqual([]);
+    expect(existsSync(file2)).toBe(false);   // closed with its terminal
     const close = r.s.db.query("SELECT * FROM orca_calls WHERE op = 'terminal.close' AND member = ?").get(String(b.wt)) as Row | null;
     expect(close?.state).toBe("completed");
     expect(orcaFor(r)).toEqual([]);
   }, 30_000);
-});
-
-test("the contract's launch line execs claude for every account form; Orca's lines do not exec", async () => {
-  const { claudeLine } = await import("../../bin/loop/drivers/claude-launch.ts");
-  const base = { gates: "/g", args: ["--model", "opus"], utf8: true, exec: true };
-  expect(claudeLine({ ...base, config: { system: true } })).toStartWith("exec env -u CLAUDE_CONFIG_DIR PATH=");
-  expect(claudeLine({ ...base, config: { home: "/h" } })).toStartWith("exec env CLAUDE_CONFIG_DIR=");
-  expect(claudeLine({ ...base, config: null })).toStartWith("exec env PATH=");
-  expect(claudeLine({ ...base, config: null, exec: false })).toStartWith("PATH=");
 });

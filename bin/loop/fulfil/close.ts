@@ -10,6 +10,11 @@
 //           Before any of that (lavish-docs-not-stored U3, io/rescue.ts) its review pages and working
 //           notes are copied to state/<label>/pages/<topic>/rescued/<role[-suffix]>/, kept or removed
 //           alike; a copy that fails keeps the worktree as a leftover (`rescue failed: <why>`).
+//           orca-worktree-cleanup U1: the files under .scratch/ and .lavish/ the rescue holds a byte-for-byte copy
+//           of count as ours in both probes (wt-probe.ts `secured`); the rescue runs again right before the
+//           second probe (after the close-time tidy), and when secured files are all that is left the removal is
+//           forced (`git worktree remove` refuses untracked files otherwise; the branch is kept either way).
+//           A refused removal records the backend's own words (`rmRefusal`).
 // Busy (U203, close-busy.ts, shared with decide.ts closeOK): worker state working/waiting, except a
 // finished unit's member that is `working` only through background tasks (its turn has ended: no
 // foreground tool call open): that one is closed. An unreadable transcript counts as busy.
@@ -44,6 +49,23 @@ function presence(x: Exec, r: Row): string | null {
 }
 // `rescued` (U3): the folder its pages and notes were copied to, when anything is there.
 type Rescue = { rescued?: string };
+/** What a failed worktree-rm says, for the leftover reason: Orca's JSON error (`<code>: <message>`) when its
+ *  output holds one, else its last line that is not the adapter's own `orca adapter: … failed …` line, else
+ *  "no detail from backend"; at most 300 characters. */
+export function rmRefusal(out: string, err: string): string {
+  const lines = `${err}\n${out}`.split("\n").map((l) => l.trim()).filter(Boolean);
+  for (const l of lines) {
+    if (!l.startsWith("{")) continue;
+    try {
+      const e = (JSON.parse(l) as { error?: { code?: unknown; message?: unknown } }).error;
+      const msg = typeof e?.message === "string" ? e.message : "", code = typeof e?.code === "string" ? e.code : "";
+      if (msg || code) return (code && msg ? `${code}: ${msg}` : msg || code).slice(0, 300);
+    } catch { /* not JSON */ }
+  }
+  const own = /^orca adapter: .* failed\b/;
+  return (lines.filter((l) => !own.test(l)).at(-1) ?? "no detail from backend").slice(0, 300);
+}
+
 function prune(store: Store, r: Row, at: number, result: string, extra: Rescue = {}): void {
   store.fact("wish_done", [{ table: "members", key: { id: r.id }, set: { status: "gone", doc: null, want_result: `done: ${result}`, updated_at: at } }],
     { project: String(r.project), squad: String(r.squad), member: (r.wt as string | null) ?? null, payload: { want: "gone", result, ...extra } });
@@ -65,10 +87,9 @@ function recordLeftover(store: Store, r: Row, wt: string, path: string, branch: 
   const doc = JSON.parse(String(squad.doc)) as Row;
   const left = (Array.isArray(doc.leftovers) ? doc.leftovers as Row[] : []).filter((l) => l.wt !== wt);
   const unit = r.role === "builder" && r.suffix ? store.get("units", { project: r.project, squad: r.squad, slug: r.suffix }) : null;
-  const waits = unit?.pr ? `PR #${unit.pr} merged — inspect, then close-squad --force or remove by hand` : "the Lead/operator decision";
-  doc.leftovers = [...left, { wt, path, branch, reason, waits_on: waits, files: files.slice(0, 20), n_files: n, unpushed, ...(unit ? { unit: String(unit.slug) } : {}) }];
+  doc.leftovers = [...left, { wt, path, branch, reason, waits_on: null, files: files.slice(0, 20), n_files: n, unpushed, ...(unit ? { unit: String(unit.slug) } : {}) }];
   store.db.run("UPDATE squads SET doc = ? WHERE project = ? AND topic = ?", [JSON.stringify(doc), String(r.project), String(r.squad)]);
-  store.event("leftover_recorded", { project: String(r.project), squad: String(r.squad), member: wt, payload: { wt, path, branch, reason, waits_on: waits, ...extra } });
+  store.event("leftover_recorded", { project: String(r.project), squad: String(r.squad), member: wt, payload: { wt, path, branch, reason, waits_on: null, ...extra } });
 }
 
 async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
@@ -88,34 +109,41 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   const w = { project: String(r.project), squad: String(r.squad), wt, path };
   if (!path || !existsSync(path)) { finish("archived: worktree already gone"); return { done: true, result: "removed: already gone" }; }
   // U3: copy its pages and notes out first, whatever the probe says next; a replay copies nothing twice.
-  const saved = await rescuePages(store, String(r.project), String(r.squad), r.suffix ? `${r.role}-${r.suffix}` : String(r.role), path);
-  if (saved.count + saved.same > 0) extra = { rescued: saved.dest };
-  if (saved.count > 0) store.event("pages_rescued", { project: String(r.project), squad: String(r.squad), member: wt,
-    payload: { wt, path, dest: saved.dest, count: saved.count, bytes: saved.bytes, same: saved.same, capped: saved.capped, listed: saved.listed, files: saved.files.slice(0, 20) } });
-  if (!saved.ok) {
-    recordLeftover(store, r, wt, path, branch || "unknown", `rescue failed: ${saved.why}`, [], 0, 0, extra);
-    finish("leftover kept (rescue failed)");
-    return { done: true, result: "left: rescue-failed" };
-  }
+  // orca-worktree-cleanup U1: run once more before the second probe; `pass` 2's event says so.
+  const rescue = async (pass: number): Promise<Result | Set<string>> => {
+    const saved = await rescuePages(store, String(r.project), String(r.squad), r.suffix ? `${r.role}-${r.suffix}` : String(r.role), path);
+    if (saved.count + saved.same > 0) extra = { rescued: saved.dest };
+    if (saved.count > 0) store.event("pages_rescued", { project: String(r.project), squad: String(r.squad), member: wt,
+      payload: { wt, path, dest: saved.dest, count: saved.count, bytes: saved.bytes, same: saved.same, capped: saved.capped, listed: saved.listed, files: saved.files.slice(0, 20), ...(pass > 1 ? { pass } : {}) } });
+    if (!saved.ok) {
+      recordLeftover(store, r, wt, path, branch || "unknown", `rescue failed: ${saved.why}`, [], 0, 0, extra);
+      finish("leftover kept (rescue failed)");
+      return { done: true, result: "left: rescue-failed" };
+    }
+    return new Set(saved.secured);
+  };
+  const secured1 = await rescue(1);
+  if (!(secured1 instanceof Set)) return secured1;
   // A dirty or unpushed tree is kept as a leftover, untouched; `tidied` says the close-time tidy ran.
-  const check = async (tidied: boolean): Promise<Result | { dirty: number; unpushed: number; files: string[] }> => {
-    const probe = await wtProbe(path, 60_000);
+  type Clean = { dirty: number; unpushed: number; secured: number; files: string[] };
+  const check = async (tidied: boolean, secured: Set<string>): Promise<Result | Clean> => {
+    const probe = await wtProbe(path, 60_000, { secured });
     if (probe.code !== 0) {
       recordLeftover(store, r, wt, path, branch || "unknown", "unknown (probe failed)", [], 0, 0, extra);
       finish("leftover kept (probe failed)");
       return { done: true, result: "left: probe-failed" };
     }
-    const lines = probe.out.split("\n"), [d, u] = lines[0].split("\t");
+    const lines = probe.out.split("\n"), [d, u, k] = lines[0].split("\t");
     const dirty = Number(d || 0), unpushed = Number(u || 0), files = lines.slice(1).filter(Boolean);
     if (dirty > 0 || unpushed > 0) {
-      const reason = dirty > 0 && unpushed > 0 ? "both" : dirty > 0 ? "uncommitted changes" : "unpushed commits";
+      const reason = `kept: ${dirty} uncommitted, ${unpushed} unpushed`;
       recordLeftover(store, r, wt, path, branch || "unknown", tidied ? `${reason} (after cleanup_on_close)` : reason, files, dirty, unpushed, extra);
       finish("leftover kept");
       return { done: true, result: dirty > 0 ? "left: dirty" : "left: unpushed" };
     }
-    return { dirty, unpushed, files };
+    return { dirty, unpushed, secured: Number(k || 0), files };
   };
-  const first = await check(false);
+  const first = await check(false, secured1);
   if (!("files" in first)) return first;
   const block = actionBlock(store, a);
   if (block) return { wait: block };
@@ -129,14 +157,18 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   } else await x.act.orca.run("terminal-close-worktree", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
   // U1 (KTD10): the project's cleanup_on_close, then stop what is still running in the tree, then probe again.
   const tidy = await closeTidy.before(a, x, path);
-  const again = await check(true);
+  const secured2 = await rescue(2);
+  if (!(secured2 instanceof Set)) return secured2;
+  const again = await check(true, secured2);
   if (!("files" in again)) return again;
   const { dirty, unpushed, files } = again;
-  const rm = contract ? await contractRemoveTree(a, x, w) : await x.act.orca.run("worktree-rm", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
+  // Only the secured copies are left: git refuses untracked files without force (the branch stays either way).
+  const force = again.secured > 0;
+  const env = { env: x.act.childActivity(x.store, a) };
+  const rm = contract ? await contractRemoveTree(a, x, w, force) : await x.act.orca.run("worktree-rm", [`id:${wt}`, ...(force ? ["force"] : [])], env);
   if (rm.code === 75) return { wait: "activity changed before removal" };   // the backend's pause/generation fence: not a refusal
   if (rm.code !== 0) {
-    const err = (rm.err || rm.out).split("\n").filter((l) => l.trim()).at(-1)?.slice(0, 200) || "no detail from backend";
-    recordLeftover(store, r, wt, path, branch || "unknown", `worktree-rm refused: ${err}`, files, dirty, unpushed, extra);
+    recordLeftover(store, r, wt, path, branch || "unknown", `worktree-rm refused: ${rmRefusal(rm.out, rm.err)}`, files, dirty, unpushed, extra);
     finish("leftover kept (worktree-rm refused)");
     return { done: true, result: "left: rm-refused" };
   }

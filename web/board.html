@@ -183,7 +183,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .crew .m .badge{margin-left:6px;flex:none;font:10px var(--mono);padding:0 5px;border-radius:4px;background:#232833;color:var(--dim)}
 .crew .m .badge.at-prompt{background:#3a2e12;color:#e8b04a}
 .ust{font-size:12px;color:var(--mut)} .ust.working,.ust.waiting,.ust.built,.ust.building,.ust.testing,.ust.babysitting{color:var(--blue)} .ust.ready{color:var(--fg)} .ust.done{color:var(--green)} .ust.gone{color:var(--red)} .ust.fixing,.ust.noPR{color:var(--amber)} .ust.merged{color:var(--purple)} .ust.held{color:var(--mut);font-style:italic} .ust.cancelled{color:var(--dim);text-decoration:line-through} .ust.stale{color:var(--amber)} .ust.merge-ready{color:var(--green)}
-.lo{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:6px 4px;border-top:1px solid var(--line);font:12px var(--mono)} .lo .path{color:var(--fg);word-break:break-all} .lo .flag{color:var(--amber)}
+.lo{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:6px 4px;border-top:1px solid var(--line);font:12px var(--mono)} .lo .path{color:var(--fg);word-break:break-all} .lo .flag{color:var(--amber)} .lo .lo-d{flex-basis:100%;padding-left:18px} .lo .lo-confirm{flex-basis:100%;margin-left:18px;padding:8px;border:1px solid var(--amber);border-radius:6px;display:flex;flex-direction:column;gap:4px}
 .dot.spin{display:inline-block;flex:none;background:transparent;border:2px solid var(--blue);border-right-color:transparent;animation:spin .8s linear infinite}
 .topic .dot.spin{margin-right:7px;vertical-align:-1px}
 @keyframes spin{to{transform:rotate(360deg)}} @media (prefers-reduced-motion:reduce){.dot.spin{animation:none}}
@@ -1602,16 +1602,60 @@ function UnitsBox({ s, flow, toast, onPlan }) {
         ${s.unit_tokens && s.unit_tokens.spent > 0 && html`<div class="tier" title="price-weighted tokens (cache write ×2 on 1h, ×1.25 on 5m; cache read ×0.05 Opus, ×0.1 other; output ×5; input ×1), review included: the sum of the unit rows above">spent ≈${fmtTok(s.unit_tokens.spent)} over ${s.unit_tokens.units} units (7 days)</div>`}</div>`;
 }
 
-// Kept worktrees: close-role couldn't remove one without losing work, so it stays until the
-// sweep proves it safe (clean and pushed/merged). Hover a row for the uncommitted file names.
-function LeftoversBox({ s }) {
-  return html`<div class="box"><h3>Leftovers <span>kept, not yet safe to remove</span></h3>
-    ${(s.leftovers || []).map((l) => html`<div key=${l.wt || l.path} class="lo" title=${(l.files || []).join("\n") || "no file list"}>
-      <span class="flag">⚑</span><span class="path">${l.path}</span>
-      <span class="mut">${l.branch}, ${l.n_files} uncommitted${l.unpushed ? ", " + l.unpushed + " unpushed" : ""}</span>
-      <span>${l.reason || ""}</span><span class="mut">waits on ${l.waits_on || "?"} · ${fmtAge(l.age_min)}</span></div>`)}</div>`;
+// Kept worktrees (archive-leftovers U3): the loop checks each against main and shows what is in it: safe (the
+// next check removes it) or look first, with the commits and files not on main and a way to keep them.
+// U4: Remove posts api/leftover-remove at once for a safe tree; a look-first one first asks, listing what is not on
+// main, and posts the check's fingerprint so the loop removes only the tree the operator looked at.
+function leftoverOutcome(m) {
+  if (!m) return null;
+  const r = m.result;
+  if (!r) return "removing…";
+  if (r.ok) return "removed" + (r.saved ? ", saved to " + r.saved : "");
+  return "not removed: " + String(r.error || "failed").replace(/^(left|refused): /, "");
 }
-
+function LeftoversBox({ s, toast }) {
+  const ago = (sec) => sec == null ? "" : sec >= 3600 ? Math.floor(sec / 3600) + "h" : Math.max(1, Math.floor(sec / 60)) + "m";
+  const [ask, setAsk] = useState(null), [sent, setSent] = useState({});
+  const say = (t) => { if (!toast) return; toast(t); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast(null), 6000); };
+  const go = async (l) => {
+    setAsk(null);
+    const fp = l.check && l.check.fingerprint;
+    try {
+      const b = await post("api/leftover-remove", { project: s.label, topic: s.topic, wt: l.wt, ...(fp ? { fingerprint: fp } : {}) });
+      setSent((o) => ({ ...o, [l.wt]: b.queued ? "queued: runs when the squad resumes" : "removing…" }));
+      say(b.queued ? "queued: runs when the squad resumes (#" + b.id + ")" : "removal of " + l.path + " requested (#" + b.id + ")");
+    } catch (e) {
+      if (e.status === 409) { setSent((o) => ({ ...o, [l.wt]: "removing…" })); return; }   // a press already open: that one runs
+      setSent((o) => ({ ...o, [l.wt]: "not sent: " + (e.message || e) })); say("not sent: " + (e.message || e));
+    }
+  };
+  return html`<div class="box"><h3>Leftovers <span>kept because they hold work not on main</span></h3>
+    ${(s.leftovers || []).map((l) => {
+      const c = l.check, plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+      const done = l.remove && l.remove.result, outcome = (done ? null : sent[l.wt]) || leftoverOutcome(l.remove);
+      const dir = "~/.dev-studio/state/" + s.label + "/pages/" + s.topic + "/leftovers", patch = dir + "/" + String(l.wt || "").replace(/[^A-Za-z0-9._-]+/g, "_") + ".patch";
+      const keep = ["git -C " + l.path + " push origin HEAD:refs/heads/" + l.branch, "mkdir -p " + dir + " && git -C " + l.path + " diff --binary HEAD > " + patch];
+      return html`<div key=${l.wt || l.path} class="lo">
+        <span class="flag">⚑</span><span class="path">${l.path}</span>
+        <span class="mut">${l.branch}${l.pr ? " · PR #" + l.pr : ""}</span>
+        ${!c ? html`<span class="mut">not checked yet</span>`
+          : c.safe ? html`<span>safe, removing on the next check</span>`
+          : html`<span><b>look first</b></span>`}
+        ${c && !c.safe && html`<div class="lo-d">
+          ${c.commits.length > 0 && html`<div>${plural(c.commits.length, "commit")} not on main: ${c.commits.map((k) => html`<div class="mut" key=${k.sha}>${k.sha.slice(0, 8)} ${k.title}</div>`)}</div>`}
+          ${c.n_differ > 0 && html`<div title=${(c.differ || []).join("\n")}>${plural(c.n_differ, "file")} differ from main: <span class="mut">${(c.differ || []).slice(0, 5).join(", ")}${c.n_differ > 5 ? ", …" : ""}</span></div>`}</div>`}
+        ${c && html`<span class="mut">checked ${ago(c.checked_age_s)} ago</span>`}
+        <a href="#" class="mut" title=${keep.join("\n")} onClick=${(e) => { e.preventDefault(); copy(keep.join("\n"), toast); }}>Keep it</a>
+        <button class="lo-rm" disabled=${!!(l.remove && !l.remove.result)} onClick=${() => c && c.safe ? go(l) : setAsk(l.wt)}>Remove</button>
+        ${outcome && html`<span class="mut lo-out">${outcome}</span>`}
+        ${ask === l.wt && html`<div class="lo-confirm" role="dialog">
+          <div><b>Remove ${l.path}?</b> ${c ? "It holds work not on main:" : "It has not been checked yet; the loop checks it again first."}</div>
+          ${c && c.commits.length > 0 && html`<div>${plural(c.commits.length, "commit")}: ${c.commits.map((k) => html`<div class="mut" key=${k.sha}>${k.sha.slice(0, 8)} ${k.title}</div>`)}</div>`}
+          ${c && c.n_differ > 0 && html`<div>${plural(c.n_differ, "file")}: <span class="mut">${(c.differ || []).join(", ")}${c.n_differ > (c.differ || []).length ? ", …" : ""}</span></div>`}
+          <div class="lo-save">uncommitted changes are saved to a patch; commits stay on branch ${l.branch}</div>
+          <div><button class="lo-go" onClick=${() => go(l)}>Remove</button> <button class="lo-cancel" onClick=${() => setAsk(null)}>Cancel</button></div></div>`}</div>`;
+    })}</div>`;
+}
 // "2h" / "3d" since an epoch-seconds mtime; "" when unknown.
 const docAge = (t) => { if (!t) return ""; const m = Math.max(0, Math.floor((Date.now() / 1000 - t) / 60)); return m < 60 ? m + "m" : m < 48 * 60 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
 const docWhen = (t) => t ? new Date(t * 1000).toLocaleString() : "";
@@ -2102,18 +2146,34 @@ function ChatCtl({ x, project, reload }) {
   };
   return html`<div class="chat-ctl"><button type="button" class="chat-cbtn chat-cancel" disabled=${off} onClick=${() => go("cancel")}>Cancel</button>${x.first && !x.now ? html`<button type="button" class="chat-cbtn chat-now" disabled=${off} onClick=${() => go("now")}>Send now</button>` : null}${msg && html`<span class="chat-time">${msg}</span>`}</div>`;
 }
+// A failed or cancelled send (chat-multiline-send-fails U2): Edit puts its text (and images) back in the member's box;
+// Dismiss files `chat-dismiss`, after which the loop leaves the send out of GET api/chat, on every device.
+function ChatFailCtl({ x, project, reload, edit }) {
+  const [off, setOff] = useState(false), [msg, setMsg] = useState("");
+  const dismiss = async () => {
+    setOff(true); setMsg("");
+    try { await post("api/chat-dismiss", { project, id: x.id }); }
+    catch (e) { setMsg(String(e.message || e)); setOff(false); }
+    reload();
+  };
+  return html`<div class="chat-ctl"><button type="button" class="chat-cbtn chat-edit" disabled=${off} onClick=${() => edit(x)}>Edit</button><button type="button" class="chat-cbtn chat-dismiss" disabled=${off} onClick=${dismiss}>Dismiss</button>${msg && html`<span class="chat-time">${msg}</span>`}</div>`;
+}
 const chatTime = (at) => at == null ? "" : new Date(at * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 const chatDay = (at) => new Date(at * 1000).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 // A typed message as the POST sends it (U19: it may span lines, pasted whole into the terminal): CR LF and CR
 // become LF, tabs stay, every other control character (C0, DEL, C1, as the server refuses them) a space.
 const chatText = (s) => String(s).replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]+/g, " ").trim();
+// The limit counts code points of the posted text, as the board server and the loop count it (bin/loop/chat/limits.ts): an emoji is 1, CR LF is 1.
+const chatCount = (s) => Array.from(chatText(s)).length;
 // On a touch screen Enter is a new line and Send sends; with a keyboard Enter sends and Shift+Enter is a new line.
 const chatAge = (s) => (s < 60 ? Math.max(0, Math.round(s)) + " s" : s < 3600 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h");
 const chatTouch = () => typeof matchMedia === "function" && matchMedia("(pointer:coarse)").matches;
 // The key strip (U19): each button is one api/keys press, typed with no Enter even while the member works:
 // Esc stops a turn, the arrows, Enter and a digit pick in a menu.
 const CHAT_KEYS = [["Escape", "Esc", "Press Esc: stops a working agent, closes a menu"], ["Up", "↑", "Up arrow"], ["Down", "↓", "Down arrow"],
-  ["Enter", "⏎", "Enter: picks the marked option"], ["Tab", "⇥", "Tab"], ...["1", "2", "3", "4", "5"].map((d) => [d, d, "Press " + d + ": picks option " + d])];
+  ["Enter", "⏎", "Enter: picks the marked option"], ["Tab", "⇥", "Tab"], ];
+// U19b: the digits show only while the screen read shows a numbered menu, 1 up to its option count (at most 5).
+const chatDigits = (n) => ["1", "2", "3", "4", "5"].slice(0, Math.max(0, Math.min(5, Number(n) || 0))).map((d) => [d, d, "Press " + d + ": picks option " + d]);
 // ---- images in the chat (chat-image-upload U3) ----
 // An image is shrunk in the page when it is big (over 3.5 MiB, a long side over 2000 px) or of a type the server refuses
 // (an iPhone HEIC), uploaded the moment it is attached (api/chat-file, answered with its name), and only the names ride
@@ -2216,7 +2276,7 @@ function chatTurn(r, source, i, imgUrl, ctl) {
   if (r.send) {
     const x = r.send;
     return html`<div key=${"s" + x.id} class=${"chat-turn op " + chatTone(x.state, x.failing)}><div class="bubble">${x.text}${x.files && x.files.length ? html`<${ChatImages} items=${x.files} />` : null}</div>
-      <span class="chat-time">${chatSendLine(x)}</span>${x.state === "queued" && x.gives_up_at != null ? html`<span class="chat-time chat-giveup">gives up at ${chatTime(x.gives_up_at)}</span>` : null}${x.state === "queued" && ctl ? html`<${ChatCtl} key=${x.id + ":" + (x.now ? 1 : 0) + ":" + (x.first ? 1 : 0)} x=${x} project=${ctl.project} reload=${ctl.reload} />` : null}</div>`;
+      <span class="chat-time">${chatSendLine(x)}</span>${x.state === "queued" && x.gives_up_at != null ? html`<span class="chat-time chat-giveup">gives up at ${chatTime(x.gives_up_at)}</span>` : null}${x.state === "queued" && ctl ? html`<${ChatCtl} key=${x.id + ":" + (x.now ? 1 : 0) + ":" + (x.first ? 1 : 0)} x=${x} project=${ctl.project} reload=${ctl.reload} />` : null}${(x.state === "failed" || x.state === "cancelled") && ctl && ctl.edit ? html`<${ChatFailCtl} key=${"f" + x.id} x=${x} project=${ctl.project} reload=${ctl.reload} edit=${ctl.edit} />` : null}</div>`;
   }
   const t = r.turn, text = String(t.text ?? ""), time = chatTime(t.at);
   if (source === "screen" || t.role === "screen") return html`<div key=${i} class="chat-turn screen"><div class="txt">${text}</div>${time && html`<span class="chat-time">${time}</span>`}</div>`;
@@ -2375,6 +2435,8 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
     const wt = shown.wt, to = wt;   // the member this line is for (shadows the opening member)
     const ids = heldOf(to).map((f) => f.id);
     if ((!t && !ids.length) || busy === to || uploading) return;
+    const n = chatCount(text);
+    if (n > CHAT_MAX) { setErr("not sent: " + n + " characters, the limit is " + CHAT_MAX); return; }   // the text stays in the box
     setBusy(to); setErr("");
     try {
       await post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t });
@@ -2388,6 +2450,26 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
     }
     finally { setBusy((v) => (v === to ? "" : v)); }
   };
+  // Edit on a failed send: its text goes back in the member's box (below an existing draft after a blank line) and its
+  // images with it, each rebuilt from the stored name; one that is gone from the store is skipped with a note.
+  const editSend = async (x) => {
+    const to = shown.wt;
+    const gone = [], back = [];
+    for (const f of x.files || []) {
+      let ok = true;
+      try { const r = await fetch(f.url, { cache: "no-store" }); ok = r.ok; } catch (e) { ok = true; }   // an unreachable store is not "gone"
+      if (ok) back.push({ id: f.name, url: f.url, name: f.name }); else gone.push(f.name);
+    }
+    const draft = String(chatDraft(project, topic, to).text || (cur.current === to ? text : ""));
+    const next = draft.trim() ? draft.replace(/\s+$/, "") + "\n\n" + x.text : x.text;
+    chatDraftSet(project, topic, to, next);
+    const have = heldOf(to), add = back.filter((f) => !have.some((h) => h.id === f.id));
+    if (add.length) putHeld(to, [...have, ...add].slice(0, CHAT_IMAGES));
+    if (cur.current === to) {
+      setText(next); setErr(""); setNote(gone.length ? (gone.length === 1 ? "image " + gone[0] + " is gone, not restored" : gone.length + " images are gone, not restored: " + gone.join(", ")) : "");
+      if (input.current) { input.current.value = next; grow(input.current); if (input.current.focus) input.current.focus(); }
+    }
+  };
   // One press of the key strip for the member shown (api/keys); a refusal shows why, nothing is retried.
   const press = async (keys, name) => {
     const to = shown.wt;
@@ -2400,7 +2482,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
   const scr = data && data.screen && typeof data.screen.tail === "string" ? data.screen : null;
   const showScreen = !!scr && (screenOn == null ? data.source === "screen" : screenOn);
   const turns = (data && data.turns) || [], sends = (data && data.sends) || [], rows = chatRows(turns, sends);
-  const left = CHAT_MAX - text.length;
+  const left = CHAT_MAX - chatCount(text);
   // The members to show: the live crew in the Crew box's order; the shown member always has a tab (first when it is not in `crew`).
   const members = topic === "_studio" ? [] : crew.some((m) => m.wt === shown.wt) ? crew : [{ wt: shown.wt, label: shown.label, role: null, unread: 0, reply_due: 0, reply_at: null }, ...crew];
   const multi = members.length >= 2;
@@ -2434,12 +2516,12 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
         onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label.length > 14 ? m.label.slice(0, 13) + "…" : m.label}</span>${badge(mail(m), chatMailTip(m))}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}
       <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${showScreen
         ? html`<pre class="chat-screen" aria-label="Live screen">${scr.tail || "(blank screen)"}</pre><span class="chat-time chat-screen-at">${scr.age_s == null ? "not read yet" : "read " + chatAge(scr.age_s) + " ago"}</span>`
-        : rows.length ? rows.map((r, i) => chatTurn(r, data.source, i, (n) => chatImgUrl(project, topic, n), { project, reload: load }))
+        : rows.length ? rows.map((r, i) => chatTurn(r, data.source, i, (n) => chatImgUrl(project, topic, n), { project, reload: load, edit: editSend }))
         : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
         ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
         ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
       <div class="qfoot">
-        <div class="chat-keys" role="toolbar" aria-label=${"Keys for " + shown.label}>${CHAT_KEYS.map(([k, l, tip]) => html`<button key=${k} type="button"
+        <div class="chat-keys" role="toolbar" aria-label=${"Keys for " + shown.label}>${CHAT_KEYS.concat(chatDigits(scr && scr.menu)).map(([k, l, tip]) => html`<button key=${k} type="button"
           class=${"btn sm chat-key" + (k === "Escape" && data && data.working ? " stop" : "")} title=${tip} aria-label=${tip} disabled=${pressing === shown.wt}
           onClick=${() => press([k], l)}>${k === "Escape" && data && data.working ? "■ Stop" : l}</button>`)}
           ${scr && html`<button type="button" class="btn sm chat-scr" aria-pressed=${showScreen ? "true" : "false"} title="Show the member's live screen" onClick=${() => setScreenOn(!showScreen)}>${showScreen ? "Chat" : "Screen"}</button>`}</div>
@@ -2449,12 +2531,12 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
           ${ups.filter((u) => u.wt === shown.wt).map((u) => html`<div key=${"u" + u.k} class=${"chat-th" + (u.state === "bad" ? " bad" : "")} title=${u.msg || "uploading"}>${u.state === "bad"
             ? html`<span>${u.msg.length > 40 ? u.msg.slice(0, 39) + "…" : u.msg}</span><button type="button" class="chat-rm" aria-label="Dismiss" onClick=${() => setUps((l) => l.filter((x) => x.k !== u.k))}>✕</button>`
             : html`<span class="dot spin" role="status" aria-label="Uploading"></span>`}</div>`)}</div>`}
-        <textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX} enterkeyhint=${chatTouch() ? "enter" : "send"} value=${text} placeholder=${"Message " + shown.label + " (typed into its terminal when it is idle; " + (chatTouch() ? "Send sends" : "Enter sends, Shift+Enter a new line") + ")"}
+        <textarea class="chat-in" rows="1" ref=${input} enterkeyhint=${chatTouch() ? "enter" : "send"} value=${text} placeholder=${"Message " + shown.label + " (typed into its terminal when it is idle; " + (chatTouch() ? "Send sends" : "Enter sends, Shift+Enter a new line") + ")"}
           onInput=${(e) => { setText(e.target.value); grow(e.target); chatDraftSet(project, topic, shown.wt, e.target.value); }}
           onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing && !e.shiftKey && !chatTouch()) { e.preventDefault(); send(); } }} onPaste=${onPaste}></textarea>
         <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
         <button type="button" class="btn sm chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}>📎</button>
-        <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left} left</span><span class="sp"></span>
+        <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left < 0 ? `${-left} over` : `${left} left`}</span><span class="sp"></span>
         <button class="btn pri" disabled=${busy === shown.wt || uploading || (!chatText(text) && !files.length)} onClick=${send}>${busy === shown.wt ? "Sending…" : uploading ? "Uploading…" : "Send"}</button>
         ${err && html`<span class="err">${err}</span>`}${note && html`<span class="err">${note}</span>`}
       </div>
@@ -3124,7 +3206,7 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
       <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} atArchive=${true} />
       ${s.mermaid && html`<${GraphBox} s=${s} />`}
       ${(s.units || []).length > 0 && html`<${UnitsBox} s=${s} flow=${flow} toast=${toast} onPlan=${onPlan} />`}
-      ${(s.leftovers || []).length > 0 && html`<${LeftoversBox} s=${s} />`}
+      ${(s.leftovers || []).length > 0 && html`<${LeftoversBox} s=${s} toast=${toast} />`}
       ${(s.proposals || []).length > 0 && html`<div class="box"><h3>Proposed fixes</h3>${s.proposals.map((p) => html`<div key=${p.id} class="prop">
           <span>${p.id}: ${p.topic}</span><button class="btn pri sm" title=${p.command} onClick=${() => copy(p.command, toast)}>Approve</button></div>`)}</div>`}
       ${otherPrs.length > 0 && html`<div class="box"><h3>Other pull requests <span>not on a work unit</span></h3>${otherPrs.map((p) => html`<${PrChip} key=${p.num} pr=${p} />`)}</div>`}
@@ -4129,7 +4211,7 @@ function App() {
               <${SpentCell} r=${a.spent_since} />
               <span class="c-menu"></span>
             </div>
-            ${isOpen && html`<div class="detail"><${Docs} s=${a} onPlan=${setPlan} closed=${true} /><div class="item">${a.prs.map((p) => html`<${PrChip} key=${p.num} pr=${p} />`)}</div></div>`}
+            ${isOpen && html`<div class="detail"><${Docs} s=${a} onPlan=${setPlan} closed=${true} />${(a.leftovers || []).length > 0 && html`<${LeftoversBox} ...${{ s: a }} />`}<div class="item">${a.prs.map((p) => html`<${PrChip} key=${p.num} pr=${p} />`)}</div></div>`}
           </${React.Fragment}>`; })}</${React.Fragment}>`}
     </div>
     </details>

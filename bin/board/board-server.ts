@@ -50,6 +50,7 @@
 //   /api/poke     {project, topic}  `poke`: a wake-up line typed into a quiet Lead's terminal
 //   GET /api/feedback, POST /api/feedback {action: post|add-to|edit|dismiss|restore, draft|note, …}  the Feedback panel (U4)
 //   /api/keys     {project, topic, wt, keys}  `keys`: 1-8 named keys pressed in the member's terminal, even while it works (409: paused, or a press still open)
+//   /api/chat-dismiss  {project, id}  `chat-dismiss` of a failed or cancelled send: it leaves the chat (409: still queued or sent)
 //   /api/chat-cancel, /api/chat-now  {project, id}  `chat-cancel`/`chat-now` of an open chat request (409: already typed)
 //   /api/chat     {project, topic, wt, text, files?}  `chat`: a message of at most 2000 characters, line breaks and
 //                 tabs allowed (CR LF read as LF; no other control character, U19) the loop types into that live, unpaused member's terminal once it is ready;
@@ -71,6 +72,9 @@
 //   /api/account {project, agent, account, enabled}  `account`: switch one account off/on for every pick
 //   /api/account-reset {project, agent, account, grant}  `account-reset`: use one free reset grant (usable now, none
 //                 open for that account: else 400/409); the server adds the idempotency key every try reuses
+//   /api/leftover-remove {project, topic, wt, fingerprint?}  `leftover-remove`: a Leftovers box's Remove (404 for no such
+//                 leftover, 409 with one open for it); the loop removes a safe tree, a look-first one only saved and
+//                 with the fingerprint the operator saw (archive-leftovers U4)
 //   /api/override {project, topic, wt, scope?(member|squad|role|project), role?, model?, effort?, plan?, account? | clear:true}  `override`: this member's
 //                 model/account "until done", or back to auto
 // Everything else is 404, so no state file is ever reachable.
@@ -80,6 +84,7 @@ import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { BACKEND_NAMES } from "../backend/registry.ts";
+import { chatProblem } from "../loop/chat/limits.ts";
 import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
 import { KEYS, KEYS_MAX, keyOk } from "../loop/chat/keys.ts";
@@ -300,7 +305,6 @@ async function poke(req: Request) {
 // chat (crew-terminal-access U3): the member a chat names. topic is a squad, or `_studio` for the
 // project's Studio; wt is the member's worktree. A string error when the names are malformed or
 // outside this board's scope.
-const CHAT_MAX = 2000; // as fulfil/chat.ts, which fails a longer one
 function chatTarget(project: unknown, topic: unknown, wt: unknown): { project: string; topic: string; wt: string } | { status: number; error: string } {
   if (typeof project !== "string" || !NAME.test(project) || typeof topic !== "string" || (topic !== "_studio" && !NAME.test(topic))
     || typeof wt !== "string" || !wt || wt.length > 1000)
@@ -330,15 +334,15 @@ async function chatPost(req: Request) {
   if ("r" in pr) return pr.r;
   const t = chatTarget(pr.b.project, pr.b.topic, pr.b.wt);
   if ("error" in t) return json(t.status, { error: t.error });
-  const raw = typeof pr.b.text === "string" ? pr.b.text.replace(/\r\n?/g, "\n") : null;
-  if (raw === null || /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(raw)) return json(400, { error: "text, no control characters but line breaks and tabs" });
+  if (typeof pr.b.text !== "string") return json(400, { error: "text must be a string" });
+  const raw = pr.b.text.replace(/\r\n?/g, "\n"), why = chatProblem(raw);
+  if (why) return json(400, { error: why });
   const files = pr.b.files ?? [];
   if (!Array.isArray(files) || files.length > CHAT_FILES_PER_SEND || new Set(files).size !== files.length
     || files.some((f) => typeof f !== "string" || !CHAT_FILE_NAME.test(f)))
     return json(400, { error: `files: at most ${CHAT_FILES_PER_SEND} distinct image names from /api/chat-file` });
   const text = raw.trim();
   if (!text && !files.length) return json(400, { error: "say something" });
-  if (Array.from(text).length > CHAT_MAX) return json(400, { error: `at most ${CHAT_MAX} characters` });
   for (const f of files as string[]) if (!chatFileAt(t.project, t.topic, f)) return json(409, { error: `image ${f} is gone — attach it again` });
   return write((s) => {
     const m = chatMember(s, t.project, t.topic, t.wt) ?? no(404, noMember(t));
@@ -417,14 +421,21 @@ async function keysPost(req: Request) {
 
 // POST /api/chat-cancel and /api/chat-now {project, id} (studio-chat-queued-busy U4): one `chat-cancel` or
 // `chat-now` request naming a chat request that is still open; 409 once it is done or typed (or never was a chat).
-async function chatControl(req: Request, kind: "chat-cancel" | "chat-now") {
+async function chatControl(req: Request, kind: "chat-cancel" | "chat-now" | "chat-dismiss") {
   const pr = await readPost(req);
   if ("r" in pr) return pr.r;
   const project = pr.b.project, id = pr.b.id;
   if (typeof project !== "string" || !project || typeof id !== "number" || !Number.isInteger(id) || id < 1) return json(400, { error: "project and a chat request id" });
   return write((s) => {
-    const r = s.db.query("SELECT kind, project, squad, member, done_at FROM requests WHERE id = ?").get(id) as { kind: string; project: string; squad: string | null; member: string | null; done_at: number | null } | null;
+    const r = s.db.query("SELECT kind, project, squad, member, done_at, result FROM requests WHERE id = ?").get(id) as { kind: string; project: string; squad: string | null; member: string | null; done_at: number | null; result: string | null } | null;
     if (!r || r.kind !== "chat" || r.project !== project) no(404, "no such chat");
+    if (kind === "chat-dismiss") {   // chat-multiline-send-fails U2: only a send that failed or was cancelled; a queued one has Cancel
+      if (r!.done_at == null) no(409, "still queued; use Cancel");
+      let res: { ok?: unknown; state?: unknown } = {};
+      try { res = JSON.parse(r!.result ?? "{}") ?? {}; } catch { /* no result */ }
+      if (res.ok !== false && res.state !== "cancelled") no(409, "only a failed or cancelled send can be dismissed");
+      return board(s, kind, { chat: id }, { project, squad: r!.squad, member: r!.member });
+    }
     if (r!.done_at != null) no(409, "already typed");
     return board(s, kind, { chat: id }, { project, squad: r!.squad, member: r!.member });
   });
@@ -897,6 +908,28 @@ async function accountResetPost(req: Request) {
   });
 }
 
+// leftover: a Leftovers box's Remove (archive-leftovers U4). One `leftover-remove` request; the loop checks the
+// tree again and removes it when it is safe, or saved first when `fingerprint` is still the tree's (else refused).
+async function leftoverRemovePost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const { project, topic, wt, fingerprint } = pr.b;
+  const ok = typeof wt === "string" && wt.length > 0 && wt.length <= 400 && !/[\x00-\x1f]/.test(wt);
+  if (!NAME.test(project ?? "") || !NAME.test(topic ?? "") || !ok || (fingerprint != null && !(typeof fingerprint === "string" && /^[0-9a-f]{8,64}$/.test(fingerprint))))
+    return json(400, { error: "need project, topic, wt and an optional fingerprint" });
+  return write((s) => {
+    const row = one(s, "SELECT doc FROM squads WHERE project = ? AND topic = ?", project, topic) ?? no(404, `no squad ${project}/${topic}`);
+    let list: any[] = [];
+    try { list = JSON.parse(String(row!.doc ?? "{}")).leftovers ?? []; } catch { /* unreadable: no leftovers */ }
+    if (!Array.isArray(list) || !list.some((l) => l && l.wt === wt)) no(404, `${project}/${topic} has no leftover ${wt}`);
+    const open = one(s, "SELECT id FROM requests WHERE kind = 'leftover-remove' AND done_at IS NULL AND project = ? AND json_extract(payload, '$.wt') = ?", project, wt);
+    if (open) no(409, `a removal of ${wt} is already open (request #${open.id})`);
+    const r = board(s, "leftover-remove", { wt, ...(fingerprint ? { fingerprint } : {}) }, { project, squad: topic });
+    // A paused squad holds the request until Resume (pause.ts actionBlock); say so in the answer.
+    return paused(s, { project, squad: topic }) ? json(202, { ok: true, id: Number(r.id), queued: true }) : r;
+  });
+}
+
 // unit: the ⋯ menu on a Work units row (squad-done-definition U5). One `unit-action` request; the loop's
 // fulfiller (fulfil/unit-action.ts) runs cancel-unit for the unit and its open dependents, or resumes
 // the squad and tells the Lead to release the unit. Cancel needs a reason; a done or cancelled unit
@@ -1212,7 +1245,7 @@ async function get(req: Request, url: URL) {
 
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
-  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
   "/api/settings-import/preview": settingsImportPreview,
 };
 
@@ -1234,6 +1267,7 @@ async function handle(req: Request) {
   if (path === "/api/keys" && req.method === "POST") return keysPost(req);
   if (path === "/api/chat-cancel" && req.method === "POST") return chatControl(req, "chat-cancel");
   if (path === "/api/chat-now" && req.method === "POST") return chatControl(req, "chat-now");
+  if (path === "/api/chat-dismiss" && req.method === "POST") return chatControl(req, "chat-dismiss");
   if (req.method !== "GET" && req.method !== "HEAD") return text(405, "GET only\n");
   return get(req, url);
 }

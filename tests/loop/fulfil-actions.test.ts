@@ -176,7 +176,7 @@ describe("member.close (U155)", () => {
     expect(builder(r.s).status).toBe("gone");
     const doc = JSON.parse(String(r.s.get("squads", { project: "fx", topic: "t1" })!.doc));
     expect(doc.leftovers).toHaveLength(1);
-    expect(doc.leftovers[0]).toMatchObject({ wt: "wtb", path: wt, reason: "uncommitted changes" });
+    expect(doc.leftovers[0]).toMatchObject({ wt: "wtb", path: wt, reason: expect.stringMatching(/^kept: [0-9]+ uncommitted, [0-9]+ unpushed$/) });
   });
 
   test("U203: a done unit's Builder working only through a background task is closed, not dropped as stale", async () => {
@@ -229,7 +229,7 @@ const left = (path: string): Leftover[] => [{ wt: "wtx", path, branch: "work", u
 describe("worktree.remove", () => {
   const removed = (r: ReturnType<typeof rig>) => {
     expect(r.orca.of("terminal-close-worktree").map((c) => c.args)).toEqual([["id:wtx"]]);
-    expect(r.orca.of("worktree-rm").map((c) => c.args)).toEqual([["id:wtx"]]);
+    expect(r.orca.of("worktree-rm").map((c) => c.args)).toEqual([["id:wtx", "force"]]);
     expect(leftovers(r.s)).toEqual([]);
   };
   const kept = (r: ReturnType<typeof rig>, why: string) => {
@@ -242,15 +242,15 @@ describe("worktree.remove", () => {
     const wt = repo(), r = rig(left(wt));
     await r.send(remove(wt));
     removed(r);
-    expect(doneResult(r.s, "worktree.remove")).toEqual(["removed: clean, pushed"]);
+    expect(doneResult(r.s, "worktree.remove")).toEqual(["removed: all on main"]);
   });
 
-  test("removed when unpushed but merged", async () => {
+  test("removed when its unpushed commit changes nothing", async () => {
     const wt = repo(), r = rig(left(wt));
     git(wt, "commit", "-qm", "two", "--allow-empty");
-    await r.send(remove(wt, true));
+    await r.send(remove(wt));
     removed(r);
-    expect(doneResult(r.s, "worktree.remove")).toEqual(["removed: PR merged"]);
+    expect(doneResult(r.s, "worktree.remove")).toEqual(["removed: all on main"]);
   });
 
   test("removed when its only ignored files are rebuildable or dev-studio's own", async () => {
@@ -266,14 +266,16 @@ describe("worktree.remove", () => {
     const wt = repo(), r = rig(left(wt));
     writeFileSync(join(wt, "new.txt"), "work");
     await r.send(remove(wt, true));
-    kept(r, "left: dirty");
+    kept(r, "left: 0 commits, 1 file not on main");
   });
 
-  test("left when unpushed and unmerged", async () => {
+  test("left when unpushed, even with its PR merged", async () => {
     const wt = repo(), r = rig(left(wt));
-    git(wt, "commit", "-qm", "two", "--allow-empty");
-    await r.send(remove(wt));
-    kept(r, "left: unpushed");
+    writeFileSync(join(wt, "a.txt"), "work");
+    git(wt, "add", "a.txt");
+    git(wt, "commit", "-qm", "two");
+    await r.send(remove(wt, true));
+    kept(r, "left: 1 commit, 1 file not on main");
   });
 
   test("left when holding .env", async () => {

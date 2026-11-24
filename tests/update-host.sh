@@ -36,10 +36,11 @@ git init -q --bare -b main "$ORIGIN"
 git init -q -b main "$SEED"
 mkdir -p "$SEED/bin/host"; cp "$ROOT/bin/host/update-host.sh" "$SEED/bin/host/update-host.sh"
 # U191: the port runs in TypeScript behind the one-line wrapper: the fixture carries ds and the files the command loads.
-mkdir -p "$SEED/bin/lib" "$SEED/bin/commands" "$SEED/bin/loop/settings" "$SEED/bin/loop/core"; cp "$ROOT/bin/loop/settings/projects.ts" "$SEED/bin/loop/settings/"; cp "$ROOT/bin/loop/core/whoami.ts" "$SEED/bin/loop/core/"; cp "$ROOT/bin/ds" "$ROOT/bin/ds.ts" "$SEED/bin/"; cp "$ROOT/bin/lib/shared.ts" "$ROOT/bin/lib/contract-here.ts" "$ROOT/bin/lib/upkeep.ts" "$SEED/bin/lib/"; cp "$ROOT/bin/commands/update-host-ts.ts" "$SEED/bin/commands/"
+mkdir -p "$SEED/bin/lib" "$SEED/bin/commands" "$SEED/bin/loop/settings" "$SEED/bin/loop/core"; cp "$ROOT/bin/loop/settings/projects.ts" "$SEED/bin/loop/settings/"; cp "$ROOT/bin/loop/core/whoami.ts" "$ROOT/bin/loop/core/code-watch.ts" "$SEED/bin/loop/core/"; cp "$ROOT/bin/ds" "$ROOT/bin/ds.ts" "$SEED/bin/"; cp "$ROOT/bin/lib/shared.ts" "$ROOT/bin/lib/contract-here.ts" "$ROOT/bin/lib/upkeep.ts" "$SEED/bin/lib/"; cp "$ROOT/bin/commands/update-host-ts.ts" "$SEED/bin/commands/"
 fake "$SEED/bin/host/install.sh" <<'F'
 #!/usr/bin/env bash
 echo "install${*:+ $*}" >> "$CALLS"
+[ -f "$DS_STATE_ROOT/loop/host-update.hold" ] && echo "held $*" >> "$CALLS.hold"
 if [ "$1" = --check ]; then [ "${FAKE_CHECK_FAIL:-0}" = 0 ]; exit; fi
 [ "${FAKE_INSTALL_FAIL:-0}" = 0 ]
 F
@@ -104,6 +105,9 @@ if [ "$(head_of "$H")" = "$M" ]; then bad "landed on main"; else good; fi
 check "still on the branch" loop-v1 "$(git -C "$H" symbolic-ref --short HEAD)"
 has "advanced line" "DS-UPDATE: advanced $B -> $L" "$OUT"
 check "install, then one stop and one ensure" "install,${CODEX_CALL}skills --muse-only,skills --check,stop,ensure," "$(calls)"
+# The loop's code watch does not restart it while update-host holds the checkout (bin/loop/core/code-watch.ts).
+check "install ran under the host-update hold" "held " "$(tail -1 "$CALLS.hold" 2>/dev/null)"
+check "the hold is gone after the run" no "$([ -e "$DS_STATE_ROOT/loop/host-update.hold" ] && echo yes || echo no)"
 
 echo "2. nothing new and install --check passes: the install is skipped, the skills refresh runs, the loop is left alone"
 update "$H"

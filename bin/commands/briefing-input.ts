@@ -542,7 +542,7 @@ export function render(f: Facts): string[] {
   for (const a of n.alerts.slice(0, CAP.alerts)) L.push(`- ${a.new ? "new" : `waiting${a.age ? " " + a.age : ""}`} card: ${a.title}${a.text ? ` — ${a.text}` : ""}`);
   L.push(...more(n.alerts.length, CAP.alerts, "cards"));
   for (const p of n.proposals) L.push(`- proposed fix squad (${p.squad}): ${p.topic ?? "?"} (listed on the board, not in its count)`);
-  for (const d of n.done) L.push(`- squad ${d} is done: read its debrief, then close it`);
+  for (const d of n.done) L.push(`- squad ${d} is done: try it, then close it (the debrief is written at close)`);
   for (const q of n.squads) L.push(`- waiting: squad ${q.squad} is ${q.status} (not counted above)`);
   for (const a of n.accounts.slice(0, CAP.accounts)) L.push(`- waiting: account ${a.account}: ${a.problem} (not counted above)`);
   L.push(...more(n.accounts.length, CAP.accounts, "accounts"));

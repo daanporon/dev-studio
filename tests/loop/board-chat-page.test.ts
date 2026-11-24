@@ -33,15 +33,16 @@ function hooks() {
 // The page's own markdown renderer (it escapes before it formats).
 const mdToHtml = new Function(`${cut("esc")} ${cut("mdToHtml")} return mdToHtml;`)();
 
+const goneUrls = new Set<string>();   // stored chat images the fetch stub answers 404 for
 function panel(reply: any = { agent: "claude", source: "transcript", turns: [], updated_at: 1, sends: [] }) {
   const h = hooks(), posts: any[] = [], fetches: string[] = [], timers: any[] = [], cleared: any[] = [], listeners = new Map<string, any>();
   let closed = 0;
   const marks = new Map<string, any>(), lstoreStub = { get: (k: string, d: any) => marks.has(k) ? marks.get(k) : d, set: (k: string, v: any) => { marks.set(k, v); } };
   const drafts = new Map<string, any>(), storeStub = { get: (k: string, d: any) => drafts.has(k) ? JSON.parse(drafts.get(k)) : d, set: (k: string, v: any) => { drafts.set(k, JSON.stringify(v)); }, del: (k: string) => { drafts.delete(k); } };
-  const fetchStub = async (url: string) => { fetches.push(url); return { ok: true, status: 200, json: async () => reply }; };
+  const fetchStub = async (url: string) => { fetches.push(url); return { ok: !goneUrls.has(url), status: goneUrls.has(url) ? 404 : 200, json: async () => reply }; };
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
   const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store",
-    `${chatSrc} return { ChatPanel, ChatCtl, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
+    `${chatSrc} return { ChatPanel, ChatCtl, ChatFailCtl, chatCount, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
   const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); return { ok: true, id: 7 }; }, fetchStub,
     (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub);
   let seen = 0;
@@ -155,7 +156,6 @@ test("Send posts one chat request with the trimmed line and clears the input; an
   const p = panel();
   p.render();
   const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
-  expect(at("maxLength")).toBe(2000);
   await attrAfter(p.render(), 'class="btn pri"', "onClick")();
   expect(p.posts).toEqual([]);
   at("onInput")({ target: { value: "  check the flaky test  " } });
@@ -223,7 +223,6 @@ test("crew-terminal-access U5, U19: the input wraps, a multi-line message keeps 
   p.render();
   const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
   expect(nodes(p.render()).some((n) => n.strings.includes('<textarea class="chat-in" rows="1"'))).toBe(true);
-  expect(at("maxLength")).toBe(2000);
   expect(String(at("placeholder"))).toContain("Enter sends, Shift+Enter a new line");
   at("onInput")({ target: { value: "a\nb\r\n\tc\u0085d\re\u0007f\n" } });
   let prevented = 0;
@@ -237,14 +236,30 @@ test("crew-terminal-access U5, U19: the input wraps, a multi-line message keeps 
   expect(prevented).toBe(1);
   expect(p.posts).toEqual([["api/chat", { project: "p", topic: "one", wt: "/w/b 1", text: "a\nb\n\tc d\ne f" }]]);
   const left = () => {
-    const n = nodes(p.render()).find((n) => n.strings.includes(" left</span>"))!;
+    const n = nodes(p.render()).find((n) => n.strings.includes('class="chat-in"'))!;
     const i = n.values.findIndex((v: any) => typeof v === "string" && v.startsWith("chat-left"));
     return n.values.slice(i, i + 2);
   };
   at("onInput")({ target: { value: "x".repeat(10) } });
-  expect(left()).toEqual(["chat-left", 1990]);
+  expect(left()).toEqual(["chat-left", "1990 left"]);
   at("onInput")({ target: { value: "x".repeat(1950) } });
-  expect(left()).toEqual(["chat-left low", 50]);
+  expect(left()).toEqual(["chat-left low", "50 left"]);
+  // chat-multiline-send-fails U2: the counter counts code points of the posted text, as the server does.
+  at("onInput")({ target: { value: "x".repeat(2000) } });
+  expect(left()).toEqual(["chat-left low", "0 left"]);
+  at("onInput")({ target: { value: "x".repeat(2001) } });
+  expect(left()).toEqual(["chat-left low", "1 over"]);
+  at("onInput")({ target: { value: "😀".repeat(2000) } });
+  expect(left()).toEqual(["chat-left low", "0 left"]);
+  at("onInput")({ target: { value: "a\r\nb" + "x".repeat(1997) } });   // CR LF counts 1: 2000 in all
+  expect(left()).toEqual(["chat-left low", "0 left"]);
+  // Over the limit Send posts nothing and keeps the text.
+  at("onInput")({ target: { value: "y".repeat(2013) } });
+  const before = p.posts.length;
+  await attrAfter(p.render(), 'class="btn pri"', "onClick")();
+  expect(p.posts.length).toBe(before);
+  expect(p.h.states).toContain("not sent: 2013 characters, the limit is 2000");
+  expect(p.h.states).toContain("y".repeat(2013));
   // Only line breaks: nothing to send.
   at("onInput")({ target: { value: "\n\n" } });
   expect(attrAfter(p.render(), 'class="btn pri"', "disabled")).toBe(true);
@@ -278,12 +293,13 @@ test("U19: the key strip posts one api/keys press per button, Esc reads Stop whi
   p.render();
   p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: false });
   const keys = keyButtons(p.render());
-  expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab", "1", "2", "3", "4", "5"]);
+  expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab"]);
   expect(keys[0][1]).toBe("Esc");
   await fnIn(keys[0][2])();
   expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
   expect(p.h.states).toContain("pressed Esc");
   await fnIn(keyButtons(p.render())[2][2])();
+  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: false, screen: { tail: "❯ 1. Yes\n  2. No\n  3. Other", menu: 3, at: T, age_s: 1 } });
   await fnIn(keyButtons(p.render())[6][2])();
   expect(p.posts.slice(1)).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Down"] }], ["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]]);
   // Mid-turn the Esc button is the red Stop.
@@ -449,4 +465,60 @@ test("studio-chat-queued-busy U4: a press posts once, disables both buttons and 
     expect(after.filter((n) => n.strings.includes("<button")).every((n) => n.values.includes(true))).toBe(true);
     expect(textOf(after)).toContain(msg);
   }
+});
+
+// Board chat U19b: the digit keys show only while the screen read shows a numbered menu.
+test("U19b: digits 1 to N show only for a numbered menu on screen", async () => {
+  const { menuOptions } = await import("../../bin/board/board-data.ts");
+  const keysFor = (tail: string | null) => {
+    const p = panel();
+    p.render();
+    p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], screen: tail === null ? null : { tail, menu: menuOptions(tail), at: T, age_s: 1 } });
+    return keyButtons(p.render()).map((k) => k[0]);
+  };
+  const base = ["Escape", "Up", "Down", "Enter", "Tab"];
+  expect(keysFor("● Working on it…\n\n> \n")).toEqual(base);
+  expect(keysFor(null)).toEqual(base);
+  const perm = " Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again\n   3. No, and tell Claude what to do differently (esc)\n";
+  expect(keysFor(perm)).toEqual([...base, "1", "2", "3"]);
+  // A numbered list in ordinary output has no selection marker.
+  expect(keysFor("Steps:\n1. first\n2. second\n3. third\n\n> ")).toEqual(base);
+  expect(menuOptions(" ❯ 1. Yes, I trust this folder\n   2. No, exit\n")).toBe(2);
+  expect(menuOptions("❯ 1. a\n  2. b\n  3. c\n  4. d\n  5. e\n  6. f\n")).toBe(6);
+});
+
+// chat-multiline-send-fails U2: a failed or cancelled send gets Edit and Dismiss; Edit fills the box.
+test("U2: Edit on a failed send fills an empty box as is, appends below a draft, restores its images and notes a gone one", async () => {
+  const failed = { id: 5, text: "para one\n\npara two", files: [{ name: "aaaa.png", url: "u/aaaa" }, { name: "bbbb.png", url: "u/bbbb" }], state: "failed", why: "never ready", at: T, done_at: T + 1 };
+  const withSends = (p: any) => p.setData({ agent: "claude", source: "transcript", sends: [failed, { ...failed, id: 6, state: "queued" }, { ...failed, id: 7, state: "cancelled" }, { ...failed, id: 8, state: "sent" }], turns: [], working: false });
+  const failCtls = (p: any) => nodes(p.render()).filter((m) => m.values.some((v: any) => typeof v === "function" && v.name === "ChatFailCtl"));
+  // Only a failed or cancelled send has the pair; a queued one keeps Cancel, a sent one nothing.
+  const p = panel(); p.render(); withSends(p);
+  expect(failCtls(p)).toHaveLength(2);
+  const edit = failCtls(p)[0].values.at(-1);   // <ChatFailCtl x project reload edit>
+  expect(typeof edit).toBe("function");
+  goneUrls.add("u/bbbb");
+  try {
+    await edit(failed);
+    expect(p.h.states).toContain("para one\n\npara two");   // an empty box takes the text as is
+    expect(String(p.h.states.find((v: any) => typeof v === "string" && v.includes("bbbb.png")))).toContain("image bbbb.png is gone, not restored");
+    expect(p.h.states.find((v: any) => Array.isArray(v) && v[0]?.id === "aaaa.png")).toEqual([{ id: "aaaa.png", url: "u/aaaa", name: "aaaa.png" }]);
+    // A box holding a draft: the text goes below it after a blank line.
+    p.setData({ agent: "claude", source: "transcript", sends: [failed], turns: [], working: false });
+    attrAfter(p.render(), 'class="chat-in"', "onInput")({ target: { value: "my draft" } });
+    await edit(failed);
+    expect(p.h.states).toContain("my draft\n\npara one\n\npara two");
+  } finally { goneUrls.clear(); }
+});
+
+test("U2: Dismiss posts api/chat-dismiss for that send; a refusal shows its text and re-enables the buttons", async () => {
+  const x = { id: 5, text: "t", state: "failed" };
+  const posts: any[] = [];
+  let reloads = 0;
+  const h = hooks(), ctl = new Function("useState", "html", "post", `${chatSrc} return { ChatFailCtl };`)(h.useState, html, async (...a: any[]) => { posts.push(a); }).ChatFailCtl;
+  const root = ctl({ x, project: "p", reload: () => reloads++, edit: () => {} });
+  const dismiss = nodes(root).flatMap((n) => n.values).filter((v: any) => typeof v === "function")[1];
+  await dismiss();
+  expect(posts).toEqual([["api/chat-dismiss", { project: "p", id: 5 }]]);
+  expect(reloads).toBe(1);
 });

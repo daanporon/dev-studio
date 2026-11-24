@@ -616,11 +616,16 @@ Update the host checkout with `/ds-update` in the Studio (pull, relink, and do
 only what the new commits need: skills changed → workers restart once idle; instructions changed →
 workers re-read them, no new session; code only → no worker restarts), or by hand: `git -C
 ~/.dev-studio pull` (or `fetch && reset --hard origin/<its branch>`); re-run
-`bin/host/install.sh` if a command was added/removed. Two things
+`bin/host/install.sh` if a command was added/removed. Three things
 then propagate differently:
 
 - **Scripts** (`bin/*/*.sh`, the backend adapter) — run their latest version on the
   next call. Nothing to do.
+- **Loop code** (`bin/**/*.ts`, the migrations) — the running loop compares its commit with
+  the checkout's between ticks and, when the new commits change loop code, exits for systemd to
+  start the new code (`bin/loop/core/code-watch.ts`, event `loop_code_changed`). A plain `git pull`
+  is enough; the loop restarts itself within about 10 seconds, and a pull of docs or tests alone
+  restarts nothing.
 - **Instructions** (`roles/*.md`, `conventions/*.md`, `AGENTS.md`) — a running agent
   only picks them up when it **re-reads** the file. Agents self-refresh when their
   `watch.sh` tick prints `INSTRUCTIONS: changed` (a fingerprint of the files), so they

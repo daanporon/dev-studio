@@ -17,7 +17,7 @@ export type Out = { code: number; out: string; err: string };
 export type Via = { from?: string | null; retry?: string | null; env?: Record<string, string> };
 export interface Orca { run(op: string, args: string[], via?: Via): Promise<Out> }
 
-const IDENTITY = new Set(["DS_MEMBER", "DS_WT", "DS_GEN", "DS_START_MEMBER", "DS_START_GEN"]);
+const IDENTITY = new Set(["DS_MEMBER", "DS_WT", "DS_GEN", "DS_START_MEMBER", "DS_START_GEN", "DS_START_OLD_GONE"]);
 
 export function childEnv(extra: Record<string, string | null | undefined> = {}): Record<string, string> {
   const env: Record<string, string> = {};

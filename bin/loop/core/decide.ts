@@ -46,6 +46,7 @@ import { ask as askCheckpoint, owed, pendingWhy, sweep as sweepCheckpoints } fro
 import { seed } from "../db/seed.ts";
 import { STANDING } from "../drivers/types.ts";
 import { onContract } from "../squad/backend.ts";
+import { finishOf } from "../squad/finish-read.ts";
 
 import type { Action, Reconciler, TickCtx } from "./plugins.ts";
 import { ROOT, type Row, type Store } from "./store.ts";
@@ -135,6 +136,7 @@ export function reality(store: Store, m: Row, now: number): Reality {
   if (w && w.gone_at == null && w.walk === "none" && w.presence === "running") {
     const sent = lastStopSent(store, m);
     if (sent > placed && walkedGone(w, sent)) return "none";
+    if (sent <= placed && deadUnderOrca(store, m, w, placed, now)) return "none";
   }
   if (w && w.gone_at == null && w.presence === "running") return "running";
   // U231: the worker went away after the last start: that is a fact, not "started, not seen yet".
@@ -142,6 +144,36 @@ export function reality(store: Store, m: Row, now: number): Reality {
   if (placed && unread) return now - placed < graceS() ? "starting" : "unknown";
   if (!w || w.gone_at != null || w.presence === "none") return "none";
   return "unknown";
+}
+
+// U21a: after a KILL Orca can keep a member `working` (presence running) while no agent runs in its
+// worktree. noAgentSince() is, for a member with a generation, when every successful walk since a time after its last start began finding
+// no agent (walk_none_at, kept by the Orca observer: a failed or split walk keeps it, a walk that finds the
+// agent clears it), while its transcript has not grown since and it has no finish row of its generation;
+// null otherwise. It is gone once that held for GONE_MIN. The caller checks the loop did not stop it (a
+// loop stop is walkedGone's).
+export function noAgentSince(store: Store, m: Row, w: Row, placed: number): number | null {
+  const since = Number(w.walk_none_at ?? 0);
+  // Only a start that carries a generation: a Codex, Muse or `--on` start has none, and an `--on` one runs
+  // on another host, where this host's walk never sees its agent (the shadow leaves them out too).
+  if (!m.gen || w.walk !== "none" || !(since > placed)) return null;
+  const t = store.db.query("SELECT MAX(mtime) AS t FROM observed_transcripts WHERE wt = ?").get(String(m.wt)) as { t: number | null } | null;
+  if (Number(t?.t ?? 0) > since) return null;
+  return finishOf(store, m) ? null : since;
+}
+export const goneMinS = (store: Store, project: string) => knob(store, project, "GONE_MIN", 3) * 60;
+function deadUnderOrca(store: Store, m: Row, w: Row, placed: number, now: number): boolean {
+  const since = noAgentSince(store, m, w, placed);
+  return since != null && now - since >= goneMinS(store, String(m.project));
+}
+// U21c: when reality() reads (or will read) an Orca member's `running` presence as none by U21a's rule
+// (no loop stop since its last start, noAgentSince held for GONE_MIN): that time, else null.
+export function staleWorkingAt(store: Store, m: Row): number | null {
+  if (!m.wt || onContract(store, String(m.project), String(m.squad))) return null;
+  const w = store.get("observed_workers", { project: m.project, wt: m.wt }), placed = lastStart(m);
+  if (!w || w.gone_at != null || w.walk !== "none" || w.presence !== "running" || lastStopSent(store, m) > placed) return null;
+  const since = noAgentSince(store, m, w, placed);
+  return since == null ? null : since + goneMinS(store, String(m.project));
 }
 
 // Reality from the process walk alone (U10's new input, U12's for a squad off Orca): an agent process
@@ -356,15 +388,32 @@ export function candidates(store: Store, now: number): Wanting {
 }
 
 const who = (m: Row) => `${m.role}${m.suffix ? ` ${m.suffix}` : ""} of ${m.squad}`;
-function card(m: Row, why: "unknown" | "rebroke", f: Omit<Facts, "room">, store: Store): Action {
+// U20a: one rebroke card per member while its starts keep breaking. The loop starts it again once
+// REBREAK_MIN has passed, so each break would open a new card under `rebroke:<restart time>`; the
+// `rebroke-run` episode keeps the first break's time (the card's key), the tries so far (count) and the
+// last restart counted (ended_at). A break whose restart came right after the last card's window joins the
+// run; a start that survived REBREAK_MIN leaves a gap longer than half of it, so the next break is a new run.
+function rebreakRun(store: Store, m: Row, restart: number, now: number): { first: number; tries: number } {
+  const key = { project: m.project, subject: `member:${m.id}`, kind: "rebroke-run" };
+  const r = store.get("episodes", key), gap = knob(store, String(m.project), "REBREAK_MIN", 30) * 30;
+  let first = restart, tries = 1;
+  if (r && Number(r.ended_at) === restart) { first = Number(r.started_at); tries = Number(r.count ?? 1); }   // the same break, seen again
+  else if (r && restart > Number(r.ended_at) && restart - Number(r.observed_at) <= gap) { first = Number(r.started_at); tries = Number(r.count ?? 1) + 1; }
+  store.upsert("episodes", key, { squad: m.squad, started_at: first, ended_at: restart, count: tries, state: "open", source: "loop", observed_at: now });
+  return { first, tries };
+}
+
+function card(m: Row, why: "unknown" | "rebroke", f: Omit<Facts, "room">, store: Store, now: number): Action {
   const since = store.get("episodes", { project: m.project, subject: `member:${m.id}`, kind: why === "unknown" ? "presence_unknown" : "restarted" })?.started_at;
+  const mins = Math.round(knob(store, String(m.project), "REBREAK_MIN", 30));
+  const run = why === "rebroke" ? rebreakRun(store, m, Number(since ?? 0), now) : null;
   const text = why === "unknown"
     ? `The loop cannot tell whether the ${who(m)} runs (${m.wt}): the process walk has read unknown for ${Math.round(f.unknownS / 60)} min. It starts nothing until it can tell.`
-    : `The ${who(m)} (${m.wt}) is gone again within ${Math.round(knob(store, String(m.project), "REBREAK_MIN", 30))} min of a restart; the loop does not restart it again.`;
+    : `The ${who(m)} (${m.wt}) is gone again within ${mins} min of a restart (${run!.tries} ${run!.tries === 1 ? "try" : "tries"} so far). The loop tries again every ${mins} min and keeps this one card until a start lasts.`;
   return { project: String(m.project), squad: String(m.squad), member: (m.wt as string | null) ?? null, subject: `member:${m.id}`, kind: "alert",
-    episode: `${why}:${since ?? 0}`, payload: { title: why === "unknown" ? "Agent presence unknown" : "Agent broke again", ...(why === "rebroke" ? { card: "agent_rebroke" } : {}), text,
+    episode: `${why}:${run ? run.first : (since ?? 0)}`, payload: { title: why === "unknown" ? "Agent presence unknown" : "Agent broke again", ...(why === "rebroke" ? { card: "agent_rebroke" } : {}), text,
       option: why === "unknown" ? "look at the worktree's processes (orca.sh agent-accounts)" : "look at it, then restart it by hand (ds want member <id> --restart)",
-      why: why === "unknown" ? "a start beside a live agent would make a second session" : "the loop does not restart an agent that did not come back" } };
+      why: why === "unknown" ? "a start beside a live agent would make a second session" : "a start that breaks again within the window is retried, not forgotten" } };
 }
 
 function stopCard(m: Row, tries: number, store: Store): Action {
@@ -411,7 +460,7 @@ function decideNow(ctx: TickCtx): Action[] {
       if (!step.settled) { out.push(...step.actions); continue; }
       act = { act: "stop", why: act.why };
     }
-    if (act.act === "card") { out.push(card(s.m, act.why, s.f, store)); continue; }
+    if (act.act === "card") { out.push(card(s.m, act.why, s.f, store, now)); continue; }
     if (act.act === "tell") {
       // U3's "works again" names the account its credits episode was on (`<agent>/<account>|<notice>`).
       const wt = String(s.m.wt ?? ""), project = String(s.m.project), key = act.why === "limit" ? s.f.tellLimit! : s.f.tellOk!;

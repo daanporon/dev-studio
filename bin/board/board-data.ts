@@ -133,6 +133,40 @@ export function openDependents(units: any[], slug: string): string[] {
   return units.map((x) => String(x?.slug ?? "")).filter((s) => out.has(s));
 }
 
+// archive-leftovers U3: a squad's kept worktrees, each with the loop's last check of it (the `leftover-check`
+// episode fulfil/worktree.ts writes: commits and files not on main, `safe`, the fingerprint; `checked_age_s`
+// from its last probe), or `check: null` for a tree not checked yet. `waits_on` is an old record's text, kept
+// in the JSON and not shown. Live and archived squads read the same way.
+function leftoverRows(db: Db, label: string, list: unknown, units: unknown) {
+  const checks = db.memo(`leftover-checks:${label}`, () => {
+    const m = new Map<string, Row>();
+    for (const r of db.all("SELECT subject, result, observed_at FROM episodes WHERE project = ? AND kind = 'leftover-check'", label)) {
+      try { const c = JSON.parse(String(r.result)); if (c && typeof c === "object") m.set(String(r.subject), { ...c, checked_age_s: Math.max(0, Math.floor(NOW() - Number(r.observed_at))) }); } catch { /* an unreadable row reads as not checked */ }
+    }
+    return m;
+  });
+  // archive-leftovers U4: each leftover's newest Remove press (open: `result` null), shown on its row until it goes.
+  const presses = db.memo(`leftover-removes:${label}`, () => {
+    const m = new Map<string, Row>();
+    for (const r of db.all("SELECT id, created_at, done_at, payload, result FROM requests WHERE project = ? AND kind = 'leftover-remove' ORDER BY id", label)) {
+      try {
+        const wt = JSON.parse(String(r.payload ?? "{}")).wt;
+        if (typeof wt === "string") m.set(wt, { id: Number(r.id), at: r.created_at ?? null, done_at: r.done_at ?? null, result: r.result == null ? null : JSON.parse(String(r.result)) });
+      } catch { /* an unreadable row shows no press */ }
+    }
+    return m;
+  });
+  return arr(list).map((l) => ({
+    wt: l?.wt ?? null, path: l?.path ?? null, branch: l?.branch ?? null,
+    n_files: l?.n_files ?? 0, files: arr(l?.files).map(String), unpushed: l?.unpushed ?? 0,
+    reason: l?.reason ?? null, waits_on: l?.waits_on ?? null, unit: l?.unit ?? null,
+    pr: l?.unit ? (arr(units).find((u) => u?.slug === l.unit)?.pr ?? null) : null,
+    age_min: ageMin(l?.recorded_at),
+    check: checks.get(String(l?.wt ?? "")) ?? null,
+    remove: presses.get(String(l?.wt ?? "")) ?? null,
+  }));
+}
+
 function ageMin(since: unknown): number | null {
   if (typeof since !== "string") return null;
   const s = since.replace(/\.[0-9]+/, "");
@@ -674,7 +708,7 @@ const EXPLAIN: Record<string, StateExplain> = {
     you_can: "release the held units, cancel them, suspend the squad, or leave it parked" },
   "wrapping-up": { means: "every unit is done or cancelled with no open PR and no Tester; the Lead owes the test check and the debrief",
     set_by: "the loop (computed)", you_can: "nothing; a \"Wrap-up stalled\" card comes only if the Lead stops answering" },
-  done: { means: "finished; the Lead wrote the debrief and the squad waits only for you", set_by: "the Lead", you_can: "read the debrief, then Close squad" },
+  done: { means: "finished; the Lead marked it done and the squad waits only for you", set_by: "the Lead", you_can: "try it out (Documents → Try it), then Close squad; the Lead writes the debrief when you close it" },
   pausing: { means: "its agents are being stopped", set_by: "you (Pause)", you_can: "Resume" },
   paused: { means: "its agents are stopped; its worktrees are kept", set_by: "you (Pause)", you_can: "Resume" },
   resuming: { means: "its agents are being started again", set_by: "you (Resume)", you_can: "wait" },
@@ -1822,16 +1856,13 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
     })),
     // Kept worktrees (close-role couldn't remove one without losing work): path, branch, dirty
     // files, why it was kept, what it waits on. The sweep removes them when provably safe.
-    leftovers: arr(st.leftovers).map((l) => ({
-      wt: l?.wt ?? null, path: l?.path ?? null, branch: l?.branch ?? null,
-      n_files: l?.n_files ?? 0, files: arr(l?.files).map(String), unpushed: l?.unpushed ?? 0,
-      reason: l?.reason ?? null, waits_on: l?.waits_on ?? null, unit: l?.unit ?? null,
-      age_min: ageMin(l?.recorded_at),
-    })),
+    leftovers: leftoverRows(db, label, st.leftovers, st.units),
   };
   flowUnitsOf.set(out, flowUnits.sort((a, b) => a.order - b.order).map(({ order, ...f }) => f));
   return out;
 }
+
+// Kept worktrees of a squad's state (live or archived): path, branch, dirty files, why it was kept, what it waits on.
 
 // The open units squad() handed the Flow, per squad object (kept off the squad's JSON).
 const flowUnitsOf = new WeakMap<object, FlowUnit[]>();
@@ -2045,13 +2076,14 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const archived = db ? labels.flatMap((l) => archivedDocs(db, l).filter((a) => a.st && typeof a.st === "object").map((a) => {
     const st = a.st, t = String(st.topic ?? "?");
     return {
-      spent_since: squadSpentFor(db, l).get(t) ?? null,
+      label: l, spent_since: squadSpentFor(db, l).get(t) ?? null,
       topic: st.topic ?? "?", closed_at: st.closed_at ?? null, type: st.type ?? "feature",
       framing: String(st.framing ?? "").slice(0, 160), progress: progress(arr(st.units)),
       debrief: typeof st.debrief === "string" && st.debrief.trim() ? st.debrief : null,
       prs: squadPrs(db, l, st, repoSlug(db, l, String(st.repo ?? ""))), plans: plans(db, l, `${l}/archive/${t}`),
       try_it: tryIt(db, l, `${l}/archive/${t}`),
       lavish: lavish(db, null, l, t),
+      leftovers: leftoverRows(db, l, st.leftovers, st.units),
     };
   })) : [];
 
@@ -2113,8 +2145,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const doneRows = squads.filter((s) => doneWaits(s.status, s.display_status, !!s.error)).map((s) => ({
     squad: s.topic, label: s.label, kind: "done", id: null, from: "lead", card_squad: s.topic, repo_slug: s.repo_slug ?? null, pr: null,
     act: { action: "close", topic: s.topic, label: "Close squad" }, open: true,
-    title: `${s.topic} is done — read the debrief, then Close squad`, titled: true,
-    text: `${s.topic} is done — read the debrief, then Close squad`, choices: [], suggestion: null, why: null, options: [], age_min: null, command: null,
+    title: `${s.topic} is done — try it out, then Close squad (the Lead writes the debrief then)`, titled: true,
+    text: `${s.topic} is done — try it out, then Close squad (the Lead writes the debrief then)`, choices: [], suggestion: null, why: null, options: [], age_min: null, command: null,
   }));
   const loopNotes = allAlerts.filter((a) => a.place === "note").sort((a, b) => (a.age_min ?? 0) - (b.age_min ?? 0))
 ;
@@ -2480,20 +2512,30 @@ export function renderText(b: Board): string {
         : `      ? ${cell}  (${u.status})`));
       if (u.status !== "done") for (const d of waits) o.push(`        waits on ${d.ref} (${d.status})`);
     }
-    if ((s.leftovers ?? []).length) {
-      o.push(`   LEFTOVERS`);
-      for (const l of (s.leftovers ?? [])) {
-        const la = l.age_min;
-        const lag = la == null || la < 0 ? "?" : la >= 60 ? `${Math.floor(la / 60)}h` : `${la}m`;
-        o.push(`      ⚑ ${l.path}  (${l.branch ?? "?"}, ${l.n_files} uncommitted${l.unpushed ? `, ${l.unpushed} unpushed` : ""}) — ${l.reason ?? "?"}; waits on ${l.waits_on ?? "?"} · ${lag}`);
-      }
-    }
+    leftoverText(o, s.leftovers);
     const ut = (s as any).unit_tokens;
     if (ut?.spent) o.push(`      spent ≈${compact(ut.spent)} over ${ut.units} units (7 days)`);
     if ((s as any).spent_since) o.push(`      ${sinceLine((s as any).spent_since)}`);
   }
   if (!b.squads.length) o.push("  (no squads)");
+  // archive-leftovers U2: an archived squad still holding kept worktrees stays in sight.
+  for (const a of (b.archived ?? []).filter((x: any) => (x.leftovers ?? []).length)) {
+    o.push(`  ARCHIVED ${a.topic}${a.closed_at ? ` (closed ${String(a.closed_at).slice(0, 10)})` : ""}`);
+    leftoverText(o, a.leftovers);
+  }
   return o.join("\n") + "\n";
+}
+
+function leftoverText(o: string[], leftovers: any[] | undefined): void {
+  if (!(leftovers ?? []).length) return;
+  o.push(`   LEFTOVERS`);
+  for (const l of leftovers!) {
+    const c = l.check, ca = c?.checked_age_s;
+    const lag = (n: number | null) => n == null ? "?" : n >= 3600 ? `${Math.floor(n / 3600)}h` : `${Math.max(1, Math.floor(n / 60))}m`;
+    const what = !c ? "not checked yet" : c.safe ? "safe, removing on the next check"
+      : `look first: ${c.commits.length} commit${c.commits.length === 1 ? "" : "s"}, ${c.n_differ} file${c.n_differ === 1 ? "" : "s"} not on main · checked ${lag(ca)}`;
+    o.push(`      ⚑ ${l.path}  (${l.branch ?? "?"}) — ${what}`);
+  }
 }
 
 // --- the server's other reads (board-server.ts GET routes) ----------------------------------------
@@ -2510,7 +2552,7 @@ function withDb<T>(fn: (db: Db) => T, root = stateRoot()): T | null {
 export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] }[] = [
   { name: "Context & compaction", keys: ["studio_move"], prefixes: ["context_", "compact_", "auto_compact_"] },
   { name: "Accounts & model picking", keys: ["limit_pct", "limit_wait_max", "credits_hold_h", "fallback_return_min"], prefixes: ["pick_"] },
-  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "default_backend", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "archive_debrief_min", "notes_cap"] },
+  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "default_backend", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "archive_debrief_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
   { name: "Board & machine", keys: ["board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
@@ -3048,6 +3090,22 @@ function chatCrew(db: Db, project: string, topic: string) {
   });
 }
 
+// Board chat U19b: the option count of a numbered menu at the bottom of a screen (a Claude permission prompt,
+// the folder-trust prompt), else 0. The last run of option lines numbered 1, 2, 3… within the last 25 non-blank
+// lines counts, and only when one of them carries the selection marker; a numbered list in plain output has none.
+export function menuOptions(tail: string): number {
+  const lines = tail.split("\n").filter((l) => l.trim() !== "").slice(-25);
+  let run: boolean[] = [];
+  let last: boolean[] = [];
+  for (const l of lines) {
+    const m = /^\s*([❯>›▶»])?\s*(\d{1,2})\.\s+\S/.exec(l);
+    if (!m) continue;
+    if (Number(m[2]) === 1) run = [];
+    if (Number(m[2]) === run.length + 1) { run.push(!!m[1]); last = run.slice(); }
+  }
+  return last.length >= 2 && last.some(Boolean) ? last.length : 0;
+}
+
 // GET /api/chat: one member's recent turns (observed_chat, redacted and capped by the loop) and its last
 // 10 chat requests, newest last. U19: `screen` {tail, at, age_s} is the loop's newest screen read (redacted
 // by the loop): observed_workers.tail by worktree, the Studio's observed_terminals.tail by its adopted handle;
@@ -3060,7 +3118,8 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
     let c: Row | null = null;
     try { c = db.one("SELECT agent, source, turns, updated_at, gone_at FROM observed_chat WHERE project = ? AND wt = ?", o.project, o.wt) ?? null; }
     catch { /* loop.db before migration 0044: no turns yet */ }
-    const sends = db.all("SELECT id, project, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? ORDER BY id DESC LIMIT 10",
+    // chat-multiline-send-fails U2: a dismissed send (`dismissed_at` in its result, set by fulfil/chat.ts) is left out, so it is gone on every device
+    const sends = db.all("SELECT id, project, payload, result, created_at, done_at FROM requests WHERE kind = 'chat' AND project = ? AND member = ? AND COALESCE(json_extract(CASE WHEN json_valid(result) THEN result END, '$.dismissed_at'), 0) = 0 ORDER BY id DESC LIMIT 10",
       o.project, o.wt).reverse().map((r) => chatSend(db, r, o.topic) as ReturnType<typeof chatSend> & { first?: boolean });
     const firstQueued = sends.find((x) => x.state === "queued");
     if (firstQueued) firstQueued.first = true;
@@ -3074,7 +3133,7 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
       agent: (c?.agent as string | null) ?? (m.agent as string | null) ?? null, source: (c?.source as string | null) ?? null,
       turns: c && c.gone_at == null ? (parse(String(c.turns ?? "[]")) ?? []) : [], updated_at: c?.updated_at == null ? null : Number(c.updated_at),
       working: w?.gone_at == null && w?.state === "working", sends,
-      screen: t && t.tail != null ? { tail: String(t.tail), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
+      screen: t && t.tail != null ? { tail: String(t.tail), menu: menuOptions(String(t.tail)), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
     };
   }, root);
 }

@@ -36,8 +36,9 @@ import { chatLine } from "../chat/turns.ts";
 import { CHAT_FILES_MAX, IMAGES_MARK, chatFilePath } from "../chat/files.ts";
 import { existsSync } from "node:fs";
 import { redact } from "../chat/redact.ts";
+import { CHAT_MAX, chatProblem } from "../chat/limits.ts";
 
-export const CHAT_MAX = 2000;
+export { CHAT_MAX };
 const HUB = new Set(["lead", "thinker", "studio"]);
 
 const parse = (s: unknown): Row => { try { const o = JSON.parse(String(s ?? "")); return o && typeof o === "object" ? o : {}; } catch { return {}; } };
@@ -68,6 +69,14 @@ function crewLog(store: Store, project: string, topic: string, role: string, suf
 function control(a: Action, store: Store, now: number): { done: true; result: string } | { failed: string } {
   const p = payloadOf<"chat-cancel">(a), t = store.get("requests", { id: p.chat });
   if (!t || t.kind !== "chat" || t.project !== a.project) return { failed: `no chat request ${p.chat} in ${a.project}` };
+  if (a.kind === "chat-dismiss") {
+    // chat-multiline-send-fails U2: take a failed or cancelled send out of the chat panel (chatJson leaves a dismissed one out).
+    const res = parse(t.result);
+    if (t.done_at == null || !(res.ok === false || res.state === "cancelled")) return { failed: `chat request ${p.chat} is not a failed or cancelled send` };
+    if (res.dismissed_at == null) store.upsert("requests", { id: p.chat }, { result: JSON.stringify({ ...res, dismissed_at: now }) });
+    finishRequest(store, a, { ok: true, state: "dismissed" }, now);
+    return { done: true, result: "dismissed" };
+  }
   if (t.done_at != null) { finishRequest(store, a, { ok: true, state: "already done" }, now); return { done: true, result: "already done" }; }
   if (a.kind === "chat-cancel") {
     finishRequest(store, { ...a, kind: "chat", payload: { request: p.chat } } as Action, { ok: false, state: "cancelled" }, now);
@@ -81,10 +90,10 @@ function control(a: Action, store: Store, now: number): { done: true; result: st
 const chat: Fulfiller = {
   name: "chat",
   scope: "host",
-  kinds: ["chat", "chat-cancel", "chat-now"],
+  kinds: ["chat", "chat-cancel", "chat-now", "chat-dismiss"],
 
   run(ctx) {
-    const { store } = ctx, out: Action[] = requestActions(ctx, ["chat-cancel", "chat-now"]), first = new Set<string>();
+    const { store } = ctx, out: Action[] = requestActions(ctx, ["chat-cancel", "chat-now", "chat-dismiss"]), first = new Set<string>();
     const rows = store.db.query("SELECT * FROM requests WHERE done_at IS NULL AND kind = 'chat' ORDER BY id").all() as Row[];
     for (const r of rows) {
       const id = Number(r.id), project = String(r.project ?? ""), squad = (r.squad as string | null) ?? null, member = (r.member as string | null) ?? null;
@@ -105,7 +114,8 @@ const chat: Fulfiller = {
     const text = String(row.text ?? p.text ?? "").trim();
     const names: unknown[] = Array.isArray(row.files) ? row.files : Array.isArray(p.files) ? p.files : [];
     if (!wt || (!text && !names.length) || id == null) return { failed: "a chat needs a member, text or images, and its request" };
-    if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text) || Array.from(text).length > CHAT_MAX) return { failed: `a chat is at most ${CHAT_MAX} characters with no control characters but line breaks and tabs` };
+    const why = chatProblem(text);
+    if (why) return { failed: why };
     if (names.length > CHAT_FILES_MAX) return { failed: `a chat carries at most ${CHAT_FILES_MAX} images` };
     const paths: string[] = [];
     for (const n of names) {

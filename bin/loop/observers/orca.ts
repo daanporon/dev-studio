@@ -18,7 +18,7 @@ import { envInt } from "../core/tick.ts";
 import { builderQuestions, idleBuilderDue, knob, liveSquads, SETTLED } from "../reconcilers/liveness.ts";
 import { paused } from "../pause/pause.ts";
 import { stopping } from "../squad/cancel.ts";
-import { stopOpen } from "../squad/member-state.ts";
+import { lastStart, stopOpen } from "../squad/member-state.ts";
 import { HEADLESS } from "./codex.ts";
 import { backendOp, backendPath, inProcess } from "../io/orca.ts";
 import { redact } from "../core/redact.ts";
@@ -281,6 +281,16 @@ export function liveModel(store: Store, project: string, wt: string, m: MainAgen
 // the walk read the worktree empty and no dispatch is live; otherwise unknown (a failed walk, mains
 // that disagree, or no walk yet). Orca's worker state and a leftover terminal are no evidence.
 // U231: a dispatch counts only when the latest dispatch read for its run saw it (`current`).
+// U21a: when the walk first read none in the current spell (observed_workers.walk_none_at). A walk that
+// reads none keeps a spell begun after the member's last start and begins one otherwise; a walk that
+// finds the agent ends it (null); a failed or split walk (`unknown`) proves nothing and keeps it.
+export function walkNoneAt(walk: unknown, prev: unknown, startedAt: number, now: number): number | null {
+  const was = prev == null ? null : Number(prev);
+  if (walk === "running") return null;
+  if (walk !== "none") return was;
+  return was != null && was > startedAt ? was : now;
+}
+
 export function presence(walk: unknown, dispatch: unknown, current = true): "running" | "none" | "unknown" {
   if (walk === "running" || (current && typeof dispatch === "string" && dispatch && !SETTLED.has(dispatch))) return "running";
   return walk === "none" ? "none" : "unknown";
@@ -408,7 +418,8 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
             const { walk, main } = walks.get(w.worktreeId) ?? { walk: "none" as const, main: null };
             const sub = JSON.stringify(subs!.get(w.worktreeId) ?? []);
             const live = main ? liveModel(store, project, w.worktreeId, main) : { model: null, effort: null };
-            ran = { walk, agent: main?.agent ?? null, account: main?.account ?? null, account_at: now, pid: main?.pid ?? null,
+            const m = store.db.query("SELECT placed_at, started FROM members WHERE project = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project, w.worktreeId) as Row | null;
+            ran = { walk, walk_none_at: walkNoneAt(walk, prev?.walk_none_at, m ? lastStart(m) : 0, now), agent: main?.agent ?? null, account: main?.account ?? null, account_at: now, pid: main?.pid ?? null,
               started_at: main?.start ?? null, rss_kb: main?.rss ?? null, live_model: live.model, live_effort: live.effort,
               sub_agents: sub !== "[]" ? sub : null };
           }
