@@ -62,6 +62,26 @@ export const tmuxArg = (a: string): string => (a.endsWith(";") ? `${a.slice(0, -
 // A session name tmux keeps as given (it turns "." and ":" into "_" itself).
 export const sessionName = (group: string): string => group.replace(/[^A-Za-z0-9_-]/g, "_") || DEFAULT_GROUP;
 
+// U20b: `capture-pane -p` drops styles, so Claude's grey prompt suggestion (`❯ mark the unit done`, drawn
+// faint with SGR 2) read as typed text. The screen is read with `-e`; text drawn faint is dropped (a
+// suggestion is not a draft) and every other escape is stripped, so the answer is plain text again.
+export function plainScreen(raw: string): string {
+  let faint = false, out = "";
+  const re = /\x1b\[([0-9;:?<>=]*)[ -/]*([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|([^\x1b]+)/g;
+  for (let m: RegExpExecArray | null; (m = re.exec(raw)); ) {
+    if (m[3] !== undefined) { if (!faint) out += m[3]; continue; }
+    if (m[2] !== "m") continue;
+    const ps = m[1]!.split(/[;:]/).map((x) => (x === "" ? 0 : Number(x)));
+    for (let i = 0; i < ps.length; i++) {
+      const c = ps[i]!;
+      if (c === 38 || c === 48 || c === 58) i += ps[i + 1] === 5 ? 2 : ps[i + 1] === 2 ? 4 : 0; // a colour's own numbers
+      else if (c === 0 || c === 22) faint = false;
+      else if (c === 2) faint = true;
+    }
+  }
+  return out;
+}
+
 export function tmuxBackend(o: TmuxOptions): TmuxBackend {
   const bin = o.tmux ?? Bun.which("tmux") ?? "tmux";
   const sock = o.socket.includes("/") ? ["-S", o.socket] : ["-L", o.socket];
@@ -201,9 +221,9 @@ export function tmuxBackend(o: TmuxOptions): TmuxBackend {
 
   async function read(req: Request<"terminal.read">): Promise<Answer<"terminal.read">> {
     const lines = Math.max(1, Math.floor(req.lines ?? 2000));
-    const r = await run([["capture-pane", "-p", "-t", req.id, ...(req.screen ? [] : ["-S", `-${lines}`])]]);
+    const r = await run([["capture-pane", "-p", "-e", "-t", req.id, ...(req.screen ? [] : ["-S", `-${lines}`])]]);
     if (r.code !== 0) return failed(req.id, "capture-pane", r);
-    const all = r.out.replace(/\n$/, "").split("\n");
+    const all = plainScreen(r.out).replace(/\n$/, "").split("\n");
     while (all.length && !all[all.length - 1]!.trim()) all.pop();
     return okAnswer("terminal.read", { text: (req.screen ? all : all.slice(-lines)).join("\n") });
   }

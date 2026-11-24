@@ -109,6 +109,17 @@ if (!TMUX) {
       }
     });
 
+    test("a faint prompt suggestion is not read as text (U20b)", async () => {
+      const t = await main.call("terminal.create", { cwd: dir, label: "faint" });
+      if (!t.ok) throw new Error("create failed");
+      await main.call("terminal.send", { id: t.terminal.id, text: "printf '\\033[39m> \\033[2msuggest me\\033[22m\\033[0m\\ntyped\\n'", submit: true });
+      let text = "";
+      for (let i = 0; i < 50 && !/^typed$/m.test(text); i++) { await Bun.sleep(100); const r = await main.call("terminal.read", { id: t.terminal.id, screen: true }); if (r.ok) text = r.text + "\n"; }
+      expect(text).toMatch(/^> \ntyped$/m);
+      expect(text).not.toMatch(/^> suggest me$/m);
+      await main.call("terminal.close", { id: t.terminal.id });
+    });
+
     test("a missing cwd fails the create", async () => {
       const c = await main.call("terminal.create", { cwd: join(dir, "nope"), label: "x" });
       expect(c.ok ? "ok" : c.error.code).toBe("failed");
