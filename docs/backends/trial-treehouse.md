@@ -24,7 +24,10 @@ What this unit shipped so the trial can run:
 - A fix in `bin/loop/squad/cancel.ts`, found by that test. A cancelled Builder's tree counted as present
   while its folder existed, and a returned slot keeps its folder. So the member never read `gone` and its
   cancel wish never finished. Now, when the tree has a provider's `worktrees` row, the row decides: present
-  while it is not gone. Orca's own trees and trees with no row still go by the folder.
+  while it is not gone, even when the contract observer's row still reads the folder. Orca's own trees and
+  trees with no row still go by the folder. A returned slot can be leased to another member at the same
+  path; when the row names that member's worktree, the cancel stops and removes nothing there
+  (`tests/loop/cancel-provider.test.ts`).
 - A spawn check in `bin/backend/registry.ts`. `worktree_provider treehouse` is refused at spawn when there
   is no treehouse binary (`DS_TREEHOUSE_BIN`, else on PATH). Before, the squad's first member start was
   the one to fail.

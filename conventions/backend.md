@@ -326,7 +326,7 @@ backend (U11, "Started" below).
     removal). The provider keeps the branch (an unmerged one always); a dirty or unpushed tree is kept as
     a leftover as on Orca. Before the provider runs, the removal checks the fence Orca's `worktree-rm`
     checks (`pause.ts` `gateBlock` on the action's `childActivity` gate; blocked answers 75, a wait), and
-    a `terminal.close` that fails keeps the tree, since no backend drops a terminal with its folder. A cancel reads the tree from the `worktrees` row when Orca has none, and such a row decides whether the tree is still there (a returned treehouse slot keeps its folder, U16e). Squads on
+    a `terminal.close` that fails keeps the tree, since no backend drops a terminal with its folder. A cancel reads the tree from the `worktrees` row, over the contract observer's row, and that row decides whether the tree is still there (a returned treehouse slot keeps its folder, U16e); a row that names another member's worktree is a slot leased again, so the cancel stops and removes nothing at that path. Squads on
     `orca` keep `terminal-close-worktree` and `worktree-rm` by id. `tests/loop/contract-removal.test.ts`.
   - **Observed (U12).** `observers/contract.ts` reads these members, not the Orca observer (whose known
     worktrees and gone sweeps skip every worktree and folder of a squad off Orca): per member the newest

@@ -362,7 +362,7 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
       return !prNumber(u.pr) || sharedPr(store, u) || (pr && (pr.state !== "OPEN" || pr.gone_at != null)) ? "the PR no longer needs closing" : false;
     }
     if (sharedBuilder(store, u)) return "another unit owns the Builder";
-    const r = cancellationReality(store, project, String(u.builder_wt ?? ""));
+    const r = cancellationReality(store, project, String(u.builder_wt ?? ""), u);
     if (a.step === "cancel.stop") return !r.live && !!r.tree ? "the Builder is stopped" : false;
     return !r.present && r.tree?.gone_at != null ? "the worktree is removed" : false;
   }
