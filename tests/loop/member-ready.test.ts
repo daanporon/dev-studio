@@ -6,6 +6,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { plainScreen } from "../../bin/backend/tmux.ts";
+import { readState } from "../../bin/loop/observers/contract.ts";
 import { memberReady, promptDraft, workingOnScreen, type ReadyOpts } from "../../bin/loop/squad/member-ready.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
@@ -195,5 +197,30 @@ describe("memberReady", () => {
     const second = Number(s.request("chat", { text: "two" }, { project: "fx", squad: "demo", member: B }).row.id);
     expect(ready(s, { before: first })).toEqual({ ready: true, why: "idle" });
     expect(ready(s, { before: second })).toEqual({ ready: false, why: "an earlier message waits" });
+  });
+});
+
+// U20b: tmux's `capture-pane -e` keeps styles; a faint (SGR 2) prompt suggestion is not a draft.
+describe("a grey prompt suggestion on a tmux screen (U20b)", () => {
+  const E = "\x1b";
+  const box = (inner: string) => `${E}[2m╭────╮${E}[0m\n│ ${inner} │\n${E}[2m╰────╯${E}[0m\n`;
+  const SUGGEST = `${E}[39m❯ ${E}[2mmark the unit done${E}[22m${E}[0m`;
+  const TYPED = `${E}[39m❯ mark the unit done${E}[0m`;
+  const base = { native: null, out: null, transcript: null, walk: "running", now: 100, quiet: 10 };
+
+  test("faint runs are dropped and every other escape is stripped", () => {
+    expect(plainScreen(`${E}[1m${E}[38;5;2mhi${E}[0m ${E}[2;36mgrey${E}[0m ok${E}[?25h\n`)).toBe("hi  ok\n");
+    expect(plainScreen(`${E}[2mfaint${E}[22m plain ${E}[0;2mfaint again${E}[0m`)).toBe(" plain ");
+    expect(plainScreen(`${E}]0;title\x07x`)).toBe("x");
+  });
+  test("a prompt with a suggestion reads an empty draft and the member idle", () => {
+    const tail = plainScreen(box(SUGGEST));
+    expect(promptDraft(tail)).toBe("");
+    expect(readState({ ...base, tail })).toBe("idle");
+  });
+  test("really typed text is kept: a draft, state unknown", () => {
+    const tail = plainScreen(box(TYPED));
+    expect(promptDraft(tail)).toBe("mark the unit done");
+    expect(readState({ ...base, tail })).toBe("unknown");
   });
 });

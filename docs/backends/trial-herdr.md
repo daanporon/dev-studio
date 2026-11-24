@@ -26,6 +26,10 @@ operator's go (the board question `trial-live-go`). Nothing below the "Record" h
    `state/<trial>/loop/herdr/`.
 2. Check the layout: one herdr workspace for the squad, one tab per member. Attach to look at it with
    `HERDR_SOCKET_PATH=state/<trial>/loop/herdr/herdr.sock HERDR_SESSION=ds-herdr-<trial> <herdr bin>`.
+2b. **Idle reads idle.** With a member at its prompt showing Claude's grey suggestion (it appears after a turn),
+   check `ds observed workers --project <trial>` reads it `idle` (not `unknown`) and a board chat to it is sent, not held
+   at "text at the prompt". Type a few real characters in its prompt: it must read as a draft and hold the chat.
+   (tmux had this fault, U20b: a screen read that drops styles shows the suggestion as typed text.)
 3. Let the Lead plan and a Builder start. While the Builder works, sample states (below) every few minutes.
 4. **Crash.** Kill the Builder's agent process (only that pid: `ds stop-mine` from its worktree, or the pid from
    `ds observed workers`). Note the time. The loop sees no agent in the folder and starts the member again

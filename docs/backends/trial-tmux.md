@@ -1,8 +1,9 @@
 # Trial: tmux (orca-backend-alternatives U16b)
 
-**Status: partial (steps 1-5 run, step 6 skipped, step 7 not reached).** The live trial ran on 2026-11-24 with the operator's go.
-The crash and loop-restart steps passed; the trial squad's Builder never started, so no PR merged and Builder
-retirement was not exercised. See "Record" below.
+**Status: done for steps 1-6 (step 7, the live upgrade, was not run; the version-change drill covers it).** The live
+trial ran on 2026-11-24 with the operator's go. The crash and loop-restart steps passed. The first Builder never
+started (the shell fault below, fixed by U20a); the second, after U20a, took its brief, opened PR #155 and was
+retired after the merge. See "Record" below.
 
 What this unit shipped so the trial can run:
 
@@ -118,9 +119,9 @@ The same trial as orca-lite (U16a), on plain git worktrees.
 ## Record (run 2026-11-24, partial)
 
 - Trial project and squad: dev-studio-public, squad `backend-pick-guide` (id 134, task: a "Which backend to pick" section in `docs/USAGE.md`), spawned 09:50:30Z on tmux (socket `-L ds-dev-studio-public`, server pid 2044300). Only that squad ran on tmux; `default_backend` went to `tmux` and back to `orca` in the same second. The roster was overridden to claude-only for the trial; U26 restores it.
-- Merged PR: none. The squad's one Builder (`u1-docs-usage-add-a`) never started work, so the squad produced no PR (step 7 not reached).
+- Merged PR: #155 (`docs(usage): add a which-backend-to-pick guide`), merged 15:57:11Z (auto-merge armed, event 615638). It came from the Builder started after U20a: `member_started` #615547 at 15:49:08Z; the Builder took its brief at 15:49:12Z (its transcript) and `unit_pr` #615594 recorded the PR at 15:52:03Z. The first Builder (`u1-docs-usage-add-a`, before U20a) never started work.
 - Forced crash: 10:42:33Z, member `thinker`; the loop restarted it (`member_started` #610666) and logged `shadow_crash` #610668.
-- Builder retirement (`want` event id, `gone`, `unit <slug> done`) and its time against the merge: not reached. No merge happened. The Builder window was `gone` twice within 30 minutes and the loop stopped restarting it (see Failures).
+- Builder retirement: `unit_done` #615640 at 15:57:43Z (PR 155, 32 s after the merge, so after it), then `want` #615641 (`gone`, why `unit u1-docs-usage-add-a done`), `member_closed` #615644 at 15:57:44Z, `worktree_removed` #615647 and `wish_done` #615649 at 15:57:49Z (`archived: worktree removed`), `squad_all_done` #615642. The earlier Builder's window had been `gone` twice within 30 minutes and the loop stopped restarting it (see Failures).
 - Agent pids before and after the loop restart (from the two snapshots): loop restart 10:44:17-10:45:02Z. Tmux server pid 2044300 and agent pids 2044334 (thinker), 2044367 (lead) and 3038652 were identical before and after. The agents survived the loop restart.
 - Sessions and windows per squad (the tmux view of `orca worktree show`: `ds tmux-drill snapshot` → `windows`): one session `backend-pick-guide` with windows `thinker`, `lead`, `builder-u1-docs-usage-add-a` (live check 14:50Z).
 - `worktrees` rows before and after the upgrade: not run (no live upgrade).
@@ -128,3 +129,6 @@ The same trial as orca-lite (U16a), on plain git worktrees.
 - Memory (tmux server RSS), backend calls per tick, tick times: server RSS about 7.9 MB (8.3 MB earlier); no `tick_slow` events from the trial squad; backend calls per tick not measured.
 - Failures (contract calls, cards) and the fix or follow-up unit for each: the Builder window of `backend-pick-guide` held a bare `bash` (pid 1729923) instead of `claude`. The loop's brief was typed into that shell and bash answered `syntax error near unexpected token '('`, so the Builder never started. The loop reported it was "sent its brief 2 times and never started", then "gone again within 30 min of a restart; the loop does not restart it again". The thinker and lead windows (claude) were healthy. Finding: on tmux a Builder window whose agent launch fails falls back to a shell and still looks alive to the backend, so the loop pastes the brief into a shell. Not restarted by hand, per the Lead. Follow-up for the Thinker: find why the Builder launch left a shell, and make the tmux backend report a pane whose foreground command is a shell as agent-gone.
 - Version-change result: see "Version-change drill" above; the live upgrade's outcome: not run.
+- Failures after U20a (both fixed by U20b, `tmux: read an idle prompt as empty, and give a typed brief time to be taken`):
+  - False "Poke not taken" card. The Builder started at 15:49:08Z and took its brief at 15:49:12Z, yet `delivery_sent` #615551 (15:49:15Z, try 2) and `delivery_escalated` #615553 (15:49:18Z) put a card on the board. Every tmux brief so far ended this way (deliveries 1841 to 1889: 10 of 14 escalated, each within about 5 s; Orca had 442 verified and none escalated in the same 3 days). A tmux `terminal.send` answers `accepted` with no `turn_started`, so the delivery was due one second later and was resent and escalated before the contract observer read the member `working`. Fix: a send that is only `accepted` on a backend off Orca waits `DS_LOOP_DELIVERY_TAKE_S` (30 s) before its resend, and the member's transcript growing since the send counts as taken (`bin/loop/fulfil/poke.ts`; Orca's sends keep their 1 s).
+  - An idle tmux member never read `idle`. `capture-pane -p` drops styles, so Claude's grey prompt suggestion (`❯ mark the unit done`, faint) read as typed text; `promptDraft()` returned it, `readState()` gave `unknown` and `memberReady()` answered "text at the prompt", which held board chats and answers. Fix: the screen is read with `capture-pane -e`, faint runs are dropped and the other escapes stripped (`plainScreen` in `bin/backend/tmux.ts`); a really typed draft stays text.

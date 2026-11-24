@@ -12,6 +12,7 @@ import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
+import { cleanRigs, LONG, rig as contractRig, sends, startLead, term, type Rig } from "./contract-rig.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
@@ -21,6 +22,7 @@ const LEAD = `${WS}/ds-dev-studio-lead-demo`;
 
 const temps: string[] = [], stores: Store[] = [];
 afterEach(() => {
+  cleanRigs();
   for (const s of stores.splice(0)) { try { s.close(); } catch { /* closed */ } }
   for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
 });
@@ -105,5 +107,63 @@ describe("poke verify (U165)", () => {
     await tick(T + 5);
     expect((s.db.query("SELECT state FROM deliveries").get() as Row).state).toBe("verified");
     expect(orca.of("poke").length).toBe(1);
+  });
+});
+
+// U20b: a tmux terminal.send answers `accepted` (no turn_started). The contract observer reads the member
+// `working` a few seconds later, so the send gets DS_LOOP_DELIVERY_TAKE_S (30) before it is resent.
+describe("an accepted send on a backend off Orca (U20b)", () => {
+  const cards = (r: Rig) => (JSON.parse(readFileSync(join(r.s.root, "fx", "alerts.json"), "utf8")).alerts as Row[]).filter((x) => String(x.id).startsWith("loop-deliver"));
+  const rows = (r: Rig, text: string) => r.s.db.query("SELECT state, tries FROM deliveries WHERE text = ?").all(text) as Row[];
+  const pokeLead = async (r: Rig, text: string) => {
+    const l = await startLead(r);
+    r.s.request("poke", { text }, { project: "fx", squad: "ontmux", member: String(l.wt) });
+    return l;
+  };
+
+  test("taken 5 s after the send (its transcript grows): verified, typed once, no card", async () => {
+    const r = await contractRig({ turn_confirm: "none" });
+    const l = await pokeLead(r, "u20b-taken");
+    await r.tick(1);
+    const id = term(r, l).t.id;
+    expect(rows(r, "u20b-taken")).toEqual([{ state: "accepted", tries: 1 }]);
+    expect((r.s.db.query("SELECT verify_at - at AS w FROM deliveries WHERE text = 'u20b-taken'").get() as Row).w).toBe(30);
+    await r.tick(1);                               // 5 s on: not due yet, nothing resent
+    expect(sends(r.fake, id).filter((x) => x === "u20b-taken")).toHaveLength(1);
+    r.s.upsert("observed_transcripts", { path: "/x/lead.jsonl" }, { project: "fx", wt: String(l.wt), mtime: r.now() + 1, observed_at: r.now() });
+    await r.tick(8);
+    expect(rows(r, "u20b-taken")).toEqual([{ state: "verified", tries: 1 }]);
+    expect(sends(r.fake, id).filter((x) => x === "u20b-taken")).toHaveLength(1);
+    expect(cards(r)).toHaveLength(0);
+  }, LONG);
+
+  test("never taken: one resend after the wait, then one card", async () => {
+    const r = await contractRig({ turn_confirm: "none" });
+    const l = await pokeLead(r, "u20b-never");
+    await r.tick(1);
+    const id = term(r, l).t.id;
+    await r.tick(5);                               // 25 s: still waiting
+    expect(sends(r.fake, id).filter((x) => x === "u20b-never")).toHaveLength(1);
+    expect(cards(r)).toHaveLength(0);
+    await r.tick(20);                              // past 2 x 30 s
+    expect(sends(r.fake, id).filter((x) => x === "u20b-never")).toHaveLength(2);
+    expect(rows(r, "u20b-never")).toEqual([{ state: "escalated", tries: 2 }]);
+    expect(cards(r)).toHaveLength(1);
+  }, LONG);
+
+  test("a send that started a turn (turn_confirm native) makes no delivery at all", async () => {
+    const r = await contractRig({ turn_confirm: "native" });
+    await pokeLead(r, "u20b-started");
+    await r.tick(3);
+    expect(rows(r, "u20b-started")).toEqual([]);
+  }, LONG);
+
+  test("Orca's accepted send keeps its 1 s wait", async () => {
+    const s = imported(), orca = new FakeOrca();
+    orca.pokes.set(LEAD, [3]);
+    pokeReq(s, "ping");
+    const { tick } = rig(s, { orca });
+    await tick(T);
+    expect((s.db.query("SELECT verify_at - at AS w FROM deliveries").get() as Row).w).toBe(1);
   });
 });
