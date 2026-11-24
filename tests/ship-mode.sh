@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=tests/lib/twins.sh
 . "$ROOT/tests/lib/twins.sh"
 LBL="zzmode_$$"
-trap 'rm -rf "$DS_STATE_ROOT/$LBL"' EXIT
+state_root_on_exit 'rm -rf "$DS_STATE_ROOT/$LBL"'
 
 pass=0; fail=0
 eq(){ if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "  FAIL: $1 — want [$3] got [$2]" >&2; fi; }

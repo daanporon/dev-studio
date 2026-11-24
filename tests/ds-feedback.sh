@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
-TMP="$(mktemp -d)"; trap 'rm -rf "$TMP" "$DS_STATE_PARENT"' EXIT
+TMP="$(mktemp -d)"; state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_PARENT"'
 export DS_FEEDBACK_LOG="$TMP/feedback"
 unset DS_MEMBER DS_WT ORCA_TERMINAL_HANDLE CLAUDE_PROJECT_DIR
 F="$ROOT/bin/role/ds-feedback.sh"

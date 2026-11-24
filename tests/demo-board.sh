@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 . "$ROOT/tests/lib/state-root.sh"        # a temp DS_STATE_ROOT the demo must not touch
 TMP="$(mktemp -d -p "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}")"
-trap 'rm -rf "$TMP" "$DS_STATE_PARENT"; stop_own "${SPID:-}"' EXIT
+state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_PARENT"; stop_own "${SPID:-}"'
 pass=0; fail=0
 ok() { if jq -e "$2" "$TMP/board.json" >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  FAIL: $1 — [$2]" >&2; fi; }
 
