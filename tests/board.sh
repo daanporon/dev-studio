@@ -1531,7 +1531,7 @@ jt "feedback U4: with no repo the header reads off and counts notes" "$TMP/fb.js
 dbw "INSERT INTO config (project, file, key, value, observed_at) VALUES ('', 'limits.conf', 'feedback_repo', 'o/r', 1) ON CONFLICT (project, file, key) DO UPDATE SET value = 'o/r'"
 render "$LBL" --json > "$TMP/fb.json"
 jt "feedback U4: with a repo the header counts drafts to review" "$TMP/fb.json" '.feedback.on == true and .feedback.repo == "o/r" and .feedback.review == 2 and .feedback.blocked == 1 and .feedback.new == 1 and .feedback.dismissed == 1'
-has "feedback U4: the text board's FEEDBACK line" "$(render "$LBL")" "FEEDBACK  2 drafts to review (1 blocked by the leak check) · notes: 3 (1 new, 1 drafted, 0 filed, 0 fixed, 1 dismissed)"
+has "feedback U4: the text board's FEEDBACK line" "$(render "$LBL")" "FEEDBACK  2 drafts to review (1 blocked by the leak check) · notes: 3 (1 new, 1 drafted, 0 filed, 0 fixed, 0 closed, 1 dismissed)"
 dbw "UPDATE config SET value = '-' WHERE key = 'feedback_repo'"
 
 echo "board: $pass passed, $fail failed"

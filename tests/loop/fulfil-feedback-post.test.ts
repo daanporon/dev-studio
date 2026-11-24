@@ -358,12 +358,12 @@ describe("ds feedback dismiss|restore", () => {
     const st = join(root, "state");
     const s = open(st);
     stores.push(s);
-    const id = draft(s), a = note(s, id);
+    const id = draft(s), a = note(s, id), gone = note(s, null, "dismissed");
     const ds = (...args: string[]) => Bun.spawnSync([join(ROOT, "bin", "ds"), ...args], { env: { ...process.env, DS_STATE_ROOT: st } });
     const one = ds("feedback", "dismiss", String(a), "--why", "seen before");
     expect(one.exitCode).toBe(0);
     expect(ds("feedback", "dismiss", String(id), "--draft").exitCode).toBe(0);
-    expect(ds("feedback", "restore", `#${a}`).exitCode).toBe(0);
+    expect(ds("feedback", "restore", `#${gone}`).exitCode).toBe(0);
     expect(ds("feedback", "restore", "999").exitCode).toBe(1);
     expect(ds("feedback", "restore", String(a), "--why", "x").exitCode).toBe(2);
     expect(ds("feedback", "dismiss", "abc").exitCode).toBe(2);
@@ -371,8 +371,29 @@ describe("ds feedback dismiss|restore", () => {
     expect(rows).toEqual([
       { kind: "feedback-dismiss", by: "ds", note: a, why: "seen before" },
       { kind: "feedback-dismiss", by: "ds", draft: id },
-      { kind: "feedback-restore", by: "ds", note: a },
+      { kind: "feedback-restore", by: "ds", note: gone },
     ]);
+  });
+
+  test("refuse a doomed request at once, with no request row", () => {
+    const root = mkdtempSync(join(base, "cli-"));
+    mkdirSync(join(root, "state"));
+    temps.push(root);
+    const st = join(root, "state");
+    const s = open(st);
+    stores.push(s);
+    const filed = note(s, null, "filed"), fresh = note(s, null, "new"), posted = draft(s, { state: "filed" });
+    const ds = (...args: string[]) => Bun.spawnSync([join(ROOT, "bin", "ds"), ...args], { env: { ...process.env, DS_STATE_ROOT: st }, stderr: "pipe" });
+    const a = ds("feedback", "dismiss", String(filed));
+    expect(a.exitCode).toBe(1);
+    expect(a.stderr.toString()).toContain(`note ${filed} is filed`);
+    const b = ds("feedback", "restore", String(fresh));
+    expect(b.exitCode).toBe(1);
+    expect(b.stderr.toString()).toContain(`note ${fresh} is new, not dismissed`);
+    const c = ds("feedback", "dismiss", String(posted), "--draft");
+    expect(c.exitCode).toBe(1);
+    expect(c.stderr.toString()).toContain(`draft ${posted} is filed, not in review`);
+    expect((s.db.query("SELECT COUNT(*) AS n FROM requests").get() as Row).n).toBe(0);
   });
 });
 

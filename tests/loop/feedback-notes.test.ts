@@ -7,7 +7,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
-import { addNote, fileLine, importFile, noteKey, parseFile, stamp, whoFromPrefix, whoOf } from "../../bin/loop/feedback/notes.ts";
+import { feedbackLine, feedbackSummary } from "../../bin/board/board-data.ts";
+import { addNote, fileLine, importFile, noteKey, parseFile, stamp, noteLine, whoFromPrefix, whoOf } from "../../bin/loop/feedback/notes.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const DS = join(ROOT, "bin", "ds");
@@ -154,5 +155,24 @@ describe("the commands", () => {
     expect(r.rc).toBe(0);
     expect(r.out).toContain("1 added");
     expect(readdirSync(root).some((f) => f.startsWith("dev-studio-feedback.imported-"))).toBe(true);
+  });
+});
+
+describe("noteLine and the summary (minor snags)", () => {
+  const row = (r: Row) => ({ id: 1, at: 1_700_000_000, project: "fx", squad: null, role: "builder", text: "a note", ...r });
+  test("a filed and a closed note show their issue; fixed keeps its PR", () => {
+    expect(noteLine(row({ state: "filed", issue: 12 }))).toContain("  filed #12  ");
+    expect(noteLine(row({ state: "closed", issue: 12 }))).toContain("  closed #12  ");
+    expect(noteLine(row({ state: "fixed", issue: 12, fix_pr: 9 }))).toContain("  fixed in #9  ");
+    expect(noteLine(row({ state: "filed", issue: null }))).toContain("  filed  ");
+  });
+  test("feedbackSummary counts closed apart from fixed", () => {
+    const s = store(temp());
+    for (const [i, state] of ["fixed", "closed", "new"].entries())
+      s.upsert("feedback_notes", { key: `fb:${i}` }, { project: "fx", text: "t", source: "cli", state, at: 1, updated_at: 1 });
+    const db = { s, all: (q: string, ...a: any[]) => s.db.query(q).all(...a) as Row[], one: (q: string, ...a: any[]) => (s.db.query(q).get(...a) as Row) ?? null };
+    const f = feedbackSummary(db as any);
+    expect([f.fixed, f.closed, f.notes]).toEqual([1, 1, 3]);
+    expect(feedbackLine({ ...f, on: true })).toContain("1 fixed, 1 closed,");
   });
 });
