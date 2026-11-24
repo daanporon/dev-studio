@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 LBL="zzdr_$$"; RQ="$DS_STATE_ROOT/$LBL/requests"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$DS_STATE_ROOT/$LBL" "$TMP"' EXIT
+state_root_on_exit 'rm -rf "$DS_STATE_ROOT/$LBL" "$TMP"'
 mkdir -p "$RQ/_studio" "$RQ/mt"
 
 pass=0; fail=0

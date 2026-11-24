@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+state_root_on_exit 'rm -rf "$TMP"'
 
 # Fake backend: record which inbox verb + arg was used, so we can assert parsing + --poll routing.
 cat > "$TMP/fakeb" <<'FAKE'
@@ -73,7 +73,7 @@ eq "AGENTS.md change: Thinker changed"         "$(isc "$(rtick proj/a/thinker "$
 # Lead mode WORK ITEMS: every dispatched Builder shows `<state> <age>` + its last words with an
 # age; a sitting one shows `since HH:MM`, not epoch ms; missing cols 4-5 print the state only.
 LBL="zzwa_$$"; SD="$DS_STATE_ROOT/$LBL/squads"
-trap 'rm -rf "$TMP" "$DS_STATE_ROOT/$LBL"' EXIT
+state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_ROOT/$LBL"'
 mkdir -p "$SD"
 printf '{"run_id":"r1","units":[{"slug":"u3","status":"dispatched","builder_wt":"wtW"},{"slug":"u4","status":"dispatched","builder_wt":"wtI5"},{"slug":"u5","status":"dispatched","builder_wt":"wtI20"},{"slug":"u6","status":"dispatched","builder_wt":"wtBare"}]}' > "$SD/mt.json"
 now=$(date +%s); ago(){ echo $(( (now - $1 * 60) * 1000 )); }

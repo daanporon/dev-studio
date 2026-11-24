@@ -13,7 +13,7 @@ SS="$ROOT/bin/role/squad-state.sh"
 # re-run (section 8) already gets its root from the parent, which removes it.
 if [ -z "${SQUAD_STATE_MARKED:-}" ]; then
   TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/squad-state-run.XXXXXX")"; export TMPDIR
-  trap 'rm -rf "$TMPDIR"' EXIT
+  state_root_on_exit 'rm -rf "$TMPDIR"'
   # Section 8's marked-root re-run of this whole suite starts now and is collected there, so the two runs
   # overlap instead of running one after the other. It has its own root and shares nothing with this run.
   MK="$(mktemp -d "$TMPDIR/squad-state-marked.XXXXXX")"; : > "$MK/.loop-migrated"

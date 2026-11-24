@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 LBL="zzrcl_$$"; SD="$DS_STATE_ROOT/$LBL/squads"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$DS_STATE_ROOT/$LBL" "$TMP"' EXIT
+state_root_on_exit 'rm -rf "$DS_STATE_ROOT/$LBL" "$TMP"'
 mkdir -p "$SD"
 printf '{"run_id":"run_A","members":[]}' > "$SD/alpha.json"
 printf '{"run_id":"run_B","members":[]}' > "$SD/beta.json"

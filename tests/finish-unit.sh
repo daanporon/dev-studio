@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 TMP="$(mktemp -d)"
 LABEL="finishunit-$$"; SD="$DS_STATE_ROOT/$LABEL"
-trap 'rm -rf "$TMP" "$SD"' EXIT
+state_root_on_exit 'rm -rf "$TMP" "$SD"'
 
 export STUB_DIR="$TMP" BACKEND="$TMP/backend" DS_GH="$TMP/gh" GH_JSON='[]' BACKEND_FAIL=0 BACKEND_ERR="" GH_FAIL=0 GH_HEALTH=''
 cat > "$TMP/gh" <<'STUB'
