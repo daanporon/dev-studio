@@ -163,6 +163,10 @@ describe("reality", () => {
       s.db.run("INSERT INTO finishes (key, project, squad, member, unit, gen, outcome, body, at) VALUES ('k1', 'p', 'one', 'p/one/builder-u1', 'u1', 'g1', 'no-pr', '', ?)", [T - 600]);
       expect(reality(s, b, T)).toBe("running");
     });
+    test("no generation (a Codex, Muse or `--on` start, whose agent this host's walk may never see): running", () => {
+      const { s, b } = dead(T - 10 * 60, { gen: null });
+      expect(reality(s, b, T)).toBe("running");
+    });
   });
 });
 

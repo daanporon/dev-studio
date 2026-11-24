@@ -147,14 +147,16 @@ export function reality(store: Store, m: Row, now: number): Reality {
 }
 
 // U21a: after a KILL Orca can keep a member `working` (presence running) while no agent runs in its
-// worktree. noAgentSince() is when every successful walk since a time after its last start began finding
+// worktree. noAgentSince() is, for a member with a generation, when every successful walk since a time after its last start began finding
 // no agent (walk_none_at, kept by the Orca observer: a failed or split walk keeps it, a walk that finds the
 // agent clears it), while its transcript has not grown since and it has no finish row of its generation;
 // null otherwise. It is gone once that held for GONE_MIN. The caller checks the loop did not stop it (a
 // loop stop is walkedGone's).
 export function noAgentSince(store: Store, m: Row, w: Row, placed: number): number | null {
   const since = Number(w.walk_none_at ?? 0);
-  if (w.walk !== "none" || !(since > placed)) return null;
+  // Only a start that carries a generation: a Codex, Muse or `--on` start has none, and an `--on` one runs
+  // on another host, where this host's walk never sees its agent (the shadow leaves them out too).
+  if (!m.gen || w.walk !== "none" || !(since > placed)) return null;
   const t = store.db.query("SELECT MAX(mtime) AS t FROM observed_transcripts WHERE wt = ?").get(String(m.wt)) as { t: number | null } | null;
   if (Number(t?.t ?? 0) > since) return null;
   return finishOf(store, m) ? null : since;
