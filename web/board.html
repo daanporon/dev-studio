@@ -183,7 +183,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .crew .m .badge{margin-left:6px;flex:none;font:10px var(--mono);padding:0 5px;border-radius:4px;background:#232833;color:var(--dim)}
 .crew .m .badge.at-prompt{background:#3a2e12;color:#e8b04a}
 .ust{font-size:12px;color:var(--mut)} .ust.working,.ust.waiting,.ust.built,.ust.building,.ust.testing,.ust.babysitting{color:var(--blue)} .ust.ready{color:var(--fg)} .ust.done{color:var(--green)} .ust.gone{color:var(--red)} .ust.fixing,.ust.noPR{color:var(--amber)} .ust.merged{color:var(--purple)} .ust.held{color:var(--mut);font-style:italic} .ust.cancelled{color:var(--dim);text-decoration:line-through} .ust.stale{color:var(--amber)} .ust.merge-ready{color:var(--green)}
-.lo{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:6px 4px;border-top:1px solid var(--line);font:12px var(--mono)} .lo .path{color:var(--fg);word-break:break-all} .lo .flag{color:var(--amber)} .lo .lo-d{flex-basis:100%;padding-left:18px}
+.lo{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:6px 4px;border-top:1px solid var(--line);font:12px var(--mono)} .lo .path{color:var(--fg);word-break:break-all} .lo .flag{color:var(--amber)} .lo .lo-d{flex-basis:100%;padding-left:18px} .lo .lo-confirm{flex-basis:100%;margin-left:18px;padding:8px;border:1px solid var(--amber);border-radius:6px;display:flex;flex-direction:column;gap:4px}
 .dot.spin{display:inline-block;flex:none;background:transparent;border:2px solid var(--blue);border-right-color:transparent;animation:spin .8s linear infinite}
 .topic .dot.spin{margin-right:7px;vertical-align:-1px}
 @keyframes spin{to{transform:rotate(360deg)}} @media (prefers-reduced-motion:reduce){.dot.spin{animation:none}}
@@ -1604,11 +1604,32 @@ function UnitsBox({ s, flow, toast, onPlan }) {
 
 // Kept worktrees (archive-leftovers U3): the loop checks each against main and shows what is in it: safe (the
 // next check removes it) or look first, with the commits and files not on main and a way to keep them.
+// U4: Remove posts api/leftover-remove at once for a safe tree; a look-first one first asks, listing what is not on
+// main, and posts the check's fingerprint so the loop removes only the tree the operator looked at.
+function leftoverOutcome(m) {
+  if (!m) return null;
+  const r = m.result;
+  if (!r) return "removing…";
+  if (r.ok) return "removed" + (r.saved ? ", saved to " + r.saved : "");
+  return "not removed: " + String(r.error || "failed").replace(/^(left|refused): /, "");
+}
 function LeftoversBox({ s, toast }) {
   const ago = (sec) => sec == null ? "" : sec >= 3600 ? Math.floor(sec / 3600) + "h" : Math.max(1, Math.floor(sec / 60)) + "m";
+  const [ask, setAsk] = useState(null), [sent, setSent] = useState({});
+  const say = (t) => { if (!toast) return; toast(t); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast(null), 6000); };
+  const go = async (l) => {
+    setAsk(null);
+    const fp = l.check && l.check.fingerprint;
+    try {
+      const b = await post("api/leftover-remove", { project: s.label, topic: s.topic, wt: l.wt, ...(fp ? { fingerprint: fp } : {}) });
+      setSent((o) => ({ ...o, [l.wt]: b.queued ? "queued: runs when the squad resumes" : "removing…" }));
+      say(b.queued ? "queued: runs when the squad resumes (#" + b.id + ")" : "removal of " + l.path + " requested (#" + b.id + ")");
+    } catch (e) { setSent((o) => ({ ...o, [l.wt]: "not sent: " + (e.message || e) })); say("not sent: " + (e.message || e)); }
+  };
   return html`<div class="box"><h3>Leftovers <span>kept because they hold work not on main</span></h3>
     ${(s.leftovers || []).map((l) => {
       const c = l.check, plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+      const done = l.remove && l.remove.result, outcome = (done ? null : sent[l.wt]) || leftoverOutcome(l.remove);
       const dir = "~/.dev-studio/state/" + s.label + "/pages/" + s.topic + "/leftovers", patch = dir + "/" + String(l.wt || "").replace(/[^A-Za-z0-9._-]+/g, "_") + ".patch";
       const keep = ["git -C " + l.path + " push origin HEAD:refs/heads/" + l.branch, "mkdir -p " + dir + " && git -C " + l.path + " diff --binary HEAD > " + patch];
       return html`<div key=${l.wt || l.path} class="lo">
@@ -1621,7 +1642,15 @@ function LeftoversBox({ s, toast }) {
           ${c.commits.length > 0 && html`<div>${plural(c.commits.length, "commit")} not on main: ${c.commits.map((k) => html`<div class="mut" key=${k.sha}>${k.sha.slice(0, 8)} ${k.title}</div>`)}</div>`}
           ${c.n_differ > 0 && html`<div title=${(c.differ || []).join("\n")}>${plural(c.n_differ, "file")} differ from main: <span class="mut">${(c.differ || []).slice(0, 5).join(", ")}${c.n_differ > 5 ? ", …" : ""}</span></div>`}</div>`}
         ${c && html`<span class="mut">checked ${ago(c.checked_age_s)} ago</span>`}
-        <a href="#" class="mut" title=${keep.join("\n")} onClick=${(e) => { e.preventDefault(); copy(keep.join("\n"), toast); }}>Keep it</a></div>`;
+        <a href="#" class="mut" title=${keep.join("\n")} onClick=${(e) => { e.preventDefault(); copy(keep.join("\n"), toast); }}>Keep it</a>
+        <button class="lo-rm" disabled=${!!(l.remove && !l.remove.result)} onClick=${() => c && c.safe ? go(l) : setAsk(l.wt)}>Remove</button>
+        ${outcome && html`<span class="mut lo-out">${outcome}</span>`}
+        ${ask === l.wt && html`<div class="lo-confirm" role="dialog">
+          <div><b>Remove ${l.path}?</b> ${c ? "It holds work not on main:" : "It has not been checked yet; the loop checks it again first."}</div>
+          ${c && c.commits.length > 0 && html`<div>${plural(c.commits.length, "commit")}: ${c.commits.map((k) => html`<div class="mut" key=${k.sha}>${k.sha.slice(0, 8)} ${k.title}</div>`)}</div>`}
+          ${c && c.n_differ > 0 && html`<div>${plural(c.n_differ, "file")}: <span class="mut">${(c.differ || []).join(", ")}${c.n_differ > (c.differ || []).length ? ", …" : ""}</span></div>`}
+          <div class="lo-save">uncommitted changes are saved to a patch; commits stay on branch ${l.branch}</div>
+          <div><button class="lo-go" onClick=${() => go(l)}>Remove</button> <button class="lo-cancel" onClick=${() => setAsk(null)}>Cancel</button></div></div>`}</div>`;
     })}</div>`;
 }
 // "2h" / "3d" since an epoch-seconds mtime; "" when unknown.

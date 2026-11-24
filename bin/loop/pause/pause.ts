@@ -392,7 +392,8 @@ export function actionBlock(store: Store, a: Action): "paused" | "generation cha
     || a.kind === "member.close"    // U155: the close is the retirement itself, not a rival of it
     // archive-leftovers U1: a leftover's removal comes after its member retired, so a retired member (gone,
     // want gone, no cancel) is no rival of it; a live or restarting member on the tree still is.
-    || (a.kind === "worktree.remove" && retiredTree(store, a.project, String((a.payload as Row | null)?.wt ?? "")));
+    // archive-leftovers U4: the board's Remove of a leftover reads the same.
+    || ((a.kind === "worktree.remove" || a.kind === "leftover-remove") && retiredTree(store, a.project, String((a.payload as Row | null)?.wt ?? "")));
   // U158: a suspended member's close-remove is the pause flow's own last step, so the
   // squad's pause intent must not block it (its stop phase stays the pause flow's).
   if (a.kind === "member.close" && (a.payload as Row | undefined)?.phase === "remove") return null;

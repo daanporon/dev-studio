@@ -71,6 +71,9 @@
 //   /api/account {project, agent, account, enabled}  `account`: switch one account off/on for every pick
 //   /api/account-reset {project, agent, account, grant}  `account-reset`: use one free reset grant (usable now, none
 //                 open for that account: else 400/409); the server adds the idempotency key every try reuses
+//   /api/leftover-remove {project, topic, wt, fingerprint?}  `leftover-remove`: a Leftovers box's Remove (404 for no such
+//                 leftover, 409 with one open for it); the loop removes a safe tree, a look-first one only saved and
+//                 with the fingerprint the operator saw (archive-leftovers U4)
 //   /api/override {project, topic, wt, scope?(member|squad|role|project), role?, model?, effort?, plan?, account? | clear:true}  `override`: this member's
 //                 model/account "until done", or back to auto
 // Everything else is 404, so no state file is ever reachable.
@@ -897,6 +900,28 @@ async function accountResetPost(req: Request) {
   });
 }
 
+// leftover: a Leftovers box's Remove (archive-leftovers U4). One `leftover-remove` request; the loop checks the
+// tree again and removes it when it is safe, or saved first when `fingerprint` is still the tree's (else refused).
+async function leftoverRemovePost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const { project, topic, wt, fingerprint } = pr.b;
+  const ok = typeof wt === "string" && wt.length > 0 && wt.length <= 400 && !/[\x00-\x1f]/.test(wt);
+  if (!NAME.test(project ?? "") || !NAME.test(topic ?? "") || !ok || (fingerprint != null && !(typeof fingerprint === "string" && /^[0-9a-f]{8,64}$/.test(fingerprint))))
+    return json(400, { error: "need project, topic, wt and an optional fingerprint" });
+  return write((s) => {
+    const row = one(s, "SELECT doc FROM squads WHERE project = ? AND topic = ?", project, topic) ?? no(404, `no squad ${project}/${topic}`);
+    let list: any[] = [];
+    try { list = JSON.parse(String(row!.doc ?? "{}")).leftovers ?? []; } catch { /* unreadable: no leftovers */ }
+    if (!Array.isArray(list) || !list.some((l) => l && l.wt === wt)) no(404, `${project}/${topic} has no leftover ${wt}`);
+    const open = one(s, "SELECT id FROM requests WHERE kind = 'leftover-remove' AND done_at IS NULL AND project = ? AND json_extract(payload, '$.wt') = ?", project, wt);
+    if (open) no(409, `a removal of ${wt} is already open (request #${open.id})`);
+    const r = board(s, "leftover-remove", { wt, ...(fingerprint ? { fingerprint } : {}) }, { project, squad: topic });
+    // A paused squad holds the request until Resume (pause.ts actionBlock); say so in the answer.
+    return paused(s, { project, squad: topic }) ? json(202, { ok: true, id: Number(r.id), queued: true }) : r;
+  });
+}
+
 // unit: the ⋯ menu on a Work units row (squad-done-definition U5). One `unit-action` request; the loop's
 // fulfiller (fulfil/unit-action.ts) runs cancel-unit for the unit and its open dependents, or resumes
 // the squad and tells the Lead to release the unit. Cancel needs a reason; a done or cancelled unit
@@ -1212,7 +1237,7 @@ async function get(req: Request, url: URL) {
 
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
-  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
   "/api/settings-import/preview": settingsImportPreview,
 };
 

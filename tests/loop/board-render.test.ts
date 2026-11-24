@@ -686,6 +686,46 @@ test("a squad's Leftovers block shows look first with commits, files and Keep it
   } finally { await r.window.happyDOM.close(); }
 });
 
+// archive-leftovers U4: Remove on a look-first leftover asks first (commits, files, the patch line) and posts the
+// check's fingerprint; on a safe one it posts at once; a finished press shows its outcome on the row.
+test("Remove on a leftover: look first confirms with the commits and posts the fingerprint; safe posts at once", async () => {
+  const lo = (wt: string, check: any, remove: any = null) => ({ wt, path: "/w/" + wt, branch: "work-" + wt, n_files: 0, files: [], unpushed: 0, reason: "kept", waits_on: null, unit: "u1", pr: null, age_min: 5, check, remove });
+  const check = (over: any) => ({ at: now - 120, safe: false, commits: [{ sha: "aaaa1111bbbb", title: "first change" }], differ: ["src/only-here.ts"], n_differ: 1, target: "origin/main", target_sha: "e".repeat(40), head: "f".repeat(40), fingerprint: "0123456789abcdef01234567", checked_age_s: 60, ...over });
+  const squad = { label: "fixture", topic: "one", type: "feature", autonomy: "orchestration", ship_mode: "ce-pipeline", display_status: "working", display_key: "working", phase: "build", status: "active", members: [], units: [], questions: [],
+    leftovers: [lo("look", check({})), lo("safe", check({ safe: true, commits: [], differ: [], n_differ: 0, fingerprint: "89abcdef0123456789abcdef" })),
+      lo("gone", check({}), { id: 9, at: now - 30, done_at: now - 20, result: { ok: false, state: "refused", error: "refused: the tree changed since you looked" } })] };
+  const r = await mount({ ...board, squads: [squad] });
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) === "api/leftover-remove") { posts.push(JSON.parse(init.body)); return new w.Response(JSON.stringify({ ok: true, id: posts.length }), { status: 202 }); }
+    return new w.Response("{}", { status: 404 });
+  };
+  const until = async (f: () => any) => { for (let k = 0; k < 40 && !f(); k++) await new Promise((res) => setTimeout(res, 25)); };
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await new Promise((x) => setTimeout(x, 30)); };
+  try {
+    await until(() => doc.querySelector(".row.squad"));
+    await click(doc.querySelector(".row.squad"));
+    await until(() => doc.querySelector(".lo"));
+    const rows = () => [...doc.querySelectorAll(".lo")] as any[];
+    expect(rows()[2].textContent).toContain("not removed: the tree changed since you looked");
+    await click(rows()[0].querySelector(".lo-rm"));
+    expect(posts).toEqual([]);
+    const ask = doc.querySelector(".lo-confirm") as any;
+    expect(ask.textContent).toContain("first change");
+    expect(ask.textContent).toContain("src/only-here.ts");
+    expect(ask.querySelector(".lo-save").textContent).toBe("uncommitted changes are saved to a patch; commits stay on branch work-look");
+    await click(ask.querySelector(".lo-go"));
+    expect(posts).toEqual([{ project: "fixture", topic: "one", wt: "look", fingerprint: "0123456789abcdef01234567" }]);
+    expect(doc.querySelector(".lo-confirm")).toBeNull();
+    expect(rows()[0].textContent).toContain("removing…");
+    await click(rows()[1].querySelector(".lo-rm"));
+    expect(doc.querySelector(".lo-confirm")).toBeNull();
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toEqual({ project: "fixture", topic: "one", wt: "safe", fingerprint: "89abcdef0123456789abcdef" });
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
 // archive-leftovers U2: an archived squad's box lists its kept worktrees in the same Leftovers block as a live squad.
 test("an archived squad's box shows the Leftovers block", async () => {
   const archived = { topic: "oldsq", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [],
