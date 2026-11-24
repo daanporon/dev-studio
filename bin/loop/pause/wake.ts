@@ -103,7 +103,7 @@ export function wake(ctx: TickCtx, member: string, text: string, reason: string,
           payload: reason === "all-done"
             ? { title: "Wrap-up stalled: Lead did not answer", card: POKE_UNANSWERED, reason, episode,
               fields: { pokeEpisode: episode, act: { action: "close", topic: squad, label: "Close squad" } },
-              text: `Every unit of ${squad} is done or cancelled and nothing is held. The loop asked its Lead ${count} times to do the test check, write the debrief and mark it done, and got no answer. ` +
+              text: `Every unit of ${squad} is done or cancelled and nothing is held. The loop asked its Lead ${count} times to do the test check and mark it done, and got no answer. ` +
                 `If ${squad} is finished, press Close squad; if more work is coming, give its Lead the next task.`,
               option: "looked at it", why: "the loop stopped poking it" }
             : { title: "Poke unanswered", card: POKE_UNANSWERED, reason, episode, fields: { pokeEpisode: episode },

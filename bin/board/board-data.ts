@@ -674,7 +674,7 @@ const EXPLAIN: Record<string, StateExplain> = {
     you_can: "release the held units, cancel them, suspend the squad, or leave it parked" },
   "wrapping-up": { means: "every unit is done or cancelled with no open PR and no Tester; the Lead owes the test check and the debrief",
     set_by: "the loop (computed)", you_can: "nothing; a \"Wrap-up stalled\" card comes only if the Lead stops answering" },
-  done: { means: "finished; the Lead wrote the debrief and the squad waits only for you", set_by: "the Lead", you_can: "read the debrief, then Close squad" },
+  done: { means: "finished; the Lead marked it done and the squad waits only for you", set_by: "the Lead", you_can: "try it out (Documents → Try it), then Close squad; the Lead writes the debrief when you close it" },
   pausing: { means: "its agents are being stopped", set_by: "you (Pause)", you_can: "Resume" },
   paused: { means: "its agents are stopped; its worktrees are kept", set_by: "you (Pause)", you_can: "Resume" },
   resuming: { means: "its agents are being started again", set_by: "you (Resume)", you_can: "wait" },
@@ -2113,8 +2113,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const doneRows = squads.filter((s) => doneWaits(s.status, s.display_status, !!s.error)).map((s) => ({
     squad: s.topic, label: s.label, kind: "done", id: null, from: "lead", card_squad: s.topic, repo_slug: s.repo_slug ?? null, pr: null,
     act: { action: "close", topic: s.topic, label: "Close squad" }, open: true,
-    title: `${s.topic} is done — read the debrief, then Close squad`, titled: true,
-    text: `${s.topic} is done — read the debrief, then Close squad`, choices: [], suggestion: null, why: null, options: [], age_min: null, command: null,
+    title: `${s.topic} is done — try it out, then Close squad (the Lead writes the debrief then)`, titled: true,
+    text: `${s.topic} is done — try it out, then Close squad (the Lead writes the debrief then)`, choices: [], suggestion: null, why: null, options: [], age_min: null, command: null,
   }));
   const loopNotes = allAlerts.filter((a) => a.place === "note").sort((a, b) => (a.age_min ?? 0) - (b.age_min ?? 0))
 ;
@@ -3048,6 +3048,22 @@ function chatCrew(db: Db, project: string, topic: string) {
   });
 }
 
+// Board chat U19b: the option count of a numbered menu at the bottom of a screen (a Claude permission prompt,
+// the folder-trust prompt), else 0. The last run of option lines numbered 1, 2, 3… within the last 25 non-blank
+// lines counts, and only when one of them carries the selection marker; a numbered list in plain output has none.
+export function menuOptions(tail: string): number {
+  const lines = tail.split("\n").filter((l) => l.trim() !== "").slice(-25);
+  let run: boolean[] = [];
+  let last: boolean[] = [];
+  for (const l of lines) {
+    const m = /^\s*([❯>›▶»])?\s*(\d{1,2})\.\s+\S/.exec(l);
+    if (!m) continue;
+    if (Number(m[2]) === 1) run = [];
+    if (Number(m[2]) === run.length + 1) { run.push(!!m[1]); last = run.slice(); }
+  }
+  return last.length >= 2 && last.some(Boolean) ? last.length : 0;
+}
+
 // GET /api/chat: one member's recent turns (observed_chat, redacted and capped by the loop) and its last
 // 10 chat requests, newest last. U19: `screen` {tail, at, age_s} is the loop's newest screen read (redacted
 // by the loop): observed_workers.tail by worktree, the Studio's observed_terminals.tail by its adopted handle;
@@ -3074,7 +3090,7 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
       agent: (c?.agent as string | null) ?? (m.agent as string | null) ?? null, source: (c?.source as string | null) ?? null,
       turns: c && c.gone_at == null ? (parse(String(c.turns ?? "[]")) ?? []) : [], updated_at: c?.updated_at == null ? null : Number(c.updated_at),
       working: w?.gone_at == null && w?.state === "working", sends,
-      screen: t && t.tail != null ? { tail: String(t.tail), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
+      screen: t && t.tail != null ? { tail: String(t.tail), menu: menuOptions(String(t.tail)), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
     };
   }, root);
 }
