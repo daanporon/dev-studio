@@ -3416,7 +3416,7 @@ function ChangeNote({ c, busy, onUndo }) {
 // Feedback (ds-feedback-github-issues U4): the header button's panel. GET api/feedback -> drafts to review (each
 // with the notes it came from, local text marked "not sent"), every note with its state, and the filed issues.
 // Each button files one request through POST api/feedback; nothing reaches GitHub until Post is pressed.
-const FB_TABS = [["review", "To review"], ["notes", "Notes"], ["filed", "Filed"]];
+const FB_TABS = [["notes", "Notes"], ["review", "To review"], ["filed", "Filed"]];
 const FB_FILTERS = [["all", "All"], ["open", "Not filed"], ["dismissed", "Dismissed"]];
 function fbNoteState(n) {
   if (n.state === "filed") return "filed" + (n.issue != null ? " #" + n.issue : "");
@@ -3426,7 +3426,7 @@ function fbNoteState(n) {
 const fbLeak = (d) => d.leak === "blocked" ? "leak check: blocked" + (d.leak_why ? " (" + d.leak_why + ")" : "") : d.leak === "ok" ? "leak check: passed" : "leak check: not run yet";
 function FeedbackPanel({ summary, project, toast, onClose }) {
   const on = !!(summary && summary.on);
-  const [tab, setTab] = useState(on ? "review" : "notes");
+  const [tab0, setTab] = useState(on && summary.review > 0 ? "review" : "notes");
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [edit, setEdit] = useState(null);         // {id, title, body}: the draft being edited
@@ -3475,10 +3475,14 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
     ${n.reason && html`<div class="mut fb-reason">${n.reason}</div>`}
   </div>`;
   const counts = { review: data ? data.review.length : (summary && summary.review) || 0, notes: data ? data.notes.length : (summary && summary.notes) || 0, filed: data ? data.filed.length : 0 };
+  // Flow order. A tab shows while the project is on, for Notes always, and while it still holds something (a draft waiting after
+  // the switch went off, a filed issue); a hidden chosen tab falls back to Notes.
+  const shown = FB_TABS.filter(([k]) => on || k === "notes" || counts[k] > 0);
+  const tab = shown.some(([k]) => k === tab0) ? tab0 : "notes";
   return html`<div class="modal" id="feedback" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox set-box" role="dialog" aria-label="Feedback"><div class="mhd"><span>Feedback${on ? " · " + summary.repo : " · off"}</span><span class="sp"></span>
       <button class="btn sm mclose" title="Close (Esc)" onClick=${onClose}>✕</button></div>
-      <div class="set-tabs">${FB_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab fb-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l} ${counts[k] > 0 ? "(" + counts[k] + ")" : ""}</button>`)}</div>
+      <div class="set-tabs">${shown.map(([k, l]) => html`<button key=${k} class=${"set-tab fb-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l} ${counts[k] > 0 ? "(" + counts[k] + ")" : ""}</button>`)}</div>
       <div class="set-body fb-body-wrap">
         ${err && html`<div class="bad fb-err">${err}</div>`}
         ${!on && html`<div class="mut fb-off">Posting is off: turn <code>feedback</code> on in Settings → Limits to get drafts (they go to the repo this checkout was cloned from). Notes are still kept on this host.</div>`}
