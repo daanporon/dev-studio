@@ -92,8 +92,9 @@ function unitActive(unit: string): boolean {
   return ["active", "activating", "deactivating", "reloading"].includes(r.stdout.toString().trim());
 }
 function jobAlive(rec: Rec): boolean {
-  if (rec.unit && unitActive(String(rec.unit))) return true;
-  return typeof rec.pid === "number" && rec.pid > 0 && pidAlive(rec.pid);
+  // The job's own pid first (a /proc read); systemctl only before the job wrote its file, or after it died.
+  if (typeof rec.pid === "number" && rec.pid > 0 && pidAlive(rec.pid)) return true;
+  return !!rec.unit && unitActive(String(rec.unit));
 }
 function stopJob(rec: Rec): void {
   if (rec.unit) Bun.spawnSync(["systemctl", "--user", "stop", String(rec.unit)], { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 30_000 });
