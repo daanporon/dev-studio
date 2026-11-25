@@ -170,14 +170,14 @@ const claudeSys = (env: Env): string => env.DS_CLAUDE_HOME || `${env.HOME}/.clau
 type Ran = { code: number; out: Uint8Array; err: Uint8Array };
 /** Run a program to completion; a program that cannot start is 127 (the shell's "not found"), one the
  *  ctx's signal stops is 143 (SIGTERM). */
-async function spawn(ctx: Ctx, argv: string[], opts: { stdin?: string; env?: Env } = {}): Promise<Ran> {
+async function spawn(ctx: Ctx, argv: string[], opts: { stdin?: string; env?: Env; cwd?: string } = {}): Promise<Ran> {
   if (ctx.signal?.aborted) return { code: 143, out: new Uint8Array(), err: new Uint8Array() };
   try {
     const p = Bun.spawn(argv, {
       stdin: opts.stdin !== undefined ? new TextEncoder().encode(opts.stdin) : ctx.stdin,
       stdout: "pipe", stderr: "pipe",
       env: { ...(opts.env ?? ctx.env) } as Record<string, string>,
-      signal: ctx.signal,
+      signal: ctx.signal, ...(opts.cwd ? { cwd: opts.cwd } : {}),
     });
     const [out, err, code] = await Promise.all([new Response(p.stdout).bytes(), new Response(p.stderr).bytes(), p.exited]);
     return { code, out, err };
@@ -581,13 +581,18 @@ export async function claudeAccounts(ctx: Ctx): Promise<string[]> {
   return out ? out.split("\n") : ["system\tsystem login"];
 }
 
+/** Muse's short-lived subcommands (U21e): a `muse usage` or `muse skills` beside a member's own muse is a
+ *  helper, not a second main agent. A first argument that is not one of these (a prompt, a flag, `resume`,
+ *  `attach`, `serve`) is a muse the member runs. */
+const MUSE_HELPERS = new Set(["exec", "config", "export", "trace", "model-profile", "skills", "voice", "plugins",
+  "sandbox", "schema", "sessions", "session-message", "mcp", "auth", "login", "logout", "usage", "init"]);
 /** agent_accounts: the `agent-accounts` verb, from $DS_PROC (default /proc). A top-level agent (no agent
  *  above it in its parent chain) is its member's own agent and prints a main line,
  *  "<cwd>\tmain\t<agent>\t<model>\t<account>\t<effort>\t<pid>\t<start>\t<rss>" (U149: its --model and
  *  --effort flags, pid, start in epoch seconds and RSS in kB, each "-" when unread). Any other agent
  *  process prints a sub line, "<cwd>\tsub\t<agent>\t<model>\t<account>[\t<effort>]" (U105: the effort only
  *  when it has one). A headless `claude -p` (U98) and a headless codex (`codex exec`, `codex app-server`,
- *  U152) are always sub lines; a claude without -p under another claude is skipped (the top claude is the
+ *  U152) and a `muse <subcommand>` (U21e, MUSE_HELPERS) are always sub lines; a claude without -p under another claude is skipped (the top claude is the
  *  member's own agent), and so is a process whose environ (a claude's account) or cwd can't be read.
  *  Muse's versioned binary (comm "muse-bin-<version>") is muse. Lines come in pid order (the shell's came
  *  in bash's hash order); everything is read and printed as bytes. */
@@ -656,6 +661,7 @@ export function agentAccounts(env: Env): string {
     let isp = false;
     if (c === "claude" && al && al.includes("-p")) isp = true;
     if (c === "codex" && al && al.length > 1 && (al[1] === "exec" || al[1] === "app-server")) isp = true;
+    if (c === "muse" && al && al.length > 1 && MUSE_HELPERS.has(al[1])) isp = true;
     if (!isp && c === "claude" && anyclaude) continue;
     let acct: string;
     if (c === "claude") {
@@ -860,7 +866,7 @@ async function museUsage(ctx: Ctx, dir: string, ttl: number, now: number): Promi
   let row = cached(f, ttl, now);
   if (row === null) {
     row = "";
-    const r = await spawn(ctx, ["muse", "usage", "--json"]);
+    const r = await spawn(ctx, ["muse", "usage", "--json"], { cwd: dir });
     if (r.code === 0) {
       try {
         const rows: string[] = [];
