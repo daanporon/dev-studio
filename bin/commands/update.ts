@@ -3,7 +3,10 @@
 // in a job outside the loop), with no Studio turn. Refused (exit 1) while the project already has one open.
 //   ds update <project> [--by <who>] [--wait <s>]
 // --wait polls until the request is done and exits 1 when it failed or did not finish in time.
-import { open } from "../loop/core/store.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { dsLabel } from "../lib/shared";
+import { open, stateRoot } from "../loop/core/store.ts";
 import { parse, print, seconds, shape, waitFor } from "../loop/core/cli.ts";
 
 export const help = "<project> [--by <who>] [--wait <s>] — the loop pulls, reinstalls, restarts itself and refreshes the project's squads (no Studio)";
@@ -11,7 +14,9 @@ export const help = "<project> [--by <who>] [--wait <s>] — the loop pulls, rei
 export async function run(args: string[]): Promise<number> {
   const { pos, opt } = parse(args, ["by", "wait"]);
   if (pos.length !== 1) { console.error(`usage: ds update ${help}`); return 2; }
-  const project = pos[0];
+  const project = dsLabel(pos[0]);
+  // A mistyped project would pull and restart the host, then fail in update-squads.
+  if (!existsSync(join(stateRoot(), project))) { console.error(`ds update: no state for '${project}' — run /ds-up first`); return 1; }
   const wait = seconds(opt.wait);
   const by = opt.by ?? process.env.DS_WHO ?? "ds";
   const s = open();

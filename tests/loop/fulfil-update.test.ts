@@ -273,10 +273,13 @@ describe("update-run's parsers", () => {
 });
 
 describe("ds update", () => {
-  test("files one request per project and refuses a second while it is open", () => {
+  test("files one request per known project and refuses an unknown one or a second while one is open", () => {
     const root = join(dir, "state");
     const env = { ...process.env, DS_STATE_ROOT: root } as Record<string, string>;
     const ds = (...a: string[]) => Bun.spawnSync([join(ROOT, "bin", "ds"), "update", ...a], { env, stdout: "pipe", stderr: "pipe" });
+    expect(ds("nosuch").exitCode).toBe(1);
+    expect(ds("nosuch").stderr.toString()).toContain("no state for 'nosuch'");
+    for (const p of ["fx", "fy"]) mkdirSync(join(root, p), { recursive: true });
     const one = ds("fx");
     expect(one.exitCode).toBe(0);
     expect(JSON.parse(one.stdout.toString())).toMatchObject({ kind: "update", project: "fx" });
