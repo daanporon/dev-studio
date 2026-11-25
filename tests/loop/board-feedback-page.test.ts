@@ -100,3 +100,26 @@ test("with no repo the panel opens on the Notes tab", () => {
   const p = panel({}, { on: false, repo: null, review: 0 }); p.render();
   expect(p.h.states[0]).toBe("notes");
 });
+
+// U12: tabs in flow order, empty ones hidden while the project is off.
+const tabs = (p: ReturnType<typeof panel>) => nodes(p.render()).filter((x) => x.strings.startsWith("<button key=") && x.strings.includes("onClick=\u0000>\u0000 \u0000</button>")).map((x) => x.values[3]);
+const loaded = (reply: any, summary: any) => { const p = panel(reply, summary); p.render(); p.setData(reply); return p; };
+const off = { on: false, repo: "o/r", review: 0, notes: 0 };
+
+test("tabs run Notes, To review, Filed", () => {
+  expect(tabs(loaded({ review: [], filed: [], notes: [] }, { on: true, repo: "o/r", review: 0, notes: 0 }))).toEqual(["Notes", "To review", "Filed"]);
+});
+test("off with nothing waiting shows only Notes, opened", () => {
+  const p = loaded({ review: [], filed: [], notes: [] }, off);
+  expect(tabs(p)).toEqual(["Notes"]); expect(p.h.states[0]).toBe("notes");
+});
+test("off with a draft in review still shows To review", () => {
+  expect(tabs(loaded({ review: [draft()], filed: [], notes: [] }, off))).toEqual(["Notes", "To review"]);
+});
+test("off with a filed note shows Filed", () => {
+  expect(tabs(loaded({ review: [], filed: [draft({ state: "filed", issue: 5 })], notes: [] }, off))).toEqual(["Notes", "Filed"]);
+});
+test("on opens on To review with drafts, on Notes without, and shows all three", () => {
+  const a = panel({}, { on: true, repo: "o/r", review: 2, notes: 0 }); a.render(); expect(a.h.states[0]).toBe("review");
+  const b = loaded({ review: [], filed: [], notes: [] }, { on: true, repo: "o/r", review: 0, notes: 0 }); expect(b.h.states[0]).toBe("notes"); expect(tabs(b).length).toBe(3);
+});
