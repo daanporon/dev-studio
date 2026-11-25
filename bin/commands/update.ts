@@ -16,7 +16,7 @@ export async function run(args: string[]): Promise<number> {
   if (pos.length !== 1) { console.error(`usage: ds update ${help}`); return 2; }
   const project = dsLabel(pos[0]);
   // A mistyped project would pull and restart the host, then fail in update-squads.
-  if (!existsSync(join(stateRoot(), project))) { console.error(`ds update: no state for '${project}' — run /ds-up first`); return 1; }
+  if (!existsSync(join(stateRoot(), project))) { console.error(`ds update: no state for '${project}' — run ds up <git-url> first`); return 1; }
   const wait = seconds(opt.wait);
   const by = opt.by ?? process.env.DS_WHO ?? "ds";
   const s = open();

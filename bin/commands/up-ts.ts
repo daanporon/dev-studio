@@ -23,7 +23,7 @@ import { inherit, isUrl } from "../lib/upkeep";
 import { compactWindowOf, roleRow, writeRoleFile } from "../lib/lib";
 import { BACKEND_WANTED, MOVE, openSquads, START_WANTED, STUDIO_SQUAD, studioCandidates, studioMember, studioPrompt, wantStudioBackend, wantStudioStart } from "../loop/squad/studio.ts";
 import type { LiveTerminal } from "../loop/observers/orca.ts";
-import { whoAmI } from "../loop/core/whoami.ts";
+import { parseMember, whoAmI } from "../loop/core/whoami.ts";
 import { chooseSquadBackend, type BackendName } from "../backend/registry.ts";
 import { herdrBin } from "../backend/herdr-bin.ts";
 import { herdrPlace } from "../backend/herdr.ts";
@@ -118,7 +118,15 @@ export async function run(argv: string[]): Promise<number> {
   if (typeof parsed === "number") return parsed;
   const { homeArg, backendFlag, worktree, account, skills, forceNew } = parsed;
   const prefix = dsPrefix();
-  if (whoAmI().via !== null) {
+  // A project is named, never guessed from where this runs (a bare `ds up` in a worktree once made a project of it).
+  if (!homeArg && !process.env.HOME_REPO) { writeErr(`usage: ds up ${help}\n`); return 2; }
+  const me = whoAmI();
+  const asMember = parseMember(me.member);
+  if (asMember && asMember.squad !== STUDIO_SQUAD) {
+    writeErr(`up: refused — ${me.member} is a squad role, and \`ds up\` is a host bootstrap: run it from a plain host shell\n`);
+    return 2;
+  }
+  if (me.via !== null) {
     writeErr("up: NOTE — you're running this inside an Orca agent (a Studio is bound to its own project). `ds up` is a host bootstrap; prefer a plain host shell. Reconciling by label so it won't duplicate.\n");
   }
 
@@ -136,7 +144,7 @@ export async function run(argv: string[]): Promise<number> {
   if (!loopUp) writeErr(`up: the loop did not start (loop --ensure exit ${loopRc}, see above)\n`);
 
   // 3. The project.
-  const arg = homeArg || process.env.HOME_REPO || `path:${ROOT}`;
+  const arg = homeArg || process.env.HOME_REPO!;
   const label = parsed.label || dsLabel(arg);
   const root = stateRoot(), stateDir = join(root, label);
   const dispState = join(stateDir, "dispatcher.json");

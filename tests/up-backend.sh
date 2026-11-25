@@ -21,6 +21,7 @@ stop_loop() { if [ -n "$loop_pid" ]; then kill "$loop_pid" 2>/dev/null; wait "$l
 # shellcheck disable=SC2016
 state_root_on_exit 'stop_loop; rm -rf "$tmp" "$ROOT/repos/zzup" "$ROOT/repos/zzup-tmux" "$ROOT/repos/zzup-down"'
 
+unset DS_MEMBER DS_WT DS_GEN ORCA_TERMINAL_HANDLE HOME_REPO   # a Builder runs this: its identity must not reach `ds up`
 export DS_WORKTREE_ROOT="$tmp/wts" DS_BIND=127.0.0.1 DS_BOARD_SERVE_WAIT=0 DS_UP_START_WAIT_S=30 DS_LOOP_RETRY_S=1
 export DS_CLAUDE_SYSTEM_JSON_DIR="$tmp/home"; mkdir -p "$tmp/home"; printf '{"numStartups":3}\n' > "$tmp/home/.claude.json"
 
@@ -175,6 +176,25 @@ has "tmux, loop down: says only the loop starts it" "only the loop can start a S
 out="$(up "$src" --backend orca --worktree treehouse --label zzup-bad)"; rc=$?
 check "orca + treehouse: refused" "2" "$rc"
 check "orca + treehouse: no state" "no" "$([ -e "$DS_STATE_ROOT/zzup-bad/dispatcher.json" ] && echo yes || echo no)"
+
+# 10. U56: a bare `ds up` prints usage, exits 2 and touches nothing (no install, no loop, no state, no backend call).
+before="$(find "$DS_STATE_ROOT" | sort | md5sum)"; : > "$ulog"; rm -f "$tmp/install.log"
+out="$(env -u HOME_REPO -u DS_MEMBER -u ORCA_TERMINAL_HANDLE "$ROOT/bin/ds" up-ts 2>&1)"; rc=$?
+check "bare up: exit 2" "2" "$rc"
+has "bare up: usage" "usage: ds up" "$out"
+check "bare up: state root unchanged" "$before" "$(find "$DS_STATE_ROOT" | sort | md5sum)"
+check "bare up: no backend call" "0" "$(wc -l < "$ulog" | tr -d ' ')"
+check "bare up: no install" "no" "$([ -e "$tmp/install.log" ] && echo yes || echo no)"
+# 10b. A squad role is refused, naming the member; the Studio carries on with the NOTE.
+out="$(env -u HOME_REPO DS_MEMBER=zzup/some-squad/builder-x "$ROOT/bin/ds" up-ts "$src" --label zzup 2>&1)"; rc=$?
+check "builder: exit 2" "2" "$rc"
+has "builder: names the member" "zzup/some-squad/builder-x" "$out"
+has "builder: plain host shell" "plain host shell" "$out"
+out="$(env -u HOME_REPO DS_MEMBER=zzup/_studio/studio "$ROOT/bin/ds" up-ts "$src" --label zzup 2>&1)"; rc=$?
+# No loop runs here, so it ends waiting for one (exit 1); what matters is that it was not refused (2).
+check "studio: not refused" "yes" "$([ "$rc" != 2 ] && echo yes || echo no)"
+has "studio: went on to the project" "asked the loop to start the Studio" "$out"
+has "studio: the NOTE" "NOTE" "$out"
 
 echo "up-backend: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

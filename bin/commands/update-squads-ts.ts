@@ -37,7 +37,7 @@ export async function run(argv: string[]): Promise<number> {
   const args = argv.filter((a) => a !== "--auto");
   if (args.length < 1) { writeErr("usage: update-squads.sh <project> [--auto]\n"); return 2; }
   const label = dsLabel(args[0]);
-  if (!existsSync(join(stateRoot(), label))) { writeErr(`update-squads: no state for '${label}' — run /ds-up first\n`); return 1; }
+  if (!existsSync(join(stateRoot(), label))) { writeErr(`update-squads: no state for '${label}' — run ds up <git-url> first\n`); return 1; }
 
   const markerFile = join(stateRoot(), label, "squads-rev.json");
   const head = chomp((await sh(["git", "rev-parse", "HEAD"], { cwd: ROOT })).out);

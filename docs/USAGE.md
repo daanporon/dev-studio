@@ -95,7 +95,7 @@ are rejected. Existing runtime files are copied into `state/<label>/loop/` witho
 replacing newer data; the operator backs up and removes the old marker directories after
 the new code is active. See the historical [switch runbook](runbooks/loop-switch.md).
 and with `--skills` also installs the role skills. It ends by
-printing the next step (`~/.dev-studio/bin/host/up.sh <git-url>`). A
+printing the next step (`~/.dev-studio/bin/ds up <git-url>`). A
 later `git pull` updates existing commands' content with no re-install; re-run
 `install.sh` after a pull that **adds or removes** a command (a new file needs its
 own symlink) or if you **move** the checkout. It's idempotent — running it after
