@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { accountPlan, accountSkillsCheck } from "../lib/account-skills";
 import { hostBackendPath, globJson, readIfs, run as runCmd, stateRoot, writeErr } from "../lib/shared";
 import { globNames } from "../lib/install";
+import { dbPath, open } from "../loop/core/store.ts";
+import { contractLimited } from "../loop/capacity/contract-limited.ts";
 
 export const help = `[--limited <file>] [--max-age <s>] — rewrite state/accounts.tsv from the backend's accounts, usage and limits (accounts-refresh.sh)`;
 
@@ -77,7 +79,16 @@ export async function run(argv: string[]): Promise<number> {
     const RESETS = await out(["account-resets"]);
     let LIM: string;
     if (limitedFile) { try { LIM = stripNl(readFileSync(limitedFile, "utf8")); } catch { LIM = ""; } }
-    else LIM = await out(["limited"]);
+    else {
+      LIM = await out(["limited"]);
+      // U35: the squads off Orca (tmux, herdr): the same screen match over their members' tails the contract observer keeps.
+      if (existsSync(dbPath())) {
+        try {
+          const st = open();
+          try { LIM = stripNl(`${LIM}\n${contractLimited(st, Number(now), Number(process.env.DS_SWEEP_SILENT_MIN || "10"))}`).replace(/^\n+/, ""); } finally { st.close(); }
+        } catch { /* no readable loop.db: Orca's rows stand */ }
+      }
+    }
 
     // Episodes: key (wt|notice) \t until \t agent \t account — set once per episode, kept until it passes.
     let epiText: string | null = null;
