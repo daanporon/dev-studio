@@ -49,7 +49,9 @@ commands, instructions, AND skills**. Run it in the Studio. Do the steps in orde
    types a `dev-studio reload:` line into this terminal once you are idle with an empty prompt: re-read
    `~/.dev-studio/AGENTS.md` and `~/.dev-studio/studio/studio.md` then, and run the `ds reload ack`
    command it ends with. Only when step 2 printed `restart` with `skills` among its classes, type
-   `/reload-skills` here too: the loop does not refresh the Studio's skills (no restart/reopen needed).
+   `/reload-skills` here too: the loop does not refresh the Studio's skills from a `/ds-update` run here
+   (no restart/reopen needed). An update started from the board or `ds update` is different: the loop
+   types `/reload-skills` into the Studio itself once it is idle (Claude Studio, skills among the classes).
    After `none` or `squads already on …` there is nothing to refresh.
 
 Report what refreshed. **When to use the others instead:** `/ds-reload` = re-read instructions

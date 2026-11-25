@@ -53,6 +53,9 @@ the newest code, run `git -C ~/.dev-studio fetch -q` and `git -C ~/.dev-studio s
   `AGENTS.md` and `studio/studio.md` and ending with `ds reload ack <project> _studio studio -` into the
   adopted handle through `wake()` once `studioReady()` holds. Only an ack from that handle counts
   (`acknowledgeReload`), and a Studio session adopted after the wish satisfies it without one.
+  Skills too (board-actions-as-wishes U3): a Claude Studio gets `/reload-skills` typed once (`reloadStudioSkills`, same
+  `wake()` and `studioReady()`, episode `reload-skills:<request id>`) after an `update` request ends done with `skills`
+  among its classes; a Studio adopted after it finished, or another agent, gets nothing.
 
 ### Your journal (Lead, Thinker, Studio, Builder)
 

@@ -11,7 +11,7 @@ import { importJson } from "../../bin/loop/db/import-json.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { FakeOrca } from "../../bin/loop/fakes/orca.ts";
 import { orcaObserver, type LiveTerminal } from "../../bin/loop/observers/orca.ts";
-import studioReconciler, { reloadStudio, studioReloadText } from "../../bin/loop/reconcilers/studio.ts";
+import studioReconciler, { reloadStudio, reloadStudioSkills, studioReloadText } from "../../bin/loop/reconcilers/studio.ts";
 import { studioMember } from "../../bin/commands/update-squads-ts.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
 
@@ -142,5 +142,53 @@ describe("the Studio's reload", () => {
     s.wishOnce("fx/_studio/studio", "reload", { at: T + 100, by: "update-squads" });
     s.db.run("UPDATE members SET handle = NULL WHERE squad = '_studio'");
     expect(reloadStudio(ctxOf(s, T + 200))).toEqual([]);
+  });
+});
+
+describe("the Studio's skills after an update (U3)", () => {
+  const done = (s: Store, at: number, result: unknown, kind = "update") =>
+    s.db.run("INSERT INTO requests (project, kind, payload, key, created_at, done_at, result) VALUES ('fx', ?, '{}', ?, ?, ?, ?)",
+      [kind, `k${Math.random()}`, at - 10, at, JSON.stringify(result)]);
+  const typed = (s: Store, now: number) => reloadStudioSkills(ctxOf(s, now)).map((a) => String((a.payload as Row).text));
+
+  test("a done update with skills types /reload-skills once when ready, waits while not ready, never twice", async () => {
+    const s = await adopted();
+    done(s, T + 100, { ok: true, classes: ["skills", "instructions"] });
+    s.db.run("UPDATE observed_terminals SET doc = json_patch(doc, '{\"unread\":1}') WHERE handle = 'term_s1'");
+    expect(typed(s, T + 200)).toEqual([]);
+    s.db.run("UPDATE observed_terminals SET doc = json_patch(doc, '{\"unread\":0}') WHERE handle = 'term_s1'");
+    const ctx = ctxOf(s, T + 200);
+    const acts = reloadStudioSkills(ctx);
+    expect(acts.map((a) => (a.payload as Row).text)).toEqual(["/reload-skills"]);
+    expect(acts[0]!.payload).toMatchObject({ handle: "term_s1", reason: "reload-skills" });
+    expect(reloadStudioSkills(ctx)).toEqual([]);
+    expect(typed(s, T + 300)).toEqual([]);
+    expect(typed(s, T + 4000)).toEqual([]);
+  });
+
+  test("nothing for a request without skills, a failed or open one, a non-update, another Studio agent, or a Studio adopted after it", async () => {
+    const s = await adopted();
+    done(s, T + 100, { ok: true, classes: ["instructions"] });
+    done(s, T + 110, { ok: false, error: "x", classes: ["skills"] });
+    done(s, T + 120, { ok: true, classes: ["skills"] }, "restart");
+    expect(typed(s, T + 200)).toEqual([]);
+    // Adopted after the update finished: needs none.
+    done(s, T + 130, { ok: true, classes: ["skills"] });
+    process.env.DS_NOW = String(T + 150);
+    s.fact("studio_moved", [{ table: "members", key: { id: Number(studio(s).id) }, set: { handle: "term_s9" } }],
+      { project: "fx", squad: "_studio", member: STUDIO, payload: { handle: "term_s9", previous: "term_s1", from: null, to: "x", model: null } });
+    s.upsert("observed_terminals", { project: "fx", handle: "term_s9" }, { wt: STUDIO, tail: "│ ❯ │\n", tail_at: T + 300, doc: JSON.stringify({ last_output_at: T - 600 }), observed_at: T + 300 });
+    expect(typed(s, T + 400)).toEqual([]);
+    // A newer update after that adoption is typed.
+    done(s, T + 500, { ok: true, classes: ["skills"] });
+    expect(typed(s, T + 600)).toEqual(["/reload-skills"]);
+  });
+
+  test("a Codex Studio gets nothing", async () => {
+    const s = await adopted();
+    done(s, T + 100, { ok: true, classes: ["skills"] });
+    expect(typed(s, T + 200)).toEqual(["/reload-skills"]);
+    s.db.run("UPDATE projects SET doc = json_patch(COALESCE(doc, '{}'), '{\"studio_agent\":\"codex\"}') WHERE label = 'fx'");
+    expect(typed(s, T + 4000)).toEqual([]);
   });
 });
