@@ -1,7 +1,7 @@
 // orca-backend-alternatives U9: a squad's backend and worktree tool, chosen once at spawn
 // (bin/backend/registry.ts chooseSquadBackend, bin/commands/spawn-squad-ts.ts, migration 0054).
 // spawn-squad runs as the Studio runs it, against a temp state root only.
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -9,6 +9,9 @@ import { buildBoard, limitsJson, renderText } from "../../bin/board/board-data.t
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { set } from "../../bin/loop/settings/settings.ts";
 import { BACKENDS, type BackendEntry, chooseSquadBackend } from "../../bin/backend/registry.ts";
+import { LoopActuator, type Picker } from "../../bin/loop/core/actuator.ts";
+import { FakeBackend as FakeOrca } from "../../bin/loop/fakes/orca.ts";
+import { fakeContract } from "../../bin/loop/fakes/contract.ts";
 import { onTestEnd, tempRoot } from "./temp-roots.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -250,4 +253,55 @@ test("U11: off Orca only claude has a launch line: a roster role or fallback on 
   ]);
   expect(noLaunchLine(roster)).toEqual(["builder: muse", "tester: codex"]);
   expect(noLaunchLine(new Map([["lead", "claude sonnet always"], ["builder", "claude opus ondemand - claude:sonnet"]]))).toEqual([]);
+});
+
+// U50 (project-start): the Studio has no squads row; its seat follows dispatcher.json's studio_backend.
+describe("the Studio's seat", () => {
+  const T = 1_800_000_000, WT = "local::/work/p-studio";
+  const pick: Picker = async () => ({ agent: "claude", model: "opus", effort: null, account: "system" });
+  function studioRig(doc: Record<string, unknown> | null, studioWt = WT) {
+    const { store, limit } = rig();
+    store.upsert("projects", { label: "p" }, { studio_wt: studioWt, doc: doc ? JSON.stringify(doc) : null, observed_at: 1 });
+    const made: string[] = [], fake = fakeContract({}, { name: "tmux", now: () => T });
+    const act = new LoopActuator({ orca: new FakeOrca(), pick, fulfillers: [], backends: (name) => { made.push(name); return { backend: fake, caps: fake.caps }; } });
+    return { store, limit, act, made, fake };
+  }
+
+  test("studio_backend tmux and a local:: studio_wt: a Studio action gets a tmux seat on the project's tool", async () => {
+    const { store, act, made, limit } = studioRig({ studio_backend: "tmux" });
+    for (const s of [act.seat(store, "p", null, "studio.move:e1", WT, T), act.seat(store, "p", "_studio", "chat:e1", null, T)]) {
+      expect(s.contract?.backend).toBe("tmux");
+      expect(s.contract?.provider).toBe("git");
+      expect(s.squad).toEqual({ project: "p", topic: "_studio", run_id: null, repo: null, lead_wt: null, studio_wt: WT });
+      expect((await s.call("studio-start", [])).err).toContain("the Studio is on backend tmux: no Orca op (studio-start)");
+    }
+    limit("worktree_provider", "treehouse");
+    expect(act.seat(store, "p", null, "k", WT, T).contract?.provider).toBe("treehouse");
+    limit("worktree_provider", "auto");
+    expect(act.seat(store, "p", null, "k", WT, T).contract?.provider).toBe("git");
+    // A start on it goes to the backend, marked with the backend and the Studio's identity and generation.
+    const s = act.seat(store, "p", null, "studio.move:e2", WT, T, "p/_studio/studio");
+    const r = await s.contract!.start({ cwd: "/work/p-studio", env: {} }, { line: "claude" } as never);
+    expect(r.ok).toBe(true);
+    expect(made).toContain("tmux");
+    const row = store.db.query("SELECT op, project, squad, member, sender FROM orca_calls WHERE key = 'studio.move:e2'").get() as Row;
+    expect(row).toEqual({ op: "terminal.create", project: "p", squad: null, member: WT, sender: "contract:tmux" });
+    expect(s.gen()).toBeTruthy();
+  });
+
+  test("a project-level seat with no Studio member (a poke to a sender terminal) stays on Orca", () => {
+    const { store, act } = studioRig({ studio_backend: "tmux" });
+    expect(act.seat(store, "p", null, "k", null, T).contract).toBeUndefined();
+    expect(act.seat(store, "p", null, "k", "local::/elsewhere", T).contract).toBeUndefined();
+  });
+
+  test("studio_backend empty, orca or missing: the seat is today's Orca seat", () => {
+    for (const doc of [null, {}, { studio_backend: "" }, { studio_backend: "orca" }]) {
+      const { store, act, made } = studioRig(doc, "repo1::/work/p-studio");
+      const s = act.seat(store, "p", null, "k", "repo1::/work/p-studio", T);
+      expect(s.contract).toBeUndefined();
+      expect(s.squad).toEqual({ project: "p", topic: "", run_id: null, repo: null, lead_wt: null, studio_wt: "repo1::/work/p-studio" });
+      expect(made).toEqual([]);
+    }
+  });
 });

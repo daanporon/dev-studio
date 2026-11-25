@@ -63,6 +63,8 @@ import { envInt } from "./tick.ts";
 import { loopStopping } from "./stopping.ts";
 import { carded, classify, clear, causeOf, fingerprint, lapse, launchRetryAt, LAUNCH_TRIES, refuse, REFUSAL_KIND, standing } from "../io/refusals.ts";
 import { keepStartFailed } from "../squad/start-failed.ts";
+import { studioContract, studioSeat } from "../squad/backend.ts";
+import { STUDIO_SQUAD } from "../squad/studio.ts";
 import { removeLaunch, writeLaunch } from "../squad/launch-file.ts";
 import { redact, redactPayload } from "./redact.ts";
 
@@ -540,6 +542,12 @@ export class LoopActuator implements Actuator {
       const { backend: _b, worktree_provider: _p, ...sq } = row;
       return this.contractSeat(store, { ...sq, studio_wt }, String(row.backend), String(row.worktree_provider ?? "git"), key, member, at, ident, (g) => { gen = g; }, () => gen);
     }
+    // U50 (project-start): the Studio has no squads row; its backend is the project's studio_backend.
+    const studio = !row && studioSeat(squad, member, studio_wt) ? studioContract(store, project) : null;
+    if (studio) {
+      const sq = { project, topic: STUDIO_SQUAD, run_id: null, repo: null, lead_wt: null, studio_wt };
+      return this.contractSeat(store, sq, studio.backend, studio.provider, key, member, at, ident, (g) => { gen = g; }, () => gen, squad);
+    }
     return {
       squad: { ...(row ?? { project, topic: squad ?? "", run_id: null, repo: null, lead_wt: null }), studio_wt },
       call: async (op, args) => {
@@ -710,9 +718,11 @@ export class LoopActuator implements Actuator {
   // U11: the seat of a squad on a contract backend. Its Orca ops refuse: such a squad has no Run,
   // sender pane or coordinator, and nothing it does reaches Orca.
   private contractSeat(store: Store, squad: Squad, name: string, provider: string, key: string, member: string | null, at: number,
-    ident: string | null, setGen: (g: string) => void, gen: () => string | null): Seat {
-    const project = squad.project, topic = squad.topic, target = { project, squad: topic, member };
-    const noOrca = (op: string): Promise<Out> => Promise.resolve({ code: 2, out: "", err: `squad ${topic} is on backend ${name}: no Orca op (${op})` });
+    ident: string | null, setGen: (g: string) => void, gen: () => string | null, asked: string | null = squad.topic): Seat {
+    // `asked`: the squad the action named; a Studio's (U50) is null or `_studio`, as its Orca seat has it.
+    const project = squad.project, topic = asked, target = { project, squad: topic, member };
+    const who = squad.topic === STUDIO_SQUAD ? "the Studio" : `squad ${squad.topic}`;
+    const noOrca = (op: string): Promise<Out> => Promise.resolve({ code: 2, out: "", err: `${who} is on backend ${name}: no Orca op (${op})` });
     const c = (): Contracted => this.contracted(store, name, project);
     const blocked = (): string | null => { const b = this.block(store, target); return b ? `activity: ${b}` : null; };
     const contract: ContractSeat = {
@@ -731,11 +741,11 @@ export class LoopActuator implements Actuator {
       ask: (op, req) => c().backend.call(op, req),
       worktree: async (m) => {
         const repo = String(squad.repo ?? store.get("projects", { label: project })?.home_repo ?? "").replace(/^path:/, "");
-        if (!repo) return { ok: false, error: `squad ${topic} has no repo` };
+        if (!repo) return { ok: false, error: `${who} has no repo` };
         // Only a worktree on this host's paths nests one: a Studio on Orca (`<repo id>::<path>`) is not its parent.
         const parent = localPath(m.role === "lead" ? squad.studio_wt : squad.lead_wt);
         try {
-          const { row } = await createWorktree(store, provider, { repo, name: wtName(m), branch: wtName(m), base: "HEAD", parent, project, squad: topic, role: m.role }, at);
+          const { row } = await createWorktree(store, provider, { repo, name: wtName(m), branch: wtName(m), base: "HEAD", parent, project, squad: squad.topic, role: m.role }, at);
           return { ok: true, path: String(row.path) };
         } catch (e) { return { ok: false, error: `worktree ${wtName(m)}: ${(e as Error).message}` }; }
       },
