@@ -136,6 +136,9 @@ check "tester --spec says no heartbeats" "1" "$(spec tester "test work" | grep -
 rm -f "$DS_STATE_ROOT/dummy/squads/_arttopic.json" "$DS_STATE_ROOT/dummy/dispatcher.json"
 
 # up.sh brings up a per-project instance, worktree-only (no orchestration).
+# U53: the host counts as installed and the loop as down (so on Orca the Studio starts directly, as below);
+# tests/up-backend.sh covers the install, the loop and the loop's start.
+export DS_UP_INSTALL_CHECK=true DS_UP_LOOP='exit 1'
 updisp="$DS_STATE_ROOT/testhome/dispatcher.json"
 ulog="$tmp/up.log"; : > "$ulog"
 STUB_LOG="$ulog" BACKEND="$stub" "$ROOT/bin/host/up.sh" name:testhome >/dev/null 2>&1

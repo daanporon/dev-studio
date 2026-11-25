@@ -41,7 +41,7 @@ The commands:
 - `ds-start-squad` — Spawn a squad from a plain-language topic (derives the slug, framing, and repo)
 - `ds-suspend` — Suspend a squad — remove its worktrees to free terminal slots; keep state, branches and conversations for /ds-resume --suspended
 - `ds-team` — Show a squad's roster (who owns each role), jump to a role's terminal, or clean up stale terminals
-- `ds-up` — Bring up (or reconcile) a project's Studio
+- `ds-up` — Bring up (or reconcile) a project: install, loop, Studio and board
 - `ds-update` — Bring EVERYTHING to the latest dev-studio — pull, relink, and do only what the new commits need (restart / reload / nothing)
 
 ## Caveat: `allowed-tools` is advisory on Muse and Codex

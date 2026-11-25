@@ -21,7 +21,7 @@ import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import { quote } from "../pause/pause.ts";
 import { wake } from "../pause/wake.ts";
-import { MOVE, RESTART_APPROVED, STUDIO_SQUAD, studioReady, studioView } from "../squad/studio.ts";
+import { MOVE, RESTART_APPROVED, START_WANTED, STUDIO_SQUAD, studioReady, studioView, type StartPick } from "../squad/studio.ts";
 import { alertAction } from "./alerts.ts";
 
 const KEY = "studio.adopt";
@@ -101,4 +101,31 @@ export function restartStudio(ctx: TickCtx): Action[] {
     payload: { handle, agent, account, model: String(m.model || "-"), effort: String(m.effort || "-"), from: `${agent}:${account}`, why: "restart" } }];
 }
 
-export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx), ...restartStudio(ctx)] } satisfies Reconciler;
+// U53 (project-start): `ds up`'s first start of the Studio (START_WANTED, squad/studio.ts wantStudioStart) becomes
+// exactly one studio-move, why "start", on the pick the wish holds: no tab to close, no studioReady() guard. It
+// waits while the project's Studio worktree is not known yet or another move is claimed; a Studio already running
+// there (a held handle, or a candidate terminal), or this start's own claim ended, ends the wish with no move.
+export function startStudio(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx;
+  const key = { project, subject: MOVE, kind: START_WANTED };
+  const w = store.get("episodes", key);
+  if (!w || w.ended_at != null) return [];
+  const claim = store.get("episodes", { project, subject: MOVE, kind: "action:studio-move" });
+  if (claim && claim.ended_at == null && ["pending", "acted", "running"].includes(String(claim.state))) return [];
+  const v = studioView(store, project);
+  if (!v) return [];
+  const episode = String(w.episode_key ?? `start@${w.started_at}`);
+  const tried = claim?.episode_key === episode && claim.ended_at != null;
+  const running = (!!v.member?.handle && v.candidates.some((t) => t.handle === v.member!.handle)) || v.candidates.length > 0;
+  if (tried || running) {
+    store.upsert("episodes", key, { ended_at: now, state: running ? "running" : "ended", observed_at: now });
+    return [];
+  }
+  let pick: StartPick = {};
+  try { const o = JSON.parse(String(w.result ?? "{}")); if (o && typeof o === "object") pick = o; } catch { /* no pick: the defaults */ }
+  const agent = v.agent, account = pick.account || "-";
+  return [{ project, squad: null, member: v.wt, subject: MOVE, kind: "studio-move", episode,
+    payload: { agent, account, model: pick.model || "-", effort: pick.effort || "-", from: `${agent}:${account}`, why: "start" } }];
+}
+
+export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx), ...restartStudio(ctx), ...startStudio(ctx)] } satisfies Reconciler;

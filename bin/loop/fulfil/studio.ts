@@ -27,7 +27,9 @@
 //            posts a card (subject studio.move, so limits.ts's studio.limit sweep never drops it) with the
 //            manual command; the close is never retried. U52a (project-start): a Studio off Orca (studio_backend)
 //            is closed by its terminal id in its folder and started through the contract driver (startOff), its
-//            new terminal kept only once Claude's prompt shows (DS_LOOP_STUDIO_PROMPT_S, 60).
+//            new terminal kept only once Claude's prompt shows (DS_LOOP_STUDIO_PROMPT_S, 60). U53: why `start` is
+//            `ds up`'s first start (reconcilers/studio.ts startStudio): no handle, no close, no studioReady(); the same
+//            replayable start, and a failed one cards "Studio start failed" with the manual command.
 // The file is named by the request, so a crash between the write and the claim's settle writes it
 // again in place, never twice. Its requests row (the one the state observer would import, key
 // file:<label>/_studio/<name>) is written at once, so the board refuses a second click meanwhile.
@@ -43,7 +45,7 @@ import { setAccountEnabled } from "../capacity/accounts.ts";
 import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
 import { LOGGED_IN } from "../capacity/login-card.ts";
 import { clearLogin } from "../capacity/login.ts";
-import { MOVE, RESTART_APPROVED, RESTART_STUDIO, STUDIO_SQUAD, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
+import { MOVE, RESTART_APPROVED, RESTART_STUDIO, START_WANTED, STUDIO_SQUAD, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
 import { localPath } from "../drivers/contract.ts";
 import type { ContractSeat, Member, Seat } from "../drivers/types.ts";
 import { memberLabel, startIdentity } from "../core/whoami.ts";
@@ -139,24 +141,26 @@ async function startOff(x: Exec, seat: Seat, wt: string, p: Move, prompt: string
 }
 
 async function move(a: Action, x: Exec) {
-  const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project, up = p.why === "back-up", restart = p.why === "restart";
-  if (!P || !p.handle || !p.agent || !p.account) return { failed: "a Studio move needs a project, the Studio's handle and a pick" };
+  const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project, up = p.why === "back-up", restart = p.why === "restart", start = p.why === "start";
+  if (!P || (!p.handle && !start) || !p.agent || !p.account) return { failed: "a Studio move needs a project, the Studio's handle and a pick" };
   const key = { project: P, subject: MOVE, kind: "studio:move" };
   const step = (state: string, ended = false) => store.upsert("episodes", key, { episode_key: a.episode, state, source: "loop", observed_at: at,
     ...(state === "closing" ? { started_at: at, ended_at: null } : {}), ...(ended ? { ended_at: at } : {}) });
   // A restart's approval ends with its move, however it went: the operator answers once, the loop tries once.
-  const endRestart = () => { if (restart) endApproval(x, P, RESTART_APPROVED); };
+  // U53: so does `ds up`'s start wish: one try, whatever comes of it.
+  const endRestart = () => { if (restart) endApproval(x, P, RESTART_APPROVED); if (start) endApproval(x, P, START_WANTED); };
   const row = store.get("episodes", key), was = row?.episode_key === a.episode ? String(row.state) : null;
   if (was === "started" || was === "failed" || was === "not moved") return { done: true, result: `already ${was}` };
   const v = studioView(store, P);
-  if (!v) return { failed: "the project has no Studio worktree" };
+  if (!v) { endRestart(); return { failed: "the project has no Studio worktree" }; }
   // U52a: off Orca (U51's v.contract) the seat is the contract one, and the start carries the Studio's DS_MEMBER.
   const ident = v.contract ? memberLabel({ project: P, squad: STUDIO_SQUAD, role: "studio" }) : null;
   const to = `${p.agent}:${p.account}`, seat = x.act.seat(store, P, null, `${a.subject}:${a.episode}`, v.wt, at, ident);
   // A closing step a crash cut short: a tab Orca no longer lists was closed, so start the new one;
   // one still listed is checked again from the start.
   const closedBefore = was === "closing" && !v.terms.some((t) => t.handle === p.handle);
-  if (was !== "closed" && was !== "starting" && !closedBefore) {
+  // U53: a first start (why "start") has no tab to close and no guard: it goes straight to the start.
+  if (!start && was !== "closed" && was !== "starting" && !closedBefore) {
     const ready = restart ? null : studioReady(store, P, at);
     const why = v.member?.handle !== p.handle ? `${p.handle} is no longer the Studio's terminal` : ready && !ready.ready ? ready.why : null;
     if (why) {
@@ -165,7 +169,7 @@ async function move(a: Action, x: Exec) {
       return { done: true, result: `not moved: ${why}` };
     }
     step("closing");
-    const c = await closeStudio(seat, v.wt, p.handle);
+    const c = await closeStudio(seat, v.wt, p.handle ?? "");   // not a start, so the move names the Studio's handle
     if (c.code !== 0) {
       step("not moved", true);
       store.event("studio_move_failed", { project: P, squad: "_studio", member: v.wt, payload: { handle: p.handle, to, step: "close", error: errOf(c, "terminal-close") } });
@@ -192,7 +196,7 @@ async function move(a: Action, x: Exec) {
   // so a replay runs it again and gets that terminal back.
   let handle = "", s: Out | null = null;
   if (was === "starting" && !seat.contract) {
-    handle = (v.member?.handle && v.member.handle !== p.handle ? String(v.member.handle) : v.candidates.find((c) => c.handle !== p.handle)?.handle) ?? "";
+    handle = (v.member?.handle && v.member.handle !== p.handle ? String(v.member.handle) : v.candidates.find((c) => !p.handle || c.handle !== p.handle)?.handle) ?? "";
     const since = Number(row?.observed_at ?? 0);
     if (!handle && at - since < moveStartS()) return { wait: "the Studio's studio-start may still be running", at: since + moveStartS() };
   }
@@ -201,7 +205,7 @@ async function move(a: Action, x: Exec) {
   if (!handle) {
     store.upsert("episodes", key, { episode_key: a.episode, state: "starting", source: "loop", observed_at: at, result: gen });
     const proj = store.get("projects", { label: P });
-    const reason = restart ? `the operator restarted it from the board (it was not responding), on ${to}` : up ? `moved back up from ${p.from ?? "a fallback"} to ${to}` : `${p.from ?? "its account"} hit its limit, now on ${to}`;
+    const reason = start ? `the operator started the project with \`ds up\`, on ${to}` : restart ? `the operator restarted it from the board (it was not responding), on ${to}` : up ? `moved back up from ${p.from ?? "a fallback"} to ${to}` : `${p.from ?? "its account"} hit its limit, now on ${to}`;
     const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), reason);
     s = seat.contract ? await startOff(x, seat, v.wt, p, prompt)
       : await seat.send("studio-start", [v.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt],
@@ -212,16 +216,18 @@ async function move(a: Action, x: Exec) {
     step("failed", true);
     endRestart();
     const err = errOf(s!, "studio-start");
-    store.event("studio_move_failed", { project: P, squad: "_studio", member: v.wt, payload: { handle: p.handle, to, step: "start", error: err } });
+    store.event("studio_move_failed", { project: P, squad: "_studio", member: v.wt, payload: { handle: p.handle ?? null, to, step: "start", error: err } });
     const cmd = studioRestartCmd(v.wt, p.model, p.account);
-    await alert(store, P, MOVE, `failed|${a.episode}`, `The loop closed the Studio's tab to ${restart ? "restart it on" : "move it to"} ${to}, but could not start it there (${err}) — start it yourself: ${cmd}`,
-      { title: "Studio move failed", option: "done — restarted it", why: cmd, fields: { kind: "out_of_credits" } });
+    await alert(store, P, MOVE, `failed|${a.episode}`, start
+      ? `The loop could not start the Studio on ${to} (${err}) — start it yourself: ${cmd}`
+      : `The loop closed the Studio's tab to ${restart ? "restart it on" : "move it to"} ${to}, but could not start it there (${err}) — start it yourself: ${cmd}`,
+    { title: start ? "Studio start failed" : "Studio move failed", option: "done — restarted it", why: cmd, fields: { kind: start ? "start_failed" : "out_of_credits" } });
     return { done: true, result: `closed, not started: ${err}` };
   }
   const set: Row = { handle, agent: p.agent, account: p.account === "-" ? null : p.account, limited_until: null,
     gen: seat.contract ? seat.gen?.() ?? null : s || kept ? gen : null, observed_at: at, updated_at: at };
   if (p.model && p.model !== "-") set.model = p.model;
-  const moved = { project: P, squad: "_studio", member: v.wt, payload: { handle, previous: p.handle, from: p.from ?? null, to, model: p.model ?? null, why: restart ? "restart" : up ? "back-up" : "limit" } };
+  const moved = { project: P, squad: "_studio", member: v.wt, payload: { handle, previous: p.handle ?? null, from: p.from ?? null, to, model: p.model ?? null, why: start ? "start" : restart ? "restart" : up ? "back-up" : "limit" } };
   store.db.transaction(() => {
     if (v.member) store.fact("studio_moved", [{ table: "members", key: { id: v.member.id }, set }], moved);
     else store.event("studio_moved", moved);
@@ -229,7 +235,7 @@ async function move(a: Action, x: Exec) {
     // The started move ends the approval its why names (a restart's studio:restart-approved, a move-up's
     // studio:up-approved, else studio:approved),
     // and a move-up stamps studio:up, which starts limits.ts's fallback_return_min window.
-    endApproval(x, P, restart ? RESTART_APPROVED : up ? "studio:up-approved" : "studio:approved");
+    endApproval(x, P, start ? START_WANTED : restart ? RESTART_APPROVED : up ? "studio:up-approved" : "studio:approved");
     if (up) store.upsert("episodes", { project: P, subject: MOVE, kind: "studio:up" }, { episode_key: a.episode, state: "started", started_at: at, ended_at: at, source: "loop", observed_at: at });
   })();
   return { done: true, result: `moved to ${to}: ${handle}` };

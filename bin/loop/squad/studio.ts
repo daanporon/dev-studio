@@ -24,6 +24,19 @@ export const STUDIO_CARD_TITLE = "Studio not responding";
 export const RESTART_STUDIO = "Restart Studio";
 export const STUDIO_FINE = "It's fine";
 export const RESTART_APPROVED = "studio:restart-approved";
+// U53 (project-start): `ds up`'s wish for the Studio's first start, an open episode on MOVE whose result holds the
+// pick ({account, model, effort}). reconcilers/studio.ts turns it into one studio-move, why "start", and
+// fulfil/studio.ts ends it whatever comes of it.
+export const START_WANTED = "studio:start-wanted";
+export type StartPick = { account?: string; model?: string; effort?: string };
+
+/** File the Studio's first start for the loop (`ds up`): one open START_WANTED episode, keyed `start@<at>`. */
+export function wantStudioStart(store: Store, project: string, pick: StartPick, at: number): string {
+  const episode = `start@${at}`;
+  store.upsert("episodes", { project, subject: MOVE, kind: START_WANTED }, { episode_key: episode, state: "wanted", started_at: at, ended_at: null,
+    result: JSON.stringify(pick), source: "up", observed_at: at });
+  return episode;
+}
 
 export type StudioTerm = { handle: string; title: string | null; identity: string | null; gen?: string | null };
 // `contract`: the Studio runs off Orca (U51), so its candidates come from contractCandidates.
