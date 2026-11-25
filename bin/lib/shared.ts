@@ -4,7 +4,7 @@
 import { readFileSync, existsSync, readdirSync, writeSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { filerIdentity, whoAmI } from "../loop/core/whoami.ts";
-import { contractHere } from "./contract-here.ts";
+import { MEMBER_VERBS, contractHere, studioHere } from "./contract-here.ts";
 
 /** The checkout root: DS_ROOT from the .sh wrapper (the path as the caller named it, symlinks kept, like the shell's `cd .. && pwd`), else two folders up. */
 export const ROOT = process.env.DS_ROOT || join(import.meta.dir, "..", "..");
@@ -88,8 +88,17 @@ export async function run(cmd: string[], opts: { env?: Record<string, string | u
   }
 }
 
+/** The adapter for one verb: backendPath(), except in a Studio off Orca (U50, project-start), where only the
+ *  member verbs (contract-here.ts MEMBER_VERBS) go to contract.sh and every other verb (`ps`, `worktree-ensure`,
+ *  `repo-ensure`, `loop-terminals`, `studio-start`, `preflight`, …) stays on the host's adapter. */
+export function backendFor(verb: string): string {
+  const p = backendPath();
+  if (process.env.BACKEND || !studioHere() || !contractHere(stateRoot())) return p;
+  return (MEMBER_VERBS as readonly string[]).includes(verb) ? p : hostBackendPath();
+}
+
 export function backend(args: string[]): Promise<Ran> {
-  return run([backendPath(), ...args]);
+  return run([backendFor(args[0] ?? ""), ...args]);
 }
 
 /** Write all of `s` to fd 1 or 2 before returning. process.stdout.write is async on a pipe, so a
