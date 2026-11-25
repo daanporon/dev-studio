@@ -196,7 +196,7 @@ A unit documents its scripts, tables and events in `docs/scripts.md`. AGENTS.md 
 ## Commands
 
 Slash-commands in `.claude/commands/` wrap the scripts (all `ds-` prefixed):
-`/ds-up`, `/ds-update`, `/ds-board`, `/ds-start-squad`, `/ds-q`, `/ds-roles`,
+`/ds-update`, `/ds-board`, `/ds-start-squad`, `/ds-q`, `/ds-roles`,
 `/ds-limits`, `/ds-accounts`, `/ds-mode`, `/ds-reload`, `/ds-restart`, `/ds-suspend`,
 `/ds-resume`, `/ds-pause`, `/ds-reclaim`, `/ds-team`, `/ds-approve-fix`, `/ds-close-squad`
 (see `docs/USAGE.md`).
@@ -210,5 +210,5 @@ Slash-commands in `.claude/commands/` wrap the scripts (all `ds-` prefixed):
 - Tests never touch the live state (U253): a test that writes `state/<project>/…` sources `tests/lib/state-root.sh` (a temp `DS_STATE_ROOT`), and `tests/ci.sh` fails when the suite added a project to the live `state/`. Detail: `docs/scripts.md`, "Verify detail".
 - A Builder runs targeted tests before it opens its PR, not the full suite (the repo is public, so GitHub minutes are not a limit): the shellcheck line plus every `tests/*.sh` whose script, or whose code under test, the change touches, and `tests/loop.sh` for a change under `bin/loop/`; on its branch merged with `origin/main`. A failure is fixed before the PR. The PR body's Tests section names those commands and gives each one's summary line. GitHub's `tests` check is the full suite and the gate: the Builder watches it after each push (the loop pokes on a failed check) and fixes a red run. Exceptions that still run `CI_JOBS=4 tests/ci.sh` locally first, with its final summary line (`ci: <seconds>s, 0 failed`) in the PR body: a change to `tests/ci.sh`, `tests/lib/` or `.github/workflows/`, or one touching more than about 30 files.
 - Thin-slice end-to-end (run on the Orca host): see the plan's Verification Contract —
-  bring up a project (`/ds-up <url>`), spawn a squad, see it on the board, ask and answer a blocking
+  bring up a project (`bin/ds up <url>`), spawn a squad, see it on the board, ask and answer a blocking
   question, confirm an `lfg` squad logs an assumption and stays on the board.

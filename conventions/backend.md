@@ -290,6 +290,8 @@ contract backend (U11, "Started" below).
   trial switch to flip and flip back: a project runs on its backend until the operator changes it. While
   the project's Studio runs on another backend that change is refused, naming `ds up <project> --backend <x>`:
   that moves the whole project (below, "Moving a project").
+  The Studio follows the project: it runs on the project's backend, and `ds up <label> --backend <x>` is the one
+  way to change both together. User-facing steps: `docs/USAGE.md`, "Start a project on a backend".
   The change is checked when set (a `worktree_provider` the backend cannot use, a missing binary, a
   roster row naming an agent `<x>` cannot launch) and prints `new squads start on <x>; N running squads
   stay on <old>`. A running squad is never moved: it keeps its backend until it is closed and started

@@ -97,7 +97,8 @@ function parseArgs(argv: string[]): Opts | number {
       o[k] = v; i += 2; return null;
     };
     let bad: number | null = null;
-    if (a === "--home") bad = take("homeArg", "a repo selector");
+    if (a === "--help" || a === "-h") { writeOut(`usage: ds up ${help}\n`); return 0; }
+    else if (a === "--home") bad = take("homeArg", "a repo selector");
     else if (a === "--label") bad = take("label", "a project name");
     else if (a === "--backend") bad = take("backendFlag", "a backend (orca, orca-lite, tmux, herdr)");
     else if (a === "--worktree") bad = take("worktree", "a worktree tool (auto, git, treehouse)");

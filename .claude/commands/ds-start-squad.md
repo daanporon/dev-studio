@@ -18,7 +18,7 @@ Spawn a squad for it, deriving what the operator didn't spell out:
      capturing the topic — e.g. "add a login page to the web app" -> `login-page`.
    - `--framing`: the operator's sentence, verbatim.
    - `--repo`: run `~/.dev-studio/bin/role/orch.sh project-list`. One project registered -> use its selector.
-     Several -> ask which. None -> tell the operator to `/ds-up <git-url>` first and stop.
+     Several -> ask which. None -> tell the operator to run `bin/ds up <git-url>` first and stop.
    - Honor intent in the wording: "testing"/"run the env" -> `--type testing`;
      "fire and forget"/"lfg" -> `--autonomy lfg`.
    - `--start plan|brainstorm|ask|investigate|fix` (optional, feature squads): the operator's own `--start` or Start-dialog pick wins over cues. Cues by meaning: something broken the operator wants gone -> `fix`; "investigate", "why does",

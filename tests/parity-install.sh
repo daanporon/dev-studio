@@ -99,7 +99,7 @@ step() { # <label> <script> [args…]
 
 step "first install on an empty HOME" install.sh
 # Not two empty runs: the new side wrote the pointer, the command links, the unit and the watchdog line.
-if [ -L "$TMP/new/home/.dev-studio" ] && [ -L "$TMP/new/home/.claude/commands/ds-up.md" ] \
+if [ -L "$TMP/new/home/.dev-studio" ] && [ -L "$TMP/new/home/.claude/commands/ds-board.md" ] \
   && [ -f "$TMP/new/home/.config/systemd/user/ds-loop.service" ] && grep -qF 'loop.sh --ensure' "$TMP/new/crontab"; then good
 else bad "the first install wrote too little to compare: $(cd "$TMP/new" && find home | head -20)"; fi
 step "repeat install" install.sh
