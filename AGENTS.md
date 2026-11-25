@@ -184,6 +184,7 @@ A unit documents its scripts, tables and events in `docs/scripts.md`. AGENTS.md 
 - `bin/role/notes.sh <project> <role> print|add|drop` — per-project, per-role tips for the next role.
 - `bin/role/ds-feedback.sh "<what>"` — jot a dev-studio snag for the operator; never edit dev-studio.
 - `bin/ds finish <unit|-> --outcome … --body …` — the finish record a worker writes when its work ends.
+- `bin/ds update <project>` — the loop pulls, reinstalls, restarts itself and refreshes the project's squads, no Studio turn.
 - `bin/ds expose <name> <url> [--stop "<cmd>"] [--squad] [--self]` — publish a URL you host so the board lists it.
 - `bin/lib/directory.sh list|reach <squad> <role>` — the phone book: who a member is and how to reach it.
 - `bin/board/board.sh` — the board (text, `--json`, `--serve`).
