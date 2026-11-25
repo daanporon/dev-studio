@@ -17,6 +17,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { limitValueProblem, SHIP_MODES } from "../../lib/operator.ts";
+import { backendChangeProblem } from "../../backend/backend-change.ts";
+import { DEFAULT_BACKEND } from "../../backend/registry.ts";
 import { confRows, confText } from "../db/import-config.ts";
 import { limitEnv } from "./limits.ts";
 import { FOCUS_KEY, focusProblem, NO_FOCUS } from "../squad/focus.ts";
@@ -36,7 +38,7 @@ export type Source = "env" | "project" | "default";
 export interface Got { project: string; file: SettingsFile; key: string; value: string | null; source: Source | null; env?: string }
 export interface Change { project: string; file: ImportFile; key: string; old: string | null; new: string | null }
 export interface HistoryRow { id: number; project: string; file: string; key: string; old_value: string | null; new_value: string | null; actor: string; at: number }
-export interface Opts { conventions?: string; now?: number; /** planImport: agent|model pairs the import's own models.conf rows add */ models?: Iterable<string> }
+export interface Opts { conventions?: string; now?: number; /** where a backend's binary is (a test's answer; else PATH) */ which?: (bin: string) => string | null; /** planImport: agent|model pairs the import's own models.conf rows add */ models?: Iterable<string> }
 
 // A refused change: the message says why, as the shell scripts said it.
 export class SettingsError extends Error {}
@@ -161,6 +163,8 @@ function checked(store: Store, project: string, file: SettingsFile, key: string,
     if (problem) fail(problem);
     // squad-priority U1: the focus names a live feature squad of this project, or `-` (none).
     if (key === FOCUS_KEY && v !== NO_FOCUS) { const why = focusProblem(store, project, v); if (why) fail(why); }
+    // U32: a backend or worktree tool that does not fit this host or the roster is refused here, not at the next spawn.
+    if (key === "default_backend" || key === "worktree_provider") { const why = backendFitProblem(store, project, key, v, o); if (why) fail(why); }
     return v;
   }
   if (file === "roles.conf") {
@@ -171,6 +175,45 @@ function checked(store: Store, project: string, file: SettingsFile, key: string,
   if (key !== "mode") fail(`ship-mode has one key, mode (got '${key}')`);
   if (!SHIP_MODES.split(" ").includes(v)) fail(`invalid mode '${v}' (one of: ${SHIP_MODES})`);
   return v;
+}
+
+const firstWord = (v: string | null | undefined): string => (v ?? "").trim().split(/\s+/)[0] ?? "";
+
+// U32: the project's effective roster as the store holds it: the shipped rows with the project's over them.
+function rosterIn(store: Store, project: string, o: Opts): Map<string, string> {
+  return new Map([...[...shipped("roles.conf", o)].map(([k, r]): [string, string] => [k, r.value]),
+    ...rowsOf(store, project, "roles.conf").map((r): [string, string] => [r.key, r.value ?? ""])]);
+}
+
+// U32: setting `default_backend` or `worktree_provider` to `v`: does the pair fit this host and the roster?
+// The other key is read as the project sees it now (its env var, row or default).
+function backendFitProblem(store: Store, project: string, key: string, v: string, o: Opts): string | null {
+  const other = key === "default_backend" ? "worktree_provider" : "default_backend";
+  const was = firstWord(get(store, project, "limits.conf", other, o).value);
+  const backend = (key === "default_backend" ? v : was) || DEFAULT_BACKEND, provider = (key === "worktree_provider" ? v : was) || "auto";
+  return backendChangeProblem({ project, backend, provider, roster: rosterIn(store, project, o), which: o.which });
+}
+
+/** U32: what an operator reads after a backend change: where new squads start and how many running squads
+ *  stay on the old backend, and a warning when an env var overrides the project's `default_backend`. "" when
+ *  `changes` holds no `default_backend` or `worktree_provider` change. */
+export function backendChangeNote(store: Store, project: string, changes: Change[], o: Opts = {}): string {
+  const ch = changes.find((c) => c.file === "limits.conf" && (c.key === "default_backend" || c.key === "worktree_provider"));
+  if (!ch) return "";
+  const out: string[] = [];
+  const env = limitEnv("default_backend"), ev = process.env[env]?.trim();
+  if (ev) out.push(`warning: ${env}=${ev} is set and overrides every project's default_backend, so new squads start on ${ev}`
+    + `${ch.key === "default_backend" ? ", not on this change" : ""}; unset it to follow the project's setting`);
+  const now = firstWord(get(store, project, "limits.conf", "default_backend", o).value) || DEFAULT_BACKEND;
+  if (ch.key === "worktree_provider") {
+    out.push(`new squads use worktree_provider ${firstWord(ch.new) || "auto"}; running squads keep the tool they started with`);
+    return out.join("\n");
+  }
+  const old = firstWord(ch.old) || firstWord(shipped("limits.conf", o).get("default_backend")?.value) || DEFAULT_BACKEND;
+  const n = (store.db.query("SELECT COUNT(*) AS n FROM squads WHERE project = ? AND COALESCE(backend, 'orca') = ? AND COALESCE(status, 'running') NOT IN ('done', 'failed', 'closed', 'gone')")
+    .get(project, old) as { n: number }).n;
+  out.push(`new squads start on ${now}; ${n} running squad${n === 1 ? "" : "s"} stay${n === 1 ? "s" : ""} on ${old}`);
+  return out.join("\n");
 }
 
 function history(store: Store, c: Change, actor: string, at: number): void {
@@ -369,7 +412,7 @@ export function writeExport(store: Store, project: string): string {
 // target as `set` would store it, and only the picked rows are written.
 
 // Keys that fit one project only: planned as `skip: project-specific`, unpicked, but can be picked.
-export const PROJECT_SPECIFIC_LIMITS = ["auto_merge", "expected_checks", "focus_squad", "review_risk_paths", "cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths", "feedback_repo"] as const;
+export const PROJECT_SPECIFIC_LIMITS = ["default_backend", "worktree_provider", "auto_merge", "expected_checks", "focus_squad", "review_risk_paths", "cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths", "feedback_repo"] as const;
 // limits.conf keys the board never writes (a command the loop runs, absolute paths it clears; board-data's
 // FILE_ONLY_LIMITS): a board plan skips them as `shell only`, and only the shell imports them.
 export const SHELL_ONLY_LIMITS = ["cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths", "feedback_repo"] as const;

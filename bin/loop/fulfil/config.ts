@@ -14,7 +14,7 @@
 // on the rows every reader then uses, not under a file that would still win.
 import { failRequest, finishRequest, requestActions, type Fulfiller } from "../core/actuator.ts";
 import { migrateSettings } from "../settings/settings-migrate.ts";
-import { applyImport, historyOf, reset, rm, set, SettingsError, type Change, type ImportPick, type ImportSource } from "../settings/settings.ts";
+import { applyImport, backendChangeNote, historyOf, reset, rm, set, SettingsError, type Change, type ImportPick, type ImportSource } from "../settings/settings.ts";
 import type { Store } from "../core/store.ts";
 
 type P = { file?: string; history?: number; key?: string; value?: string | null; role?: string; reset?: boolean; agent?: string; model?: string; spawn?: string; effort?: string; fallbacks?: string; plan?: string; return?: string };
@@ -81,12 +81,12 @@ const config: Fulfiller = {
     }
     const e = a.project ? edit(a.kind, a.project, (a.payload ?? {}) as P) : null;
     if (!e) return { failed: `a ${a.kind} edit needs a project and ${a.kind === "limits" ? "a key" : a.kind === "config-undo" ? "a file (limits.conf or roles.conf), a key and a history id" : "a role, agent, model and spawn"}` };
-    let changes: Change[];
-    try { migrateSettings(x.store); changes = e.go(x.store); } catch (err) {
+    let changes: Change[], note = "";
+    try { migrateSettings(x.store); changes = e.go(x.store); note = a.project ? backendChangeNote(x.store, a.project, changes) : ""; } catch (err) {
       if (err instanceof SettingsError) return { failed: err.message };
       throw err;
     }
-    finishRequest(x.store, a, { ok: true, ran: e.ran, changed: changes.length }, x.now);
+    finishRequest(x.store, a, { ok: true, ran: e.ran, changed: changes.length, ...(note ? { note } : {}) }, x.now);
     return { done: true };
   },
   giveUp: failRequest,
