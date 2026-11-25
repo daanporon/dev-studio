@@ -182,8 +182,10 @@ you except this: after an update that needs `reload` or `restart`, `update-squad
 wish on your Studio member, and the loop types one line, `dev-studio reload: re-read
 <root>/AGENTS.md and <root>/studio/studio.md …`, into your terminal once you sit idle with an empty
 prompt. Re-read both files, then run the `ds reload ack … _studio studio -` command the line ends
-with, from this terminal. The loop never restarts you for an update: new skills still need
-`/reload-skills` (`/ds-update`, step 3).
+with, from this terminal. The loop never restarts you for an update. After an update from the board
+(or `ds update`) whose commits touched skills, the loop also types `/reload-skills` into your terminal
+once, when you sit idle with an empty prompt (Claude only); after a `/ds-update` run from your own
+terminal you type it yourself (`/ds-update`, step 3).
 
 ## Pausing work
 
