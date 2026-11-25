@@ -304,7 +304,7 @@ async function moveBackend(a: Action, x: Exec): Promise<Result> {
       const proj = store.get("projects", { label: P });
       const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), `the operator moved the project from ${plan.from} to ${plan.to} with \`ds up\`, on ${to}`);
       s = seat.contract ? await startOff(x, seat, plan.wt, p, prompt)
-        : await seat.send("studio-start", [plan.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt], startIdentity(ident, plan.gen));
+        : await seat.send("studio-start", [plan.wt, p.account, p.model || "-", p.effort || "-", seat.window?.("studio") || "-", prompt], startIdentity(ident, plan.gen));
       handle = s.code === 0 ? s.out.trim().split("\n").pop()!.trim() : "";
     }
     if (!handle) {

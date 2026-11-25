@@ -19,6 +19,7 @@ import { Loop } from "../../bin/loop/core/tick.ts";
 import { canon, git } from "../../bin/loop/io/worktrees.ts";
 import { useOrca } from "../../bin/loop/io/providers/orca.ts";
 import { chooseSquadBackend } from "../../bin/backend/registry.ts";
+import { studioOn } from "./studio-on.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
@@ -60,6 +61,7 @@ async function rig() {
   for (const [role, value] of [["lead", "claude sonnet always"], ["thinker", "claude opus ondemand"], ["builder", "claude opus ondemand"]] as const)
     s.upsert("config", { project: "fx", file: "roles.conf", key: role }, { value, observed_at: T });
   s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "orca-lite", observed_at: T });   // U30: the project's backend
+  studioOn(s, "fx", "orca-lite", T);   // U54: one backend per project
   const act = new LoopActuator({ orca, pick: system, fulfillers: fulfillers.filter((f) => f.kinds) });
   const loop = new Loop(s, { observers: [], reconcilers: [decider, ...reconcilers, ...fulfillers] }, act, { projects: () => ["fx"] });
   loop.boot(T);

@@ -13,6 +13,7 @@ import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
 import decider from "../../bin/loop/core/decide.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
+import { studioOn } from "./studio-on.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
@@ -133,6 +134,7 @@ describe("squad create (U158)", () => {
   test("U11: a squad on another backend gets no Run, task or coordinator; its roles are wished", async () => {
     const { s, orca, tick } = await rig();
     s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });   // U30: the project's backend
+    studioOn(s, "fx", "tmux", T);   // U54: one backend per project
     s.want("squad", "fx/ontmux", "running", { payload: { repo: "path:/nonexistent/fixture-repo", type: "feature" },
       fill: { repo: "path:/nonexistent/fixture-repo", type: "feature", backend: "tmux", worktree_provider: "git" }, by: "test" });
     await tick(3);
