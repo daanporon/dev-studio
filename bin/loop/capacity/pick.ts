@@ -54,6 +54,7 @@ import { LOGIN_ENDED, loginHolds } from "./login.ts";
 import { newBuilderStart, slot, type Asker } from "./slot.ts";
 import { memo } from "./walk-memo.ts";
 import { hostCrit, hostCritHit, sampleState, type CritHit, type SampleState } from "./machine-level.ts";
+import { canLaunch } from "../../backend/launch-lines.ts";
 import { loopProjects } from "../settings/projects.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 
@@ -446,10 +447,13 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   const skipped: string[] = [];   // each higher rung left and why, for the fallback pick's why
   const broke = new Set<string>();   // U2: <agent>:<account> held out of credits, named in a wait's reason
   const loggedOut = new Set<string>();   // claude-login-ended U2: <agent>:<account> whose login ended, the same
+  const backend = squad ? (store.get("squads", { project: req.project, topic: squad })?.backend as string | null) ?? "orca" : "orca";
+  const noLaunch = new Set<string>();   // U31: agents this squad's backend has no launch line for, named in a wait's reason
   let off = false;                // the override's or explicit account is disabled
 
   for (let i = 0; i < floor.n; i++) {
     const r = rungs[i], tag = rungTag(r);
+    if (!canLaunch(backend, r.agent)) { noLaunch.add(r.agent); skipped.push(`${tag} (no launch line on ${backend})`); continue; }
     let accts = accounts(store, r.agent, now, req.limited ?? []).filter((a) => matchesPlan(r.plan, a.plan));
     if (account) {
       const a = accts.find((x) => x.account === account);
@@ -507,7 +511,10 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   if (off) return { wait: at, known, why: "wait", reason: `${how}: account disabled (${account}); ${until}` };
   const credits = broke.size ? `; ${[...broke].join(", ")} ${OUT_OF_CREDITS}` : "";
   const login = loggedOut.size ? `; ${[...loggedOut].join(", ")} ${LOGIN_ENDED}` : "";
-  return { wait: at, known, why: "wait", reason: `${how}: no account with room on ${tried.join(", ")}${below}${credits}${login}; ${until}` };
+  const nolaunch = noLaunch.size ? `; ${[...noLaunch].join(", ")} cannot start on ${backend}` : "";
+  const rest = [...new Set(rungs.slice(0, floor.n).filter((r) => canLaunch(backend, r.agent)).map((r) => r.agent))];
+  const what = noLaunch.size ? `host busy: no account for ${rest.length ? rest.join(", ") : "an agent it can start"} on ${backend}` : `${how}: no account with room on ${tried.join(", ")}`;
+  return { wait: at, known, why: "wait", reason: `${what}${below}${credits}${login}${nolaunch}; ${until}` };
 }
 
 // Match the running/held place to its step, including the account's plan. A stored step plan

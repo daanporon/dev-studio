@@ -6,6 +6,7 @@ import { dsExec, waitArgs } from "../lib/operator";
 import { readGet, readRoster } from "../loop/settings/settings";
 import { openReadOnly, dbPath } from "../loop/core/store";
 import { chooseSquadBackend } from "../backend/registry";
+import { noLaunchLine } from "../backend/launch-lines";
 import { whoAmI } from "../loop/core/whoami.ts";
 
 export const help = `--repo <selector> --topic <slug> [--type t] [--autonomy a] [--host h] [--backend b] [--framing f | --framing-file path] [--start s] — write a squad's running wish (spawn-squad.sh)`;
@@ -69,19 +70,7 @@ export async function run(raw: string[]): Promise<number> {
 }
 
 /** The backend of a squad that has started (its doc is written) and is not closed; null for a new one. */
-// The roster's terminal roles (not `elevate`, a one-shot call) whose agent or a fallback's has no launch
-// line on a contract backend, as `<role>: <agent>`. Columns: agent model spawn [effort] [fallbacks] …
-const LAUNCH_LINES = new Set(["claude"]);
-export function noLaunchLine(roster: Map<string, string>): string[] {
-  const out: string[] = [];
-  for (const [role, v] of roster) {
-    const f = v.trim().split(/\s+/);
-    if (f[2] === "elevate") continue;
-    const agents = [f[0], ...(f[4] ?? "").split(",").filter((x) => x.includes(":")).map((x) => x.split(":")[0])];
-    for (const a of new Set(agents)) if (a && !LAUNCH_LINES.has(a)) out.push(`${role}: ${a}`);
-  }
-  return out;
-}
+export { noLaunchLine };
 
 function squadBackend(label: string, topic: string): string | null {
   if (!existsSync(dbPath())) return null;
