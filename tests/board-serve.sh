@@ -81,7 +81,9 @@ LVSTART="echo started >> '$TMP/lvstart.log'; '$(command -v bun)' -e \"Bun.serve(
 # fulfillers alone (tests/board-fulfil.ts), against the fake backend.
 jq '.events = 120' "$SEED" > "$TMP/seed-ev.json"
 resync(){ SEED="$TMP/seed-ev.json" LAVISH_AXI_STATE_DIR="$TMP/lv2" mkdb "$LBL"; }
-ff(){ DS_STATE_ROOT="$DBR" BACKEND="$TMP/fakeb" DS_LAVISH_START="$LVSTART" DS_LOOP_PICKER_TYPE_MS=50 DS_LOOP_SEND_TRIES=1 TMPDIR="$TMP" bun "$ROOT/tests/board-fulfil.ts" "$LBL"; }
+# board-actions-as-wishes U6: the squad-start name call is a stub that fails, so a start takes the plain name from its brief.
+printf '#!/bin/sh\nexit 1\n' > "$TMP/namestub"; chmod +x "$TMP/namestub"
+ff(){ DS_SQUAD_NAME_CMD="$TMP/namestub" DS_STATE_ROOT="$DBR" BACKEND="$TMP/fakeb" DS_LAVISH_START="$LVSTART" DS_LOOP_PICKER_TYPE_MS=50 DS_LOOP_SEND_TRIES=1 TMPDIR="$TMP" bun "$ROOT/tests/board-fulfil.ts" "$LBL"; }
 # dbq <sql>: the rows as a JSON array (loop.db read-only).
 printf '%s\n' 'import { Database } from "bun:sqlite";' \
   'const d = new Database(process.argv[2], { readonly: true });' \
@@ -950,6 +952,11 @@ eq "request: a second update is 409" "$(req "{\"project\":\"$LBL\",\"action\":\"
 eq "request: update with a topic is 400" "$(req "{\"project\":\"$LBL\",\"action\":\"update\",\"topic\":\"ans\"}")" "400"
 eq "request: start with a brief"     "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"fix the\nlogin bug\"}")" "202"
 eq "request: start twice is fine"    "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"another\"}")" "202"
+# board-actions-as-wishes U6: a Start is a squad-start request; the same brief while one is open, or a taken slug, is 409.
+eq "request: the same brief again is 409" "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"another\"}")" "409"
+eq "request: a taken slug is 409"    "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"x y\",\"slug\":\"ans\"}")" "409"
+SSQ="$(dbq "SELECT json_extract(payload, '\$.framing') AS f, json_extract(payload, '\$.by') AS b FROM requests WHERE kind = 'squad-start' AND project = '$LBL' ORDER BY id")"
+eq "request: start files squad-start requests with the brief" "$SSQ" '[{"f":"fix the\nlogin bug","b":"board"},{"f":"another","b":"board"}]'
 # A pending request for squad "ans-2" must not block the same action on squad "ans" (and back).
 eq "request: other squad pending"    "$(req "{\"project\":\"$LBL\",\"action\":\"close\",\"topic\":\"ans-2\"}")" "202"
 ff
@@ -960,18 +967,18 @@ has "request: one update request, failed off the live root" "$UPQ" "1|done"
 has "request: update fails with the live-root reason"        "$UPQ" "not the live state root"
 eq "request: update leaves no Studio file"  "$(ls "$RD"/board-update-*.txt 2>/dev/null | wc -l | tr -d ' ')" "0"
 eq "request: update starts no job log"      "$(ls "$DBR"/loop/update/*.log 2>/dev/null | wc -l | tr -d ' ')" "0"
-has "request: start command"         "$(cat "$RD"/board-start-*.txt 2>/dev/null)" "/ds-start-squad --repo $LBL --framing-file $DBR/$LBL/framings/board-start-"
+eq "request: start leaves no Studio file" "$(find "$RD" -name 'board-start-*.txt' | wc -l | tr -d ' ')" "0"
 eq "request: the brief is in its file, newlines kept" "$(for f in "$DBR/$LBL"/framings/board-start-*.md; do cat "$f"; echo '#'; done | tr '\n' '|' | sed 's/#|/#\n/g' | sort | tr -d '\n')" "another#fix the|login bug#"
-eq "request: two starts, two files"  "$(find "$RD" -name 'board-start-*.txt' | wc -l | tr -d ' ')" "2"
+eq "request: two starts, two running wishes named from the brief" "$(dbq "SELECT topic, want, want_by FROM squads WHERE project = '$LBL' AND topic IN ('fix-login-bug', 'another') ORDER BY topic")" '[{"topic":"another","want":"running","want_by":"board"},{"topic":"fix-login-bug","want":"running","want_by":"board"}]'
+eq "request: the starts are done, named by fallback" "$(dbq "SELECT json_extract(result, '\$.topic') AS t, json_extract(result, '\$.named_by') AS n FROM requests WHERE kind = 'squad-start' AND project = '$LBL' ORDER BY id")" '[{"t":"fix-login-bug","n":"fallback"},{"t":"another","n":"fallback"}]'
 has "request: other squad's file"    "$(cat "$RD"/board-close-ans-2-*.txt 2>/dev/null)" "/ds-close-squad ans-2"
 rm -f "$RD"/board-close-ans-2-*.txt "$RD/board-close-ans-$C1.txt"
-# U9 (U33: the project's own backend): the Start dialog's backend reaches /ds-start-squad as --backend; an unknown one is 400.
-rm -f "$RD"/board-start-*.txt
-eq "request: start on the project backend" "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"on orca\",\"backend\":\"orca\"}")" "202"
+# U9 (U33: the project's own backend): the Start dialog's backend reaches the squad's wish; an unknown one is 400.
+eq "request: start on the project backend" "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"on orca\",\"backend\":\"orca\",\"slug\":\"on-orca\"}")" "202"
 eq "request: unknown backend is 400" "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"x\",\"backend\":\"screen\"}")" "400"
+eq "request: a slug an open start holds is 409" "$(req "{\"project\":\"$LBL\",\"action\":\"start\",\"text\":\"other\",\"slug\":\"on-orca\"}")" "409"
 ff
-has "request: start passes backend"  "$(cat "$RD"/board-start-*.txt 2>/dev/null)" "/ds-start-squad --repo $LBL --backend orca --framing-file $DBR/$LBL/framings/board-start-"
-rm -f "$RD"/board-start-*.txt
+eq "request: start passes backend"  "$(dbq "SELECT json_extract(want_payload, '\$.backend') AS b FROM squads WHERE project = '$LBL' AND topic = 'on-orca'")" '[{"b":"orca"}]'
 DS_STATE_ROOT="$DBR" bun -e 'import { open } from "'"$ROOT"'/bin/loop/core/store.ts"; import { doneRequests } from "'"$ROOT"'/bin/loop/db/import-json.ts"; const s = open(); doneRequests(s, s.root, process.argv[1]); s.close();' "$LBL"
 eq "request: done once the Studio removed the file" "$(req "{\"project\":\"$LBL\",\"action\":\"close\",\"topic\":\"ans\"}")" "202"
 eq "request: start without brief"    "$(req "{\"project\":\"$LBL\",\"action\":\"start\"}")" "400"
@@ -1338,8 +1345,8 @@ eq "start-file: a second image"         "$(ups b.png)" "200"
 SID2=$(jq -r '.id' "$TMP/up.out")
 sbody(){ jq -nc --arg p "$LBL" --argjson f "$1" '{project: $p, action: "start", text: "look", files: $f}'; }
 eq "start-file: a start with 2 files is 202" "$(req "$(sbody "[\"$SID\",\"$SID2\"]")")" "202"
-eq "start-file: the studio row holds the names" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.action, .payload.files]')" "[\"studio\",\"start\",[\"$SID\",\"$SID2\"]]"
-srows(){ dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'" | jq '.[0].n'; }
+eq "start-file: the squad-start row holds the names" "$(reqrow "$(rid)" | jq -c '[.kind, .payload.files]')" "[\"squad-start\",[\"$SID\",\"$SID2\"]]"
+srows(){ dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'squad-start'" | jq '.[0].n'; }
 N4=$(srows)
 eq "start-file: 9 files are 400"        "$(req "$(sbody "$(jq -nc '[range(9) | tostring * 16 + ".png"]')")")" "400"
 eq "start-file: a bad name is 400"      "$(req "$(sbody '["../x.png"]')")" "400"

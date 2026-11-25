@@ -1510,6 +1510,13 @@ render "$LBL" --json > "$TMP/upd.json"
 jt "U3 update: a pending request shows"      "$TMP/upd.json" '.update.pending != null'
 has "U3 update: pending text" "$(render "$LBL")" "UPDATE asked — waiting for the Studio"
 dbw "DELETE FROM requests WHERE key = 'k-upd'"
+# board-actions-as-wishes U6: an open squad-start shows in the waiting list as "starting a squad"; a failed one names its error.
+dbw "INSERT INTO requests (kind, project, squad, key, payload, created_at, requested_by) VALUES ('squad-start', '$LBL', NULL, 'k-ss1', '{\"framing\":\"why does the banner stay an hour\"}', $((UNOW-30)), 'board')"
+dbw "INSERT INTO requests (kind, project, squad, key, payload, created_at, done_at, result, requested_by) VALUES ('squad-start', '$LBL', NULL, 'k-ss2', '{\"framing\":\"fix the toast\"}', $((UNOW-60)), $((UNOW-30)), '{\"ok\":false,\"error\":\"image x.png is gone\"}', 'board')"
+render "$LBL" --json > "$TMP/ss.json"
+jt "U6 start: an open squad-start shows as starting a squad" "$TMP/ss.json" '[.requests[] | select(.text == "starting a squad: why does the banner stay an hour")] | length == 1'
+jt "U6 start: a failed squad-start shows its error" "$TMP/ss.json" '[.requests[] | select(.error == "image x.png is gone" and (.text | startswith("starting a squad: fix the toast")))] | length == 1'
+dbw "DELETE FROM requests WHERE kind = 'squad-start'"
 # board-actions-as-wishes U2: the banner follows the loop's `update` request: running, done with a warning, failed.
 upreq(){ dbw "DELETE FROM requests WHERE kind = 'update'"; dbw "INSERT INTO requests (kind, project, squad, key, payload, created_at, done_at, result, requested_by) VALUES ('update', '$LBL', NULL, 'k-run', '{\"by\":\"board\"}', $((UNOW-120)), $1, '$2', 'board')"; render "$LBL" --json > "$TMP/upd.json"; }
 upreq NULL '{"state":"pulling","log":"/x/1.log","started_at":'"$((UNOW-120))"'}'

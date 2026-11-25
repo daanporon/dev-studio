@@ -190,7 +190,7 @@ test("Start squad: a multi-line brief and the fields are one POST that keeps eve
     await d.wait(120);
     expect(d.posts).toEqual([{ project: "fixture", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan", backend: "orca" }]);
     expect(d.doc.querySelector('[role="dialog"][aria-label="Start squad"]')).toBeNull();
-    expect(d.doc.body.textContent).toContain("sent to the Studio: start squad my-topic (request #7)");
+    expect(d.doc.body.textContent).toContain("starting squad… my-topic (request #7)");
     expect(d.r.errors).toEqual([]);
   } finally { await d.w.happyDOM.close(); }
 });
