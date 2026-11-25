@@ -135,6 +135,16 @@ const OPS = {
     req: obj({ id: nonEmpty }),
     ans: obj({ state: lit(...AGENT_STATES) }),
   },
+  // `parents native` only (else `unsupported`): the folder a worktree is nested under in the backend's own tree,
+  // null when it has none, and the move that nests one under another. Both name worktrees by folder.
+  "worktree.parent": {
+    req: obj({ cwd: nonEmpty }),
+    ans: obj({ parent: nullable(str) }),
+  },
+  "worktree.set_parent": {
+    req: obj({ cwd: nonEmpty, parent: nonEmpty }),
+    ans: obj({}),
+  },
 } as const;
 
 export type Op = keyof typeof OPS;

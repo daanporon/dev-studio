@@ -98,12 +98,12 @@ export function orcaLite(o: OrcaLiteOptions = {}): Backend {
     return p;
   };
 
-  async function show(sel: string): Promise<{ id: string; parentWorktreeId: string | null } | null> {
+  async function show(sel: string): Promise<{ id: string; path?: string; parentWorktreeId: string | null } | null> {
     const r = await run("wt-show", [sel]);
     if (r.code === 3) return null;
     if (r.code !== 0) throw new Error(`orca-lite: worktree show ${sel} failed: ${lastLine(r)}`);
     const line = r.out.split("\n").find((l) => l.trim());
-    return line ? (JSON.parse(line) as { id: string; parentWorktreeId: string | null }) : null;
+    return line ? (JSON.parse(line) as { id: string; path?: string; parentWorktreeId: string | null }) : null;
   }
 
   async function panes(): Promise<Row[]> {
@@ -143,8 +143,9 @@ export function orcaLite(o: OrcaLiteOptions = {}): Backend {
     const parent = req.parent ?? null;
     if (parent !== null && resolve(parent) !== cwd) {
       const p = await show(`path:${resolve(parent)}`);
-      if (!p) return fail("failed", `orca-lite: Orca has no worktree at the parent ${parent}`);
-      if (w.parentWorktreeId !== p.id) {
+      // A parent Orca does not know (a Studio's folder that is gone) is not a reason to leave the role unstarted:
+      // it starts top-level and the nesting reconciler (U21f) moves it once the parent is seen.
+      if (p && w.parentWorktreeId !== p.id) {
         const s = await run("wt-set-parent", [w.id, p.id]);
         if (s.code !== 0) return fail("failed", `orca-lite: nesting ${req.cwd} under ${parent} failed: ${lastLine(s)}`);
       }
@@ -155,6 +156,27 @@ export function orcaLite(o: OrcaLiteOptions = {}): Backend {
     const k: Kept = { id: handle, cwd: req.cwd, label: req.label, group: null, parent, gen: req.env?.DS_GEN ?? null, created_at: now(), handle, pane, wt: w.id };
     await edit((ks) => { ks.push(k); });
     return okAnswer("terminal.create", { terminal: terminalOf(k) });
+  }
+
+  // The tree, by folder: Orca keeps it (`parentWorktreeId`), so both ways resolve a folder or an id through `wt-show`.
+  async function parentOf(req: Request<"worktree.parent">): Promise<Answer<"worktree.parent">> {
+    const w = await show(`path:${resolve(req.cwd)}`);
+    if (!w) return fail("not_found", `orca-lite: Orca has no worktree at ${req.cwd}`);
+    if (!w.parentWorktreeId) return okAnswer("worktree.parent", { parent: null });
+    const p = await show(`id:${w.parentWorktreeId}`);
+    return okAnswer("worktree.parent", { parent: p?.path ?? null });
+  }
+  async function setParent(req: Request<"worktree.set_parent">): Promise<Answer<"worktree.set_parent">> {
+    if (ro) return readOnly();
+    const w = await show(`path:${resolve(req.cwd)}`);
+    if (!w) return fail("not_found", `orca-lite: Orca has no worktree at ${req.cwd}`);
+    const p = await show(`path:${resolve(req.parent)}`);
+    if (!p) return fail("not_found", `orca-lite: Orca has no worktree at the parent ${req.parent}`);
+    if (w.parentWorktreeId !== p.id) {
+      const s = await run("wt-set-parent", [w.id, p.id]);
+      if (s.code !== 0) return fail("failed", `orca-lite: nesting ${req.cwd} under ${req.parent} failed: ${lastLine(s)}`);
+    }
+    return okAnswer("worktree.set_parent", {});
   }
 
   async function list(): Promise<Answer<"terminal.list">> {
@@ -228,6 +250,8 @@ export function orcaLite(o: OrcaLiteOptions = {}): Backend {
         switch (op) {
           case "backend.info": return okAnswer("backend.info", { name: "orca-lite", version: ORCA_LITE_VERSION, capabilities: { ...ORCA_LITE_CAPS } }) as Answer<O>;
           case "terminal.create": return await create(req as Request<"terminal.create">) as Answer<O>;
+          case "worktree.parent": return await parentOf(req as Request<"worktree.parent">) as Answer<O>;
+          case "worktree.set_parent": return await setParent(req as Request<"worktree.set_parent">) as Answer<O>;
           case "terminal.list": return await list() as Answer<O>;
           case "terminal.close": return await close((req as Request<"terminal.close">).id) as Answer<O>;
           case "terminal.send": return await send(req as Request<"terminal.send">) as Answer<O>;

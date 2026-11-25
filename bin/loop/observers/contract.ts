@@ -137,8 +137,14 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
           const others = await Promise.all(s.others.map(async (o) => { const r = await c.backend.call("terminal.last_output", { id: o.id }); return r.ok ? r.at : null; }));
           return { out: out.ok ? out.at : null, tail: screen.ok ? redact(screen.text).trimEnd() : null, native: st?.ok ? st.state : null, others };
         }));
+        // U21f: a backend whose worktrees are Orca's (`parents native`) keeps the tree in Orca: read the parent it shows.
+        const trees = await Promise.all(seen.map(async (s) => {
+          if (c.caps.parents !== "native") return undefined;
+          const r = await c.backend.call("worktree.parent", { cwd: s.path });
+          return r.ok ? r.parent : undefined;   // no answer: the loop's own record stands
+        }));
         store.tx(() => {
-          seen.forEach((s, i) => write(store, project, topic, s, reads[i], walks, procs === "failed", now, quiet));
+          seen.forEach((s, i) => write(store, project, topic, s, reads[i], walks, procs === "failed", now, quiet, trees[i]));
           // U51: after a list that succeeded, as the Orca observer adopts an Orca Studio (observers/orca.ts).
           if (g.studio) adoptStudio(store, project, now);
         });
@@ -148,11 +154,11 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
 }
 
 function write(store: Store, project: string, topic: string, s: Seen, r: { out: number | null; tail: string | null; native: string | null; others: (number | null)[] } | null,
-  walks: Walk2 | null, failed: boolean, now: number, quiet: number): void {
+  walks: Walk2 | null, failed: boolean, now: number, quiet: number, shown?: string | null): void {
   const wt = String(s.m.wt), prev = store.get("observed_workers", { project, wt });
   const wtRow = store.db.query("SELECT branch, parent_path FROM worktrees WHERE host = 'local' AND path = ?").get(s.path) as Row | null;
   const tree = (agents: number | null) => store.upsert("observed_worktrees", { project, wt }, { path: s.path, branch: wtRow?.branch ?? null,
-    parent: wtRow?.parent_path ? `local::${wtRow.parent_path}` : null, doc: { agents, backend: "contract" }, observed_at: now, gone_at: null });
+    parent: shown !== undefined ? (shown ? `local::${shown}` : null) : wtRow?.parent_path ? `local::${wtRow.parent_path}` : null, doc: { agents, backend: "contract" }, observed_at: now, gone_at: null });
   if (!s.t || !r) {
     // Its terminal is gone: the worker with it. The walk's last verdict stays for the decider. Stamped each
     // tick, as on Orca, with no terminal seen this tick, so a pause (fulfil/pause.ts) can finish after its close.

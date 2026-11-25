@@ -64,7 +64,22 @@ describe("orca-lite", () => {
     await b.call("terminal.create", { cwd: dir, label: "c", parent: dir });
     expect(fake.of("wt-set-parent")).toHaveLength(1);
     const none = await b.call("terminal.create", { cwd: dir, label: "d", parent: join(root, "nowhere") });
-    expect(none.ok ? "ok" : none.error.code).toBe("failed");
+    // U21f: a parent Orca does not know starts the terminal un-nested (the nesting reconciler moves it later).
+    expect(none.ok ? "ok" : none.error.code).toBe("ok");
+    expect(fake.of("wt-set-parent")).toHaveLength(1);
+  });
+
+  test("worktree.parent reads the parent Orca shows as a folder; worktree.set_parent moves it, once, by folder", async () => {
+    const { fake, dir, parent, b } = rig();
+    expect(await b.call("worktree.parent", { cwd: dir })).toEqual({ ok: true, parent: null });
+    expect((await b.call("worktree.set_parent", { cwd: dir, parent })).ok).toBe(true);
+    expect((await b.call("worktree.set_parent", { cwd: dir, parent })).ok).toBe(true);
+    expect(fake.of("wt-set-parent")).toHaveLength(1);
+    expect(await b.call("worktree.parent", { cwd: dir })).toEqual({ ok: true, parent });
+    const gone = await b.call("worktree.set_parent", { cwd: dir, parent: join(root, "nowhere") });
+    expect(gone.ok ? "ok" : gone.error.code).toBe("not_found");
+    const unknown = await b.call("worktree.parent", { cwd: join(root, "nowhere") });
+    expect(unknown.ok ? "ok" : unknown.error.code).toBe("not_found");
   });
 
   test("an env value with a control character is refused", async () => {
