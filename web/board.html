@@ -482,8 +482,10 @@ function awaitDone(id, ms = 60000) {
 }
 // A filed write's outcome: null once the loop did it (or nothing came in time), else why it failed.
 // A settings draft stays until then, so a refused value is still there to fix.
+let lastNote = "";   // the loop's note on the last accepted change (U32: where new squads start)
 async function refusal(b) {
   const r = b && b.id != null ? await awaitDone(b.id) : {};
+  lastNote = r && r.ok !== false && r.note ? String(r.note) : "";
   return r && r.ok === false ? r.error || "the loop refused it" : null;
 }
 // The toast for an events row, or null: requests this page filed (and every failed one), a member
@@ -3610,7 +3612,7 @@ function LimitsPane({ project, toast }) {
       const why = await refusal(await saveOne(key, value));
       if (why) { setMsg((m) => ({ ...m, [key]: why })); return; }
       setDraft(({ [key]: _, ...d }) => d); setMsg(({ [key]: _, ...m }) => m);
-      say(value === null ? key + ": reset to default" : key + " = " + value);
+      say((value === null ? key + ": reset to default" : key + " = " + value) + (lastNote ? " · " + lastNote.replace(/\n/g, " · ") : ""));
       load();
     } catch (e) { setMsg((m) => ({ ...m, [key]: String(e.message || e) })); }
   };
