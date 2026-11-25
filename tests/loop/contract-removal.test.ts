@@ -76,7 +76,7 @@ async function rig() {
   const loop = new Loop(s, { observers: [], reconcilers: [decider, ...reconcilers, ...fulfillers, emit] }, act, { projects: () => ["fx"] });
   loop.boot(T);
   const tick = async (n = 1) => { for (let i = 0; i < n; i++) { at += 5; await loop.tick(at); await act.drain(); } };
-  s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });   // U30: the project's backend
+  s.upsert("projects", { label: "fx" }, { doc: JSON.stringify({ ...JSON.parse(String(s.get("projects", { label: "fx" })?.doc ?? "{}")), studio_backend: "tmux" }), observed_at: T });   // U57: the Studio's backend
   studioOn(s, "fx", "tmux", T);   // U54: one backend per project
   s.want("squad", `fx/${SQ}`, "running", { payload: { repo: `path:${repo}`, type: "feature" },
     fill: { repo: `path:${repo}`, type: "feature", backend: "tmux", worktree_provider: "git" }, by: "test" });

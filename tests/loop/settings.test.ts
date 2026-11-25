@@ -315,71 +315,55 @@ describe("config observer (KTD5)", () => {
   });
 });
 
-describe("U32: a backend change is checked when it is set", () => {
+describe("U32, U57: a worktree_provider change is checked against the Studio's backend; default_backend is no setting", () => {
   const has = (...bins: string[]) => (b: string) => (bins.includes(b) ? `/usr/bin/${b}` : null);
-  const squad = (s: Store, topic: string, backend: string, status = "running") =>
-    s.upsert("squads", { project: P, topic }, { repo: "path:/x", status, want: "running", observed_at: 1, updated_at: 1, backend });
+  const studioOn = (s: Store, backend: string) =>
+    s.upsert("projects", { label: P }, { studio_wt: "local::/x/studio", doc: JSON.stringify({ studio_backend: backend }), observed_at: 1 });
 
   // The shipped roster names muse, which a contract backend cannot launch: the other tests run on a claude-only one.
   const claudeOnly = (o: { conventions: string; now: number }) => { writeFileSync(join(o.conventions, "roles.conf"), "lead claude sonnet always\nbuilder claude sonnet always\n"); return o; };
 
-  test("a missing binary, a tool the backend cannot use and a roster row it cannot launch are each refused with the fix", () => {
+  test("default_backend is refused for every writer, naming ds up --backend, and writes no row", () => {
     const { s, o } = fixture();
-    const oo = { ...o, which: has("orca") };
-    refused(() => set(s, P, "limits.conf", "default_backend", "tmux", "ds", oo), /needs 'tmux', which is not on PATH.*install it, or pick another backend/);
-    const tm = { ...o, which: has("tmux") };
-    // the shipped roster names muse for a role: a contract backend can start claude only
-    refused(() => set(s, P, "limits.conf", "default_backend", "tmux", "ds", tm), /can start only claude.*roles\.conf/);
+    for (const v of ["tmux", "orca", "orca-lite"])
+      refused(() => set(s, P, "limits.conf", "default_backend", v, "ds", o), new RegExp(`default_backend is not a setting.*ds up ${P} --backend ${v}`));
     expect(row(s, "limits.conf", "default_backend")).toBeNull();
-    // the same change fits once the roster is claude only
-    claudeOnly(o);
-    expect(set(s, P, "limits.conf", "default_backend", "tmux", "ds", tm)).toHaveLength(1);
   });
 
-  test("U54: default_backend is refused while the Studio runs on another backend, naming ds up --backend; its own fits", () => {
-    const { s, o } = fixture();
-    claudeOnly(o);
-    const tm = { ...o, which: has("tmux", "orca") };
-    s.upsert("projects", { label: P }, { studio_wt: "local::/x/studio", doc: JSON.stringify({ studio_backend: "tmux" }), observed_at: 1 });
-    refused(() => set(s, P, "limits.conf", "default_backend", "orca", "board", tm), new RegExp(`Studio runs on tmux.*ds up ${P} --backend orca`));
-    expect(row(s, "limits.conf", "default_backend")).toBeNull();
-    expect(set(s, P, "limits.conf", "default_backend", "tmux", "ds", tm)).toHaveLength(1);
-    // A project with no Studio yet (a first ds up writes its backend before it exists): no such check.
-    s.upsert("projects", { label: P }, { studio_wt: null, observed_at: 2 });
-    expect(set(s, P, "limits.conf", "default_backend", "orca", "ds", tm)).toHaveLength(1);
-  });
-
-  test("worktree_provider: an explicit git or treehouse with orca is refused; so is a backend change under it", () => {
+  test("worktree_provider: an explicit git or treehouse on an orca Studio is refused; auto fits", () => {
     const { s, o } = fixture();
     claudeOnly(o);
     refused(() => set(s, P, "limits.conf", "worktree_provider", "git", "ds", o), /cannot use worktree_provider git.*set worktree_provider auto, or pick another backend/);
     refused(() => set(s, P, "limits.conf", "worktree_provider", "treehouse", "ds", o), /cannot use worktree_provider treehouse/);
     expect(set(s, P, "limits.conf", "worktree_provider", "auto", "ds", o)).toHaveLength(1);
-    // orca-lite also uses Orca's worktrees: a row of git is refused there too
-    s.upsert("config", { project: P, file: "limits.conf", key: "worktree_provider" }, { value: "git", observed_at: 1 });
-    refused(() => set(s, P, "limits.conf", "default_backend", "orca-lite", "ds", { ...o, which: has("orca") }), /orca-lite cannot use worktree_provider git/);
   });
 
-  test("a valid change is written, and the note says where new squads start and how many stay", () => {
+  test("worktree_provider reads the Studio's backend: git fits a tmux Studio, and not an orca-lite one", () => {
     const { s, o } = fixture();
     claudeOnly(o);
-    squad(s, "a", "orca"); squad(s, "b", "orca"); squad(s, "c", "orca", "closed"); squad(s, "d", "tmux");
-    const oo = { ...o, which: has("orca") };
-    const cs = set(s, P, "limits.conf", "default_backend", "orca-lite", "ds", oo);
-    expect(cs).toHaveLength(1);
-    expect(backendChangeNote(s, P, cs, oo)).toBe("new squads start on orca-lite; 2 running squads stay on orca");
-    squad(s, "b", "orca", "closed");
-    const back = set(s, P, "limits.conf", "default_backend", "orca", "ds", oo);
-    expect(backendChangeNote(s, P, back, oo)).toBe("new squads start on orca; 0 running squads stay on orca-lite");
-    expect(backendChangeNote(s, P, [], oo)).toBe("");
+    studioOn(s, "tmux");
+    expect(set(s, P, "limits.conf", "worktree_provider", "git", "ds", { ...o, which: has("tmux") })).toHaveLength(1);
+    studioOn(s, "orca-lite");
+    refused(() => set(s, P, "limits.conf", "worktree_provider", "treehouse", "ds", { ...o, which: has("orca") }), /orca-lite cannot use worktree_provider treehouse/);
   });
 
-  test("a DS_LIMIT_DEFAULT_BACKEND env var is warned about", () => {
+  test("the note says new squads use the tool and running squads keep theirs; nothing for another change", () => {
     const { s, o } = fixture();
     claudeOnly(o);
-    const oo = { ...o, which: has("orca") };
-    const cs = set(s, P, "limits.conf", "default_backend", "orca-lite", "ds", oo);
-    const note = withEnv("DS_LIMIT_DEFAULT_BACKEND", "tmux", () => backendChangeNote(s, P, cs, oo));
-    expect(note).toMatch(/^warning: DS_LIMIT_DEFAULT_BACKEND=tmux is set and overrides every project's default_backend/);
+    const cs = set(s, P, "limits.conf", "limit_pct", "70", "ds", o);
+    expect(backendChangeNote(s, P, cs, o)).toBe("");
+    studioOn(s, "tmux");
+    const g = set(s, P, "limits.conf", "worktree_provider", "git", "ds", { ...o, which: has("tmux") });
+    expect(backendChangeNote(s, P, g, o)).toBe("new squads use worktree_provider git; running squads keep the tool they started with");
+    expect(backendChangeNote(s, P, [], o)).toBe("");
+  });
+
+  test("a default_backend value an old project still holds is never read", () => {
+    const { s, o } = fixture();
+    s.upsert("config", { project: P, file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: 1 });
+    expect(readRoster(P, o)).toBeDefined();
+    studioOn(s, "orca");
+    claudeOnly(o);
+    expect(set(s, P, "limits.conf", "worktree_provider", "auto", "ds", o)).toHaveLength(1);
   });
 });

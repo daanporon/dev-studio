@@ -2891,7 +2891,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, card })
 // StartSquad: the Start squad dialog (board-start-squad-box U1). One press files one `start` request whose
 // text keeps every newline; the checks below are the server's contract, in its words.
 const BRIEF_MAX = 32 * 1024;
-// U33: the Start dialog shows the project's default_backend as a line; it is not a choice (the server refuses another, bin/backend/registry.ts squadBackendRule).
+// U33, U57: the Start dialog shows the Studio's backend as a line; it is not a choice (the server refuses another, bin/backend/registry.ts squadBackendRule).
 const START_IMAGES = 8;
 // The squad's backend chip, only off orca; the worktree tool joins it when it is not the backend's default.
 function backendChip(s) {
@@ -2951,7 +2951,7 @@ function StartSquad({ project, projects, toast, onClose }) {
     if (got.length) { e.preventDefault(); attach(got); }   // a text paste is left alone
   };
   const dragHas = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files");
-  const backendOf = (l) => ((projects || []).find((p) => p.label === l) || {}).default_backend || "orca";
+  const backendOf = (l) => ((projects || []).find((p) => p.label === l) || {}).studio_backend || "orca";
   const backend = backendOf(proj);
   const labels = (projects || []).map((p) => p.label);
   if (!labels.includes(project)) labels.unshift(project);
@@ -3009,7 +3009,7 @@ function StartSquad({ project, projects, toast, onClose }) {
           <label>Type<br/><select class="start-type" value=${type} onChange=${(e) => { setType(e.target.value); if (e.target.value === "testing") setStart("auto"); }}><option value="feature">feature</option><option value="testing">testing</option></select></label>
           <label>Autonomy<br/><select class="start-autonomy" value=${autonomy} onChange=${(e) => setAutonomy(e.target.value)}><option value="checkpoints">checkpoints</option><option value="lfg">lfg</option></select></label>
           <label>Start<br/><select class="start-start" value=${start} disabled=${type === "testing"} onChange=${(e) => setStart(e.target.value)}>${["auto", "plan", "brainstorm", "ask", "investigate", "fix"].map((v) => html`<option key=${v} value=${v}>${v}</option>`)}</select></label>
-          <label title=${"The project's backend: its squads start on " + backend + " and keep it for life. Change it in Settings → Limits (default_backend)."}>Backend<br/><span class="mono start-backend">${backend}</span></label>
+          <label title=${"The Studio's backend: its squads start on " + backend + " and keep it for life. Move the project with: ds up " + project + " --backend <name>"}>Backend<br/><span class="mono start-backend">${backend} (the Studio's)</span></label>
         </div>
         ${discard && html`<div class="start-discard bad" style=${{ marginTop: "10px" }}>Discard this brief? <button class="btn sm start-discard-yes" onClick=${onClose}>Discard</button> <button class="btn sm" onClick=${() => setDiscard(false)}>Keep editing</button></div>`}
       </div>
@@ -3516,7 +3516,7 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
 // sweep minute / board refresh; auto_compact_* apply when an agent is next (re)started.
 const SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"]];
 function Settings({ project, projects, toast, onClose }) {
-  const backend = ((projects || []).find((p) => p.label === project) || {}).default_backend || "orca";
+  const backend = ((projects || []).find((p) => p.label === project) || {}).studio_backend || "orca";
   const [tab, setTab] = useState(SETTINGS_TABS[0][0]);
   const [importing, setImporting] = useState(false);
   const [rev, setRev] = useState(0);   // bumped by an applied import: the tabs read their rows again
@@ -3525,7 +3525,7 @@ function Settings({ project, projects, toast, onClose }) {
       <a class="btn sm" id="settings-export" href=${"api/settings-export?project=" + encodeURIComponent(project)} download=${project + "-settings.txt"} title="Download this project's settings as a text file another project (or host) can import">Export</a>
       <button class="btn sm" id="settings-import" style=${{ marginLeft: 6 }} title="Copy settings in from a file or another project, choosing row by row" onClick=${() => setImporting(!importing)}>Import</button>
       <button class="btn sm mclose" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
-      <div class="set-note set-backend" style=${{ margin: "8px 16px 0" }}>Backend: <b class="mono">${backend}</b> — new squads start on it. To change it set <code>default_backend</code> in Limits → Agents &amp; nudges; squads already running keep theirs.</div>
+      <div class="set-note set-backend" style=${{ margin: "8px 16px 0" }}>Backend: <b class="mono">${backend}</b> — the Studio's; new squads start on it. To change it run <code>ds up ${project} --backend &lt;name&gt;</code>; squads already running keep theirs.</div>
       ${importing ? html`<div class="set-body"><${ImportPane} project=${project} toast=${toast} onBack=${() => setImporting(false)} onApplied=${() => setRev((n) => n + 1)} /></div>` : html`<div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
       <div class="set-body" key=${rev}>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}</div>`}</div></div>`;
 }

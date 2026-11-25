@@ -821,7 +821,6 @@ describe("U54: moving a project's Studio to another backend (why backend)", () =
     const wt = `local::${oldPath}`, newWt = `local::${newPath}`, proj = s.get("projects", { label: "fx" })!;
     s.upsert("projects", { label: "fx" }, { studio_wt: wt, doc: JSON.stringify({ ...JSON.parse(String(proj.doc ?? "{}")), studio_backend: "tmux" }), observed_at: T });
     s.db.run("UPDATE squads SET status = 'closed' WHERE project = 'fx'");
-    s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });
     const crash = { close: o.crash ?? 0 }, tm = fake("tmux", crash), hd = fake("herdr", crash);
     const act = new LoopActuator({ orca: new FakeBackend(), fulfillers: [], backends: (name) => name === "herdr" ? { backend: hd.backend, caps: hd.f.caps } : { backend: tm.backend, caps: tm.f.caps } });
     const old = await tm.f.call("terminal.create", { cwd: oldPath, env: { DS_GEN: "g0" }, label: "studio", group: "_studio" });
@@ -861,7 +860,7 @@ describe("U54: moving a project's Studio to another backend (why backend)", () =
     expect(m).toMatchObject({ id: r.id, wt: r.newWt, account: "acct-a", limited_until: T + 3600, model: "opus", gen: r.herdr.terms.get(handle)!.env.DS_GEN });
     expect(disp(r)).toMatchObject({ studio_backend: "herdr", studio_wt: r.newWt });
     expect(r.s.get("projects", { label: "fx" })).toMatchObject({ studio_wt: r.newWt });
-    expect(r.s.get("config", { project: "fx", file: "limits.conf", key: "default_backend" })).toMatchObject({ value: "herdr" });
+    expect(r.s.get("config", { project: "fx", file: "limits.conf", key: "default_backend" })).toBeNull();
     expect(payloads(r.s, "studio_moved")).toEqual([expect.objectContaining({ handle, previous: r.old, why: "backend", backend: "herdr", was: "tmux", wt: r.newWt, old_wt: r.wt })]);
     expect(wish(r)).toMatchObject({ state: "ended" });
     expect(await go(r, actions(r)[0] ?? { project: "fx", squad: null, member: null, subject: MOVE, kind: "studio-move", episode: r.episode,
@@ -921,7 +920,7 @@ describe("U54: moving a project's Studio to another backend (why backend)", () =
     expect(ops(r.herdr, "terminal.create")).toEqual([]);
     expect(ops(r.tmux, "terminal.close")).toEqual([]);
     expect(studioMember(r.s)).toMatchObject({ wt: r.wt, handle: r.old });
-    expect(r.s.get("config", { project: "fx", file: "limits.conf", key: "default_backend" })).toMatchObject({ value: "tmux" });
+    expect(disp(r)).not.toHaveProperty("studio_backend", "herdr");
     expect(wish(r)).toMatchObject({ state: "ended" });
     expect(actions(r)).toEqual([]);
   });

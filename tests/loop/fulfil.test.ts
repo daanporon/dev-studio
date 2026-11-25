@@ -105,18 +105,18 @@ describe("squad wishes (U158)", () => {
     return a.tick(T);
   };
   const refusedFor = (s: Store, topic: string) => String(squad(s, topic).want_result ?? "");
-  test("U30: a squad wish naming another backend than the project's default_backend is refused with an event and a card, never started", async () => {
+  test("U30: a squad wish naming another backend than the Studio's is refused with an event and a card, never started", async () => {
     const s = imported(), a = rig(s);
-    s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });
-    // U54: no Studio here, so the project's default_backend alone rules (a Studio's own rule is squad-backend.test.ts).
-    s.upsert("projects", { label: "fx" }, { studio_wt: null, observed_at: T });
+    // U57: the Studio's backend rules; a stale default_backend row says orca and is never read.
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "orca", observed_at: T });
+    s.upsert("projects", { label: "fx" }, { studio_wt: "local::/fake/studio", doc: JSON.stringify({ studio_backend: "tmux" }), observed_at: T });
     for (const b of ["orca", "herdr"]) {
       await wishOn(s, a, `t-${b}`, b);
-      expect(refusedFor(s, `t-${b}`)).toContain(`failed: backend ${b} is refused: this project's squads start on tmux (its default_backend)`);
+      expect(refusedFor(s, `t-${b}`)).toContain(`failed: backend ${b} is refused: this project's Studio runs on tmux, and a project keeps one backend for its Studio and squads; to move the whole project: ds up fx --backend ${b}`);
       expect(squad(s, `t-${b}`).doc).toBeNull();
       expect(squad(s, `t-${b}`).run_id).toBeNull();
     }
-    expect(events(s, "wish_given_up").map((e) => e.error).filter((e) => String(e).includes("default_backend")).length).toBe(2);
+    expect(events(s, "wish_given_up").map((e) => e.error).filter((e) => String(e).includes("ds up fx --backend")).length).toBe(2);
     expect(alerts(s).length).toBe(2);
     // The project's own backend passes the rule (it starts; the Orca fake has no tmux here, so the result is not a refusal).
     await wishOn(s, a, "t-tmux", "tmux");

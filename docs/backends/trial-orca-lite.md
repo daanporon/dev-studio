@@ -8,8 +8,8 @@ passed and the squad's PR merged. One gap: the Thinker's worktree is not nested 
 
 - `bin/backend/registry.ts`: orca-lite has its adapter (`bin/backend/orca-lite.ts`), so spawn-squad can start a
   squad on it. A squad starts on a backend only in a project whose
-  `default_backend` names it. A `--backend orca-lite` on any other project is refused with a message that
-  names the project's backend and how to change it.
+  Studio runs on it. A `--backend orca-lite` on any other project is refused with a message that
+  names the Studio's backend and how to change it.
 - `bin/lib/contract-roles.ts` `makeBackend`: the role scripts read an orca-lite squad's terminals through the same
   adapter and facts file as the loop (`<state root>/<project>/loop/orca-lite-terminals.json`), read-only
   (`readOnly`: only the loop writes the file; their create and close refuse). A list never drops the facts of a
@@ -27,7 +27,7 @@ passed and the squad's PR merged. One gap: the Thinker's worktree is not nested 
 each drill step (`--step <name>`, output appended to a file) and keep the events list for the record.
 
 1. Set the trial project up:
-   - Set the project's backend: `ds config set <trial> limits.conf default_backend orca-lite`.
+   - Set the project's backend: `ds up <trial> --backend orca-lite` (the Studio's backend is the project's).
    - `ds config set <trial> roles.conf builder claude opus ondemand - claude:sonnet`. The default builder row
      falls back to Muse, which has no launch line off Orca, and spawn-squad refuses a roster that names it.
 2. Start one small feature squad there (`/ds-start-squad`, or `spawn-squad.sh --repo <trial> --topic <squad>`).

@@ -10,7 +10,7 @@ const now = Math.floor(Date.now() / 1000);
 const empty = JSON.parse(readFileSync(join(root, "tests/fixtures/board-empty.json"), "utf8"));
 const board = {
   ...empty, project: "fixture", page_version: "v1", as_of: { accounts: now },
-  projects: [{ label: "fixture", default_backend: "orca" }, { label: "other", default_backend: "orca" }],
+  projects: [{ label: "fixture", studio_backend: "orca" }, { label: "other", studio_backend: "orca" }],
 };
 const HEX = (n: number) => n.toString(16).padStart(16, "0");
 
