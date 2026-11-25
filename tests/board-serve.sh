@@ -953,7 +953,7 @@ eq "request: start twice is fine"    "$(req "{\"project\":\"$LBL\",\"action\":\"
 # A pending request for squad "ans-2" must not block the same action on squad "ans" (and back).
 eq "request: other squad pending"    "$(req "{\"project\":\"$LBL\",\"action\":\"close\",\"topic\":\"ans-2\"}")" "202"
 ff
-eq "request: no Studio file for restart, suspend, resume or reload" "$(ls "$RD" | grep -cE '^board-(restart|suspend|resume|reload)-' || true)" "0"
+eq "request: no Studio file for restart, suspend, resume or reload" "$(find "$RD" -maxdepth 1 -regextype posix-extended -regex '.*/board-(restart|suspend|resume|reload)-.*' | wc -l | tr -d ' ')" "0"
 # board-actions-as-wishes U2: the update is the loop's own `update` request, not a line for the Studio.
 UPQ="$(bun -e 'const {Database}=require("bun:sqlite");const d=new Database(process.argv[1],{readonly:true});const r=d.query("SELECT kind, done_at, result FROM requests WHERE kind = ? AND project = ?").all("update",process.argv[2]);console.log(r.length+"|"+r.map((x)=>(x.done_at?"done":"open")+" "+x.result).join("|"))' "$DBR/loop.db" "$LBL")"
 has "request: one update request, failed off the live root" "$UPQ" "1|done"
