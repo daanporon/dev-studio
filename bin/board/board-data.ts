@@ -897,7 +897,11 @@ const depList = (u: any) => (Array.isArray(u.deps ?? []) ? (u.deps ?? []) : [u.d
 // The loop's own dispatch verdict per member (U100: liveness.ts dispatchVerdict, read through
 // the member's squad) — so an idle standing role is not shown as settled, a rebound-settled one
 // is not restarted on, and a stale read keeps the agent state.
-type Live = { ws: Record<string, string>; backendOk: boolean; loopDown: boolean };
+/** `backendOk`: the Orca observer's rows are current. `contractOk`: the projects whose contract observer rows are
+ *  current (U58), so a member off Orca with no row of its own reads as gone there, else unknown. */
+type Live = { ws: Record<string, string>; backendOk: boolean; loopDown: boolean; contractOk?: Set<string> };
+/** observed_workers rows the contract observer wrote (bin/loop/observers/contract.ts), not Orca's. */
+const CONTRACT_ROW = "COALESCE(json_valid(doc) AND json_extract(doc, '$.backend') = 'contract', 0)";
 
 // A member's display state: a standing role (not lead, not builder) whose agent state reads
 // `done` follows the loop's verdict — open and rebound read `waiting` (idle at its prompt,
@@ -1635,7 +1639,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
   // A worker the Orca observer marked gone (or never saw) is GONE — unless its rows are stale
   // (unknown), or the squad is suspended (its worktrees were removed on purpose).
   const wst = (w: unknown) => status === "suspended" ? "suspended"
-    : live.ws[String(w ?? "")] || (live.backendOk ? "gone" : "unknown");
+    : live.ws[String(w ?? "")] || ((String(w ?? "").startsWith("local::") ? live.contractOk?.has(label) : live.backendOk) ? "gone" : "unknown");
   const wts = arr(st.worktrees).map(String);
   const activeWts = wts.filter((w) => !paused(db.s, { project: label, squad: topic, member: w }));
   const working = activeWts.filter((w) => live.ws[w] === "working").length;
@@ -2042,8 +2046,11 @@ function fromDb(db: Db, label: string, topic: string, liveRoot = false) {
   // The Orca observer's rows are current when its newest is younger than the loop's stale window.
   const loop = loopStatus(db, label);
   const live: Live = { ws: {}, backendOk: false, loopDown: loop.down };
-  const orcaAt = Number(db.one("SELECT MAX(observed_at) AS at FROM observed_workers")?.at ?? 0);
+  // U58: Orca's own rows only; a contract observer's rows say nothing about Orca, and are current per project.
+  const orcaAt = Number(db.one(`SELECT MAX(observed_at) AS at FROM observed_workers WHERE NOT ${CONTRACT_ROW}`)?.at ?? 0);
   live.backendOk = orcaAt > 0 && NOW() - orcaAt <= loop.stale_after_s;
+  live.contractOk = new Set(db.all(`SELECT project, MAX(observed_at) AS at FROM observed_workers WHERE ${CONTRACT_ROW} GROUP BY project`)
+    .filter((r) => NOW() - Number(r.at ?? 0) <= loop.stale_after_s).map((r) => String(r.project)));
   for (const r of db.all(`SELECT wt, state, gone_at FROM observed_workers ${label ? "WHERE project = ?" : ""} ORDER BY rowid`, ...(label ? [label] : []))) {
     live.ws[String(r.wt)] = r.gone_at != null ? "gone" : String(r.state ?? "idle");
   }
@@ -2228,9 +2235,14 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const sargs = label ? [label] : [];
   const terminals = db ? Number(db.one(`SELECT COUNT(*) AS n FROM observed_terminals WHERE gone_at IS NULL ${scope}`, ...sargs)?.n ?? 0) : 0;
   const at = (table: string) => (db ? asOf(db, table, label) : null);
+  // A current observer, Orca's or a contract's (U58): the host-wide worktree and terminal counts are read.
+  const seen = live.backendOk || (live.contractOk?.size ?? 0) > 0;
   const out = {
     generated_at: new Date(NOW() * 1000).toISOString().replace(/\.\d+Z$/, "Z"),
     backend_ok: live.backendOk,
+    // U58: the "Orca isn't answering" warning, only while a project shown has its Studio or an open squad on Orca.
+    orca_warning: !live.backendOk && (!db || labels.some((project) => studioBackend(db.s.get("projects", { label: project })) === "orca"
+      || !!db.one("SELECT 1 FROM squads WHERE project = ? AND COALESCE(backend, 'orca') = 'orca' AND COALESCE(status, '') NOT IN ('closed', 'gone') LIMIT 1", project))),
     project: label || null,
     projects: db ? labels.map((project) => ({ label: project, pause: { ...projection(db.s, { project }),
       descendants_paused: !!db.one("SELECT 1 FROM pause_intents WHERE project = ? AND cleared_at IS NULL LIMIT 1", project) },
@@ -2243,8 +2255,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
         label: String(p.ref), state: p.state, url: p.repo && p.pr ? `https://github.com/${p.repo}/pull/${p.pr}` : null })),
     ]) : [],
     project_url: label && projSlug ? "https://github.com/" + projSlug : null,
-    live_worktrees: db && live.backendOk ? Number(db.one("SELECT COUNT(DISTINCT wt) AS n FROM observed_worktrees WHERE gone_at IS NULL")?.n ?? 0) : null,
-    capacity: db && live.backendOk ? { label: "terminals", count: terminals } : null,
+    live_worktrees: db && seen ? Number(db.one("SELECT COUNT(DISTINCT wt) AS n FROM observed_worktrees WHERE gone_at IS NULL")?.n ?? 0) : null,
+    capacity: db && seen ? { label: "terminals", count: terminals } : null,
     gh: { ok: !!db && (at("observed_prs") ?? 0) > 0, cmd: "loop" },
     github: ghView ? { ...ghView, waiting: waitingPrs.map((p) => ({ project: p.project, num: p.num })) } : null,
     accounts: accts,
@@ -2294,7 +2306,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     briefing_schedule: db ? briefingSchedule(db, label, labels) : { time: BRIEFING_DEFAULTS.briefing_time, days: BRIEFING_DEFAULTS.briefing_days, on: false, next: null },
   };
   decorateResources(db, label, squads);
-  const machine = machineSummary(db, label, out.live_worktrees, db && live.backendOk ? terminals : null, squads);
+  const machine = machineSummary(db, label, out.live_worktrees, db && seen ? terminals : null, squads);
   const update = updateSummary(db, label);
   const disk = diskSummary(db, label);
   const header = headerSummary(db, label, squads, out.needs_you, loop);

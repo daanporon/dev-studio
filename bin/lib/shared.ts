@@ -4,7 +4,7 @@
 import { readFileSync, existsSync, readdirSync, writeSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { filerIdentity, whoAmI } from "../loop/core/whoami.ts";
-import { MEMBER_VERBS, contractHere, studioHere } from "./contract-here.ts";
+import { MEMBER_VERBS, contractHere, projectOffOrca, studioHere } from "./contract-here.ts";
 
 /** The checkout root: DS_ROOT from the .sh wrapper (the path as the caller named it, symlinks kept, like the shell's `cd .. && pwd`), else two folders up. */
 export const ROOT = process.env.DS_ROOT || join(import.meta.dir, "..", "..");
@@ -97,7 +97,28 @@ export function backendFor(verb: string): string {
   return (MEMBER_VERBS as readonly string[]).includes(verb) ? p : hostBackendPath();
 }
 
+/** U58: the non-member verbs a Studio off Orca still calls (`grep -n 'backend(\[' bin/commands bin/lib`), and where
+ *  each goes once no part of its project is on Orca (contract-here.ts projectOffOrca). `host`: the host's adapter all
+ *  the same (`preflight` reads the host's accounts for wrap-hooks, Orca's until issue #125). `orca`: Orca's alone, so
+ *  it is refused with one line: `ps` (lib.ts worktreePath reads a `local::` worktree as its own path), and `ds up`'s
+ *  Orca steps (`up-ts.ts` calls the host's adapter itself for them when it moves a project to Orca). A verb not
+ *  listed is refused the same way. While an open squad of the project is on Orca every verb stays on the host's. */
+export const STUDIO_HOST_VERBS: Record<string, "host" | "orca"> = {
+  preflight: "host", ps: "orca", "loop-terminals": "orca", "studio-start": "orca", "repo-ensure": "orca", "worktree-ensure": "orca",
+};
+
+/** `<verb>: not on <backend>` when this process is a Studio whose project has no part on Orca and the verb is
+ *  Orca's alone (STUDIO_HOST_VERBS), else null. */
+export function studioRefusal(verb: string): string | null {
+  if (process.env.BACKEND || !studioHere() || (MEMBER_VERBS as readonly string[]).includes(verb) || STUDIO_HOST_VERBS[verb] === "host") return null;
+  const project = process.env.DS_MEMBER?.split("/")[0] ?? "";
+  const off = project ? projectOffOrca(stateRoot(), project) : null;
+  return off ? `${verb}: not on ${off}` : null;
+}
+
 export function backend(args: string[]): Promise<Ran> {
+  const no = studioRefusal(args[0] ?? "");
+  if (no) return Promise.resolve({ out: "", err: no + "\n", rc: 2 });
   return run([backendFor(args[0] ?? ""), ...args]);
 }
 

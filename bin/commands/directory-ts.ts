@@ -2,7 +2,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { stateRoot, dsLabel, dsPrefix, chomp, readJson, globJson, backend as realBackend, hostBackendPath, run as runCmd, type Ran, writeOut as realOut, writeErr as realErr } from "../lib/shared";
-import { contractLive, isLocalWt, type Live } from "../lib/contract-roles.ts";
+import { contractHere, contractLive, isLocalWt, projectOffOrca, type Live } from "../lib/contract-roles.ts";
 
 export const help = `list [--project <label>] [--from <squad>] [--json] | reach|check <squad> <role[-suffix]> [--project <label>] — the phone book (directory.sh)`;
 
@@ -49,15 +49,18 @@ function hasWt(doc: any, wt: string): boolean {
  *  a member whose worktree is `local::<path>` is live when one of them runs there, and Orca is never asked
  *  about it. Without it (the loop's own Orca observer, which watches those squads through their seats)
  *  such a member reads as Orca sees it: not running. */
+/** `noCurrent` (U58): this process has no worktree of its own to ask Orca about in project `label` (a host shell in
+ *  a project with no part on Orca), so `current` is not called. */
 export type DirIo = { stateRoot: string; backend: (args: string[]) => Promise<Ran>; out: (s: string) => void; err: (s: string) => void;
-  contract?: (label: string) => Promise<Live> };
+  contract?: (label: string) => Promise<Live>; noCurrent?: (label: string) => boolean };
 
 // `current` is this process's own worktree, through its squad's adapter (a `local::` path off Orca); the
 // Orca reads are the host's, so a squad off Orca still sees which Orca squads of its project are live.
 export const run = (argv: string[]): Promise<number> =>
   runWith({ stateRoot: stateRoot(), out: realOut, err: realErr,
     backend: (a) => (a[0] === "current" ? realBackend(a) : runCmd([hostBackendPath(), ...a])),
-    contract: (label) => contractLive(stateRoot(), label) }, argv);
+    contract: (label) => contractLive(stateRoot(), label),
+    noCurrent: (label) => !!projectOffOrca(stateRoot(), label) && !contractHere(stateRoot()) }, argv);
 
 export async function runWith(io: DirIo, argv: string[]): Promise<number> {
   const STATE_ROOT = io.stateRoot, backend = io.backend, writeOut = io.out, writeErr = io.err;
@@ -93,7 +96,7 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
   }
 
   let CUR = "";
-  if (!(OP === "check" && PROJECT)) CUR = chomp((await backend(["current"])).out);
+  if (!(OP === "check" && PROJECT) && !(PROJECT && io.noCurrent?.(dsLabel(PROJECT)))) CUR = chomp((await backend(["current"])).out);
 
   let LABEL = "";
   if (PROJECT) LABEL = dsLabel(PROJECT);
@@ -191,7 +194,7 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
       for (const f of globJson(DIR)) {
         const doc = readJson(f);
         const reason = notRunningReason(doc);
-        if (!reason) { await liveLoad(membersOf(doc).map((m) => m.wt)); await detailLoad(runIdOf(doc)); }
+        if (!reason) { await liveLoad(membersOf(doc).map((m) => m.wt)); if (membersOf(doc).some((m) => onOrca(m.wt))) await detailLoad(runIdOf(doc)); }   // U58: Orca's handles, Orca members only
         const frun = runIdOf(doc);
         for (const m of membersOf(doc)) {
           if (!m.role) continue;

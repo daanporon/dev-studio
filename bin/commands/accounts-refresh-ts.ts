@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { accountPlan, accountSkillsCheck } from "../lib/account-skills";
 import { hostBackendPath, globJson, readIfs, run as runCmd, stateRoot, writeErr } from "../lib/shared";
 import { globNames } from "../lib/install";
+import { ACCOUNTS_SKIP, orcaMissing } from "../lib/orca-missing";
 import { dbPath, open } from "../loop/core/store.ts";
 import { contractLimited } from "../loop/capacity/contract-limited.ts";
 
@@ -66,6 +67,9 @@ export async function run(argv: string[]): Promise<number> {
   const fallback = Number(process.env.DS_ACCOUNTS_LIMIT_S || 3600);
   mkdirSync(root, { recursive: true });
   if (maxAge && existsSync(OUT) && Number(now) - mtime(OUT) < Number(maxAge)) return 0;
+  // U58: Orca missing (no CLI, or its runtime not answering), so no accounts to read (they move off Orca in #125):
+  // one line, the last file kept.
+  if (await orcaMissing(hostBackendPath())) { writeErr(ACCOUNTS_SKIP("accounts-refresh") + "\n"); return 0; }
   const LOCK = join(root, ".accounts-refresh.lock");
   if (existsSync(LOCK) && Math.floor(Date.now() / 1000) - mtime(LOCK) > 600) { try { rmdirSync(LOCK); } catch { /* taken */ } }
   try { mkdirSync(LOCK); } catch { return 0; }
