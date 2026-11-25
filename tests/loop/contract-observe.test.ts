@@ -172,3 +172,24 @@ describe("the loop decides for a squad off Orca (U12)", () => {
     expect(r.walks()).toBeGreaterThanOrEqual(10);
   }, LONG);
 });
+
+describe("the tree a native backend shows (U21f)", () => {
+  test("parents native: observed_worktrees.parent is the parent the backend shows; groups: the loop's own record", async () => {
+    for (const parents of ["native", "groups"] as const) {
+      const r = await rig({ parents });
+      const l = await startLead(r), b = await startMember(r, "builder", "u1");
+      await r.tick();
+      const tree = (m: Row) => r.s.get("observed_worktrees", { project: "fx", wt: String(m.wt) })?.parent ?? null;
+      r.s.db.run("UPDATE worktrees SET parent_path = '/loop/says' WHERE host = 'local' AND path = ?", [pathOf(b)]);
+      r.fake.trees.set(pathOf(b), "/backend/shows");
+      await r.tick(2);
+      expect(tree(b)).toBe(parents === "native" ? "local::/backend/shows" : "local::/loop/says");
+      if (parents === "native") {
+        r.fake.trees.delete(pathOf(b));   // moved to the top level in the backend
+        await r.tick(2);
+        expect(tree(b)).toBeNull();
+      }
+      void l;
+    }
+  }, LONG);
+});
