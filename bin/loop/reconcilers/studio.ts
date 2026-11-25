@@ -27,7 +27,7 @@ import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import { quote } from "../pause/pause.ts";
 import { wake } from "../pause/wake.ts";
-import { MOVE, RESTART_APPROVED, START_WANTED, STUDIO_SQUAD, studioReady, studioView, type StartPick } from "../squad/studio.ts";
+import { BACKEND_WANTED, MOVE, RESTART_APPROVED, START_WANTED, STUDIO_SQUAD, studioReady, studioView, type BackendTarget, type StartPick } from "../squad/studio.ts";
 import { alertAction } from "./alerts.ts";
 
 const KEY = "studio.adopt";
@@ -161,4 +161,31 @@ export function startStudio(ctx: TickCtx): Action[] {
     payload: { agent, account, model: pick.model || "-", effort: pick.effort || "-", from: `${agent}:${account}`, why: "start" } }];
 }
 
-export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx), ...reloadStudioSkills(ctx), ...restartStudio(ctx), ...startStudio(ctx)] } satisfies Reconciler;
+// U54 (project-start): `ds up <label> --backend <x>`'s move (BACKEND_WANTED, squad/studio.ts wantStudioBackend) becomes
+// exactly one studio-move, why "backend", on the Studio's own agent, account, model and effort, naming the target the
+// wish holds and the Studio's handle (none when no Studio runs: then nothing is closed). It waits while another move is
+// claimed; this move's own claim ended, or a wish with no target, ends the wish with no move. Open squads are checked
+// by the move itself, right before it acts.
+export function backendStudio(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx;
+  const key = { project, subject: MOVE, kind: BACKEND_WANTED };
+  const w = store.get("episodes", key);
+  if (!w || w.ended_at != null) return [];
+  const claim = store.get("episodes", { project, subject: MOVE, kind: "action:studio-move" });
+  if (claim && claim.ended_at == null && ["pending", "acted", "running"].includes(String(claim.state))) return [];
+  const v = studioView(store, project);
+  const episode = String(w.episode_key ?? `backend@${w.started_at}`);
+  let t: Partial<BackendTarget> = {};
+  try { const o = JSON.parse(String(w.result ?? "{}")); if (o && typeof o === "object") t = o; } catch { /* no target: ended below */ }
+  const tried = claim?.episode_key === episode && claim.ended_at != null;
+  if (tried || !v || !t.backend || !t.wt) {
+    store.upsert("episodes", key, { ended_at: now, state: "ended", observed_at: now });
+    return [];
+  }
+  const m = v.member, agent = String(m?.agent || v.agent), account = String(m?.account || "-");
+  return [{ project, squad: null, member: v.wt, subject: MOVE, kind: "studio-move", episode,
+    payload: { ...(m?.handle ? { handle: String(m.handle) } : {}), agent, account, model: String(m?.model || "-"), effort: String(m?.effort || "-"),
+      from: `${agent}:${account}`, why: "backend", backend: t.backend, provider: t.provider ?? "", wt: t.wt } }];
+}
+
+export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx), ...reloadStudioSkills(ctx), ...restartStudio(ctx), ...startStudio(ctx), ...backendStudio(ctx)] } satisfies Reconciler;

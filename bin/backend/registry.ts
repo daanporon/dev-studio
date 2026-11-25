@@ -66,9 +66,15 @@ function treehouseFound(which?: (bin: string) => string | null): boolean {
  *  A squad's backend and `backend_host` are read from its own row, never from the project, so a squad on another
  *  host later widens only this function. Called by spawn-squad (via `chooseSquadBackend`) and the squad wish's
  *  fulfiller (bin/loop/fulfil/squad.ts). */
-export function squadBackendRule(o: { backend: string; host?: string; projectBackend?: string }): string | null {
+export function squadBackendRule(o: { backend: string; host?: string; projectBackend?: string; studioBackend?: string | null; project?: string }): string | null {
   const project = (o.projectBackend ?? "").trim() || DEFAULT_BACKEND, host = (o.host ?? "").trim() || LOCAL_HOST;
   if (host !== LOCAL_HOST) return `host '${host}' is not supported yet: squads start on this host (${LOCAL_HOST})`;
+  // U54 (project-start): one backend per project, the Studio's included: a squad on another backend than the
+  // project's Studio is refused in either direction (an Orca squad's Run pane opens in the Studio's worktree).
+  const studio = (o.studioBackend ?? "").trim();
+  if (studio && o.backend !== studio)
+    return `backend ${o.backend} is refused: this project's Studio runs on ${studio}, and a project keeps one backend for its Studio and squads; `
+      + `to move the whole project: ds up ${o.project || "<project>"} --backend ${o.backend}`;
   if (o.backend === project) return null;
   return `backend ${o.backend} is refused: this project's squads start on ${project} (its default_backend); `
     + `to change it set the project's default_backend (ds config set <project> limits.conf default_backend <name>)`;
@@ -79,7 +85,7 @@ export function squadBackendRule(o: { backend: string; host?: string; projectBac
  *  backend's default). Refused, with a line naming why: an unknown name, a backend other than the project's
  *  `default_backend` (`squadBackendRule`), a tool the backend cannot use, an adapter not built yet, a binary missing on PATH (the
  *  backend's, or treehouse's for that tool). `registry` and `which` are for tests. */
-export function chooseSquadBackend(o: { flag?: string; projectBackend?: string; providerSetting?: string;
+export function chooseSquadBackend(o: { flag?: string; projectBackend?: string; providerSetting?: string; studioBackend?: string | null; project?: string;
   registry?: Readonly<Record<string, BackendEntry>>; which?: (bin: string) => string | null }): Chosen {
   const reg: Readonly<Record<string, BackendEntry>> = o.registry ?? BACKENDS;
   const flag = (o.flag ?? "").trim(), project = (o.projectBackend ?? "").trim() || DEFAULT_BACKEND;
@@ -93,7 +99,7 @@ export function chooseSquadBackend(o: { flag?: string; projectBackend?: string; 
   if (!e.providers.includes(provider))
     return { ok: false, error: `backend ${e.name} cannot use worktree_provider ${provider} (the project's setting): ${e.name} uses ${e.providers.join(" or ")}; set worktree_provider auto, or pick another backend` };
   if (!e.adapter) return { ok: false, error: `backend ${e.name} (${from}) is not built yet: the loop cannot start a squad on it; start the squad on another backend` };
-  const ruled = squadBackendRule({ backend: e.name, projectBackend: project });
+  const ruled = squadBackendRule({ backend: e.name, projectBackend: project, studioBackend: o.studioBackend, project: o.project });
   if (ruled) return { ok: false, error: `${ruled} (asked for by ${from})` };
   const which = o.which ?? e.find ?? ((bin: string) => Bun.which(bin));
   if (e.bin && !which(e.bin))

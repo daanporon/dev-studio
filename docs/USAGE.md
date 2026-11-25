@@ -211,8 +211,11 @@ label (its own clone in `repos/<label>/`, state and Studio). A label already up 
 first bring-up it becomes the project's `default_backend`, and a roster role the backend cannot start (only
 claude starts off Orca today) is refused before anything is made. Off Orca the Studio's worktree comes from
 the project's worktree tool (`--worktree <auto|git|treehouse>` writes `worktree_provider`), and the loop
-alone starts it, so `up` stops when the loop is not running. Moving a project that is already up to another
-backend is not built yet (U54).
+alone starts it, so `up` stops when the loop is not running. A project keeps one backend for its Studio and
+squads: `bin/host/up.sh <label> --backend <x>` on a project already up moves it (the loop starts the Studio on
+`<x>` in a new worktree, closes the old one and switches the project, keeping the Studio's account history). It
+is refused while any squad of the project is open, a paused one included, and `ds config set … default_backend`
+is refused while the Studio runs elsewhere, naming that command.
 
 ```sh
 bin/host/up.sh https://github.com/you/your-app --backend tmux --label your-app-tmux
