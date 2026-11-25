@@ -15,7 +15,7 @@ TMP="$(mktemp -d)"
 export DS_STATE_ROOT="$TMP/state"
 LBL="zzdir_$$"; SD="$DS_STATE_ROOT/$LBL"
 SD2="$DS_STATE_ROOT/${LBL}x"   # a second label, so finding the project from the worktree is real
-trap 'rm -rf "$TMP"' EXIT
+state_root_on_exit 'rm -rf "$TMP"'
 PASS=0; FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); printf 'FAIL: %s\n  expected: %s\n  actual:   %s\n' "$1" "$2" "$3" >&2; fi; }
 

@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 RP="zzroles-$$"; TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$DS_STATE_ROOT/$RP"' EXIT
+state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_ROOT/$RP"'
 export BACKEND="$TMP/backend"; printf '#!/usr/bin/env bash\nexit 0\n' > "$BACKEND"; chmod +x "$BACKEND"
 export CODEX_BIN="$TMP/no-codex"
 export MUSE_MODEL_CATALOG_DIR="$TMP/emptycat"; mkdir -p "$TMP/emptycat"   # hermetic: no host muse rows
@@ -110,13 +110,13 @@ rc=0; "$ROOT/bin/commands/roles.sh" set "$RP" schematics claude opus ondemand >/
 eq "a role in no roster is refused (U256)" "$rc" "2"
 
 # U260: the Studio has its own roster row (the default shows it; a project override wins)
-SP="zzroles-studio-$$"; trap 'rm -rf "$TMP" "$DS_STATE_ROOT/$RP" "$DS_STATE_ROOT/$SP"' EXIT
+SP="zzroles-studio-$$"; state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_ROOT/$RP" "$DS_STATE_ROOT/$SP"'
 eq "studio row in the default roster (U267: claude sonnet)" "$("$ROOT/bin/commands/roles.sh" list "$SP" | awk '$1=="studio"{print $2,$3}')" "claude sonnet"
 "$ROOT/bin/commands/roles.sh" set "$SP" studio claude opus >/dev/null
 eq "a project override of the studio row wins" "$("$ROOT/bin/commands/roles.sh" list "$SP" | awk '$1=="studio"{print $2,$3}')" "claude opus"
 
 # U267: a project roster overrides per role; the default fills every role it lacks.
-OP="zzroles-one-$$"; trap 'rm -rf "$TMP" "$DS_STATE_ROOT/$RP" "$DS_STATE_ROOT/$SP" "$DS_STATE_ROOT/$OP"' EXIT
+OP="zzroles-one-$$"; state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_ROOT/$RP" "$DS_STATE_ROOT/$SP" "$DS_STATE_ROOT/$OP"'
 "$ROOT/bin/commands/roles.sh" set "$OP" tester claude sonnet >/dev/null
 eq "set on a project with no roster writes one row" "$(own "$OP" | awk '{print $1}' | tr '\n' ,)" "tester,"
 eq "...whose omitted spawn is the default row's" "$(own "$OP" | awk '$1=="tester"{print $4}')" "ondemand"
@@ -127,6 +127,29 @@ eq "--json: the set role is an override, the rest default" "$("$ROOT/bin/command
 "$ROOT/bin/commands/roles.sh" reset "$OP" tester >/dev/null
 eq "reset drops the project's row" "$(own "$OP" | grep -c '^tester' || true)" "0"
 eq "...and the role runs the default again" "$("$ROOT/bin/commands/roles.sh" list "$OP" | awk '$1=="tester"{print $2,$3}')" "$(awk '$1=="tester"{print $2,$3}' "$ROOT/conventions/roles.conf")"
+
+# configurable-role-elevation U1: column 8 (`return`, up|stay|-) and the resolved `back up`.
+UP="zzroles-up-$$"; state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_ROOT/$RP" "$DS_STATE_ROOT/$SP" "$DS_STATE_ROOT/$OP" "$DS_STATE_ROOT/$UP"'
+bu() { "$ROOT/bin/commands/roles.sh" list "$UP" | awk -v r="$1" '$1==r{print $8, $9}' | sed 's/ $//'; }
+eq "the default: thinker up (from its default row), lead stay" "$(bu thinker)|$(bu lead)" "up (default)|stay (default)"
+eq "elevate rows show no back up; studio stays by default" "$(bu builder-review)|$(bu thinker-deep)|$(bu studio)" "-|-|stay (default)"
+out="$("$ROOT/bin/commands/roles.sh" set "$UP" lead claude sonnet always "" "" "" up)"
+eq "set takes up as the 9th argument" "$(own "$UP" | awk '$1=="lead"')" "lead claude sonnet always - - - up"
+eq "...says so" "$(printf '%s' "$out" | grep -o 'back up=[a-z]*')" "back up=up"
+eq "...and list shows it as the row's own" "$(bu lead)" "up"
+"$ROOT/bin/commands/roles.sh" set "$UP" lead claude opus >/dev/null
+eq "an omitted return keeps the row's own" "$(own "$UP" | awk '$1=="lead"{print $2,$3,$NF}')" "claude opus up"
+"$ROOT/bin/commands/roles.sh" set "$UP" builder claude opus "" "" "" "" up >/dev/null
+eq "builder up covers a tier row that says nothing" "$(bu builder-standard)" "up (builder)"
+eq "...never an elevate row" "$(bu builder-review)" "-"
+eq "--json: return (the effective row's column 8) and back_up (resolved)" "$("$ROOT/bin/commands/roles.sh" list --json "$UP" | jq -r '[.roles[]|select(.role=="lead" or .role=="builder-standard" or .role=="builder-review" or .role=="thinker")|"\(.role):\(.return):\(.back_up):\(.default.return):\(.default.back_up)"]|join(",")')" "lead:up:true::false,thinker:up:true:up:true,builder-standard::true::false,builder-review::false::false"
+"$ROOT/bin/commands/roles.sh" set "$UP" thinker claude opus always "" "" "" stay >/dev/null
+eq "thinker stay" "$(bu thinker)" "stay"
+eq "a project row that differs only in column 8 reads override" "$("$ROOT/bin/commands/roles.sh" list --json "$UP" | jq -r '.roles[]|select(.role=="thinker")|.source')" "override"
+rc=0; err="$("$ROOT/bin/commands/roles.sh" set "$UP" builder-review claude opus elevate "" "" "" up 2>&1 >/dev/null)" || rc=$?
+eq "up on an elevate row is refused, naming the row" "$rc:$(printf '%s' "$err" | grep -c "builder-review")" "2:1"
+"$ROOT/bin/commands/roles.sh" set "$UP" studio claude sonnet ondemand "" "" "" up >/dev/null
+eq "configurable-role-elevation U3: up on studio is taken (studio_move moves it back up)" "$(own "$UP" | awk '$1=="studio"')|$(bu studio)" "studio claude sonnet ondemand - - - up|up"
 
 echo "roles: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

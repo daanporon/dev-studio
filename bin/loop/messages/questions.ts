@@ -4,8 +4,12 @@
 // `seq` order (export-json.ts), the import and squad-state.sh turn the entries into rows (sync). An
 // answer marks the row answered and never deletes it:
 //   open(store, project, squad, entry)              a new open row (U15's board asks through it)
-//   answer(store, project, squad, id, text, via)    the open row answered + an events row question_answered
+//   answer(store, project, squad, id, text, via[, seq]) the open row answered + an events row question_answered
+// A question's id stays the same per asking (`plan-<short>` after a revision); two askings are told apart by
+// `since`, the entry's timestamp (the row's `asked_at`), which changes only when the question is asked again.
+// `seq` moves under unrelated questions (sync re-inserts rows), so it never names an asking across reads.
 //   list(store, project, squad, {limit, before})    answered rows, newest first
+//   drop(store, project, squad, reason)             every open row dropped (archive) + question_dropped events
 import type { Row, Store } from "../core/store.ts";
 import { json, now } from "../core/store.ts";
 
@@ -65,12 +69,13 @@ export function open(store: Store, project: string, squad: string, entry: Row): 
   return store.tx(() => insert(store, project, squad, columns(entry)));
 }
 
-// Answer the open row(s) with this id. An unknown or already answered id changes nothing (null), so a
-// second answer never overwrites the first.
-export function answer(store: Store, project: string, squad: string, id: string, answerText: string, via: Via): Row | null {
+// Answer the open row(s) with this id, or only the open row `seq` when it is given (the board answers the
+// asking it chose; another open row with the same id stays open). An unknown or already answered id changes
+// nothing (null), so a second answer never overwrites the first.
+export function answer(store: Store, project: string, squad: string, id: string, answerText: string, via: Via, seq?: number): Row | null {
   return store.tx(() => {
-    const rows = store.db.query("SELECT * FROM questions WHERE project = ? AND squad = ? AND id = ? AND status = 'open' ORDER BY seq")
-      .all(project, squad, id) as Row[];
+    const rows = (store.db.query("SELECT * FROM questions WHERE project = ? AND squad = ? AND id = ? AND status = 'open' ORDER BY seq")
+      .all(project, squad, id) as Row[]).filter((r) => seq === undefined || r.seq === seq);
     if (!rows.length) return null;
     const at = now();
     for (const r of rows) {
@@ -79,6 +84,21 @@ export function answer(store: Store, project: string, squad: string, id: string,
     const r = rows[rows.length - 1];
     store.event("question_answered", { project, squad, payload: { id, title: r.title ?? r.question ?? null, answer: answerText, via } });
     return { ...r, status: "answered", answer: answerText, answered_via: via, answered_at: at };
+  });
+}
+
+// morning-brief-stale-items U2: an archived squad's open rows are dropped, never answered: status
+// `dropped`, the reason in `answer`, via `archive`. They stay in the table (nothing is deleted), out of
+// `pending`, `list` (answered history) and `answer`. One `question_dropped` event per row; returns the
+// rows as they were (still open), so the caller can name them.
+export function drop(store: Store, project: string, squad: string, reason: string): Row[] {
+  return store.tx(() => {
+    const rows = pending(store, project, squad), at = now();
+    for (const r of rows) {
+      store.db.run("UPDATE questions SET status = 'dropped', answer = ?, answered_via = 'archive', answered_at = ? WHERE seq = ? AND status = 'open'", [reason, at, r.seq as number]);
+      store.event("question_dropped", { project, squad, payload: { id: r.id, title: r.title ?? r.question ?? null, blocking: r.blocking === 1, reason } });
+    }
+    return rows;
   });
 }
 

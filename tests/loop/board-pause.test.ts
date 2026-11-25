@@ -114,3 +114,20 @@ test("a registered role awaiting its first worktree stays on the board and can b
   expect((await f.post("resume", target)).status).toBe(200);
   expect((await f.post("pause", { ...target, suffix: "not-registered" })).status).toBe(409);
 });
+
+test("a squad whose member is resuming still counts in the header; a paused squad does not", async () => {
+  const f = await rig();
+  f.store.upsert("squads", { project: "p", topic: "two" }, { doc: { topic: "two", members: [], worktrees: [], units: [], waiting_on_you: [] }, status: "running", observed_at: 1, updated_at: 1 });
+  for (const sq of ["one", "two"]) f.store.upsert("units", { project: "p", squad: sq, slug: "u" }, { status: "planned", updated_at: 1, observed_at: 1 });
+  await f.post("pause", f.targetBody); await f.tick(); f.checkpoint(); await f.tick();
+  expect((await f.post("resume", f.targetBody)).status).toBe(200);
+  const resuming = f.board();
+  const one = resuming.squads.find((s: any) => s.topic === "one");
+  expect(one.members[0].state).toBe("resuming");
+  expect(one.pause.state).not.toMatch(/^(pausing|paused)$/);
+  expect(resuming.header.squads_active).toBe(2);
+  expect((await f.post("pause", { scope: "squad", project: "p", topic: "two" })).status).toBe(200);
+  const b = f.board();
+  expect(b.squads.find((s: any) => s.topic === "two").pause.state).toMatch(/^(pausing|paused)$/);
+  expect(b.header.squads_active).toBe(1);
+});

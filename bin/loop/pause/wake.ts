@@ -59,10 +59,12 @@ export function pokeAsk(reason: string): string {
     reload: "The poke asked it to re-read its instructions and confirm with ds reload ack.",
     limit: "The poke told it its usage limit had passed.",
     "credits-ok": "The poke told it its account works again.",
+    "login-ok": "The poke told it its account's login works again.",
     held: "The poke told it a held message was waiting.",
     msg: "The poke told it a message was waiting in its ds msg inbox.",
     ready: "The poke told it a unit was ready to start.",
     "stop-checkpoint": "The poke asked it to write a journal checkpoint before a planned restart.",
+    "archive-debrief": "The poke asked the Lead to write the final debrief before its squad archives.",
   };
   return ask[reason] ?? (reason.startsWith("pr") ? "The poke told it about a change on its PR." : `The poke was a "${reason}" nudge from the loop.`);
 }
@@ -101,7 +103,7 @@ export function wake(ctx: TickCtx, member: string, text: string, reason: string,
           payload: reason === "all-done"
             ? { title: "Wrap-up stalled: Lead did not answer", card: POKE_UNANSWERED, reason, episode,
               fields: { pokeEpisode: episode, act: { action: "close", topic: squad, label: "Close squad" } },
-              text: `Every unit of ${squad} is done or cancelled and nothing is held. The loop asked its Lead ${count} times to do the test check, write the debrief and mark it done, and got no answer. ` +
+              text: `Every unit of ${squad} is done or cancelled and nothing is held. The loop asked its Lead ${count} times to do the test check and mark it done, and got no answer. ` +
                 `If ${squad} is finished, press Close squad; if more work is coming, give its Lead the next task.`,
               option: "looked at it", why: "the loop stopped poking it" }
             : { title: "Poke unanswered", card: POKE_UNANSWERED, reason, episode, fields: { pokeEpisode: episode },

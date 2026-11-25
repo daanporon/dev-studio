@@ -11,7 +11,7 @@ const Docs = new Function("useState", "html", "RevokePlan", `${arrow("docAge")} 
 // Every template node under a view, depth first.
 const nodes = (v: any): any[] => Array.isArray(v) ? v.flatMap(nodes) : v && typeof v === "object" && "str" in v ? [v, ...v.values.flatMap(nodes)] : [];
 const groups = (view: any) => nodes(view).filter((n) => n.str.includes("data-docs")).map((n) => n.values[0]);
-const render = (s: any, closed: boolean, onPlan: (p: any) => void = () => {}) => Docs({ s, onPlan, closed });
+const render = (s: any, closed: boolean, onPlan: (p: any) => void = () => {}, atArchive = false) => Docs({ s, onPlan, closed, atArchive });
 const plans = [{ name: "a-plan.md", mtime: 2 }, { name: "b-plan.md", mtime: 1 }];
 
 test("done squad: Debrief group before Plans, and the debrief row opens the plan modal", () => {
@@ -27,6 +27,11 @@ test("done squad with nothing else still shows the box with 'no debrief'", () =>
   expect(groups(view)).toEqual(["debrief"]);
   expect(nodes(view).some((n) => n.str.includes("nodebrief"))).toBe(true);
 });
+test("done squad (debrief comes at archive) says 'written at archive'; an archived one without says 'no debrief'", () => {
+  const label = (view: any) => nodes(view).find((n) => n.str.includes("nodebrief")).values[0];
+  expect(label(render({ topic: "t", plans: [], lavish: [] }, true, () => {}, true))).toBe("written at archive");
+  expect(label(render({ topic: "t", plans: [], lavish: [] }, true))).toBe("no debrief");
+});
 test("running squad with no debrief and no plans renders nothing", () => {
   expect(render({ topic: "t", plans: [] }, false)).toBeNull();
 });
@@ -35,4 +40,11 @@ test("running squad with plans has no debrief group", () => {
 });
 test("archived-shaped entry: Debrief and Plans, no Review pages", () => {
   expect(groups(render({ topic: "t", debrief: "x", plans }, true))).toEqual(["debrief", "plans"]);
+});
+
+test("review pages: a saved copy links to /page/<path> (saved copy), a live session to /lavish/<key>", () => {
+  const lavish = [{ key: "aaaaaaaaaaaaaaaa", name: "plan.html", dir: ".lavish", mtime: 3, saved: "p/pages/t/rescued/b-u1/.lavish/plan.html" }, { key: null, name: "my idea.html", dir: "c", mtime: 2, saved: "p/pages/t/my idea.html" }, { key: "bbbbbbbbbbbbbbbb", name: "live.html", dir: "x", mtime: 1 }];
+  const links = nodes(render({ topic: "t", plans: [], lavish }, true)).filter((n) => n.str.includes('class="plan" style=')).map((n) => ({ href: n.values[2], title: n.values[3] }));
+  expect(links.map((l) => l.href)).toEqual(["/page/p/pages/t/rescued/b-u1/.lavish/plan.html", "/page/p/pages/t/my%20idea.html", "/lavish/bbbbbbbbbbbbbbbb"]);
+  expect(links.map((l) => l.title.endsWith("saved copy"))).toEqual([true, true, false]);
 });

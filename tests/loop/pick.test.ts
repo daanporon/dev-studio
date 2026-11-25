@@ -9,12 +9,13 @@ import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import { accountRows } from "../../bin/loop/db/import-json.ts";
-import { ladder, overrideOf, pick, tuple, workDone, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
+import { accountBlock, ladder, overrideOf, pick, tuple, workDone, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
 import { reconcile, slotBudget } from "../../bin/loop/capacity/picks.ts";
 import { slot } from "../../bin/loop/capacity/slot.ts";
 import { since } from "../../bin/loop/core/events.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
 import { holdCredits } from "../../bin/loop/capacity/credits.ts";
+import { holdLogin } from "../../bin/loop/capacity/login.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -134,6 +135,29 @@ describe("pick", () => {
     const t = fixture();
     t.upsert("config", { project: "fx", file: "roles.conf", key: "builder" }, { value: "muse muse-spark-1.3 ondemand - claude:opus", observed_at: T });
     expect(ok(builder(t)).agent).toBe("muse");
+  });
+
+  test("U31: a squad on a contract backend never lands on an agent it has no launch line for", () => {
+    const limitedAll = (s: Store) => {
+      s.upsert("episodes", { project: "", subject: "wt-x|limit", kind: "account" }, { state: "claude/acct-a", ended_at: T + 600, source: "loop", observed_at: T });
+      acct(s, "acct-b", { session_pct: "96" });
+      acct(s, "acct-c", { weekly_pct: "99" });
+    };
+    const s = fixture();
+    limitedAll(s);
+    s.upsert("squads", { project: "fx", topic: "demo" }, { backend: "tmux", observed_at: T, updated_at: T });
+    const w = builder(s, { squad: "demo" }) as Waiting;
+    expect(w.why).toBe("wait");
+    expect(w.reason).toContain("host busy: no account for claude on tmux");
+    expect(w.reason).toContain("muse cannot start on tmux");
+    // A Claude account frees up: it starts on Claude, not a fallback.
+    acct(s, "acct-b", { session_pct: "40" });
+    expect(tuple(ok(builder(s, { squad: "demo" })))).toBe("claude\topus\t-\tacct-b\t0");
+    // An Orca squad still falls back as today.
+    const o = fixture();
+    limitedAll(o);
+    o.upsert("squads", { project: "fx", topic: "demo" }, { backend: "orca", observed_at: T, updated_at: T });
+    expect(ok(builder(o, { squad: "demo" })).agent).toBe("muse");
   });
 
   test("U267: a project roster that lacks a role runs the default row for it (studio: claude sonnet)", () => {
@@ -855,6 +879,32 @@ describe("U2: an account out of credits", () => {
     const w = builder(s) as Waiting;
     expect(w.wait).toBe(T + 86400);
     expect(w.reason).toContain("muse:default out of credits");
+  });
+});
+
+// claude-login-ended U2: a login hold (login.ts) blocks like credits, and the pick names it `login ended`.
+describe("claude-login-ended U2: an account whose login ended", () => {
+  function museFirst(s: Store, fallback = " claude:opus:high") {
+    s.upsert("config", { project: "fx", file: "roles.conf", key: "builder" }, { value: `muse muse-spark-1.3 ondemand max${fallback}`, observed_at: T });
+    s.upsert("observed_accounts", { agent: "muse", account: "default" }, { session_pct: "-", weekly_pct: "-", observed_at: T });
+    holdLogin(s, { agent: "muse", account: "default", from: "probe" }, T - 60);
+  }
+  test("leaves the account out with block `login` until the operator clears it", () => {
+    const s = fixture();
+    museFirst(s);
+    expect(accountBlock(s, "muse", "default", T)).toBe("login");
+    const p = ok(builder(s));
+    expect(p).toMatchObject({ agent: "claude", fallback: true });
+    expect(p.why).toContain("default login ended");
+    expect(setAccountEnabled(s, { agent: "muse", account: "default", enabled: true, by: "test" }, T)).toMatchObject({ cleared: true });
+    expect(ok(builder(s))).toMatchObject({ agent: "muse", fallback: false });
+  });
+  test("a ladder with no other rung waits until the hold's end and names it", () => {
+    const s = fixture();
+    museFirst(s, " -");
+    const w = builder(s) as Waiting;
+    expect(w.wait).toBe(T - 60 + 3600);
+    expect(w.reason).toContain("muse:default login ended");
   });
 });
 

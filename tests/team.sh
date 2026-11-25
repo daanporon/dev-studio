@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 LBL="zzteam_$$"; SD="$DS_STATE_ROOT/$LBL"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$SD" "$TMP"' EXIT
+state_root_on_exit 'rm -rf "$SD" "$TMP"'
 mkdir -p "$SD/squads"
 printf '{"run_id":"run_9","members":[
   {"role":"lead","wt":"wtLead","owns":[],"for":""},

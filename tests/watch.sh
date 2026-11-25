@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+state_root_on_exit 'rm -rf "$TMP"'
 
 # Fake backend: record which inbox verb + arg was used, so we can assert parsing + --poll routing.
 cat > "$TMP/fakeb" <<'FAKE'
@@ -56,10 +56,24 @@ eq "an edited instruction file says re-read" "$r" "ok"
 case "$(tick "$TMP/wt1")" in *unchanged*) r=ok ;; *) r=no ;; esac
 eq "and then unchanged again"                "$r" "ok"
 
+# INSTRUCTIONS per role: the hash covers AGENTS.md plus the role's own file, not conventions/*.md.
+IR="$TMP/ir"; mkdir -p "$IR/roles" "$IR/conventions" "$IR/studio" "$TMP/wl" "$TMP/wt"
+for f in AGENTS.md roles/lead.md roles/thinker.md studio/studio.md conventions/c.md; do printf 'v1' > "$IR/$f"; done
+rtick(){ (cd "$2" && env -u DS_INSTR_FILES DS_INSTR_ROOT="$IR" DS_MEMBER="$1" DS_INSTR_SEEN="$TMP/seen-role" BACKEND="$TMP/fakeb" "$ROOT/bin/lib/watch.sh" --worktree 1000 2>/dev/null | grep '^INSTRUCTIONS' || true); }
+isc(){ case "$1" in *unchanged*) echo unchanged ;; *changed*re-read*) echo changed ;; *) echo "?$1" ;; esac; }
+rtick proj/a/lead "$TMP/wl" >/dev/null; rtick proj/a/thinker "$TMP/wt" >/dev/null
+printf 'v2' > "$IR/conventions/c.md"
+eq "conventions-only change: Lead unchanged"   "$(isc "$(rtick proj/a/lead "$TMP/wl")")" "unchanged"
+printf 'v2' > "$IR/roles/lead.md"
+eq "roles/lead.md change: Lead changed"        "$(isc "$(rtick proj/a/lead "$TMP/wl")")" "changed"
+eq "roles/lead.md change: Thinker unchanged"   "$(isc "$(rtick proj/a/thinker "$TMP/wt")")" "unchanged"
+printf 'v2' > "$IR/AGENTS.md"
+eq "AGENTS.md change: Thinker changed"         "$(isc "$(rtick proj/a/thinker "$TMP/wt")")" "changed"
+
 # Lead mode WORK ITEMS: every dispatched Builder shows `<state> <age>` + its last words with an
 # age; a sitting one shows `since HH:MM`, not epoch ms; missing cols 4-5 print the state only.
 LBL="zzwa_$$"; SD="$DS_STATE_ROOT/$LBL/squads"
-trap 'rm -rf "$TMP" "$DS_STATE_ROOT/$LBL"' EXIT
+state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_ROOT/$LBL"'
 mkdir -p "$SD"
 printf '{"run_id":"r1","units":[{"slug":"u3","status":"dispatched","builder_wt":"wtW"},{"slug":"u4","status":"dispatched","builder_wt":"wtI5"},{"slug":"u5","status":"dispatched","builder_wt":"wtI20"},{"slug":"u6","status":"dispatched","builder_wt":"wtBare"}]}' > "$SD/mt.json"
 now=$(date +%s); ago(){ echo $(( (now - $1 * 60) * 1000 )); }
@@ -111,7 +125,9 @@ for hk in '"hold":true' '"hold":true,"hold_by":"plan"' '"hold":true,"hold_by":"p
 done
 has   "the close-out line also shows on --poll"         "$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}' --poll)" "$FL"
 has   "the close-out line names the close command"      "$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}')" "/ds-close-squad fz"
-has   "the close-out line asks for the debrief first"  "$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}')" "write the debrief (set-debrief), then set-status done"
+CO="$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}')"
+has   "the close-out line asks for no debrief"  "$CO" "check the Try it page is current, then set-status done"
+hasnt "the close-out line has no set-debrief"  "$CO" "set-debrief"
 hasnt "the line no longer skips the testability handoff" "$(fin fz '{"run_id":"r","units":[{"slug":"a","status":"done"}]}')" "skip it for docs-only"
 hasnt "a tester member holds the line back"             "$(fin fy '{"run_id":"r","members":[{"role":"lead"},{"role":"tester"}],"units":[{"slug":"a","status":"done"}]}')" '★ finished'
 T_AB="$(ftok fz '{"run_id":"r","units":[{"slug":"a","status":"done"},{"slug":"b","status":"done"}]}')"
@@ -365,7 +381,7 @@ has   "unchanged PR: unit counted, not listed"  "$(pq SUCCESS)" "(1 workers, 1 u
 has   "checks went red: the unit is listed"     "$(pq FAILURE)" "checks failing"
 printf 'wL\tworking\tL\nwA\tidle\tA\t%s\n' "$(( ($(date +%s) - 1200) * 1000 ))" > "$TMP/states"
 mergedq="$(pq SUCCESS MERGED)"
-has   "live merged PR gets its action row"     "$mergedq" $'‼ merged\tw1\twA\tPR #7 MERGED\tthe loop has not marked it done: mark it done and retire the Builder'
+has   "live merged PR gets its action row"     "$mergedq" $'‼ merged\tw1\twA\tPR #7 MERGED\tthe loop has not marked it done yet: it does on its next PR read; if this stays after a tick, mark it done (refused until the loop has read the merge), and it retires the Builder'
 hasnt "merged PR suppresses sitting nudge"      "$mergedq" "⏸ sitting"
 has   "merged action survives quiet mode"       "$(pq SUCCESS MERGED)" $'‼ merged\tw1\twA\tPR #7 MERGED'
 printf '{"run_id":"rq","members":[{"role":"lead","wt":"wL"}],"units":[{"slug":"d1","status":"done"}]}' > "$SD/lq.json"

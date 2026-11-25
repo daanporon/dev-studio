@@ -39,7 +39,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { actionBlock, actionTargets, actionVersion, deferredMail, paused, version, resumeAction, startBlock, actionStartSent } from "../pause/pause.ts";
 import { outside, sender } from "../messages/coordinator.ts";
 import { driverModule } from "../drivers/index.ts";
-import type { Driver, Member, Seat, Squad } from "../drivers/types.ts";
+import { startIdentity } from "./whoami.ts";
+import { startedOn, wtName, type ContractSeat, type Driver, type Member, type Seat, type Squad, type StartMeta } from "../drivers/types.ts";
+import { contract as contractDriver, localPath } from "../drivers/contract.ts";
+import { claudeSettings } from "../drivers/claude-launch.ts";
+import type { Backend, Terminal } from "../../backend/contract.ts";
+import { contracts, sharedContracts, type Contracted } from "../squad/contracts.ts";
+import { createWorktree } from "../io/worktrees.ts";
+import { allSkills, deniedMcpServers, disabledPlugins, isProjectSkill, mcpLevels, pluginLevels, projectRules, shippedRules, skillOverrides } from "../settings/skills.ts";
 import { errOf, inDoubt, shell, spawn, type Orca, type Out } from "../io/orca.ts";
 import { DIRS, load, type Action, type Actuator, type Reconciler, type TickCtx } from "./plugins.ts";
 import { pick } from "../capacity/pick.ts";
@@ -53,8 +60,12 @@ import { now, ROOT, type Row, type Store } from "./store.ts";
 import { spreadDue } from "./timers.ts";
 import { retireCapacityFacts } from "../fulfil/pending.ts";
 import { envInt } from "./tick.ts";
+import { loopStopping } from "./stopping.ts";
 import { carded, classify, clear, causeOf, fingerprint, lapse, launchRetryAt, LAUNCH_TRIES, refuse, REFUSAL_KIND, standing } from "../io/refusals.ts";
 import { keepStartFailed } from "../squad/start-failed.ts";
+import { studioContract, studioSeat } from "../squad/backend.ts";
+import { STUDIO_SQUAD } from "../squad/studio.ts";
+import { removeLaunch, writeLaunch } from "../squad/launch-file.ts";
 import { redact, redactPayload } from "./redact.ts";
 
 export type Result =
@@ -71,7 +82,7 @@ export type Fulfiller = Reconciler & {
   kinds: string[];
   exec(a: Action, x: Exec): Result | Promise<Result>;
   ready?(a: Action, x: Exec): boolean | Promise<boolean>; // before claim: no room makes no action
-  stale?(a: Action, x: Exec): boolean;       // true: the reason for the action has gone, drop it
+  stale?(a: Action, x: Exec): boolean | string;   // true (or a reason: dropped `stale: <reason>`): the reason for the action has gone, drop it
   // The action given up for good; a truthy return: it told someone itself (its own card, or the
   // request it failed), so no refusal card.
   giveUp?(a: Action, x: Exec, why: string): unknown;
@@ -98,9 +109,12 @@ const startSlots = () => envInt("DS_LOOP_START_SLOTS", 4);
 // U239: these kinds run in the background like a start: the tick claims, the call runs on its own and
 // its result settles the episode. Their own slots; one at a time per subject and per member worktree;
 // a call that has not ended after DS_LOOP_BG_TIMEOUT_S (120) settles as a retry and frees its subject.
-export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "finish-unit", "studio-move", "expose.stop"]);
+export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "update-branch", "finish-unit", "studio-move", "expose.stop", "feedback.draft"]);
 const bgSlots = () => envInt("DS_LOOP_BG_SLOTS", 6);
-const bgTimeoutMs = () => envInt("DS_LOOP_BG_TIMEOUT_S", 120) * 1000;
+// A kind whose call runs longer than the default gets its own limit (the drafter's headless call ends
+// itself at DS_FEEDBACK_DRAFT_S; this is that plus a minute, so the loop never frees its subject first).
+const BG_TIMEOUT_S: Record<string, () => number> = { "feedback.draft": () => envInt("DS_FEEDBACK_DRAFT_S", 900) + 60 };
+const bgTimeoutMs = (kind: string) => (BG_TIMEOUT_S[kind]?.() ?? envInt("DS_LOOP_BG_TIMEOUT_S", 120)) * 1000;
 
 const claimKey = (a: Action) => ({ project: a.project, subject: a.subject, kind: `action:${a.kind}` });
 const errText = (e: unknown) => (e as Error)?.message ?? String(e);
@@ -146,12 +160,16 @@ export class LoopActuator implements Actuator {
   private unseated = new Map<string, string>();            // squad -> why its last rebind failed
   private seatSeen = new Map<string, { sig: string; at: number }>(); // squad -> its seat as last checked with Orca (U244)
   private seatFailed = new Set<string>();                  // squads whose start or send failed on the seat (U244)
+  private contracts: (store: Store, name: string, project: string) => Contracted; // U11: its contract backend per name and project
+  private inFlight = new Set<string>();                    // U11: contract calls running now, by retry id
   private relayPeekAt = new Map<string, number>();         // squad -> when its Run's inbox was last peeked (U244)
   private unrelayed = new Map<string, string>();           // squad -> why its last relay failed
 
-  constructor(private opts: { orca?: Orca; pick?: Picker; fulfillers?: Fulfiller[]; slots?: number; bgSlots?: number; bgTimeoutMs?: number } = {}) {
+  constructor(private opts: { orca?: Orca; pick?: Picker; fulfillers?: Fulfiller[]; slots?: number; bgSlots?: number; bgTimeoutMs?: number;
+    backends?: (name: string, project: string, store: Store) => Contracted } = {}) {
     this.orca = opts.orca ?? shell();
     this.pick = opts.pick ?? ladderPick;
+    this.contracts = opts.backends || opts.orca ? contracts(opts.backends, this.orca) : sharedContracts;
   }
 
   private fulfillers(): Promise<Map<string, Fulfiller>> {
@@ -169,6 +187,9 @@ export class LoopActuator implements Actuator {
 
   // After a restart: settle the calls a crash cut short, and put back the starts that were running.
   async boot(store: Store, at: number): Promise<void> {
+    // U11: a contract call (op `terminal.create`, …) has no request-show: one a crash cut short is put
+    // out of the member lock, unsettled, so its action's replay keeps its retry id (and generation).
+    store.db.run("UPDATE orca_calls SET state = 'absent' WHERE settled_at IS NULL AND state IN ('sent', 'pending') AND op LIKE '%.%'");
     const open = store.db.query("SELECT * FROM orca_calls WHERE settled_at IS NULL AND state IN ('sent', 'pending') ORDER BY id").all() as Row[];
     for (const c of open) await this.ask(store, c, at);
     store.db.run("UPDATE episodes SET state = 'pending', next_at = ? WHERE kind LIKE 'action:%' AND state IN ('acted', 'running') AND ended_at IS NULL AND action IS NOT NULL", [at]);
@@ -230,8 +251,8 @@ export class LoopActuator implements Actuator {
   // A background kind waits for a later tick while its subject or worktree has an action running, or the slots are taken.
   private bgKeys(a: Action): string[] {
     const wt = (a.payload as { wt?: unknown } | undefined)?.wt ?? a.member;
-    // U249: a merge's subject is its PR, and it holds no worktree: two PRs of one Lead merge side by side.
-    return [`${a.project}|${a.subject}`, ...(a.kind !== "merge" && typeof wt === "string" && wt ? [`${a.project}|wt|${wt}`] : [])];
+    // U249: a merge's subject is its PR, and it holds no worktree: two PRs of one Lead merge side by side (an update-branch too).
+    return [`${a.project}|${a.subject}`, ...(a.kind !== "merge" && a.kind !== "update-branch" && typeof wt === "string" && wt ? [`${a.project}|wt|${wt}`] : [])];
   }
   private bgFull(a: Action): boolean {
     return BACKGROUND_KINDS.has(a.kind) && (this.bgCount >= (this.opts.bgSlots ?? bgSlots()) || this.bgKeys(a).some((k) => this.bgBusy.has(k)));
@@ -264,15 +285,16 @@ export class LoopActuator implements Actuator {
     const t0 = performance.now(), keys = this.bgKeys(a);
     try {
       const block = startBlock(store, a);
+      const stale = row?.ended_at != null || block ? false : f.stale?.(a, x);
       const skip: Result | null = row?.ended_at != null ? { dropped: "episode ended" } : block === "paused" ? { wait: "paused" }
-        : block ? { dropped: block } : f.stale?.(a, x) ? { dropped: "stale" } : null;
+        : block ? { dropped: block } : stale ? { dropped: typeof stale === "string" ? `stale: ${stale}` : "stale" } : null;
       if (skip) r = skip;
       else if (BACKGROUND_KINDS.has(a.kind) && this.bgCount < (this.opts.bgSlots ?? bgSlots()) && !keys.some((k) => this.bgBusy.has(k))) {
         // The call starts on the next microtask, so even its synchronous part is not the tick's.
         this.bgCount++; keys.forEach((k) => this.bgBusy.add(k));
         const run = this.activity.run(a, () => Promise.resolve().then(() => f.exec(a, x)).then((res) => ("background" in res ? res.background : res)));
         let timer: ReturnType<typeof setTimeout>;
-        const limit = new Promise<Result>((ok) => { const ms = this.opts.bgTimeoutMs ?? bgTimeoutMs(); timer = setTimeout(() => ok({ retry: `timed out after ${ms / 1000}s` }), ms); timer.unref?.(); });
+        const limit = new Promise<Result>((ok) => { const ms = this.opts.bgTimeoutMs ?? bgTimeoutMs(a.kind); timer = setTimeout(() => ok({ retry: `timed out after ${ms / 1000}s` }), ms); timer.unref?.(); });
         const free = () => { clearTimeout(timer); this.bgCount--; keys.forEach((k) => this.bgBusy.delete(k)); this.timed(a.kind, t0, true); };
         r = { background: Promise.race([run, limit]).finally(free) };
       } else r = await this.activity.run(a, () => f.exec(a, x));
@@ -341,6 +363,9 @@ export class LoopActuator implements Actuator {
     else if ("dropped" in r) { set = { state: "dropped", ended_at: at, next_at: null, action: null, result: r.dropped }; kind = "action_dropped"; }
     // A pending action is acted again from the next tick at the soonest, never twice in this one.
     else if ("wait" in r) pending(holder ? at + HELD_GAP : Math.max(r.at ?? 0, at + 1), { wait: r.wait });
+    // A step the loop's own shutdown killed (checked now, when the result is recorded) is no failure: the next loop process runs it
+    // on its first tick, uncounted and with no refusal row.
+    else if ("retry" in r && loopStopping()) pending(at + 1);
     else if (cls === "wait") pending(at + REFUSED_WAIT);
     // seat().call binds a fresh sender on these causes itself; the action gets one more try, uncounted.
     else if (cls === "fixable" && saved.fixed !== cause) pending(at + 1, { fixed: cause });
@@ -459,7 +484,11 @@ export class LoopActuator implements Actuator {
   // An Orca mutation under `key` (one effect, e.g. one start of one wish): write-ahead, then call.
   // A call request-show settled as completed has no output (result NULL): it is replayed under the
   // same id from the same sender to get it; from another sender only the fact it started is known.
-  async call(store: Store, op: string, args: string[], o: { key: string; project: string; squad: string | null; member: string | null; sender: string; at: number }): Promise<Out> {
+  // U4 (orca-backend-alternatives): with `ident` (a DS_MEMBER) a Claude start or resume carries it and its
+  // generation, the call's retry id, to the adapter (startIdentity), which puts them on the terminal's launch line; `gen` hears the
+  // generation the call ran (or, settled before, ran) under. The same id on a replay keeps the same generation.
+  async call(store: Store, op: string, args: string[], o: { key: string; project: string; squad: string | null; member: string | null; sender: string; at: number;
+    ident?: string | null; gen?: (gen: string) => void; env?: Record<string, string> }): Promise<Out> {
     const target = { project: o.project, squad: o.squad, member: o.member }, block = this.block(store, target);
     if (block) return { code: 75, out: "", err: `activity: ${block}` };
     // U200: a row under this key is this call's only when it is for the same project and member: an
@@ -467,7 +496,10 @@ export class LoopActuator implements Actuator {
     let last = store.db.query("SELECT * FROM orca_calls WHERE key = ? AND (project IS NULL OR project = ?) AND (? IS NULL OR member IS NULL OR member = ?) ORDER BY id DESC LIMIT 1").get(o.key, o.project, o.member, o.member) as Row | null;
     if (last?.state === "pending") last = await this.ask(store, last, o.at);
     if (last?.state === "pending") return { code: 75, out: "", err: `orca: request ${last.retry_id} still pending` };
-    if (last?.state === "completed" && (last.result != null || last.sender !== o.sender)) return { code: 0, out: String(last.result ?? ""), err: "" };
+    if (last?.state === "completed" && (last.result != null || last.sender !== o.sender)) {
+      if (identified(o.ident, String(last.op), last.payload ? JSON.parse(String(last.payload)) as string[] : args)) o.gen?.(String(last.retry_id));
+      return { code: 0, out: String(last.result ?? ""), err: "" };
+    }
     const afterLookup = this.block(store, target);
     if (afterLookup) return { code: 75, out: "", err: `activity: ${afterLookup}` };
     const replay = last != null && (last.settled_at == null || last.state === "completed") && last.sender === o.sender;
@@ -478,9 +510,13 @@ export class LoopActuator implements Actuator {
     // Orca holds an id to its first input, and a replay's pick or prompt may read differently now.
     const sent = replay && last!.op === op && last!.payload ? JSON.parse(String(last!.payload)) as string[] : args;
     // U270: a failed Claude launch's screen becomes a start_failed event; the answer keeps a pointer to it.
-    const out = keepStartFailed(store, await this.orca.run(op, sent, { from: o.sender, retry, env: this.callEnv(store, target) }), target);
-    if (out.code === 0) store.db.run("UPDATE orca_calls SET state = 'completed', result = ?, settled_at = ? WHERE retry_id = ?", [out.out, o.at, retry]);
-    else {
+    const ident = identified(o.ident, op, sent);
+    const env = { ...this.callEnv(store, target), ...(ident ? startIdentity(ident, retry) : {}), ...o.env };
+    const out = keepStartFailed(store, await this.orca.run(op, sent, { from: o.sender, retry, env }), target);
+    if (out.code === 0) {
+      store.db.run("UPDATE orca_calls SET state = 'completed', result = ?, settled_at = ? WHERE retry_id = ?", [out.out, o.at, retry]);
+      if (ident) o.gen?.(retry);
+    } else {
       // A non-zero exit may still have landed (a timeout, a killed backend): ask before a retry gets a new id.
       store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [errOf(out, op), retry]);
       if (!inDoubt(out)) await this.ask(store, store.db.query("SELECT * FROM orca_calls WHERE retry_id = ?").get(retry) as Row, o.at, errOf(out, op));
@@ -495,34 +531,60 @@ export class LoopActuator implements Actuator {
   }
 
   // What a driver acts through for one action: its squad, its sender terminal (made on the first
-  // mutating call), and `key` for the write-ahead row.
-  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number): Seat {
-    const row = squad ? store.db.query("SELECT project, topic, run_id, repo, lead_wt FROM squads WHERE project = ? AND topic = ?").get(project, squad) as Squad | null : null;
+  // mutating call), and `key` for the write-ahead row. `ident` is the member's DS_MEMBER for a start
+  // (fulfil/member.ts): a Claude start then carries its identity, and `gen()` is its generation. `env` goes on
+  // every call of an Orca seat (U21c: squad/old-gone.ts's flag on a start).
+  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null, env?: Record<string, string>): Seat {
+    let gen: string | null = null;
+    const row = squad ? store.db.query("SELECT project, topic, run_id, repo, lead_wt, backend, worktree_provider FROM squads WHERE project = ? AND topic = ?").get(project, squad) as (Squad & { backend?: string; worktree_provider?: string }) | null : null;
     const studio_wt = (store.get("projects", { label: project })?.studio_wt as string | null | undefined) ?? null;
+    if (row && squad && (row.backend ?? "orca") !== "orca") {
+      const { backend: _b, worktree_provider: _p, ...sq } = row;
+      return this.contractSeat(store, { ...sq, studio_wt }, String(row.backend), String(row.worktree_provider ?? "git"), key, member, at, ident, (g) => { gen = g; }, () => gen);
+    }
+    // U50 (project-start): the Studio has no squads row; its backend is the project's studio_backend.
+    const studio = !row && studioSeat(squad, member, studio_wt) ? studioContract(store, project) : null;
+    if (studio) {
+      const sq = { project, topic: STUDIO_SQUAD, run_id: null, repo: null, lead_wt: null, studio_wt };
+      return this.contractSeat(store, sq, studio.backend, studio.provider, key, member, at, ident, (g) => { gen = g; }, () => gen, squad);
+    }
     return {
       squad: { ...(row ?? { project, topic: squad ?? "", run_id: null, repo: null, lead_wt: null }), studio_wt },
       call: async (op, args) => {
         const block = this.block(store, { project, squad, member });
         if (block) return { code: 75, out: "", err: `activity: ${block}` };
-        const via = (from: string) => this.call(store, op, args, { key, project, squad, member, sender: from, at });
+        const via = (from: string) => this.call(store, op, args, { key, project, squad, member, sender: from, at, ident, env, gen: (g) => { gen = g; } });
         const out = await via(await this.sender(store, project, squad ?? "", at));
         if (out.code === 0 || !/consumer_fenced|not bound to Run|run_not_bound|terminal_not_found|stable_pane_required/.test(out.err + out.out)) return out;
         if (squad) this.seatFailed.add(`${project}/${squad}`); // U244: seats() asks Orca who holds the Run next tick
         // The sender lost its Run (a restarted Orca, a closed tab): find or make it again, once.
         return via(await this.sender(store, project, squad ?? "", at, true));
       },
-      send: (op, args) => {
-        const target = op === "poke-terminal" ? store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ?").get(args[0]) as Row | null : null;
+      send: (op, args, extra) => {
+        // A handle can have rows under two projects (a worktree another project once claimed): the
+        // action's own project's row first, else a live row.
+        const target = op === "poke-terminal" ? store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ? ORDER BY (project = ?) DESC, (gone_at IS NULL) DESC, observed_at DESC")
+          .get(args[0], project) as Row | null : null;
         const physical = target ? { project: String(target.project), member: String(target.wt) }
           : ["poke", "keys", "ping"].includes(op) ? { project, member: args[0] } : { project, squad, member };
         const block = this.block(store, physical);
         if (block) return Promise.resolve({ code: 75, out: "", err: `activity: ${block}` });
         // U270: a Studio move's studio-start is a Claude launch too: keep a failed one's screen as call() does.
         const who = { project: physical.project, squad: "squad" in physical ? physical.squad ?? null : null, member: physical.member ?? null };
-        return this.orca.run(op, args, { env: this.callEnv(store, physical) }).then((o) => keepStartFailed(store, o, who));
+        return this.orca.run(op, args, { env: { ...this.callEnv(store, physical), ...extra } }).then((o) => keepStartFailed(store, o, who));
       },
       window: (role) => compactWindow(store, project, role),
+      gen: () => gen,
     };
+  }
+
+  // U54 (project-start): a seat for the Studio on `backend` in worktree `wt`, before the project names either (a
+  // backend move's new Studio, fulfil/studio.ts moveBackend): the contract seat off Orca, else the Orca seat.
+  studioSeatOn(store: Store, project: string, backend: string, provider: string, key: string, wt: string, at: number, ident: string | null = null): Seat {
+    if (backend === "orca") return this.seat(store, project, null, key, wt, at, ident);
+    let gen: string | null = null;
+    const sq = { project, topic: STUDIO_SQUAD, run_id: null, repo: null, lead_wt: null, studio_wt: wt };
+    return this.contractSeat(store, sq, backend, provider, key, wt, at, ident, (g) => { gen = g; }, () => gen, null);
   }
 
   private block(store: Store, target: { project: string; squad?: string | null; member?: string | null }): string | null {
@@ -656,7 +718,158 @@ export class LoopActuator implements Actuator {
     store.event("plugin_error", { project, squad, payload: { plugin: "actuator", error } });
   }
 
-  driver(seat: Seat, agent: string | null): Driver { return driverModule(agent).make(seat); }
+  driver(seat: Seat, agent: string | null): Driver { return (seat.contract ? contractDriver : driverModule(agent)).make(seat); }
+
+  // U11: the contract backend `name` for a project's squads (squad/contracts.ts: tmux, or orca-lite on this
+  // actuator's Orca runner; a test passes its fake through `backends`).
+  private contracted(store: Store, name: string, project: string): Contracted { return this.contracts(store, name, project); }
+
+  // U11: the seat of a squad on a contract backend. Its Orca ops refuse: such a squad has no Run,
+  // sender pane or coordinator, and nothing it does reaches Orca.
+  private contractSeat(store: Store, squad: Squad, name: string, provider: string, key: string, member: string | null, at: number,
+    ident: string | null, setGen: (g: string) => void, gen: () => string | null, asked: string | null = squad.topic): Seat {
+    // `asked`: the squad the action named; a Studio's (U50) is null or `_studio`, as its Orca seat has it.
+    const project = squad.project, topic = asked, target = { project, squad: topic, member };
+    const who = squad.topic === STUDIO_SQUAD ? "the Studio" : `squad ${squad.topic}`;
+    const noOrca = (op: string): Promise<Out> => Promise.resolve({ code: 2, out: "", err: `${who} is on backend ${name}: no Orca op (${op})` });
+    const c = (): Contracted => this.contracted(store, name, project);
+    const blocked = (): string | null => { const b = this.block(store, target); return b ? `activity: ${b}` : null; };
+    const contract: ContractSeat = {
+      backend: name, provider,
+      get caps() { return c().caps; },
+      start: (req, meta) => {
+        const b = blocked();
+        if (b) return Promise.resolve({ ok: false, error: b, busy: true });
+        return this.contractStart(store, c().backend, { ...req, env: { ...req.env, DS_BACKEND: name, DS_WT: req.cwd, ...(ident ? { DS_MEMBER: ident } : {}) } }, meta,
+          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen, req.cwd, squad.topic !== STUDIO_SQUAD);
+      },
+      close: (cwd, id) => {
+        const b = blocked();
+        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` }, id, cwd);
+      },
+      ask: (op, req) => c().backend.call(op, req),
+      worktree: async (m) => {
+        const repo = String(squad.repo ?? store.get("projects", { label: project })?.home_repo ?? "").replace(/^path:/, "");
+        if (!repo) return { ok: false, error: `${who} has no repo` };
+        // Only a worktree on this host's paths nests one: a Studio on Orca (`<repo id>::<path>`) is not its parent.
+        const parent = localPath(m.role === "lead" ? squad.studio_wt : squad.lead_wt);
+        try {
+          const { row } = await createWorktree(store, provider, { repo, name: wtName(m), branch: wtName(m), base: "HEAD", parent, project, squad: squad.topic, role: m.role }, at);
+          return { ok: true, path: String(row.path) };
+        } catch (e) { return { ok: false, error: `worktree ${wtName(m)}: ${(e as Error).message}` }; }
+      },
+      settings: (role, path) => {
+        const shipped = shippedRules(), mine = projectRules(store.db as unknown as Parameters<typeof projectRules>[0], project), skills = allSkills(false, path);
+        const so = skillOverrides(skills.map((x) => x.name), role, shipped, mine, new Set(skills.filter(isProjectSkill).map((x) => x.name)));
+        const mcp = mcpLevels(role, shipped, mine), window = compactWindow(store, project, role);
+        return claudeSettings({ window: /^\d+$/.test(window) ? window : "", skillOverrides: so, denied: deniedMcpServers(mcp), plugins: disabledPlugins(pluginLevels(role, shipped, mine)) });
+      },
+    };
+    return { squad, call: noOrca, send: noOrca, window: (role) => compactWindow(store, project, role), gen, contract };
+  }
+
+  // The orca_calls row under a contract seat's key: as call() looks it up (same project and member).
+  private lastCall(store: Store, o: { key: string; project: string; member: string | null }): Row | null {
+    return store.db.query("SELECT * FROM orca_calls WHERE key = ? AND (project IS NULL OR project = ?) AND (? IS NULL OR member IS NULL OR member = ?) ORDER BY id DESC LIMIT 1")
+      .get(o.key, o.project, o.member, o.member) as Row | null;
+  }
+  private writeCall(store: Store, last: Row | null, op: string, payload: string[], o: CallAt): string {
+    if (last && last.op === op && last.settled_at == null) {
+      store.db.run("UPDATE orca_calls SET state = 'sent', at = ? WHERE id = ?", [o.at, last.id as number]);
+      return String(last.retry_id);
+    }
+    const retry = crypto.randomUUID();
+    store.db.run("INSERT INTO orca_calls (retry_id, key, op, project, squad, member, sender, payload, at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'sent')",
+      [retry, o.key, op, o.project, o.squad, o.member, o.sender, JSON.stringify(payload), o.at]);
+    return retry;
+  }
+  private settleCall(store: Store, retry: string, state: "completed" | "failed" | "absent", result: string, at: number): void {
+    store.db.run("UPDATE orca_calls SET state = ?, result = ?, settled_at = ? WHERE retry_id = ?", [state, result, state === "absent" ? null : at, retry]);
+  }
+
+  // U11: a start on a contract backend, one orca_calls row (op terminal.create) under the seat's key, its
+  // retry id the terminal's DS_GEN. Before the create it lists the folder's terminals: one of this
+  // generation is this start's own, made before a crash or a lost answer (no second one is made); any
+  // other is an old agent's, closed first (a crashed member's restart). U52a (project-start): not for a Studio
+  // start (`sweep` false): its move closed the old Studio by its handle, and a shell the operator opened
+  // in the Studio's folder stays. The launch line is typed once:
+  // the row notes `typed` before the send, and a replay that finds it set never types again. A thrown
+  // call leaves the row unsettled and out of the member lock (`absent`), so the replay keeps the id.
+  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string, sweep = true): ReturnType<ContractSeat["start"]> {
+    const last = this.lastCall(store, o);
+    if (last?.op === "terminal.create" && last.state === "completed") {
+      setGen(String(last.retry_id));
+      return { ok: true, terminal: (JSON.parse(String(last.result)) as Progress).terminal! };
+    }
+    if (last?.op === "terminal.create" && last.settled_at == null && this.inFlight.has(String(last.retry_id)))
+      return { ok: false, error: `start ${last.retry_id} still in flight`, busy: true };
+    const retry = this.writeCall(store, last, "terminal.create", [JSON.stringify(req), JSON.stringify(meta)], o);
+    const [rq, mt] = (JSON.parse(String((store.db.query("SELECT payload FROM orca_calls WHERE retry_id = ?").get(retry) as Row).payload)) as string[]).map((x) => JSON.parse(x));
+    const r0 = rq as typeof req, m0 = mt as StartMeta;
+    const was = last?.retry_id === retry && last.result ? JSON.parse(String(last.result)) as Progress : {};
+    let progress: Progress = was.terminal ? was : {};
+    this.inFlight.add(retry);
+    try {
+      let t = progress.terminal ?? null;
+      if (!t) {
+        const l = await b.call("terminal.list", {});
+        if (!l.ok) { this.settleCall(store, retry, "absent", JSON.stringify({ error: l.error.message }), o.at); return { ok: false, error: `terminal.list: ${l.error.message}` }; }
+        t = l.terminals.find((x) => x.gen === retry) ?? null;
+        for (const old of sweep ? l.terminals.filter((x) => x.cwd === r0.cwd && x.gen !== retry) : []) {
+          const c = await b.call("terminal.close", { id: old.id });
+          if (!c.ok && c.error.code !== "not_found") { this.settleCall(store, retry, "absent", JSON.stringify({ error: c.error.message }), o.at); return { ok: false, error: `terminal.close ${old.id}: ${c.error.message}` }; }
+        }
+      }
+      if (!t) {
+        const c = await b.call("terminal.create", { ...r0, env: { ...r0.env, DS_GEN: retry } });
+        if (!c.ok) { this.settleCall(store, retry, "failed", JSON.stringify({ error: c.error.message }), o.at); return { ok: false, error: `terminal.create: ${c.error.message}` }; }
+        t = c.terminal;
+      }
+      if (!progress.typed) {
+        progress = { terminal: t, typed: true };
+        store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [JSON.stringify(progress), retry]);
+        // U20a: the full line goes to a file; the terminal gets a short one that fits a shell with no prompt yet.
+        let text: string;
+        try { text = writeLaunch(store.root, o.project, who, retry, m0.line); }
+        catch (e) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: `launch file: ${(e as Error).message}` }), o.at); return { ok: false, error: `launch file: ${(e as Error).message}` }; }
+        const s = await b.call("terminal.send", { id: t.id, text, submit: true });
+        if (!s.ok) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: s.error.message }), o.at); return { ok: false, error: `terminal.send: ${s.error.message}` }; }
+      }
+      this.settleCall(store, retry, "completed", JSON.stringify({ terminal: t, typed: true }), o.at);
+      setGen(retry);
+      return { ok: true, terminal: t };
+    } catch (e) {
+      this.settleCall(store, retry, "absent", JSON.stringify({ ...progress, error: (e as Error).message }), o.at);
+      return { ok: false, error: (e as Error).message };
+    } finally { this.inFlight.delete(retry); }
+  }
+
+  // U11: close every terminal in a folder (U12b: only `id`, a pause's agent terminal), one orca_calls row
+  // (op terminal.close) under the seat's key.
+  // A gone terminal answers closed:false (or not_found between the list and the close): a replay is safe.
+  private async contractClose(store: Store, b: Backend, cwd: string, o: CallAt, id?: string, who?: string): Promise<{ ok: boolean; error?: string }> {
+    const last = this.lastCall(store, o);
+    if (last?.op === "terminal.close" && last.state === "completed") return { ok: true };
+    if (last?.op === "terminal.close" && last.settled_at == null && this.inFlight.has(String(last.retry_id))) return { ok: false, error: "close still in flight" };
+    const retry = this.writeCall(store, last, "terminal.close", [JSON.stringify(id ? { cwd, id } : { cwd })], o);
+    this.inFlight.add(retry);
+    try {
+      const l = await b.call("terminal.list", {});
+      if (!l.ok) { this.settleCall(store, retry, "absent", l.error.message, o.at); return { ok: false, error: `terminal.list: ${l.error.message}` }; }
+      const closed: string[] = [];
+      for (const t of l.terminals.filter((x) => x.cwd.replace(/\/+$/, "") === cwd.replace(/\/+$/, "") && (!id || x.id === id))) {
+        const c = await b.call("terminal.close", { id: t.id });
+        if (!c.ok && c.error.code !== "not_found") { this.settleCall(store, retry, "failed", c.error.message, o.at); return { ok: false, error: `terminal.close ${t.id}: ${c.error.message}` }; }
+        closed.push(t.id);
+      }
+      if (who) { try { removeLaunch(store.root, o.project, who); } catch { /* a leftover file is dropped by the next start */ } }   // U20a
+      this.settleCall(store, retry, "completed", JSON.stringify({ closed }), o.at);
+      return { ok: true };
+    } catch (e) {
+      this.settleCall(store, retry, "absent", (e as Error).message, o.at);
+      return { ok: false, error: (e as Error).message };
+    } finally { this.inFlight.delete(retry); }
+  }
 }
 
 // A seconds knob that may be 0 (always); unset or not a number: the default.
@@ -692,12 +905,16 @@ export function memberAt(store: Store, a: Action, wt: string): Member {
 export const alertPrefix = (subject: string) => `loop-${subject.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(-60)}-`;
 export const alertId = (subject: string, episode: string) => `${alertPrefix(subject)}${Bun.hash(episode).toString(36)}`;
 
+// A reconciler's own `sweep-<key>-<n>` id is the stored id, so the checks that look for it (cardPlace, alertGone,
+// the prefix clears) find the card; any other id keeps `loop-<subject>-<hash>`.
+export const cardId = (subject: string, episode: string, id?: unknown) => typeof id === "string" && id.startsWith("sweep-") ? id : alertId(subject, episode);
+
 // opts.fields lands on the card beside its text, for a reconciler to read (alerts.sh add's extra JSON).
 export async function alert(store: Store, project: string, subject: string, episode: string, text: string,
-  opts: { title?: string; option?: string; why?: string; fields?: Record<string, unknown>; who?: Whose } = {}): Promise<Out> {
+  opts: { id?: string; title?: string; option?: string; why?: string; fields?: Record<string, unknown>; who?: Whose } = {}): Promise<Out> {
   // U232: the one place a card's title is built: `<squad> · <unit or role>: <title>`.
   const title = opts.who ? cardTitle(store, project, opts.who, opts.title ?? "") : opts.title ?? "";
-  return spawn([join(ROOT, "bin", "lib", "alerts.sh"), join(store.root, project, "alerts.json"), "add", alertId(subject, episode), title, text, opts.option ?? "", opts.why ?? "",
+  return spawn([join(ROOT, "bin", "lib", "alerts.sh"), join(store.root, project, "alerts.json"), "add", cardId(subject, episode, opts.id), title, text, opts.option ?? "", opts.why ?? "",
     ...(opts.fields ? [JSON.stringify(opts.fields)] : [])], {}, 30_000);
 }
 
@@ -732,3 +949,12 @@ export function finishRequest(store: Store, a: Action, result: unknown, at: numb
 export const failRequest = (a: Action, x: Exec, why: string): true => { finishRequest(x.store, a, { ok: false, error: why }, x.now); return true; };
 
 export const actuator = new LoopActuator();
+
+type CallAt = { key: string; project: string; squad: string | null; member: string | null; at: number; sender: string };
+type Progress = { terminal?: Terminal; typed?: boolean };
+
+// The DS_MEMBER a call carries: only a Claude start or resume, whose terminal the adapter opens and so
+// can give an environment (claudeTab, resumeTab). A start Orca types itself (Codex, Muse) has none.
+function identified(ident: string | null | undefined, op: string, args: string[]): string | null {
+  return ident && startedOn(op, args)?.agent === "claude" ? ident : null;
+}

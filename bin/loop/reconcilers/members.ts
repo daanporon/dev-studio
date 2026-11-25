@@ -30,11 +30,14 @@ import { stopping } from "../squad/cancel.ts";
 // pane the loop owns is never one. A card is cleared once its terminal is gone (a close clears its own).
 import { paused } from "../pause/pause.ts";
 import { lock } from "../squad/member-state.ts";
+import { finishOf } from "../squad/finish-read.ts";
 import { STANDING } from "../drivers/types.ts";
 import { shell, type Orca, type Out } from "../io/orca.ts";
 import { pmap, readSlots } from "../core/tick.ts";
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
+import { noteRunWorkers } from "../squad/run-reads.ts";
+import { limitInt } from "../settings/limits.ts";
 
 export type Worker = { wt: string; live: boolean; dispatch: string | null; handle: string | null; task: string | null; status: string | null; reported?: boolean };
 // busy: the agent-handles 4th column (`busy` mid-turn, `idle` at its prompt); null when the backend
@@ -98,7 +101,7 @@ export function parseShells(out: string): Shell[] {
 }
 // A shell with output in the last STRAY_QUIET seconds is in use: neither closed nor carded yet.
 export const STRAY_QUIET = 600;
-export const quiet = (t: Shell, now: number) => t.out === null || now - t.out >= STRAY_QUIET;
+export const quiet = (t: { out: number | null }, now: number) => t.out === null || now - t.out >= STRAY_QUIET;
 export const STRAY_EVERY = 60;
 export const STRAY_KIND = "stray_terminal";
 const strayAt = new WeakMap<Store, Map<string, number>>();
@@ -228,7 +231,93 @@ function held(store: Store, project: string): Row[] {
       AND COALESCE(s.status, '') NOT IN ('suspended', 'closed', 'gone') ORDER BY s.topic`).all(project) as Row[];
 }
 
+// U12: the squads off Orca. They have no Run to read, so only the Tester retire applies: a feature
+// squad's Tester whose pass ended (a verdict finish row of its generation, no agent process left in its
+// worktree) is closed like a done Builder. Rebinds are Orca's; strays and duplicates are contractGuards'.
+function contractTesters(ctx: TickCtx): void {
+  const { store, project } = ctx;
+  const squads = store.db.query(`SELECT topic FROM squads WHERE project = ? AND COALESCE(backend, 'orca') != 'orca' AND COALESCE(type, 'feature') = 'feature'
+      AND COALESCE(status, '') NOT IN ('suspended', 'closed', 'gone') ORDER BY topic`).all(project) as Row[];
+  for (const s of squads) {
+    const squad = String(s.topic);
+    const testers = store.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND role = 'tester' AND wt IS NOT NULL
+        AND COALESCE(status, '') != 'gone' AND COALESCE(want, '') != 'gone' ORDER BY id`).all(project, squad) as Row[];
+    for (const m of testers) {
+      const wt = String(m.wt);
+      if (stopping(store, project, wt) || paused(store, m as { project: string }) || starting(m, ctx.now, store)) continue;
+      if (finishOf(store, m)?.outcome !== "verdict") continue;
+      const w = store.get("observed_workers", { project, wt });
+      if (w && w.gone_at == null && w.walk !== "none") continue;
+      if (store.want("member", String(m.id), "gone", { by: "loop", why: "tester pass finished" }).changed)
+        store.event("tester_pass_done", { project, squad, member: wt, payload: { suffix: m.suffix ?? "", at: ctx.now } });
+    }
+  }
+}
+
+// U12b: strays and duplicate agents off Orca, from what the contract observer lists in an up member's
+// folder (observed_terminals rows marked `extra`: every terminal there but the member's own). One with no
+// generation (no DS_GEN: no terminal the loop started) is a plain shell, a stray once it is quiet; one with
+// another generation is a second agent the loop started (a close that failed, a start the guard missed),
+// so it gets the same `duplicate` action as on Orca. A stray card whose terminal is gone is cleared.
+const CONTRACT_SHELL = "unknown";
+function contractGuards(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx, out: Action[] = [];
+  const dups = dupAt.get(store) ?? new Map<string, number>();
+  dupAt.set(store, dups);
+  const busyS = limitInt(store, project, "chat_quiet_s", 10);
+  const members = store.db.query(`SELECT m.* FROM members m JOIN squads s ON s.project = m.project AND s.topic = m.squad
+      WHERE m.project = ? AND COALESCE(s.backend, 'orca') != 'orca' AND COALESCE(s.status, '') NOT IN ('suspended', 'closed', 'gone')
+      AND m.wt LIKE 'local::%' AND COALESCE(m.status, '') != 'gone' AND COALESCE(m.want, '') != 'gone' ORDER BY m.id`).all(project) as Row[];
+  for (const m of members) {
+    const wt = String(m.wt), squad = String(m.squad);
+    if (stopping(store, project, wt) || paused(store, m as { project: string }) || starting(m, now, store)) continue;
+    const w = store.get("observed_workers", { project, wt });
+    if (!w || w.gone_at != null || w.presence !== "running") continue;
+    const own = (JSON.parse(String(w.doc ?? "{}")) as Row).terminal;
+    const rows = store.db.query("SELECT handle, title, doc FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle").all(project, wt) as Row[];
+    for (const r of rows) {
+      const d = JSON.parse(String(r.doc ?? "{}")) as Row, handle = String(r.handle);
+      if (!d.extra || handle === own) continue;
+      const last = typeof d.last_output_at === "number" ? d.last_output_at : null;
+      if (d.gen == null) {
+        if (quiet({ out: last }, now)) out.push({ project, squad, member: wt, subject: `stray:${handle}`, kind: "stray", episode: CONTRACT_SHELL,
+          payload: { wt, handle, state: CONTRACT_SHELL, title: String(r.title ?? "") } });
+        continue;
+      }
+      const busy = last != null && now - last < busyS;
+      if (busy && !dups.has(handle)) dups.set(handle, now);
+      if (!busy) dups.delete(handle);
+      out.push({ project, squad, member: wt, subject: `duplicate:${handle}`, kind: "duplicate", episode: handle,
+        payload: { wt, handle, newest: own == null ? undefined : String(own), first: busy ? dups.get(handle)! : null } });
+    }
+  }
+  for (const c of strayCards(store, project)) {
+    const t = store.db.query("SELECT gone_at FROM observed_terminals WHERE project = ? AND handle = ? AND wt LIKE 'local::%'").get(project, c.handle) as Row | null;
+    if (t && t.gone_at != null) out.push({ project, squad: null, subject: `drop:${c.id}`, kind: "alert-clear", episode: `drop@${c.since}`, payload: { id: c.id, why: "its terminal is gone" } });
+  }
+  return out;
+}
+
+// The open stray cards of a project: on Orca (`contract` false) or off it (their terminal is a `local::` one).
+function strayCards(store: Store, project: string, contract = true): { id: string; handle: string; since: string }[] {
+  const cards: { id: string; handle: string; since: string }[] = [];
+  for (const r of store.db.query("SELECT id, doc FROM observed_alerts WHERE project = ? ORDER BY rowid").all(project) as Row[]) {
+    let a: Row;
+    try { a = JSON.parse(String(r.doc)) as Row; } catch { continue; }
+    if (a.kind !== STRAY_KIND || typeof a.handle !== "string") continue;
+    const local = !!store.db.query("SELECT 1 FROM observed_terminals WHERE project = ? AND handle = ? AND wt LIKE 'local::%'").get(project, a.handle);
+    if (local === contract) cards.push({ id: String(r.id), handle: a.handle, since: String(a.since ?? "") });
+  }
+  return cards;
+}
+
 export async function reconcile(ctx: TickCtx, orca: Orca): Promise<Action[]> {
+  contractTesters(ctx);
+  const guards = contractGuards(ctx);
+  return [...guards, ...await orcaMembers(ctx, orca)];
+}
+
+async function orcaMembers(ctx: TickCtx, orca: Orca): Promise<Action[]> {
   const { store, project } = ctx, squads = held(store, project);
   // With no squad held or no agent list, no member is up: strays only clears the cards of gone terminals.
   if (!squads.length) return strays(ctx, orca, new Map(), loopPanes(store, project));
@@ -246,6 +335,7 @@ export async function reconcile(ctx: TickCtx, orca: Orca): Promise<Action[]> {
     const rw = rws[i];
     if (rw.code !== 0) continue;
     const workers = parseWorkers(rw.out);
+    noteRunWorkers(project, squad, ctx.tick, workers);   // U10: the shadow's member point reuses this read
     const squadType = String((store.db.query("SELECT type FROM squads WHERE project = ? AND topic = ?").get(project, squad) as Row | null)?.type ?? "feature");
     const members = store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND COALESCE(status, '') != 'gone' ORDER BY id")
       .all(project, squad) as Row[];
@@ -355,12 +445,8 @@ async function strays(ctx: TickCtx, orca: Orca, up: Map<string, string>, panes: 
   const { store, project, now } = ctx, last = strayAt.get(store) ?? new Map<string, number>();
   strayAt.set(store, last);
   if (!strayDue(ctx)) return [];
-  const cards: { id: string; handle: string; since: string }[] = [];
-  for (const r of store.db.query("SELECT id, doc FROM observed_alerts WHERE project = ? ORDER BY rowid").all(project) as Row[]) {
-    let a: Row;
-    try { a = JSON.parse(String(r.doc)) as Row; } catch { continue; }
-    if (a.kind === STRAY_KIND && typeof a.handle === "string") cards.push({ id: String(r.id), handle: a.handle, since: String(a.since ?? "") });
-  }
+  // A stray card off Orca is contractGuards' (terminal-shells never lists its terminal).
+  const cards = strayCards(store, project, false);
   if (!up.size && !cards.length) return [];
   const ts = await (early ?? orca.run("terminal-shells", []));
   if (ts.code !== 0) return [];

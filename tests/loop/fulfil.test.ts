@@ -99,6 +99,41 @@ describe("squad wishes (U158)", () => {
     expect(String(squad(s, "demo").want_result)).toStartWith("failed:");
   });
 
+  // U30: one rule for which backend a project's squads use, here through the wish (`ds want squad … --fill`).
+  const wishOn = (s: Store, a: ReturnType<typeof rig>, topic: string, backend: string | null) => {
+    s.want("squad", `fx/${topic}`, "running", { payload: { repo: "path:/fake", type: "feature" }, fill: { repo: "path:/fake", type: "feature", ...(backend ? { backend } : {}) }, by: "test" });
+    return a.tick(T);
+  };
+  const refusedFor = (s: Store, topic: string) => String(squad(s, topic).want_result ?? "");
+  test("U30: a squad wish naming another backend than the project's default_backend is refused with an event and a card, never started", async () => {
+    const s = imported(), a = rig(s);
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });
+    // U54: no Studio here, so the project's default_backend alone rules (a Studio's own rule is squad-backend.test.ts).
+    s.upsert("projects", { label: "fx" }, { studio_wt: null, observed_at: T });
+    for (const b of ["orca", "herdr"]) {
+      await wishOn(s, a, `t-${b}`, b);
+      expect(refusedFor(s, `t-${b}`)).toContain(`failed: backend ${b} is refused: this project's squads start on tmux (its default_backend)`);
+      expect(squad(s, `t-${b}`).doc).toBeNull();
+      expect(squad(s, `t-${b}`).run_id).toBeNull();
+    }
+    expect(events(s, "wish_given_up").map((e) => e.error).filter((e) => String(e).includes("default_backend")).length).toBe(2);
+    expect(alerts(s).length).toBe(2);
+    // The project's own backend passes the rule (it starts; the Orca fake has no tmux here, so the result is not a refusal).
+    await wishOn(s, a, "t-tmux", "tmux");
+    expect(refusedFor(s, "t-tmux")).not.toContain("is refused");
+  });
+
+  test("U30: on an Orca project a wish naming orca (or none) is not refused, any other backend is", async () => {
+    const s = imported(), a = rig(s);
+    await wishOn(s, a, "t-lite", "orca-lite");
+    // U54: the project's Studio runs on Orca, so the refusal names it and the move.
+    expect(refusedFor(s, "t-lite")).toContain("backend orca-lite is refused: this project's Studio runs on orca");
+    expect(refusedFor(s, "t-lite")).toContain("ds up fx --backend orca-lite");
+    await wishOn(s, a, "t-orca", "orca");
+    await wishOn(s, a, "t-none", null);
+    for (const t of ["t-orca", "t-none"]) expect(refusedFor(s, t)).not.toContain("is refused");
+  });
+
   test("closing a squad that is gone already archives it at once, without a child", async () => {
     const s = imported(), a = rig(s);
     s.want("squad", "fx/ghost", "gone");

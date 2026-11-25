@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 TMP="$(mktemp -d)"
 LBL="zzoc_$$"
-trap 'rm -rf "$TMP" "$DS_STATE_ROOT/$LBL"' EXIT
+state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_ROOT/$LBL"'
 mkdir -p "$TMP/old" "$TMP/data/cli/bin" "$TMP/env"
 export DS_ORCA_CLI_BIN_DIR="$TMP/old" DS_ORCA_DATA="$TMP/data" ORCA_CLI_BIN_DIR="$TMP/env"
 export CLI_LOG="$TMP/log" DS_INSTR_SEEN="$TMP/seen"

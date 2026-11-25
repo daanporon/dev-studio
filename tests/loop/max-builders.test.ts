@@ -115,6 +115,24 @@ test("U153: a restarting Builder keeps its slot; a satisfied restart wish does n
   expect(slot(s, "p", { member: b(3) }, T).ok).toBe(true);
 });
 
+test("configurable-role-elevation U1: a Builder stopped to move back up keeps its seat while its fallback-reserve is open", () => {
+  const f = fixture(), s = f.store;
+  s.upsert("config", { project: "p", file: "limits.conf", key: "max_builders" }, { value: "1", observed_at: T });
+  const b = (i: number) => s.db.query("SELECT * FROM members WHERE project = 'p' AND suffix = ?").get(slug(i)) as Row;
+  for (let i = 1; i <= N; i++) s.upsert("observed_workers", { project: "p", wt: wtOf(i) }, { presence: "none", started_at: null, observed_at: T });
+  // Builder 1 was stopped to move up: its agent is gone, no restart_at, a reservation open since the stop.
+  s.upsert("members", { id: b(1).id }, { want: "running", placed_at: T - 1000 });
+  s.upsert("members", { id: b(3).id }, { want: "running" });
+  s.upsert("episodes", { project: "p", subject: `member:${b(1).id}`, kind: "fallback-reserve" },
+    { squad: "one", episode_key: JSON.stringify({ agent: "claude", model: "opus", account: "acct-a" }), started_at: T - 20, ended_at: T + 300, state: "reserved", source: "loop", observed_at: T - 20 });
+  expect(slot(s, "p", { member: b(3) }, T).ok).toBe(false);
+  expect(slot(s, "p", { member: b(1) }, T).ok).toBe(true);
+  // Once it is placed past the stop, the reservation holds nothing and the seat is free again.
+  s.upsert("members", { id: b(1).id }, { placed_at: T - 10 });
+  s.upsert("observed_workers", { project: "p", wt: wtOf(1) }, { presence: "none", started_at: null, account_at: T, observed_at: T });
+  expect(slot(s, "p", { member: b(3) }, T).ok).toBe(true);
+});
+
 test(`resume of ${N} paused Builders under max_builders ${MAX} starts ${MAX}, the oldest, and the rest wait quietly`, async () => {
   process.env.DS_LOOP_START_SLOTS = "30";   // the host start budget is not what holds them back
   const f = fixture();

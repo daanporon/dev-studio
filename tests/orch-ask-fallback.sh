@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$DS_STATE_PARENT"' EXIT
+state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_PARENT"'
 S="$DS_STATE_ROOT"; mkdir -p "$S/fx/squads"
 printf '%s' '{"topic":"t1","run_id":"run_t1","lead_wt":"wtl","units":[]}' > "$S/fx/squads/t1.json"
 printf '%s' '{"topic":"t2","run_id":"run_t2","lead_wt":"wt2","units":[]}' > "$S/fx/squads/t2.json"

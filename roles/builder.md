@@ -23,8 +23,10 @@ Builders don't collide.
    **A unit that looks too big for one PR is not refused.** Do not end it with `worker_done`
    ("not done, scope too large"): that closes your dispatch and leaves the unit idle. Propose a
    split with `orch.sh ask` (what goes in each part, in what order) and start on the first part
-   while you wait. `worker_done --outcome failed` is only for a unit that cannot be built at all;
-   its body says why and what the Lead should decide.
+   while you wait. A unit that cannot be built at all ends with
+   `~/.dev-studio/bin/role/finish-unit.sh <state> <unit> --failed "<why>"` (never a bare
+   `worker_done --outcome failed`): it records the finish and sends `worker_done --outcome failed`;
+   the why says what blocks it and what the Lead should decide.
    **When `orch.sh ask` says it fell back** (exit 5: your dispatch is closed, or no answer came
    within its wait), the question still reached the Lead: watch your own inbox
    (`~/.dev-studio/bin/lib/watch.sh --worktree --poll`) for the answer instead of stopping.
@@ -98,6 +100,8 @@ Builders don't collide.
    **Prove your unit's Done:** run its **Check** from the plan (`conventions/plan-shape.md`,
    move e) and paste the real output in the PR description. A unit whose Check you couldn't
    run, or that failed, is not merge-ready — say why in the PR and tell your Lead.
+   **A PR that fixes a ds-feedback issue** (one the operator filed from a note, named in your unit) writes `Fixes #N` in its body, so GitHub names the PR on the issue and the note flows back as `fixed in #<pr>`.
+   **Tests before the PR are targeted** (`AGENTS.md`, "Verify"): the shellcheck line plus every `tests/*.sh` whose script or code under test your change touches, and `tests/loop.sh` for a change under `bin/loop/`; name those commands and their summary lines in the PR's Tests section. GitHub's `tests` check is the full suite and the gate: after each push, fix a red run when the loop pokes you. A change to `tests/ci.sh`, `tests/lib/` or `.github/workflows/`, or one touching more than about 30 files, runs `CI_JOBS=4 tests/ci.sh` locally first.
    **A commit or push the leak hooks refuse** is fixed as `.github/CONTRIBUTING.md` ("Leak hooks") says.
    You never merge — stop at a merge-ready green PR via the finish sequence below; the
    operator merges at the "PR ready" checkpoint. (A separate Reviewer is **optional** — the
@@ -121,7 +125,7 @@ Builders don't collide.
       Once, right after the push, run `finish-unit.sh <state> <unit> --check`: a PR green except a
       required context nobody posts (`required:<context>`) gets no poke, so run the repo step that posts it, or `orch.sh ask` the Lead.
    The loop asks the PR questions: never ask the operator (or ask your Lead to ask) for a PR
-      review, sign-off or waiver — finish your unit and stop; the loop asks, withdraws and routes
+      review, sign-off or waiver — finish your unit and stop (a refusal names the poster; a PR that is not ready is yours to fix, and a cause outside your unit goes to your Lead with `send-role.sh <topic> lead`); the loop asks, withdraws and routes
       those questions, and an operator answer arrives as a poke.
    3. On the merge-ready poke, run `finish-unit.sh <state> <unit>`. It refuses anything but merge-ready, so never
       send `worker_done` by hand. Your worker_done means "merge-ready", not "unit done":
@@ -220,3 +224,5 @@ the loop starts a fresh session from this journal using the normal picker.
 ## Reload
 
 A `reload` message in your inbox carries its own `ds reload ack …` command: re-read `AGENTS.md` and your role file, then run it from this terminal to confirm (an old session's ack does not count).
+
+Lavish pages and their files go in `state/<label>/pages/<topic>/` (open with `lavish-axi <path>`); the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend.

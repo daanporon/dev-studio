@@ -220,41 +220,88 @@ describe("processes (class a)", () => {
 });
 
 describe("glob files (class e, KTD9)", () => {
+  // `now` is read after the matches exist: NOW is fixed when the file loads, and an entry made after
+  // NOW + 10 (a slow runner, after the 60,000-file test) would be newer than the age floor.
   function globDir(s: Store, n: number, more?: (dir: string) => void) {
     const dir = tmp(), glob = join(dir, "zzdebris-*");
     for (let i = 0; i < n; i++) writeFileSync(join(dir, `zzdebris-${i}`), "");
     if (more) { more(dir); n += 1; }
     setLimit(s, "cleanup_tmp_globs", glob); setLimit(s, "cleanup_tmp_age_h", "0");
     seed(s, { class: "e", key: glob, path: dir, facts: { count: n, removable: n, too_new: 0, not_ours: 0, in_use: 0 } });
-    return { dir, glob };
+    return { dir, glob, now: Math.floor(Date.now() / 1000) + 10 };
   }
 
   test("60,000 matches: the first pass removes 50,000 with one event, the next episode the rest; the event loop is never held a second", async () => {
-    const s = fixture(), { dir, glob } = globDir(s, 60_000), o = { proc: fakeProc([]), uid: UID };
+    const s = fixture(), { dir, glob, now } = globDir(s, 60_000), o = { proc: fakeProc([]), uid: UID };
     let lag = 0, last = performance.now();
     const timer = setInterval(() => { const t = performance.now(); lag = Math.max(lag, t - last - 20); last = t; }, 20);
     try {
-      const [first] = acts(s, NOW + 10);
-      expect(await exec(s, first, o, backend(), NOW + 10)).toEqual({ done: true, result: "removed 50000 (capped)" });
+      const [first] = acts(s, now);
+      expect(await exec(s, first, o, backend(), now)).toEqual({ done: true, result: "removed 50000 (capped)" });
       s.upsert("episodes", { project: "p", subject: first.subject, kind: `action:${CLEANUP_ACT}` }, { episode_key: first.episode, state: "done", source: "loop", ended_at: NOW, observed_at: 1 });
-      const [second] = acts(s, NOW + 10);
+      const [second] = acts(s, now);
       expect(second.episode).not.toBe(first.episode);
-      expect(await exec(s, second, o, backend(), NOW + 10)).toEqual({ done: true, result: "removed 10000" });
+      expect(await exec(s, second, o, backend(), now)).toEqual({ done: true, result: "removed 10000" });
     } finally { clearInterval(timer); }
     expect(readdirSync(dir)).toEqual([]);
     expect(events(s, "cleanup_removed").map((e) => [e.glob, e.count, e.sample.length])).toEqual([[glob, 50_000, 20], [glob, 10_000, 20]]);
     expect(lag).toBeLessThan(1000);
-    expect(acts(s, NOW + 10)).toEqual([]);
+    expect(acts(s, now)).toEqual([]);
   }, 180_000);
 
   test("a matching symlink that points outside the root: the link is removed, its target is untouched", async () => {
     const s = fixture(), target = join(tmp(), "keep.txt");
     writeFileSync(target, "keep");
-    const { dir } = globDir(s, 0, (d) => symlinkSync(target, join(d, "zzdebris-link")));
-    const [a] = acts(s, NOW + 10);
-    expect(await exec(s, a, { proc: fakeProc([]), uid: UID }, backend(), NOW + 10)).toEqual({ done: true, result: "removed 1" });
+    const { dir, now } = globDir(s, 0, (d) => symlinkSync(target, join(d, "zzdebris-link")));
+    const [a] = acts(s, now);
+    expect(await exec(s, a, { proc: fakeProc([]), uid: UID }, backend(), now)).toEqual({ done: true, result: "removed 1" });
     expect(readdirSync(dir)).toEqual([]);
     expect(existsSync(target)).toBe(true);
+  });
+});
+
+describe("trimmed folders (class f, investigate-disk-cleanup U2)", () => {
+  // <dir>/zzcache-v1/ with `old` files 72 h old and `fresh` ones just written; the row as the scan wrote it.
+  function cacheDir(s: Store, old: number, fresh: number) {
+    const dir = tmp(), folder = join(dir, "zzcache-v1"), glob = join(dir, "zzcache-*");
+    mkdirSync(folder);
+    for (let i = 0; i < old; i++) { writeFileSync(join(folder, `old-${i}`), "x"); age(join(folder, `old-${i}`), NOW - 72 * H); }
+    for (let i = 0; i < fresh; i++) writeFileSync(join(folder, `fresh-${i}`), "x");
+    setLimit(s, "cleanup_trim_globs", glob);
+    seed(s, { class: "f", key: glob, path: dir, facts: { folders: 1, count: old + fresh, removable: old, too_new: fresh, not_ours: 0, in_use: 0 } });
+    return { dir, folder, glob };
+  }
+
+  test("1,000 old files, 10 fresh, 1 old one held open: one pass removes exactly the 1,000, one class f event; the folder stays", async () => {
+    const s = fixture(), { folder, glob } = cacheDir(s, 1000, 10), held = join(folder, "held");
+    writeFileSync(held, "x"); age(held, NOW - 72 * H);
+    const [a] = acts(s);
+    expect(a).toMatchObject({ subject: `cleanup.act:f:${glob}`, payload: { class: "f", key: glob } });
+    expect(await exec(s, a, { proc: fakeProc([{ pid: 77, cwd: "/home", fds: [held] }]), uid: UID })).toEqual({ done: true, result: "removed 1000" });
+    expect(readdirSync(folder).sort()).toEqual([...Array.from({ length: 10 }, (_, i) => `fresh-${i}`), "held"].sort());
+    expect(events(s, "cleanup_removed").map((e) => [e.class, e.glob, e.count, e.capped])).toEqual([["f", glob, 1000, false]]);
+    expect(JSON.parse(row(s, glob).facts)).toMatchObject({ removable: 0, count: 10 }); // the seeded 1,010 less the removed
+  }, 60_000);
+
+  test("a capped pass asks for the next one under a new episode, which removes the rest", async () => {
+    const s = fixture(), { folder } = cacheDir(s, 30, 0), o = { proc: fakeProc([]), uid: UID, batch: 20 };
+    const [first] = acts(s);
+    expect(await exec(s, first, o)).toEqual({ done: true, result: "removed 20 (capped)" });
+    s.upsert("episodes", { project: "p", subject: first.subject, kind: `action:${CLEANUP_ACT}` }, { episode_key: first.episode, state: "done", source: "loop", ended_at: NOW, observed_at: 1 });
+    const [second] = acts(s);
+    expect(second.episode).not.toBe(first.episode);
+    expect(await exec(s, second, o)).toEqual({ done: true, result: "removed 10" });
+    expect([readdirSync(folder), existsSync(folder)]).toEqual([[], true]);
+  });
+
+  test("report: no act asked for and nothing trimmed, the row reads removable; a glob taken out of the key trims nothing", async () => {
+    const s = fixture("report"), { folder, glob } = cacheDir(s, 3, 0);
+    expect(acts(s)).toEqual([]);
+    expect(await exec(s, act("f", glob), { proc: fakeProc([]), uid: UID })).toEqual({ done: true, result: "kept: host_tidy is not apply" });
+    expect(cardText(s, "p")).toContain(`Trim ${glob}: 1 folder kept, 3 entries inside`);
+    setLimit(s, "host_tidy", "apply"); setLimit(s, "cleanup_trim_globs", "-");
+    expect((await exec(s, act("f", glob), { proc: fakeProc([]), uid: UID })).result).toContain("no longer configured");
+    expect(readdirSync(folder)).toHaveLength(3);
   });
 });
 

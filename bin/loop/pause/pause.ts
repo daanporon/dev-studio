@@ -1,4 +1,5 @@
 import { CANCEL_KINDS, stopping } from "../squad/cancel.ts";
+import { debriefHold } from "../squad/archive-debrief.ts";
 // Shared activity overlay and guard. Public checkpoint/close/start controls live in the lifecycle fulfiller.
 import type { Action } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
@@ -95,7 +96,7 @@ export function projection(store: Store, t: Target): Row {
     generation: row?.generation ?? sources[0]?.generation ?? null, reason: row?.reason ?? (sources.length && !closed ? "awaiting journal checkpoint" : null),
     checkpoint: row?.checkpoint ?? null, session: row?.session ?? null, dispatch: row?.dispatch ?? null, delivered_at: row?.delivered_at ?? null,
     sources: sources.map((r) => ({ scope: r.scope, source: r.source, project: r.project, squad: r.squad, role: r.role,
-      suffix: r.suffix, generation: r.generation, prerequisites: r.prerequisites ? JSON.parse(String(r.prerequisites)) : [],
+      suffix: r.suffix, generation: r.generation, requested_at: r.requested_at ?? null, prerequisites: r.prerequisites ? JSON.parse(String(r.prerequisites)) : [],
       ...(r.source === "dependency" ? { remaining: dependencyReasons(store, r as Target, JSON.parse(String(r.prerequisites ?? "[]"))) } : {}) })) };
 }
 export function pause(store: Store, t: PauseTarget, opts: PauseOptions, at: number): Row {
@@ -148,6 +149,15 @@ export function checkpointHash(file: string, generation: string): string {
   const line = readFileSync(file, "utf8").split("\n").findLast((l) => l.includes(`checkpoint ${generation}: `));
   if (!line || !line.split(`checkpoint ${generation}: `)[1]?.trim()) throw new Error("pause: missing generation-bound journal checkpoint");
   return createHash("sha256").update(line).digest("hex");
+}
+// The terminal this process runs in, as a pause row names it: the Orca handle, else (a squad off Orca,
+// U12b: no handle) the live terminal of the contract observer whose generation is DS_GEN, in DS_WT's folder.
+export function sessionOf(store: Store, me: { handle: string | null; gen: string | null; wt: string | null }): string | null {
+  if (me.handle) return me.handle;
+  if (!me.gen || !me.wt) return null;
+  const rows = store.db.query("SELECT handle, doc FROM observed_terminals WHERE wt = ? AND gone_at IS NULL").all(`local::${me.wt.replace(/\/+$/, "")}`) as Row[];
+  const hit = rows.filter((r) => { try { return JSON.parse(String(r.doc ?? "{}")).gen === me.gen; } catch { return false; } });
+  return hit.length === 1 ? String(hit[0].handle) : null;
 }
 export function acknowledge(store: Store, t: Target, generation: string, session: string, dispatch: string, file: string, at: number): Row {
   return store.tx(() => {
@@ -274,13 +284,17 @@ export function resume(store: Store, t: PauseTarget, at: number): Row {
 // order: its squad archived (gone or closed) -> archived; its squad suspended -> suspended; an open
 // pause intent on the member, its squad or its project -> paused; else its own wish (running, stopped,
 // archived; null when it has none). `own` is that wish, `why` names the row that decided.
-export type Effective = { state: string | null; own: string | null; why: "squad" | "pause" | "own" };
+// why "archive-debrief": the squad is archiving and its Lead stays on its own wish while the final-debrief
+// step is open (debriefHold, squad/archive-debrief.ts); the decider never starts or restarts it then.
+export type Effective = { state: string | null; own: string | null; why: "squad" | "pause" | "own" | "archive-debrief" };
 export function effective(store: Store, m: Row): Effective {
   const own = m.want == null ? null : m.want === "gone" ? "archived" : String(m.want);
   if (own === "archived") return { state: own, own, why: "own" };
   const squad = m.role === "studio" ? null : store.get("squads", { project: m.project, topic: m.squad });
   const ended = (v: unknown) => ["gone", "closed", "archived"].includes(String(v ?? ""));
-  if (ended(squad?.want) || ended(squad?.status)) return { state: "archived", own, why: "squad" };
+  if (ended(squad?.want) || ended(squad?.status)) {
+    return debriefHold(store, m, squad) ? { state: own, own, why: "archive-debrief" } : { state: "archived", own, why: "squad" };
+  }
   // The squad's wish wins over its status: a resume in flight (want running, status suspended) is not suspended.
   if ((squad?.want ?? squad?.status) === "suspended") return { state: "suspended", own, why: "squad" };
   if (intents(store, { project: String(m.project), squad: String(m.squad), role: String(m.role), suffix: String(m.suffix ?? "") }).length) return { state: "paused", own, why: "pause" };
@@ -312,7 +326,7 @@ export function actionTargets(store: Store, a: Action): Target[] {
     const from = String(q?.from_handle ?? "");
     const recipient = from.startsWith("dispatch:")
       ? store.db.query("SELECT project, wt FROM observed_workers WHERE dispatch_id = ?").get(from.slice(9)) as Row | null
-      : store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ?").get(from) as Row | null;
+      : store.db.query("SELECT project, wt FROM observed_terminals WHERE handle = ? ORDER BY (project = ?) DESC, (gone_at IS NULL) DESC, observed_at DESC").get(from, project) as Row | null;
     if (recipient) return [targetOf(store, { project: String(recipient.project), member: String(recipient.wt) })];
   }
   if (a.kind === "answer" && a.squad && p.id) {
@@ -346,10 +360,27 @@ export function actionTargets(store: Store, a: Action): Target[] {
   }
   return [targetOf(store, { project, squad: a.squad, member: a.member ?? (p.wt as string) ?? null })];
 }
-const controls = new Set(["board_start", "board_restart", "board_stop", "board_giveup", "config", "limits", "roles", "skills", "override", "account", "unit-action", "plan-revoke", "alert", "alert-clear", "lavish", "dismiss"]);
+const controls = new Set(["board_start", "board_restart", "board_stop", "board_giveup", "config", "limits", "roles", "skills", "override", "account", "unit-action", "plan-revoke", "chat-cancel", "chat-now", "chat-dismiss", "alert", "alert-clear", "lavish", "dismiss"]);
 const mail = new Set(["poke", "answer", "reply", "send-role", "send-peer", "notify-squads"]);
 export function deferredMail(a: Action): boolean { return mail.has(a.kind); }
 export function actionVersion(store: Store, a: Action): string { return JSON.stringify(actionTargets(store, a).map((t) => version(store, t))); }
+// The fence a child script checks before each mutation (check-activity.ts, exit 75), on the gate
+// `childActivity` hands it: a paused target, or a version moved since the gate was made. U11c: a provider's
+// removal for a squad off Orca runs in process and checks the same gate.
+export type ActivityGate = { targets: Target[]; version: string; mail?: boolean; control?: Action; resume?: Action };
+export function gateBlock(store: Store, gate: ActivityGate): string | null {
+  if (gate.control?.kind === "pause-control") return pauseControlBlock(store, gate.control);
+  if (gate.targets.some((t) => paused(store, t)) && !(gate.resume && resumeAction(store, gate.resume))) return "paused";
+  return !gate.mail && JSON.stringify(gate.targets.map((t) => version(store, t))) !== gate.version ? "generation changed" : null;
+}
+// Every member row on the worktree has retired for good: status gone, want gone and no cancel payload.
+export function retiredTree(store: Store, project: string, wt: string): boolean {
+  const ms = wt ? store.db.query("SELECT status, want, want_payload FROM members WHERE project = ? AND wt = ?").all(project, wt) as Row[] : [];
+  return ms.length > 0 && ms.every((m) => {
+    let cancel; try { cancel = JSON.parse(String(m.want_payload ?? "{}"))?.cancel; } catch {}
+    return m.status === "gone" && m.want === "gone" && !cancel;
+  });
+}
 export function actionBlock(store: Store, a: Action): "paused" | "generation changed" | null {
   if (a.kind === "pause-control") return pauseControlBlock(store, a) ? "generation changed" : null;
   // U232: matched on the payload's stable `card`, never on the display title.
@@ -358,7 +389,11 @@ export function actionBlock(store: Store, a: Action): "paused" | "generation cha
   if (controls.has(a.kind) && !activityAlert) return null;
   const targets = actionTargets(store, a);
   const retiring = (a.kind === "role" && store.get("members", { id: (a.payload as Row | undefined)?.id })?.want === "gone")
-    || a.kind === "member.close";   // U155: the close is the retirement itself, not a rival of it
+    || a.kind === "member.close"    // U155: the close is the retirement itself, not a rival of it
+    // archive-leftovers U1: a leftover's removal comes after its member retired, so a retired member (gone,
+    // want gone, no cancel) is no rival of it; a live or restarting member on the tree still is.
+    // archive-leftovers U4: the board's Remove of a leftover reads the same.
+    || ((a.kind === "worktree.remove" || a.kind === "leftover-remove") && retiredTree(store, a.project, String((a.payload as Row | null)?.wt ?? "")));
   // U158: a suspended member's close-remove is the pause flow's own last step, so the
   // squad's pause intent must not block it (its stop phase stays the pause flow's).
   if (a.kind === "member.close" && (a.payload as Row | undefined)?.phase === "remove") return null;

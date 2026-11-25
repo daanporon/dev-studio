@@ -1,7 +1,8 @@
 // fallback.test.ts — U66/U154: a Thinker on a fallback rung moves back up when a higher rung has
 // room. U154 routes the move through the decider (decide.ts, switches.ts): it stops the member when
-// idle, and the start picks the higher rung. Only Thinkers move back up; a pinned or limited member
-// is left to its row.
+// idle, and the start picks the higher rung. configurable-role-elevation U1: only a member whose roster
+// row resolves column 8 to `up` moves back up (the default roster: the Thinker); a pinned or limited
+// member is left to its row.
 import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +32,9 @@ function setup(row: string, on: string, accts: string[], o: { state?: string; mi
   cpSync(join(ROOT, "tests", "fixtures", "loop", "state"), d, { recursive: true });
   const s = open(d); stores.push(s); importJson(s, d, () => {});
   s.db.run("DELETE FROM accounts"); s.db.run("DELETE FROM observed_accounts");
+  // configurable-role-elevation U1: the shipped default `thinker` row says `up` (column 8); the project
+  // row above it has no column 8, so it inherits, and `thinker-*` rows inherit through the base row.
+  s.upsert("config", { project: "", file: "roles.conf", key: "thinker" }, { value: "claude opus always - - - up", observed_at: T });
   s.upsert("config", { project: "fx", file: "roles.conf", key: o.key ?? "thinker" }, { value: row, observed_at: T });
   if (o.min !== undefined) s.upsert("config", { project: "fx", file: "limits.conf", key: "fallback_return_min" }, { value: o.min, observed_at: T });
   const [agent, model] = on.split(":");
@@ -311,5 +315,76 @@ describe("U180: a fallback move up stops only the Thinkers that fit", () => {
     expect(missed).toHaveLength(1);
     expect(JSON.parse(String(missed[0].payload))).toMatchObject({ aimed: "claude:opus@a1", landed: expect.stringContaining("codex:gpt") });
     expect(JSON.parse(String(missed[0].payload)).why).toContain("fallback_return_min");
+  });
+});
+
+// configurable-role-elevation U1: roles.conf column 8 (`return`) says which rows move back up; the
+// shipped default sets it on the Thinker alone (setup seeds that default row).
+describe("move back up per roster row (configurable-role-elevation U1)", () => {
+  const U2 = "u2-sqlite-store-migrations-and";
+  const builder = (row: string, key = "builder", extra: { tier?: string } = {}) =>
+    setup(row, "muse:m", ["claude:a1=20", "muse:mu=10"], { key, role: "builder", suffix: U2, ...extra });
+
+  test("with no roster change a Thinker moves and a Lead stays (the project thinker row without column 8 still moves)", () => {
+    expect(stops(setup("claude opus spawn - muse:m", "muse:m", ["claude:a1=20", "muse:mu=10"]))).toHaveLength(1);
+    expect(stops(setup("claude opus spawn - muse:m", "muse:m", ["claude:a1=20", "muse:mu=10"], { key: "lead", role: "lead" }))).toEqual([]);
+  });
+
+  test("a Lead row set to up moves an idle Lead back up", () => {
+    const a = stops(setup("claude opus always - muse:m - up", "muse:m", ["claude:a1=20", "muse:mu=10"], { key: "lead", role: "lead" }));
+    expect(a).toHaveLength(1);
+    expect(String(a[0].episode)).toBe("stop:fallback:rung2->1");
+  });
+
+  test("a Thinker row set to stay keeps the Thinker on its fallback", () => {
+    expect(stops(setup("claude opus always - muse:m - stay", "muse:m", ["claude:a1=20", "muse:mu=10"]))).toEqual([]);
+  });
+
+  test("configurable-role-elevation U3: a studio row set to up never gets a member stop (decide skips the Studio; studio_move moves it)", () => {
+    expect(stops(setup("claude opus ondemand - muse:m - up", "muse:m", ["claude:a1=20", "muse:mu=10"], { key: "studio", role: "studio" }))).toEqual([]);
+  });
+
+  test("builder up moves a builder-standard member unless that tier row says stay", () => {
+    const s = builder("claude sonnet ondemand - muse:m", "builder-standard", { tier: "standard" });
+    expect(stops(s)).toEqual([]);
+    s.upsert("config", { project: "fx", file: "roles.conf", key: "builder" }, { value: "claude opus ondemand - muse:m - up", observed_at: T });
+    expect(stops(s)).toHaveLength(1);
+    s.upsert("config", { project: "fx", file: "roles.conf", key: "builder-standard" }, { value: "claude sonnet ondemand - muse:m - stay", observed_at: T });
+    expect(stops(s)).toEqual([]);
+  });
+
+  test("a Builder whose unit is finished (done, or its PR merged) is not moved up", () => {
+    const s = builder("claude opus ondemand - muse:m - up");
+    expect(stops(s)).toHaveLength(1);
+    s.upsert("observed_prs", { project: "fx", ref: `demo/${U2}` }, { pr: 93, state: "MERGED", observed_at: T });
+    expect(stops(s)).toEqual([]);
+    s.db.run("DELETE FROM observed_prs");
+    s.db.run("UPDATE units SET status = 'done' WHERE slug = ?", [U2]);
+    expect(stops(s)).toEqual([]);
+  });
+
+  test("at max_builders with a unit queued, a Builder stopped to move up keeps its seat and restarts on its stronger model", async () => {
+    const s = builder("claude opus ondemand - muse:m - up");
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "max_builders" }, { value: "1", observed_at: T });
+    // A queued Builder on another dispatched unit, never started: it waits for the one seat.
+    s.db.run("UPDATE units SET status = 'dispatched' WHERE slug = 'u3-loop-daemon-skeleton-health'");
+    s.upsert("members", { project: "fx", squad: "demo", role: "builder", suffix: "u3-loop-daemon-skeleton-health" }, { want: "running", want_at: T - 30, status: "waiting", observed_at: T, updated_at: T });
+    const queued = s.db.query("SELECT * FROM members WHERE suffix = 'u3-loop-daemon-skeleton-health'").get() as Row;
+    const { slot } = await import("../../bin/loop/capacity/slot.ts");
+    expect(slot(s, "fx", { member: queued }, T).ok).toBe(false);
+    const orca = new FakeBackend(), act = new LoopActuator({ orca });
+    const fulfillers = await load<Reconciler>(DIRS.fulfil);
+    s.upsert("coordinators", { project: "fx", squad: "demo" }, { handle: "term_loop", run_id: "run1", created_at: T - 3600, bound_at: T - 3600 });
+    const loop = new Loop(s, { observers: [], reconcilers: [(await import("../../bin/loop/core/decide.ts")).default, ...fulfillers] }, act, { projects: () => ["fx"] });
+    const tick = async (at: number) => { await loop.tick(at); await act.drain(); };
+    await tick(T);
+    expect(orca.of("worker-stop").filter((c) => c.args[1] === WT)).toHaveLength(1);
+    // Its agent is gone: the seat is still its own while the move's reservation is open.
+    s.upsert("observed_workers", { project: "fx", wt: WT }, { presence: "none", account_at: T + 1, observed_at: T + 1 });
+    expect(slot(s, "fx", { member: queued }, T + 1).ok).toBe(false);
+    await tick(T + 1);
+    const started = orca.of("worker-start").filter((c) => c.args[1] === WT);
+    expect(started).toHaveLength(1);
+    expect(String(started[0].args[4])).toContain("opus");
   });
 });

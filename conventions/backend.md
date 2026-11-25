@@ -1,10 +1,462 @@
 # Backend interface
 
 All backend access goes through a defined interface so the system is not
-hardwired to Orca (R19, KTD9). Orca is the only backend shipped now; another is
-a sibling adapter under `bin/backend/`.
+hardwired to Orca (R19, KTD9). Orca is the only backend the loop runs on now; another is
+a sibling adapter under `bin/backend/` (herdr, contract v2, below).
 
-## Selecting the backend
+There are two contracts:
+
+- **Contract v2** (below, `bin/backend/contract.ts`): the one a new backend implements (tmux,
+  herdr, orca-lite). A backend runs terminals and nothing else; the loop keeps everything else.
+- **The Orca adapter, contract v1** (from "Selecting the backend" on): the verbs
+  `bin/backend/orca.sh` answers today. The loop still runs on it; nothing in the Orca path
+  changes until a later unit moves the loop onto v2.
+
+## Contract v2
+
+### Requests and answers
+
+Every op is one JSON request and one JSON answer, so a backend can sit in the loop's process, behind
+a unix socket, or on another host over ssh. On the wire a request is the envelope `{op, req}`.
+Every answer has `ok`: `{ok: true, …fields}` on success, or `{ok: false, error: {code, message}}`.
+
+| Error code | Meaning |
+|---|---|
+| `not_found` | No terminal with that `id` (never made, closed, or the process behind it ended). |
+| `unsupported` | The request needs a capability this backend says it lacks (keys with `keys: none`). |
+| `bad_request` | The request is outside its op's type. `handle()` answers it before the backend sees it. |
+| `failed` | Anything else: the server is down, a command failed. The message says what. |
+
+`bin/backend/contract.ts` defines each request and answer once (`bin/loop/core/schema.ts` shapes),
+which gives both the TypeScript types (`Request<op>`, `Answer<op>`, the `Backend` interface) and the
+run-time checks (`checkRequest`, `checkAnswer`, each naming the wrong field). `handle(backend,
+envelope)` is the wire entry: an unknown op or a bad request answers `bad_request`, a backend that
+throws answers `failed`. `checked(backend)` wraps a backend so a request or answer outside its type
+throws a `ContractError`; the conformance suite runs every backend through it.
+
+### Ops
+
+| Op | Request | Answer |
+|---|---|---|
+| `backend.info` | `{}` | `{name, version, capabilities}` |
+| `terminal.create` | `{cwd, env?, label, group?, parent?}` | `{terminal}` |
+| `terminal.list` | `{}` | `{terminals: [terminal]}` |
+| `terminal.close` | `{id}` | `{closed: boolean}` |
+| `terminal.send` | `{id, text?, keys?, submit?}` | `{delivery: "turn_started" \| "accepted"}` |
+| `terminal.read` | `{id, screen?, lines?}` | `{text}` |
+| `terminal.last_output` | `{id}` | `{at: epoch seconds \| null}` |
+| `agent.state` | `{id}` | `{state: "working" \| "waiting" \| "idle" \| "unknown"}` |
+| `worktree.parent` | `{cwd}` | `{parent: string \| null}` — the folder the worktree is nested under in the backend's own tree (`parents: native` only, else `unsupported`) |
+| `worktree.set_parent` | `{cwd, parent}` | `{}` — nests the worktree under another, both by folder (`parents: native` only, else `unsupported`); the loop's `wt-set-parent` goes through it (U21f) |
+
+A **terminal** is `{id, cwd, label, group, parent, gen, created_at}`:
+
+- `id` is the backend's own handle. It is opaque to the loop.
+- `gen` is the `DS_GEN` in the create's `env`, or null without one. The loop puts a fresh generation
+  in every start and matches a retried start on it, so a backend needs no idempotency of its own.
+- `group` echoes the request's `group` when `parents` is `groups`, else it is null. `parent` echoes the
+  request's `parent` when `parents` is `native`, else it is null.
+- `created_at` is in epoch seconds.
+
+The rules per op:
+
+- `terminal.create` starts a shell in `cwd` with `env` added to its environment (names
+  `[A-Za-z_][A-Za-z0-9_]*`, string values). The loop types the agent's launch line into it afterwards;
+  the backend never knows which agent runs.
+- `terminal.close` is idempotent: a terminal already gone answers `{closed: false}`, not an error, so a
+  replayed close is safe.
+- `terminal.send` carries exactly one of `text` and `keys`. `submit` (text only) presses Enter after the
+  text. `keys` are named keys (`Enter Escape Tab Backspace Up Down Left Right C-c C-d`) or one digit or
+  lowercase letter (a menu pick), and there is at least one. The answer is `turn_started` only when the
+  backend saw the agent start a turn; otherwise it is `accepted`.
+- `terminal.read` with `screen` gives the visible screen. Without it, it gives the scrollback too, at most
+  `lines` lines.
+- `terminal.last_output` is the last time the terminal printed anything. It is null when it never did,
+  or when the backend cannot tell.
+
+### Capabilities
+
+`backend.info` names what the backend can do. The loop reads the answer and does the rest itself.
+
+| Capability | `native` | other values |
+|---|---|---|
+| `parents` | The backend nests a terminal's worktree under its `parent` (Orca). | `groups`: the backend places the terminal in its `group` (a tmux session, a herdr workspace). `none`: neither; the tree is in loop.db only. |
+| `state` | `agent.state` reads the agent's state. | `none`: it always answers `unknown`, and the loop works out the state from the screen and the transcript. |
+| `turn_confirm` | A submitted send answers `turn_started` once a turn started. | `none`: a send only ever answers `accepted`, and the loop confirms the turn itself. |
+| `keys` | `terminal.send {keys}` types named keys. | `none`: it answers `unsupported`. |
+
+### What stays in the loop
+
+The contract is small because the loop keeps the rest:
+
+- **Launch drivers.** The agent's command line, its flags and model, the account it runs on, and
+  reading a menu or a limit notice off the screen.
+- **Accounts and the picker.** Account folders, usage and credentials are read on the loop's side
+  (`docs/backends/local-reads.md`).
+- **Agent state** when `state` is `none`, and the turn check when `turn_confirm` is `none`.
+- **The parents tree** when `parents` is not `native`, and **start idempotency**, through `gen`.
+- **Worktrees.** The loop makes and removes the worktree; the backend gets a `cwd`.
+
+### Backend servers live outside the loop
+
+A backend with a server of its own (a tmux server, herdr) must never run as the loop's child. Every
+loop restart (an update, the watchdog) would take every agent on it down. `bin/backend/server-unit.ts`
+starts one the way `bin/loop/fulfil/board.ts` starts the board:
+
+- `startServer({name, argv, log, cwd?, env?})` runs it in its own transient user unit
+  (`systemd-run --user --collect --unit ds-<name>`). `systemctl --user restart ds-loop` then stops the
+  loop's cgroup and not this one.
+- Without systemd (no `systemd-run`, no user bus, the unit name already taken, or
+  `DS_SERVER_SYSTEMD=0`) it starts the server detached, in its own session.
+- The handle is `{pid, via: "systemd" | "detached", unit, log}`. The server's output appends to `log`.
+  In a unit, its pid is kept in `<log>.pid` and its exit code in `<log>.exit` (`exitCodeOf`).
+- `serverAlive(pid)` and `stopServer(handle)` check and stop it.
+- The unit does not inherit the caller's environment: `env` is the server's whole environment. The
+  default is the caller's, without `ORCA_*`.
+
+### Conformance
+
+`tests/loop/backend-conformance.ts` is the suite every v2 backend must pass. An adapter's test registers
+it on its own backend: `conformance({name, make, cwd, wait?, survive?})`.
+
+- Every call goes through `checked()`, so an answer outside its type fails the case.
+- Each case holds the backend to the capabilities it states. It covers create and list (with the `gen`,
+  `group` and `parent` echoes), an idempotent close, `not_found` on a gone id, typed text on the screen,
+  `last_output`, env and cwd (`echo $NAME`, `pwd`), screen reads, keys or `unsupported`, `agent.state`,
+  and `bad_request` from the wire entry.
+- `survive` (a backend with a server): a caller starts the server through `server-unit.ts`, creates a
+  terminal and is SIGKILLed. The server and its terminal must still be there afterwards.
+
+`tests/loop/backend-contract.test.ts` runs the suite against the in-memory fake
+(`bin/loop/fakes/contract.ts`, switchable capabilities) in all 24 capability mixes, over a unix socket,
+and as a server that outlives its caller. It also shows the checks catch an answer outside its type.
+`tests/loop/server-unit.test.ts` covers `server-unit.ts` on both paths.
+
+### The tmux backend
+
+`bin/backend/tmux.ts` (U14) is the first v2 backend on a real multiplexer. Capabilities: `parents`
+`groups`, `state` `none` (`agent.state` is always `unknown`; the loop's own readers give the state),
+`turn_confirm` `none`, `keys` `native`.
+
+- One tmux server per project: `projectTmux(<project>, {stateRoot})` uses the socket `-L ds-<project>`
+  and starts its server through `server-unit.ts` (unit `ds-tmux-<project>`, log
+  `<state root>/<project>/loop/tmux-server.log`) on the first create. The server runs
+  `tmux -f /dev/null -D`, so no user config is read, with `exit-empty` off. Its environment is the
+  caller's without `ORCA_*`, `TMUX*`, `DS_MEMBER`, `DS_WT`, `DS_GEN` and `DS_BACKEND`.
+- Every client call passes `-N`, so a call never starts a server inside the loop's cgroup.
+- One session per squad (the terminal's `group`; `.`, `:` and other characters become `_`; no group
+  means session `_ds`) and one window per member, made with `-c <cwd>` and `-e` for each env entry.
+- A terminal's id is its pane id (`%7`). The window option `@ds_meta` keeps cwd, label, group, gen and
+  the create time. It is set in the same tmux command list as the window, so a listed terminal always
+  has its gen.
+- Text is loaded into a paste buffer from stdin and pasted, so tmux never parses it. `submit` then
+  presses Enter. Keys go through `send-keys`.
+- `read` is `capture-pane`. `last_output` is the window's `window_activity`, because tmux 3.4 has no
+  `pane_activity` and each window holds one pane.
+- No server, or a server with no session left, lists no terminals and answers `not_found` for an id.
+
+`tests/loop/backend-tmux.test.ts` runs the conformance suite, including `survive`, on a private socket
+(`tmux.ts caller` is its caller). When no `tmux` binary is on `PATH` it skips with the reason printed.
+
+### The orca-lite backend (`bin/backend/orca-lite.ts`)
+
+Orca's terminals with no Run, task, dispatch or coordinator (orca-backend-alternatives U13), in worktrees
+the `orca` worktree provider makes (`bin/loop/io/providers/orca.ts`, its only provider). Every Orca call is
+an adapter verb of the Operations table below, through the loop's Orca runner (`bin/loop/io/orca.ts`), so
+the tick's shared reads, the in-process verbs and the fake Orca all apply. The actuator makes one per
+project on its own runner (`core/actuator.ts` `contracted`). A spawn picks it only on its trial project
+(U16a, "Chosen at spawn" below; the runbook and record are `docs/backends/trial-orca-lite.md`).
+
+- **create.** `wt-show path:<cwd>` gives the worktree's Orca id; a folder Orca has no worktree at is
+  `failed`. A `parent` other than the cwd is set with `wt-set-parent` when `wt-show` reads another
+  parent. Then `terminal-create <id> <label> <command>`: Orca types the command into the new shell, and
+  the command is `export K='v' …` of the request's env, so a launch line typed later runs with it. An env
+  value holding a control character is `bad_request`.
+- **Facts kept by the backend.** Orca keeps no env and no facts of ours on a tab, and Claude rewrites a
+  tab's title, so cwd, label, parent, gen and created_at are kept in one JSON file per project
+  (`<state root>/<project>/loop/orca-lite-terminals.json`, written whole through a rename). The terminal id
+  is the handle Orca gave at create. A restarted Orca hands out new handles for the same tabs: the entry
+  keeps the tab's pane key (`tabId:leafId`) and follows it to the new handle. `terminal.list` lists only
+  the tabs of the file that `terminal-panes` still shows, and drops the others' entries (never one made at or
+  after its own pane read: a create it raced); every other op on such an id is `not_found` (a closed handle
+  still reads `ok` in Orca, so liveness is the list). Only the loop writes the file: the role scripts open the
+  backend `readOnly` (`bin/lib/contract-roles.ts`), follow a new handle in memory, and their create and close
+  refuse.
+- **send** is `terminal-type`: text as is, keys as their bytes (Enter `\r`, Escape `\x1b`, Backspace
+  `\x7f`, arrows `\x1b[A`…, `C-c` `\x03`, `C-d` `\x04`), and with `submit` Enter through
+  `--enter --wait-submit 10`. **read** is `terminal-read` (`--screen` for `screen`), **last_output** the
+  tab's `lastOutputAt`, **close** `terminal-close`.
+- **Capabilities.** `parents: native` (`wt-set-parent`, read back with `wt-show`), `state: native`
+  (`pane-state`: `worktree ps` reports the agent of a plain tab in an Orca-made worktree, `working` →
+  working, `waiting`/`blocked` → waiting, `done`/`idle` → idle, else unknown), `turn_confirm: native`
+  (`turn_started` when Orca's send receipt has that stage; a plain shell answers `accepted`), `keys: native`.
+- `tests/loop/backend-orca-lite.test.ts` runs the conformance suite on the fake Orca (`bin/loop/fakes/orca.ts`,
+  whose `terminal-create` tabs are small shells) and the cases it does not reach: parents, an unknown
+  folder, a restarted Orca's handles, the agent state and a confirmed turn.
+
+### Adding a v2 backend
+
+1. Implement `Backend` (`call(op, req)`) under `bin/backend/<name>.ts`.
+2. Start its server, if it has one, through `server-unit.ts`.
+3. State its capabilities in `backend.info`.
+4. Pass the conformance suite in a test of its own.
+5. Anything it needs from the agents' host beyond these ops is a local read: list it in
+   `docs/backends/local-reads.md`.
+
+### The herdr backend (`bin/backend/herdr.ts`)
+
+The first v2 backend (orca-backend-alternatives U15). [herdr](https://github.com/herdrdev/herdr) is a
+terminal multiplexer for agents: a server owns workspaces, tabs and panes, and sees which agent runs in a
+pane and whether it is working. The adapter speaks herdr's socket API (newline-delimited JSON). The loop
+runs a squad on it through `projectHerdr` (U16c, below), on a trial project only.
+
+- **Pinned.** `HERDR_VERSION` 0.9.5, protocol 22. A server that answers another protocol fails every op.
+  `fetchHerdr(dir)` downloads that release's Linux binary and checks its sha256. `DS_HERDR_BIN` names a
+  local binary instead, and `DS_HERDR_FETCH=0` downloads nothing. `bun bin/backend/herdr.ts install`
+  downloads it into `herdrPinnedDir()`, `$XDG_DATA_HOME` (else `~/.local/share`)`/dev-studio/herdr/<version>/herdr`,
+  and touches nothing else (no PATH entry, no `herdr integration install`). The loop's binary is
+  `herdrBin()` (`bin/backend/herdr-bin.ts`): `DS_HERDR_BIN`, else that install, else `herdr` on PATH.
+- **Its server.** `startHerdr({bin, dir, name})` writes `<dir>/config.toml`, starts `herdr server` through
+  `server-unit.ts` and waits for an answer on `<dir>/herdr.sock`. The server runs in its own session
+  (`HERDR_SESSION=ds-<name>`, `HERDR_SOCKET_PATH`, `HERDR_CONFIG_PATH`), apart from any herdr the
+  operator runs. The config sets `resume_agents_on_restore = false` (the loop restarts its members
+  itself), turns off herdr's update and agent-manifest checks, and turns off sound. `herdr integration
+  install` is never run.
+- **Layout B.** There is one workspace per group (a squad) and one tab per terminal (a member), each
+  started with its own cwd and env. The group's first terminal makes the workspace and takes its first
+  tab. A later one adds a tab. Closing the last tab closes the workspace. A terminal made without a
+  group goes to one shared workspace.
+- **Facts live in herdr.** Any client reads the same answers, so a new loop process, or a client after
+  its caller is killed, sees the same terminals. The terminal id is the adapter's own (`h-<random>`),
+  kept as the pane token `ds_id`, because herdr's pane ids (`w1:p2`) are positions that are not stable
+  over a server's life. cwd, label, group, gen and created_at are base64url JSON cut into 80-character
+  tokens (`ds_n`, `ds_m0`…). Facts too long for 13 pieces answer `bad_request`. A group's workspace
+  carries `ds_g`. Only panes with a `ds_id` are listed. Tokens are not restored after a herdr server
+  restart, so the restored panes are not listed.
+- **Capabilities.** `parents: groups`, `state: native` (herdr's `agent_status`: `working` → working,
+  `blocked` → waiting, `idle` and `done` → idle, else unknown), `keys: native`, `turn_confirm: none`. A
+  send answers once herdr has taken the bytes. herdr's turn signal, `agent prompt --wait`, only works
+  for an agent herdr already recognises.
+- **`last_output`** hashes the visible screen and keeps the hash and the time it changed in pane tokens
+  (`ds_oh`, `ds_oa`). The time is when a read first saw the change.
+- **The loop's backend for a project (U16c).** `projectHerdr(project, {stateRoot})` is what
+  `squad/contracts.ts` (the actuator and the contract observer) and `bin/lib/contract-roles.ts` (the role
+  scripts) make: its server is the unit `ds-herdr-<project>` (session `ds-herdr-<project>`), its files in
+  `<state root>/<project>/loop/herdr/` (or a short folder under the runtime dir when that socket path
+  would pass 100 bytes). Only a `terminal.create` starts the server; with none listening (no socket, or
+  a refused connect) a list is empty, a close closes nothing and any other op on a terminal is
+  `not_found`, so the observer reads the members gone and the loop starts them again. A server that
+  listens but is slow or failing keeps its `failed` answers, so the observer writes nothing. A server a previous loop process started is used as it is, and
+  its protocol is checked again after it was gone. A create with no binary fails naming the install command.
+- `bun bin/backend/herdr.ts states <state root> <project>` prints what herdr says each of a project's terminals
+  is doing (read only, no server started), the trial's sampler.
+- `bun bin/backend/herdr.ts caller <bin> <dir> <name> [home]` is the conformance suite's survive caller.
+- `tests/loop/backend-herdr.test.ts` runs the conformance suite (the server outliving its caller
+  included) and layout B against the pinned binary in a temp HOME. When the binary can't be fetched,
+  it skips those cases and prints why. The mappings and the protocol pin always run, and so do
+  `projectHerdr`'s no-server cases; with the binary it also starts a project's server on a create, finds
+  it from a second client and starts it again after it was stopped. How well herdr reads agent state
+  without its hooks is the trial's to record (`docs/backends/trial-herdr.md`, not run yet).
+
+## A backend per squad
+
+Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
+lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
+`herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
+others, the first being its default). A spawn starts on the project's `default_backend` (U30, below): `orca`, `tmux` (U16b),
+`herdr` (U16c) or `orca-lite` (U16a). The loop itself can run a squad on any
+contract backend (U11, "Started" below).
+
+- **One rule (U30).** A project's squads start on its `default_backend` and nothing else
+  (`squadBackendRule`, `bin/backend/registry.ts`): `--backend` (or the board's pick) naming another
+  backend, `orca` included, is refused with `backend tmux is refused: this project's squads start on orca
+  (its default_backend); to change it set the project's default_backend …`, and a squad wish
+  (`ds want squad … --fill '{"backend":…}'`) asking for another is refused by `bin/loop/fulfil/squad.ts`
+  with a `wish_given_up` event and a card, so one project's backend never leaks onto another. Once the project
+  has a Studio, its backend wins (U54, one backend per project): a squad on any other is refused with `backend orca
+  is refused: this project's Studio runs on tmux, and a project keeps one backend for its Studio and squads; to
+  move the whole project: ds up <project> --backend orca`. The flag and the
+  wish's `backend` stay for squads on other hosts later (the rule takes the squad's backend and
+  `backend_host`; today only `local`). An entry's `find` looks for its binary where
+  PATH would not (herdr: `herdrBin()`), and `install` is named when it is missing. The tmux trial's
+  runbook and record are `docs/backends/trial-tmux.md`; `ds tmux-drill` is its helper (the
+  version-change drill and the before/after snapshot). The treehouse trial (U16e: a tmux squad with `worktree_provider
+  treehouse`) is `docs/backends/trial-treehouse.md`, with `ds treehouse-drill` (start to first test, pooled
+  against fresh, and the lease check). The comparison of the three backends, Treehouse's measured gain and
+  the recommendation for what new squads try next are `docs/backends/trial.md` (U16d).
+
+- **Set and change (U32, U34, U54).** A project's backend is the one setting `default_backend`, set with
+  `ds config set <project> limits.conf default_backend <x>` or in the project's settings. There is no
+  trial switch to flip and flip back: a project runs on its backend until the operator changes it. While
+  the project's Studio runs on another backend that change is refused, naming `ds up <project> --backend <x>`:
+  that moves the whole project (below, "Moving a project").
+  The Studio follows the project: it runs on the project's backend, and `ds up <label> --backend <x>` is the one
+  way to change both together. User-facing steps: `docs/USAGE.md`, "Start a project on a backend".
+  The change is checked when set (a `worktree_provider` the backend cannot use, a missing binary, a
+  roster row naming an agent `<x>` cannot launch) and prints `new squads start on <x>; N running squads
+  stay on <old>`. A running squad is never moved: it keeps its backend until it is closed and started
+  again. A settings import leaves `default_backend` and `worktree_provider` alone. Still on Orca: the
+  account list (until `plan-accounts`).
+- **Moving a project (U54).** `ds up <project> --backend <x>` on a project up on another backend moves its
+  Studio, and so the project. It is refused, changing nothing, while any squad of the project is open (a
+  paused one too: close them first). `ds up` makes the new Studio's worktree (`<prefix><project>-studio-<x>`:
+  Orca's on `orca`, else the worktree tool's `local::` folder) and files the move for the loop
+  (`studio:backend-wanted`); the loop's one `studio-move`, why `backend`, keeps each step on its episode, so a
+  crash replays from the last one: the new Studio started, the old one closed, then `studio_backend` and
+  `studio_wt` (dispatcher.json), `default_backend` and the `_studio` member row carried over with its account
+  history. The old worktree is left for cleanup.
+- **Chosen at spawn.** the project's limits key `default_backend` (default `orca`) says it;
+  `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend pick) may only name that backend. The worktree tool is the
+  project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
+  refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet, a
+  backend other than the project's `default_backend` and a binary missing on PATH (the backend's, or treehouse's
+  for `worktree_provider treehouse`: `DS_TREEHOUSE_BIN`, else on PATH); a refused spawn writes no wish and never falls back to `orca`.
+- **Written once.** The squad's row keeps `backend`, `backend_host` (`local`; the machine it runs on) and
+  `worktree_provider` (migration 0054; every existing squad reads `orca`/`local`/`orca`). Once the loop
+  has started the squad the columns cannot change (a table trigger), and `spawn-squad` refuses a different
+  `--backend` for it; a later change of `default_backend` touches only new squads. A closed squad started
+  again under its topic may pick again.
+- **Not `squads.host`.** That column is spawn-squad's dev-env host (`--host`), unchanged; the backend's
+  machine is `backend_host`.
+- **Shown.** The board's squad row and box carry a chip with the backend (and the tool, when it is not the
+  backend's default) for a squad off `orca`; the text board adds ` · on:<backend>[/<tool>]` to its line.
+  Settings → Agents & nudges lists both keys.
+- **Started (U11).** A squad on another backend is run through the contract (`bin/backend/contract.ts`),
+  not Orca: `fulfil/squad.ts` makes no Run, task, dispatch, coordinator pane or sender for it, and wishes
+  its roles; the actuator's contract seat (`core/actuator.ts` `contractSeat`) starts, pokes, stops and
+  closes them with the contract driver (`drivers/contract.ts`). The actuator reaches `tmux` through
+  `bin/backend/tmux.ts`, `orca-lite` through `bin/backend/orca-lite.ts` (U13) and `herdr` through
+  `projectHerdr` in `bin/backend/herdr.ts` (U16c). The registry gives `tmux` (U16b), `herdr` (U16c)
+  and `orca-lite` (U16a) their adapters, each trial-gated as above. A test reaches this path through `LoopActuator`'s `backends` option and the
+  contract fake.
+  - **Start.** The member's worktree comes from the squad's recorded `worktree_provider` through
+    `io/worktrees.ts`, its parent the Lead's (the Lead's own is none while the Studio is on Orca); its `wt`
+    is `local::<path>`. The folder is marked trusted in the account's `.claude.json` first
+    (`drivers/claude-launch.ts` `markTrusted`), then one `terminal.create` (cwd, label `<role>[-suffix]`,
+    `group` = the squad on `parents: groups`, `parent` = the Lead's path on `parents: native`) with env
+    `DS_GEN` (the call's retry id), `DS_BACKEND`, `DS_MEMBER` and `DS_WT`, and the Claude launch line
+    (`claudeLine`, the one Orca's adapter types, here as `exec env …` so claude replaces the shell and the
+    terminal ends with it: a poke never types into a bare shell) sent once with `submit`. The line is about 9,500 bytes, and a shell
+    with no prompt yet keeps at most 4,095 bytes of one line, so (U20a) the loop writes it to
+    `<state>/<project>/loop/launch/<folder>/<generation>.sh` (`squad/launch-file.ts`, mode 0600, the next generation's start or the
+    terminal's close removes it) and types only `exec bash '<file>'`, under 512 bytes. Only Claude has a launch
+    line: `spawn-squad` refuses a non-Orca squad whose roster names Codex or Muse (primary or fallback).
+  - **Ledger.** Starts and closes are `orca_calls` rows with the contract verb as `op` (`terminal.create`,
+    `terminal.close`), in `LOCK_OPS`, `stopOpen()` and `startInFlight()`. A start lists the terminals
+    first: one carrying this row's `DS_GEN` is this start's own (its answer was lost; no second create),
+    and any other in the folder is an old agent's, closed before the new one is made (a crashed member's
+    restart). The line's send is noted (`typed`) before it goes, so a replay never types it twice. A
+    second start under the same key while one runs is answered busy. Pokes are not ledgered:
+    `terminal.send` with `submit`, `turn_started` read as started, `accepted` as accepted.
+  - **Finish.** `finish-unit` and `ds finish` know the squad's backend (`DS_BACKEND`, else its loop.db
+    row): off Orca there is no Run, so the finish row is the whole finish and no `worker_done` is sent.
+  - **Removal (U11c).** Every removal path closes the member's terminals with `terminal.close` (by the
+    folder path, through the contract seat, one `orca_calls` row per step key so a replay closes nothing
+    twice) and removes its worktree through the squad's recorded provider (`io/worktrees.ts`
+    `removeWorktree`, by path), all in `squad/removal.ts`: a close (`fulfil/close.ts`), a cancel
+    (`fulfil/cancel.ts`: the stop closes, the remove closes again and is forced as `worktree-rm force` is on Orca), a
+    leftover pass (`fulfil/worktree.ts`) and a host tidy of a class `d` tree (`fulfil/cleanup-act.ts`,
+    found by its live `worktrees` row; no `worktree ps` read, and the tree is probed again before the
+    removal). The provider keeps the branch (an unmerged one always); a dirty or unpushed tree is kept as
+    a leftover as on Orca. Before the provider runs, the removal checks the fence Orca's `worktree-rm`
+    checks (`pause.ts` `gateBlock` on the action's `childActivity` gate; blocked answers 75, a wait), and
+    a `terminal.close` that fails keeps the tree, since no backend drops a terminal with its folder. A cancel reads the tree from the `worktrees` row, over the contract observer's row, and that row decides whether the tree is still there (a returned treehouse slot keeps its folder, U16e); a row that names another member's worktree is a slot leased again, so the cancel stops and removes nothing at that path. Squads on
+    `orca` keep `terminal-close-worktree` and `worktree-rm` by id. `tests/loop/contract-removal.test.ts`.
+  - **Observed (U12).** `observers/contract.ts` reads these members, not the Orca observer (whose known
+    worktrees and gone sweeps skip every worktree and folder of a squad off Orca): per member the newest
+    terminal `terminal.list` shows in its folder (its own `DS_GEN` first), `terminal.last_output`,
+    `terminal.read` and, on `state: native`, `agent.state`, plus the host's process walk. Its state is
+    idle when the walk finds no agent process, else the native answer; on `state: none`, working while
+    the transcript or output moved within `chat_quiet_s` (or `esc to interrupt` shows), idle at an empty
+    prompt with the agent alive, else unknown. A terminal no longer listed marks the worker gone; a
+    failed list marks nothing. The decider reads the walk alone (`walkReality`), and the finish row
+    (`ds finish`, of the member's generation) stands in for Orca's dispatch: it ends a one-shot role,
+    retires a Tester, lets a done Builder retire and carries the Lead's failed / no-PR report.
+  - **Pause, Lead health, guards (U12b).** A pause snapshots the member from its member row and the
+    observer's rows (session = its terminal id, dispatch `-`, no dispatch refusal), types the checkpoint
+    with `terminal.send` and closes with `terminal.close` through the seat; the ack takes `-` for the
+    dispatch. Liveness reads a Lead's unread mail as its unread `messages` rows (`rowsUnread`), so a
+    Lead idle with mail unread is poked and then carded or restarted as "not responding" exactly as on
+    Orca (the board's `leadVerdict` too). The observer also lists every other terminal in a member's
+    folder (`observed_terminals`, `doc.extra`): one with no `DS_GEN` is a plain shell, a `stray` once
+    quiet for `STRAY_QUIET`, closed only while `agent.state` says idle and carded otherwise (on
+    `state: none` the card says the backend cannot tell); one with another generation is a second agent,
+    a `duplicate`, closed once it is not busy. Both fulfillers read `terminal.list` again before a close
+    (`squad/contract-terminal.ts`). The board's failed-report reader matches the generation's episode.
+    `tests/loop/contract-guards.test.ts`.
+  - **Role scripts (U11b).** See "Role scripts off Orca" below.
+  - **Not yet.** `nesting.ts` skips such a squad (only Orca moves a worktree under a parent).
+
+### Role scripts off Orca
+
+The scripts a role runs (ask-operator, the watch tick, the phone book, the team listing, squad-state)
+reach the squad's own backend, not Orca (U11b). `backendPath()` (`bin/lib/shared.ts`) picks the adapter:
+`$BACKEND` when set, else `bin/backend/contract.sh` when this process belongs to a squad off Orca
+(`contractHere` in `bin/lib/contract-here.ts`, which shared.ts imports alone: `DS_BACKEND`, which every contract terminal carries, else
+the `squads.backend` of `DS_MEMBER`'s squad in loop.db, read-only), else `orca.sh`. Reads about the host
+(accounts, skills, the Orca nesting depth) use `hostBackendPath()`, which never picks the contract.
+
+`contract.sh` (`ds contract-backend`) answers the adapter verbs those scripts call, from the contract:
+
+- `current`: `local::` + `DS_WT`, else the git top level.
+- `ping`: exits 0 and writes nothing. A squad off Orca has no card note; the `waiting_on_you` question is
+  the board card, so answering it clears nothing (squad-state's resolve and the loop's answer fulfiller
+  skip a `local::` card).
+- `worker-states` and `wt-terminals`: Orca's line shapes over `terminal.list`, `agent.state` and
+  `terminal.last_output` of each project's contract squads (`contractStates`, `contractLive`). The newest
+  terminal of a worktree speaks for it. A backend with no adapter or a list that fails goes to stderr, and
+  the verb exits 1 only when no project could be read.
+- `worker-detail` prints nothing and `terminal-reap` prints `0`.
+- Any other verb exits 2 with `contract adapter: no '<verb>' off Orca`.
+
+The phone book and the team listing read each `local::` member from the contract in process and every
+other member from Orca, so a project with squads on both makes no Orca read for its contract members.
+
+**The Studio's backend (project-start U50).** A project's Studio runs on `studio_backend` in its
+`dispatcher.json` (the loop reads it from `projects.doc`; empty means `orca`, and then everything is as
+before). For a Studio off Orca, `seat()` (`core/actuator.ts`) gives a Studio action (squad `_studio`, or no
+squad with `studio_wt` as the member) a contract seat with the tool the project's `worktree_provider`
+picks. In the Studio's own shell (`DS_MEMBER` `<project>/_studio/studio`) `contractHere` reads
+`studio_backend`, and `backend()` (`backendFor` in `bin/lib/shared.ts`) sends only the six verbs above to
+`contract.sh`; every other verb (`ps`, `worktree-ensure`, `repo-ensure`, `loop-terminals`, `studio-start`,
+`preflight`, …) goes to `hostBackendPath()`. A `local::<path>` worktree is its own path (`worktreePath` in
+`bin/lib/lib.ts`), so the role file and the rewake hook need no `ps`. `contractProjects` and
+`projectContracts` count a project whose only contract member is its Studio.
+**Seeing that Studio (project-start U51).** `observers/contract.ts` reads a Studio off Orca in a
+`local::` folder whether or not the project has a squad off Orca (`studioGroup`, squad `_studio`), writes
+its `observed_terminals` and `observed_workers` rows as for a contract member (its walk counts only the
+Studio's agent), and calls `adoptStudio` after a `terminal.list` that succeeded. A contract terminal has
+no agent identity, so the Studio is found by its `DS_GEN` (`contractCandidates` in `squad/studio.ts`: a
+terminal of the member's own generation, else every terminal with one; a shell beside it has none), and
+the member row keeps the held terminal's `gen`. `offOrca` counts the Studio's worktree and folder, so the
+Orca observer never walks, adopts or reads it (an orca-lite Studio is read by one observer), and the poke
+checks treat it as off Orca. The Studio card names the Studio's backend instead of Orca.
+`tests/loop/studio.test.ts` ("a Studio off Orca (U51)") covers it.
+**Starting and restarting that Studio (project-start U52a).** A Studio move (`fulfil/studio.ts`: a
+restart, a limit move, a move back up) on a Studio off Orca closes the Studio's own terminal by its id in
+its folder (`seat.contract.close(path, handle)`), never another terminal there, and starts the new one
+through the contract driver (`drivers/contract.ts`: the pick's model and effort, the Studio's `--settings`
+with its compact window and skills, the folder trusted on the account, `DS_MEMBER` `<project>/_studio/studio`)
+and the seat's one ledgered `terminal.create`, whose retry id is the new Studio's `DS_GEN` and so its
+`gen` on the member row. A Studio start skips the sweep a member start does (`contractStart`'s `sweep`):
+a shell the operator opened beside it stays. The contract has no wait for the TUI, so the move reads the
+new terminal's screen until Claude's prompt shows (`claudePrompt`, `DS_LOOP_STUDIO_PROMPT_S`, 60); one that
+never shows it is closed again and the start fails, which posts the `studio.move` card. A replay after the
+start began runs the ledgered start again and gets the same terminal back.
+`tests/loop/studio-move.test.ts` ("U52a") covers it.
+**Waking and chatting with that Studio (project-start U52b).** A board chat, a wake-up poke (the reload line
+too) and a menu key reach a Studio off Orca through `squad/studio-send.ts`: the adopted terminal id gets
+`terminal.send` (text with `submit`, or named keys; a backend whose `keys` capability is `none` fails the press
+with that reason) where Orca's Studio gets `poke-terminal` and `keys`. `ds reload ack` from its pane has no Orca
+handle and is found by `DS_GEN` in `DS_WT`. `tests/loop/studio-off-orca-send.test.ts` covers it.
+A Lead off Orca has no Run. Its address is its worktree (`send-worker`), its watch tick reads only its
+loop.db rows (header `no Run: the squad runs on <backend>`), and ask-operator takes a state file with no
+`run_id` when the squad's row names a contract backend. `tests/loop/role-scripts-contract.test.ts`
+covers it, with a real tmux server when one is on PATH.
+
+## The Orca adapter (contract v1)
+
+### Selecting the backend
 
 `$BACKEND` points at the adapter script, defaulting to `bin/backend/orca.sh`.
 Callers invoke `"$BACKEND" <op> [args]` and never call `orca` directly.
@@ -12,6 +464,18 @@ The loop is the one exception to the spawn: when `$BACKEND` is unset or is this 
 `orca.sh`, it calls the verbs of `bin/backend/orca.ts` in process, with the environment orca.sh
 would have had and the same `{code, stdout, stderr}` (U227). Any other `$BACKEND` (a sibling
 adapter, a test's fake script) is still a program the loop spawns.
+
+## Worker identity
+
+A start or resume of a Claude worker the loop makes passes `DS_START_MEMBER`
+(`<project>/<squad>/<role[-suffix]>`) and `DS_START_GEN` (the generation: the start call's retry id,
+also on the member's row as `members.gen`) to the adapter, and the adapter puts `DS_MEMBER`, `DS_WT`
+and `DS_GEN` on the terminal's launch line (`identity()` in `bin/backend/orca.ts`). Only that pair
+sets them: the adapter never passes its caller's own `DS_MEMBER` on, and the loop's children never
+inherit one (`childEnv`). A start the backend makes itself (Orca's `--agent` launch for Codex and
+Muse, a `--on` host) carries only the Orca handle. Code that asks who it runs as calls `whoAmI()`
+(`bin/loop/core/whoami.ts`): `DS_MEMBER` first, then `ORCA_TERMINAL_HANDLE`. A sibling adapter sets
+the same three variables on every Claude terminal it starts.
 
 The Orca adapter chooses its CLI once per process: `DS_ORCA_CLI_BIN_DIR`, then
 `ORCA_CLI_BIN_DIR`, then an executable `orca` in `<Orca data path>/cli/bin`, then
@@ -36,7 +500,7 @@ failure goes to stderr, so the rewake hook wakes only for a real request.
 When worker states are unavailable on a failed Lead read, the team and unit
 sections show unknown state rather than advising re-dispatch.
 
-## Operations
+### Operations
 
 Script-callable (implemented by the adapter, used by the loop's observers and fulfillers and by `bin/host/up.sh`; `spawn-squad.sh` only writes a wish and `bin/board/board.sh` reads loop.db):
 
@@ -61,16 +525,24 @@ Script-callable (implemented by the adapter, used by the loop's observers and fu
 | `limited` | — | `<worktree_id>\t<reset_epoch or ->\t<notice text>` per worker showing a usage limit that has been idle/done for the silent threshold (`DS_SWEEP_SILENT_MIN`, default 10 — so a transient 429 on a working agent doesn't count); nothing if none or unsupported |
 | `gate-list` | `<run_id>` | integer count of pending checkpoint gates |
 | `current` | — | this terminal's own worktree id (close-squad's self-close guard) |
+| `wt-make` | `<repo> <name> <branch> <base> [parent_path]` | the new worktree as one JSON line (`id`, `path`, `branch`, `head`, `parentWorktreeId`): `orca worktree create` with no agent and no Run, `--setup skip`, nested under `<parent_path>` or `--no-parent`; Orca picks the folder and suffixes `-2` on an existing branch or taken name, so the caller checks it (the `orca` worktree provider, `bin/loop/io/providers/orca.ts`) |
+| `wt-show` | `<selector>` | the worktree as one JSON line, as `wt-make` prints it; exit 3 when Orca has no such worktree (`path:<path>` also finds one Orca no longer lists) |
+| `wt-list` | `<repo>` | one JSON line per worktree Orca lists for the repo, the main checkout left out; exit 1 when the list cannot be read whole |
 | `worktree-rm` | `<selector> [force]` | — (remove a worktree + stop its worker; keeps unmerged branches unless `force`) |
 | `attention` | — | displayNames of worktrees whose agent is **waiting for input** (the board's live backstop; the backend owns what "waiting" means, so the board stays backend-agnostic) |
 | `activity` | — | `<worktree-id>\t<active\|waiting>` per non-idle worktree (lets the board show live truth — e.g. flag a stale `done` squad whose workers are still active) |
 | `inbox-wait` | `<run_id> <timeout_ms>` | blocks until a message lands on the Run or the timeout; prints the batch (empty on timeout) — the agent-agnostic "watch" primitive (`bin/lib/watch.sh`) |
 | `worker-states` | — | `<worktree-id>\t<working\|waiting\|done\|idle>\t<displayName>` per worktree (lets `bin/lib/watch.sh` give a Lead/Thinker a team check-in without touching `orca`) |
-| `worker-start`, `lead-worker-start` | as `role-start`: `… [host] [effort] [account] [window] [role]` (`lead-worker-start` takes no role: always the Lead) | — (start/restart a supervised worker in an existing worktree; U97: first closes the worktree's other live agent terminals — `ds-loop` panes and plain shells kept — and starts only once they are gone; an agent mid-turn refuses with exit 3 and `agent_busy`, a failed close with exit 1, so no second session is ever made) |
+| `worker-start`, `lead-worker-start` | as `role-start`: `… [host] [effort] [account] [window] [role]` (`lead-worker-start` takes no role: always the Lead) | — (start/restart a supervised worker in an existing worktree; U97: first closes the worktree's other live agent terminals — `ds-loop` panes and plain shells kept — and starts only once they are gone; an agent mid-turn refuses with exit 3 and `agent_busy`, a failed close with exit 1, so no second session is ever made; U21c: with `DS_START_OLD_GONE=1`, which the loop sets only when U21a's rule reads the member gone and a fresh walk of that worktree finds no agent process, a `working` state is stale and its terminals close as an idle agent's) |
 | `run-workers` | `<run_id>` | `<worktree_id>\t<live yes\|no>\t<dispatch id or ->\t<terminal handle or ->\t<task id or ->\t<status or ->` per worker of the Run (live = a `dispatched` dispatch; handle, task and status are that dispatch's, else the newest one's). The loop's members reconciler (U71) compares the handle with the worktree's live agent terminal; exit 1 when the worker list can't be read |
 | `agent-handles` | — | `<worktree_id>\t<handle>\t<title>` per live AGENT terminal (agent identity, connected, writable, not orphaned), host-wide, newest output first within a worktree (U71: the terminal a member is rebound to; exit 1 when the terminal list can't be read or parsed) |
 | `terminal-shells` | — | `<worktree_id>\t<handle>\t<idle\|busy\|unknown>\t<last output, epoch s\|->\t<title>` per live PLAIN terminal in a worktree (no agent identity, connected, not orphaned), host-wide; idle = its shell is the foreground process group of its tty (from `$DS_PROC`, default /proc, by `ORCA_TERMINAL_HANDLE`), unknown = no readable session leader (U79: members.ts closes idle strays; exit 1 when the list can't be read or parsed) |
 | `terminal-close` | `<handle>` | `terminal-close: closed <handle>` (close one terminal; exit 1 when Orca refuses) |
+| `terminal-create` | `<worktree_id> <title> [command]` | `<handle>\t<tabId:leafId>` of a new plain shell tab in that worktree (the pane key empty when Orca does not list it yet); `[command]` is typed into the new shell (orca-lite's env line) |
+| `terminal-panes` | — | `<handle>\t<worktreeId>\t<tabId:leafId>\t<last output, epoch s\|->` per terminal Orca lists that is not orphaned, agent or shell (orca-lite's list); exit 1 when the list can't be read |
+| `terminal-type` | `<handle> <text> [enter]` | `turn_started` when Orca's receipt saw the agent start a turn (it waits up to 10 s), else `accepted`; `<text>` is written as is (control bytes pass), any terminal, Enter after it with `enter`; exit 1 = not sent |
+| `terminal-read` | `<handle> [screen\|stream] [limit]` | the terminal's output lines: the rendered screen with `screen`, else the accumulated output, at most `[limit]` lines; exit 3 when Orca has no such terminal |
+| `pane-state` | `<worktree_id> <tabId:leafId>` | the state `worktree ps` gives the agent in that pane (`working`, `done`, …), or nothing when it lists none there (only an Orca-made worktree is listed, `docs/backends/orca-probe.md` Q5) |
 | `task-spec` | `<run_id> <task_id>` | that task's spec (exit 1 when the task isn't in the Run) |
 | `dispatch` | `<task_id> <handle> <run_id>` | the dispatch id: hand an existing task to a live terminal with `--inject`, from the coordinator (`DS_ORCA_FROM`); exit 1 when refused (U71's rebind; never the squad's umbrella task, which Orca refuses `task_not_startable`) |
 | `dispatch-abandon` | `<dispatch_id>` | — (fence one dispatch: a rebound member's old one, or a Run worker that is no longer a member; exit 1 when refused) |
@@ -78,7 +550,7 @@ Script-callable (implemented by the adapter, used by the loop's observers and fu
 | `wt-terminals` | — | `<worktree_id>` per worktree with a live terminal, host-wide (the phone book's liveness source; exit 1 when the terminal list can't be read, so liveness reports unknown instead of guessing) |
 | `worker-resume` | `<run> <worktree_id> <spec> <model> [account] [agent] [window] [role]` | — (restart in place keeping the conversation; missing agent = claude; exit 1 when the agent can't resume, so the caller starts fresh; the U97 fresh-start guard above runs first, with the same `agent_busy` exit 3) |
 | `ps` | — | merged `worktree ps` JSON across the default host and omitted hosts |
-| `worker-done` | `<subject> <body>` | — (complete THIS terminal's active dispatch with outcome succeeded; discovers task/dispatch/sender ids itself — `bin/role/finish-unit.sh`) |
+| `worker-done` | `[--outcome succeeded\|failed] <subject> <body>` | — (complete THIS terminal's active dispatch with that outcome, default succeeded; discovers task/dispatch/sender ids itself — `bin/role/finish-unit.sh`) |
 
 **Accounts.** `account` is the last optional argument of the start ops; a backend with one login
 ignores it. A caller that passes `account` but skips an earlier optional positional (`host`,
@@ -189,9 +661,9 @@ stays the low-level same-Run op. A new backend implements `wt-terminals` (worktr
 a live terminal) so the phone book's liveness keeps working; dispatch ids are never a
 delivery address (an idle standing role's newest dispatch is `completed`).
 
-## Adding a backend
+### Adding a v1 adapter
 
-Write `bin/backend/<name>.sh` implementing the script-callable ops (and, for a
+A new backend implements contract v2 (above). A v1 adapter is a sibling of `orca.sh`: write `bin/backend/<name>.sh` implementing the script-callable ops (and, for a
 full port, the agent-facing ones), then run with `BACKEND=bin/backend/<name>.sh`.
 Nothing in the Studio, Squad helpers, or conventions should need to change — that
 is the seam's whole purpose.

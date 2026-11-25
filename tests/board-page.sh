@@ -168,6 +168,13 @@ out="$(bsh "$LBL" --serve)"
 kill "$livepid" 2>/dev/null || true
 has "serve: a live pid says the loop runs it" "$out" "the loop runs it on :8795"
 eq  "serve: ... and changes nothing" "$(sqlr "SELECT want_at FROM services WHERE project='$LBL'" | jq -r '.[0].want_at')" "100"
+# U2 (board-empty-state-and-port): a board the loop moved (asked 8795, bound 8796) prints the bound port.
+bash -c 'exec -a board-server sleep 30' & livepid=$!
+sqlr "UPDATE services SET pid=$livepid, port=8796 WHERE project='$LBL'"
+out="$(bsh "$LBL" --serve)"
+kill "$livepid" 2>/dev/null || true
+has "serve: a moved board prints its bound port" "$out" "the loop runs it on :8796 (8795 was taken) — open http://127.0.0.1:8796/"
+eq  "serve: ... and asking again changes nothing" "$(sqlr "SELECT want_at, port FROM services WHERE project='$LBL'" | jq -r '.[0] | "\(.want_at) \(.port)"')" "100 8796"
 sqlr "UPDATE services SET status=NULL, pid=NULL WHERE project='$LBL'"
 rc=0; out="$(WAIT=1 bsh "$LBL" --serve 8797)" || rc=$?
 eq  "serve: no loop to start it within the wait exits 1" "$rc" "1"
@@ -316,8 +323,8 @@ has "text: cancelled row folds into PR"  "$CXT" "folded into PR#19717"
 hasre "text: ✗ marks the cancelled row"  "$CXT" '✗ u1 '
 has "text: blocked names work dropped"   "$CXT" "blocked by u3 (work dropped)"
 has "text: LEFTOVERS block"              "$CXT" "LEFTOVERS"
-has "text: leftover names path+branch"   "$CXT" "⚑ /tmp/wt-keep  (br-keep, 2 uncommitted, 1 unpushed)"
-has "text: leftover waits on the PR"     "$CXT" "waits on PR#19717"
+has "text: leftover names path+branch"   "$CXT" "⚑ /tmp/wt-keep  (br-keep) — not checked yet"
+case "$CXT" in *"waits on PR#19717"*) fail=$((fail+1)); echo "  FAIL: text still shows waits on" >&2;; *) pass=$((pass+1));; esac
 # Same dep without into_merged -> blocked; dropped-cancelled dep -> blocked.
 jq '(.units[] | select(.slug=="u1") | .into_merged) = false' "$SD/cx-sq.json" > "$TMP/cx2" && mv "$TMP/cx2" "$SD/cx-sq.json"
 board "$LBL" > "$TMP/cx2.json"
@@ -327,7 +334,7 @@ eq "web board: cancelled counts as finished" "$(grep -cF 'u.state === "cancelled
 eq "board-data: open units exclude cancelled" "$(grep -cF 'u.state !== "done" && u.state !== "cancelled"' "$ROOT/bin/board/board-data.ts")" "2"
 eq "web board: units total excludes cancelled" "$(grep -cF 'total: n((x) => x.state !== "cancelled")' "$ROOT/web/board.html")" "1"
 eq "web board: LeftoversBox under UnitsBox" "$(grep -cF "<\${LeftoversBox} s=" "$ROOT/web/board.html")" "1"
-eq "web board: leftover files in a title tooltip" "$(grep -cF '(l.files || []).join("\n")' "$ROOT/web/board.html")" "1"
+eq "web board: leftover files in a title tooltip" "$(grep -cF '(c.differ || []).join("\n")' "$ROOT/web/board.html")" "1"
 eq "web board: cancelled dot + state styles" "$(grep -cF '.dot.cancelled' "$ROOT/web/board.html")$(grep -cF '.ust.cancelled' "$ROOT/web/board.html")" "11"
 
 # The loop's health row: a fresh tick -> no banner; older than board_stale_ticks (12) ticks of
@@ -456,27 +463,35 @@ jt "no dispatch on record keeps done"           "$TMP/u96.json" "$U96 | (.member
 rm -f "$SD/u96.json"
 
 # U100: the board degrades on a loop.db from before migration 0017 (no dispatch_seen_at):
-# a done Thinker keeps `done` instead of rendering the squad broken.
+# a done Thinker keeps `done` instead of rendering the squad broken. Such a loop.db has none of 0056's
+# triggers either, so they go first.
 printf '{"run_id":"r17","status":"running","members":[{"role":"thinker","wt":"wT"}],"units":[]}' > "$SD/u17.json"
 cat > "$TMP/seed17.json" <<'JSON'
 {"workers":[["wT","done","ds-thinker"]],"terminals":[],"worktrees":[["wT",null]]}
 JSON
 SEED="$TMP/seed17.json" mkdb "$LBL"
-bun -e 'const {Database} = await import("bun:sqlite"); const db = new Database("'"$DBR"'/loop.db"); db.run("ALTER TABLE observed_workers DROP COLUMN dispatch_seen_at"); db.close();'
+bun -e 'const {Database} = await import("bun:sqlite"); const db = new Database("'"$DBR"'/loop.db"); for (const t of ["observed_workers_orca_ins", "observed_workers_orca_upd"]) db.run(`DROP TRIGGER IF EXISTS ${t}`); db.run("ALTER TABLE observed_workers DROP COLUMN dispatch_seen_at"); db.close();'
 render "$LBL" --json > "$TMP/u17.json"
 jt "pre-0017 loop.db keeps the agent state" "$TMP/u17.json" '.squads[] | select(.topic=="u17") | (.members[] | select(.label=="thinker") | .state=="done")'
 rm -f "$SD/u17.json"
 
 # The board reads and writes loop.db alone: no command, no file read and no config script or Lavish
-# start in the whole of bin/board/board-data.ts and bin/board/board-server.ts (import lines aside) — the one
-# exception is the page itself, web/board.html, read by its line in the server.
+# start in the whole of bin/board/board-data.ts and bin/board/board-server.ts (import lines aside) — the
+# exceptions are the page itself, web/board.html, read by its line in the server, and the chat images
+# (chat-image-upload U1): chatPrune lists `<label>/chat-files/*/` and chatFileGet serves one image.
 PAT='Bun\.spawn|run\(\[|readFileSync|readdirSync|Bun\.file\(|roles\.sh|limits\.sh|lavish-axi|DS_LAVISH_START'
 eq "board-data.ts: no spawn, no file read, no script" "$(grep -nE "$PAT" "$ROOT/bin/board/board-data.ts" | grep -vcE '^[0-9]+:import ' || true)" "0"
-HITS="$(grep -nE "$PAT" "$ROOT/bin/board/board-server.ts" | grep -vE '^[0-9]+:import ' || true)"
-eq "board-server.ts: only the page is read" "$(printf '%s\n' "$HITS" | grep -c . || true)" "1"
+# Each hit outside the page line must sit inside chatPrune or chatFileGet (from its `function` line to the
+# next line that is a lone `}`).
+HITS="$(PAT="$PAT" awk '
+  /^(async )?function (chatPrune|chatFileGet)\(/ { inside = 1 }
+  $0 ~ ENVIRON["PAT"] && $0 !~ /^import / && !inside { print NR ": " $0 }
+  inside && /^}$/ { inside = 0 }' "$ROOT/bin/board/board-server.ts")"
+eq "board-server.ts: only the page is read outside the chat-image block" "$(printf '%s\n' "$HITS" | grep -c . || true)" "1"
 has "board-server.ts: the exception is readFileSync(page)" "$HITS" "readFileSync(page)"
-echo "  (the one exception, web/board.html: bin/board/board-server.ts:${HITS%%:*})"
-eq "board-server.ts: every GET goes through the read block" "$(grep -cE '^  return get\(req, new URL\(req\.url\)\);' "$ROOT/bin/board/board-server.ts")" "1"
+echo "  (the page, web/board.html: bin/board/board-server.ts:${HITS%%:*})"
+eq "board-server.ts: the chat-image block reads files" "$(awk '/^(async )?function (chatPrune|chatFileGet)\(/ { i = 1 } i && /readdirSync|readFileSync/ { n++ } i && /^}$/ { i = 0 } END { print n + 0 }' "$ROOT/bin/board/board-server.ts")" "3"
+eq "board-server.ts: every GET goes through the read block" "$(grep -cE '^  return get\(req, url\);' "$ROOT/bin/board/board-server.ts")" "1"
 
 # Header tiles (plan U3, KTD8): /board.json `accounts_summary` and `header` are computed in board-data;
 # the page only lays them out. Fixture: three accounts (one limited until later today+, one above
@@ -607,8 +622,8 @@ has "web page: the switch choice is stored under b:machine-sort" "$mt" 'lstore.s
 has "web page: the heading follows the switch" "$mt" 'Top by ${sort === "cpu" ? "CPU" : "RAM"}'
 has "web page: the heading tooltip says RAM is RSS" "$mt" 'RAM here is RSS'
 has "web page: the outside block is under the table" "$mt" 'Outside this project'
-# U264: a Studio the loop moved to another account reads "Studio moved to <agent>:<account>" on the page.
-has "web page: the Studio move line" "$(grep -F 'studio-moved' "$ROOT/web/board.html")" 'Studio moved to <span class="mono">${st.moved.to_label}</span>'
+# U5: the page has no Studio moved line.
+if grep -qF 'studio-moved' "$ROOT/web/board.html"; then fail=$((fail+1)); echo "  FAIL: web page: no Studio moved line" >&2; else pass=$((pass+1)); fi
 rc="$(sed -n '/^function ResourceCard/,/^}/p;/^function UtilBar/,/^}/p' "$ROOT/web/board.html")"
 has "web page: the card is titled Resource utilization with the project" "$rc" 'Resource utilization${project ? " · " + project : ""}'
 has "web page: the card sits under the tiles, before the table" "$mp" '<${ResourceCard} M=${M} project=${data.project} />'
@@ -705,28 +720,28 @@ FXNOW="$(DS_STATE_ROOT="$FR" bun "$ROOT/tests/loop/flow-fixture.ts" "$FR" zzflow
 DS_STATE_ROOT="$FR" DS_NOW="$FXNOW" TZ=UTC PATH="$TMP/nopath" "$ROOT/bin/board/board.sh" zzflow --json > "$TMP/flow.json"
 jt "U1: flow has a card in every stage" "$TMP/flow.json" '[.flow.cards[].stage] | unique == ["building","merging","needs_you","pr_open","queued"]' '.flow.cards'
 jt "U1: flow has a card in every Queued and PR open group" "$TMP/flow.json" '[.flow.cards[].group | select(. != null)] | unique == ["blocked","checks running","coding","draft","fixing","fixing findings","held","in review","review stopped","reviewing","waiting for a slot","waiting for an account","waiting on another unit"]' '[.flow.cards[].group]'
-jt "U4: the fixture squad's Building units show the four review groups with their notes" "$TMP/flow.json" '[.flow.cards[] | select(.squad == "flow" and .stage == "building") | {slug, group, note}] | sort_by(.slug) == [{"slug":"u19-slow","group":"reviewing","note":"2nd review · delta 4m"},{"slug":"u2-building","group":"coding","note":null},{"slug":"u8-gone","group":"review stopped","note":"reviews stopped · needs --retry"},{"slug":"u9-closed","group":"fixing findings","note":"6 findings 12m"}]' '[.flow.cards[] | select(.stage == "building")]'
-jt "U1: flow counts add up to the header's units left" "$TMP/flow.json" '.flow.counts as $c | ($c.queued + $c.building + $c.pr_open + $c.needs_you + $c.merging) == .header.units_left'
+jt "U4: the fixture squad's Building units show the four review groups with their notes" "$TMP/flow.json" '[.flow.cards[] | select(.squad == "flow" and .stage == "building") | {slug, group, note}] | sort_by(.slug) == [{"slug":"u19-slow","group":"reviewing","note":"2nd review · delta 4m"},{"slug":"u2-building","group":"coding","note":null},{"slug":"u20-starting","group":"coding","note":null},{"slug":"u8-gone","group":"review stopped","note":"reviews stopped · needs --retry"},{"slug":"u9-closed","group":"fixing findings","note":"6 findings 12m"}]' '[.flow.cards[] | select(.stage == "building")]'
+jt "U1: flow counts add up to the header's units left" "$TMP/flow.json" '.flow.counts as $c | ($c.queued + $c.building + $c.pr_open + $c.needs_you + $c.merging + ($c.paused // 0)) == .header.units_left'
 jt "U1: flow keeps 30 days of merges" "$TMP/flow.json" '(.flow.per_day | length) == 30'
 DS_STATE_ROOT="$FR" DS_NOW="$FXNOW" TZ=UTC PATH="$TMP/nopath" "$ROOT/bin/board/board.sh" zzflow > "$TMP/flow.txt"
 eq "U1: one FLOW line on the text board" "$(grep -c '^FLOW ' "$TMP/flow.txt" || true)" "1"
-eq "U1: the FLOW line has flow.counts' numbers" "$(grep '^FLOW ' "$TMP/flow.txt")" "$(jq -r '.flow.counts | "FLOW \(.queued) queued · \(.building) building · \(.pr_open) PR open · \(.merging) merging · \(.stuck) stuck\(if .slow > 0 then " · \(.slow) slow" else "" end) · \(.needs_you) needs you · \(.merged_today) merged today"' "$TMP/flow.json")"
+eq "U1: the FLOW line has flow.counts' numbers" "$(grep '^FLOW ' "$TMP/flow.txt")" "$(jq -r '.flow.counts | "FLOW \(.queued) queued · \(.building) building · \(.pr_open) PR open · \(.merging) merging · \(.stuck) stuck\(if .slow > 0 then " · \(.slow) slow" else "" end) · \(.needs_you) needs you\(if .paused > 0 then " · \(.paused) paused" else "" end) · \(.merged_today) merged today"' "$TMP/flow.json")"
 
 
 # U7: Needs-you holds the cards only the operator can clear: the morning brief (Read) and a finished squad (Show squad, Close squad, Dismiss).
-eq "U7 page: brief and finished rows are non-blocking qnote rows" "$(grep -cF 'class=${"qnote" + (sent ? " sent" : "")}' "$ROOT/web/board.html")" "1"
-eq "U7 page: Read opens Briefs and answers Mark read" "$(grep -cF 'sendAnswer(n.label, "_studio", n.id, "Mark read")' "$ROOT/web/board.html")" "1"
+eq "U7 page: brief and finished rows are non-blocking qnote rows" "$(grep -cF 'class="qnote" onClick=' "$ROOT/web/board.html")" "1"
+eq "U7 page: Read opens Briefs and answers Mark read" "$(grep -cF 'k === "read" ? "Mark read" : a.answer' "$ROOT/web/board.html")" "1"
 eq "U7 page: Read keeps the b:briefs store open" "$(grep -cF 'lstore.set("b:briefs", true)' "$ROOT/web/board.html")" "1"
-eq "U7 page: a Studio card has its act button and Dismiss" "$(grep -cF '(studioCard || doneRow) && n.act && html' "$ROOT/web/board.html")$(grep -cF 'studioCard && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); dismiss(); }}>Dismiss' "$ROOT/web/board.html")" "11"
+eq "U7 page: a Studio card has its act button and Dismiss" "$(grep -cF 'if (n.act) out.push({ key: "act", label: n.act.label' "$ROOT/web/board.html")$(grep -cF 'out.push({ key: "dismiss", label: "Dismiss"' "$ROOT/web/board.html")" "31"
 # U10: one row shape for every Needs-you item; no "from sweep".
 eq "U10 page: the Needs-you list has no qrow grid branch" "$(sed -n '/U10: every Needs-you item/,/<${LoopNotes}/p' "$ROOT/web/board.html" | grep -c qrow)" "0"
-eq "U10 page: asks get an Answer button" "$(grep -cF '!brief && !studioCard && !doneRow && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); setAsk(nkey(n)); }}>Answer' "$ROOT/web/board.html")" "1"
+eq "U10 page: asks get an Answer button" "$(grep -cF 'out.push({ key: "answer", label: "Answer"' "$ROOT/web/board.html")" "1"
 # squad-done-definition U4: the done row, the explanation and the close confirm are in the page.
-eq "U4 page: a done row has Close squad and Open" "$(grep -cF 'doneRow && html`<button class="btn sm" onClick=${(e) => { e.stopPropagation(); show(n.label, n.card_squad); }}>Open' "$ROOT/web/board.html")" "1"
+eq "U4 page: a done row has Close squad and Open" "$(grep -cF 'out.push({ key: "show", label: "Open"' "$ROOT/web/board.html")" "1"
 eq "U4 page: the pill hover and the squad panel carry the explanation" "$(grep -cF 'explainText(s)' "$ROOT/web/board.html" | awk '{print ($1>=2)}')" "1"
 eq "U4 page: the close confirm names open units" "$(grep -cF 'are still held or planned and will be archived with them' "$ROOT/web/board.html")$(grep -cF '1 unit is still held and will be archived with it' "$ROOT/web/board.html")" "11"
 eq "U4 page: the legend and wrapping-up pill colour" "$(grep -cF '.pill.wrapping-up{' "$ROOT/web/board.html")$(grep -cF 'STATE_LEGEND.join' "$ROOT/web/board.html")" "11"
-eq "U10 page: Studio card has Show squad" "$(grep -cF 'studioCard && n.card_squad && html' "$ROOT/web/board.html")" "1"
+eq "U10 page: Studio card has Show squad" "$(grep -cF 'if (n.card_squad) out.push({ key: "show", label: "Show squad"' "$ROOT/web/board.html")" "1"
 eq "U10 page: from shown only for an asker not already in the who line" "$(grep -cF 'n.from && !who.includes(n.from)' "$ROOT/web/board.html")" "1"
 eq "U10 page: the overlay shows from only when set" "$(grep -cF '${n.from && html`<span>· from ${n.from}</span>`}' "$ROOT/web/board.html")" "1"
 eq "U10 page: no from-sweep text on the page" "$(grep -ci 'from sweep' "$ROOT/web/board.html")" "0"
@@ -754,7 +769,7 @@ eq "polish U1 page: the changes view names the unit and the plan view keeps inde
 eq "U2 page: the question text and Why fold under Details for the record" "$(printf '%s' "$ask_fn" | grep -cF '<details class="qdetails"><summary>Details for the record</summary>')" "1"
 eq "U2 page: no plain summary keeps today's question text" "$(printf '%s' "$ask_fn" | grep -cF '${!n.plain && n.text !== n.title')" "1"
 eq "U2 page: the button reads Open plan on plan-* and Open doc otherwise" "$(grep -cF '/^plan-/.test(n.id || "") ? "Open plan" : "Open doc"' "$BP")" "1"
-eq "U2 page: the Needs-you row gets the doc button and the What you get detail line" "$(grep -cF 'n.doc && html`<button class="btn sm" data-ev="open-doc"' "$BP")$(grep -cF 'l.label === "What you get"' "$BP")" "11"
+eq "U2 page: the Needs-you row gets the doc button and the What you get detail line" "$(grep -cF 'if (n.doc) out.push({ key: "open-doc"' "$BP")$(grep -cF 'l.label === "What you get"' "$BP")" "11"
 eq "U2 page: while a plan is open the overlay ignores every key" "$(printf '%s' "$ask_fn" | grep -c 'if (planOpen || chat) return;')$(grep -cF 'planOpen=${!!plan}' "$BP")" "11"
 eq "U2 page: the plan modal is rendered after the overlay so it paints on top" "$(awk '/<\$\{AskOverlay\}/{a=NR} /\$\{plan && html`<div class="modal"/{p=NR} END{print (a && p > a) ? "after" : "before"}' "$BP")" "after"
 
@@ -763,12 +778,13 @@ chat_fn=$(sed -n '/^function ChatPanel(/,/^}/p' "$BP")
 eq "U3 page: a crew member with a worktree has chat in its actions menu" "$(sed -n '/^function MemberActions(/,/^}/p' "$BP" | grep -cF '${m.wt && onChat && html`<button class="btn sm chat-btn"')$(grep -cF 'onChat=${() => setChatWith(m)}' "$BP")$(grep -cF '<${ChatPanel} project=${s.label} topic=${s.topic} wt=${chatWith.wt}' "$BP")" "111"
 eq "U3 page: a squad question card chats with the member its answer goes to" "$(printf '%s' "$ask_fn" | grep -c 'n.squad !== "_studio" && n.chat_wt')$(printf '%s' "$ask_fn" | grep -c 'wt: n.chat_wt, label: n.chat_label')$(printf '%s' "$ask_fn" | grep -cF '<${ChatPanel} ...${chat}')" "111"
 eq "U3 page: the panel reads api/chat every 3 s and stops on close" "$(printf '%s' "$chat_fn" | grep -c 'setInterval(load, 3000)')$(printf '%s' "$chat_fn" | grep -c 'clearInterval(t)')" "11"
-eq "U3/U5 page: a wrapping input capped at 2000, sent as one line to api/chat" "$(printf '%s' "$chat_fn" | grep -c '<textarea class="chat-in" rows="1" ref=${input} maxLength=${CHAT_MAX}')$(grep -c '^const CHAT_MAX = 2000;' "$BP")$(printf '%s' "$chat_fn" | grep -c 'post("api/chat", { project, topic, wt, text: t })')$(printf '%s' "$chat_fn" | grep -c 'const t = chatOneLine(text);')" "1111"
+eq "U3/U5/U19 page: a wrapping input counted to 2000 by code points, sent with its line breaks to api/chat" "$(printf '%s' "$chat_fn" | grep -c '<textarea class="chat-in" rows="1" ref=${input} enterkeyhint')$(grep -c '^const CHAT_MAX = 2000;' "$BP")$(printf '%s' "$chat_fn" | grep -c 'post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t })')$(printf '%s' "$chat_fn" | grep -c 'const t = chatText(text);')" "1111"
+eq "U19 page: the key strip posts api/keys, Esc first; a screen toggle reads data.screen" "$(grep -c '^const CHAT_KEYS = \[\["Escape", "Esc"' "$BP")$(printf '%s' "$chat_fn" | grep -cF 'await post("api/keys", { project, topic, wt: to, keys })')$(printf '%s' "$chat_fn" | grep -cF 'class="chat-keys" role="toolbar"')$(printf '%s' "$chat_fn" | grep -cF 'data.screen && typeof data.screen.tail === "string"')" "1111"
 # crew-terminal-access U5: the panel reads as a conversation.
 chat_row_fn=$(sed -n '/^function chatTurn(/,/^}/p' "$BP")
 eq "U5 page: only a reply is HTML, and only through mdToHtml (it escapes first)" "$(printf '%s%s' "$chat_fn" "$chat_row_fn" | grep -ci 'innerHTML')$(printf '%s' "$chat_row_fn" | grep -cF 'dangerouslySetInnerHTML=${{ __html: mdToHtml(text) }}')" "11"
-eq "U5 page: at phone width the panel fills the screen" "$(grep -cF '@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;height:100dvh' "$BP")" "1"
-eq "U5 page: a counter, Working…, the ↓ button, no send strip" "$(printf '%s' "$chat_fn" | grep -c '} left</span>')$(printf '%s' "$chat_fn" | grep -c 'data.working && html')$(printf '%s' "$chat_fn" | grep -c 'class="btn chat-down"')$(grep -c 'chat-sends\|chat-send ' "$BP")" "1110"
+eq "U5 page: at phone width the panel fills the screen" "$(grep -cF '@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none' "$BP")" "1"
+eq "U5 page: a counter, Working…, the ↓ button, no send strip (the second data.working line is the card's ■ Stop)" "$(printf '%s' "$chat_fn" | grep -c '} left`}</span>')$(printf '%s' "$chat_fn" | grep -c 'data.working && html')$(printf '%s' "$chat_fn" | grep -c 'class="btn chat-down"')$(grep -c 'chat-sends\|chat-send ' "$BP")" "1210"
 # crew-terminal-access U4: the Flow card opens the unit details window, which names the Builder and offers Chat / Show in squad / Answer.
 ud_fn=$(sed -n '/^function UnitDetails(/,/^}/p' "$BP")
 eq "U4 page: the window's Builder row names the member and its state, or says why it is gone" "$(printf '%s' "$ud_fn" | grep -cF '<b>${bm.label}</b> <span class="mut">· ${bm.state')$(printf '%s' "$ud_fn" | grep -cF 'gone — its worktree')" "11"

@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 LBL="zzjn_$$"; JD="$DS_STATE_ROOT/$LBL/journals"
-trap 'rm -rf "$DS_STATE_ROOT/$LBL"' EXIT
+state_root_on_exit 'rm -rf "$DS_STATE_ROOT/$LBL"'
 J="$ROOT/bin/role/journal.sh"
 
 pass=0; fail=0

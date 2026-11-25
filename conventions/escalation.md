@@ -116,7 +116,13 @@ loop files one question per PR naming the gates, withdraws it when the PR goes b
 and routes the operator's answer: "Done" hands the PR back to the loop, "Send back" and free text
 are poked to the unit's Builder (a copy to the Lead). A Builder or Lead never asks the operator
 about a PR: `ask-operator.sh --pr <n>`, and a question naming one of the squad's unit PRs, is
-refused for them with "the loop asks PR questions; finish your unit and stop". If the PR goes back
+refused for them with "the loop asks PR questions" and a line naming who posts it: (a) the loop, its
+question is already on the board as `<id>`; (b) the loop, once the Builder has finished, because only human
+gates are left; (c) nobody yet, because the PR is not ready: the Builder fixes it (a Lead sends it
+`send-role.sh <topic> builder-<slug>`, a Builder tells its Lead if the cause is outside its unit), and a
+Lead who needs the operator to decide asks about the unit with `--unit <slug>` and no PR number
+(routing metadata, allowed while the PR needs repairs); an unread PR state gets the (c) step. A `--unit` that is
+not a unit slug exits 2 with one line listing the squad's slugs. If the PR goes back
 to not ready, the loop closes the question (answered via `reality`); its Builder gets the pr-stale
 poke. A Builder that goes quiet after the first pr-stale poke without pushing gets the second
 after `stale_repoke_min` minutes (default 30; 0 = only after a push) of quiet: idle at its prompt, no push,

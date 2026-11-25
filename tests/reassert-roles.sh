@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LABEL="zzrole_$$"
 SD="$DS_STATE_ROOT/$LABEL"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$SD" "$TMP"' EXIT
+state_root_on_exit 'rm -rf "$SD" "$TMP"'
 
 mkdir -p "$SD/squads" "$TMP/wtStudio" "$TMP/wtLead"
 for w in wtStudio wtLead; do ( cd "$TMP/$w" && git init -q && git config user.email t@t && git config user.name t ); done

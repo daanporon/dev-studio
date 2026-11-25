@@ -30,10 +30,15 @@ or with a `limited_until` still ahead is skipped. Unknown usage is eligible unle
 has not reset. The loop keeps such limits across worker switches, including Muse’s terminal
 notice when its usage API returns no data. The picker tries each fallback in the 6th column in
 the written order, without grouping by agent. Pick floors count rungs in that same order.
-Only an idle Thinker automatically returns to a higher rung when it has room, at most once
-per `fallback_return_min` minutes (0 disables returns). A Builder, Lead, Tester or Reviewer
-stays on its model until a restart, a long stall or a phase change; this includes a member
-whose model is no longer on its row's ladder. With no eligible account on any allowed model, the loop waits for the earliest
+An idle member whose roster row says `up` (`roles.conf` column 8, `return`) automatically
+returns to a higher rung when it has room, at most once per `fallback_return_min` minutes
+(0 disables returns); the shipped roster sets it on the Thinker alone. A row with no column 8
+inherits it from the default row of the same name, then from its base role's row
+(`builder-standard` from `builder`), else `stay`. A member on a `stay` row stays on its model
+until a restart, a long stall or a phase change; this includes a member whose model is no
+longer on its row's ladder. A Builder whose unit is done or whose PR merged is never moved,
+and a Builder stopped to move up keeps its seat under `max_builders` until it is placed again
+(or `pick_ttl_s` passes). `elevate` rows never move. The Studio moves back up only when its `studio` row says `up`, through `studio_move`'s move (a fresh tab from its journal; `ask` cards first, `off` never), not the member restart. With no eligible account on any allowed model, the loop waits for the earliest
 account to become usable after all of that account’s blocking windows reset. The member records the `account` it got and `fallback`
 when it is not on its row's own model. Nothing free: the wish stays and the loop keeps
 the start pending (`no account free`, or `no room until HH:MM`) and tries it again; the board shows

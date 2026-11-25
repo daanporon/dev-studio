@@ -5,7 +5,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, dsLabel, writeErr, writeOut } from "../lib/shared";
 import { confLines, limitEnvName, limitSrc, readFields } from "../lib/operator";
-import { rm, set } from "../loop/settings/settings.ts";
+import { backendChangeNote, rm, set } from "../loop/settings/settings.ts";
+import { BACKEND_NAMES, PROVIDER_SETTINGS } from "../backend/registry.ts";
 import { changeSettings } from "../loop/settings/settings-migrate.ts";
 
 export const help = `show [--json] [<project>] | set <project> <key> <value> | rm <project> <key> — view or set the limits (limits.sh)`;
@@ -21,6 +22,9 @@ function allowedFor(key: string): string[] | null {
   if (key === "studio_move") return ["auto", "ask", "off"];
   if (key === "auto_merge") return ["off", "squash", "merge", "rebase"];
   if (key === "builder_host_brake") return ["off", "on"];
+  if (key === "unblock_first" || key === "debrief") return ["on", "off"];
+  if (key === "default_backend") return [...BACKEND_NAMES];
+  if (key === "worktree_provider") return [...PROVIDER_SETTINGS];
   if (key === "base_update") return ["merge", "rebase"];
   return null;
 }
@@ -62,8 +66,10 @@ export async function run(argv: string[]): Promise<number> {
   if (cmd === "set") {
     if (args.length < 3) return usage();
     const [proj, key, val] = args, label = dsLabel(proj);
-    if (!changeSettings("limits.sh", (s) => set(s, label, "limits.conf", key, val, "ds limits"))) return 2;
+    let note = "";
+    if (!changeSettings("limits.sh", (s) => { const cs = set(s, label, "limits.conf", key, val, "ds limits"); note = backendChangeNote(s, label, cs); return cs; })) return 2;
     writeOut(`set ${key} = ${val.trim()} for ${label}\n`);   // settings.ts stores it trimmed
+    if (note) writeOut(note + "\n");
     return 0;
   }
 

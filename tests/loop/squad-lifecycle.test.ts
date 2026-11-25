@@ -13,6 +13,7 @@ import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
 import decider from "../../bin/loop/core/decide.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
+import { studioOn } from "./studio-on.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
@@ -106,6 +107,7 @@ describe("squad create (U158)", () => {
     wish("st1", { type: "feature", framing: "think about the board", start: "brainstorm" });
     wish("st2", { type: "feature", framing: "think about the board" });
     wish("st3", { type: "testing", framing: "run it", start: "plan" });
+    wish("st4", { type: "feature", framing: "the board crashes", start: "fix" });
     await tick();
     expect(JSON.parse(String(squad(s, "st1").doc)).start).toBe("brainstorm");
     expect(JSON.parse(String(squad(s, "st2").doc)).start).toBeNull();
@@ -115,6 +117,7 @@ describe("squad create (U158)", () => {
     expect(prompt("st2", "thinker")).not.toContain("Studio start");
     expect(prompt("st3", "thinker")).not.toContain("Studio start");
     expect(prompt("st3", "thinker")).not.toContain("Framing");
+    expect(prompt("st4", "thinker")).toContain("Studio start: fix — run the Start triage in roles/thinker.md from it; overrule it only with a reason.");
     expect(prompt("st1", "lead")).not.toContain("Studio start");
   });
 
@@ -126,6 +129,22 @@ describe("squad create (U158)", () => {
     expect(orca.of("run-create")).toHaveLength(1);
     expect(String(squad(s, "new2").run_id)).toMatch(/^run_/);
     expect(String(squad(s, "new2").task_id ?? "")).toMatch(/^task_/);
+  });
+
+  test("U11: a squad on another backend gets no Run, task or coordinator; its roles are wished", async () => {
+    const { s, orca, tick } = await rig();
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });   // U30: the project's backend
+    studioOn(s, "fx", "tmux", T);   // U54: one backend per project
+    s.want("squad", "fx/ontmux", "running", { payload: { repo: "path:/nonexistent/fixture-repo", type: "feature" },
+      fill: { repo: "path:/nonexistent/fixture-repo", type: "feature", backend: "tmux", worktree_provider: "git" }, by: "test" });
+    await tick(3);
+    expect(orca.of("run-create")).toHaveLength(0);
+    expect(orca.of("task-create")).toHaveLength(0);
+    expect(orca.calls.filter((c) => JSON.stringify(c.args).includes("ontmux"))).toEqual([]);
+    expect(squad(s, "ontmux").run_id ?? null).toBeNull();
+    expect(squad(s, "ontmux").status).toBe("running");
+    expect(s.get("coordinators", { project: "fx", squad: "ontmux" })).toBeNull();
+    expect((members(s, "ontmux") as { role: string }[]).map((m) => m.role)).toContain("lead");
   });
 });
 

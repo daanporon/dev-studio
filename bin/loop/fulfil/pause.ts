@@ -6,12 +6,19 @@
 // the process gone), once orca.sh has released every other dispatch of the worktree, is recorded
 // once as a `refusals` row of class unknown and the pause finishes; it is never tried again. Any
 // other failed release (or fence, or listing) is a raw retry the actuator classifies.
+// U12b: a squad off Orca has no dispatch. Its snapshot is the member row and the contract observer's rows
+// (the finish row of the member's generation stands for a completed task); the instruction is a
+// `terminal.send`, each agent terminal is closed through the seat by id, and there is nothing to release.
 import { type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
 import { CHECKPOINT_S, checkpointFailed as journalFailed, checkpointHash, ensureTransition, journalPath, intents, latestMember, memberKey, pauseControlBlock, quote, type Target } from "../pause/pause.ts";
 import { fingerprint, refuse } from "../io/refusals.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import type { Action, TickCtx } from "../core/plugins.ts";
+import type { ContractSeat } from "../drivers/types.ts";
 import { startInFlight } from "../squad/member-state.ts";
+import { onContract } from "../squad/backend.ts";
+import { finishOf } from "../squad/finish-read.ts";
+import { localPath } from "../drivers/contract.ts";
 
 type Snapshot = { terminals: string[]; idle: boolean; helpers: boolean; spell: string; dispatch: string | null; completed: boolean };
 type Step = { op: "deliver" | "close" | "release"; snap: Snapshot; resend?: number };
@@ -28,7 +35,8 @@ function observed(ctx: TickCtx, m: Row): Snapshot {
   if (!worker || (worker.observed_at !== now && worker.gone_at !== now)) throw new Error("worker observations missing or stale");
   const facts = doc(worker);
   if (facts.terminals_seen_at !== now) throw new Error("terminal observations missing or stale");
-  if (worker.dispatch_seen_at !== now) throw new Error("dispatch observations missing or stale");
+  const contract = onContract(store, String(m.project), String(m.squad));
+  if (!contract && worker.dispatch_seen_at !== now) throw new Error("dispatch observations missing or stale");
   const rows = store.db.query("SELECT * FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL").all(String(m.project), String(m.wt)) as Row[];
   if (rows.some((r) => r.observed_at !== now || typeof doc(r).agent !== "boolean")) throw new Error("terminal identity observations missing or stale");
   const terminals = rows.filter((r) => doc(r).agent).map((r) => String(r.handle));
@@ -40,7 +48,9 @@ function observed(ctx: TickCtx, m: Row): Snapshot {
   // runs every DS_LOOP_LIVE_ACCOUNT_S and keeps the old columns when it fails).
   const walked = worker.account_at === now && worker.walk != null && worker.walk !== "unknown";
   return { terminals, idle: !!terminals.length && states.every((s: string) => s === "idle" || s === "done"), helpers: !walked || worker.sub_agents != null,
-    spell: String(worker.since ?? "idle"), dispatch: worker.dispatch_id == null ? null : String(worker.dispatch_id), completed: worker.dispatch === "completed" };
+    spell: String(worker.since ?? "idle"),
+    ...(contract ? { dispatch: null, completed: !!finishOf(store, m) }
+      : { dispatch: worker.dispatch_id == null ? null : String(worker.dispatch_id), completed: worker.dispatch === "completed" }) };
 }
 function validCheckpoint(row: Row): boolean {
   return row.acknowledged_at != null && checkpointHash(String(row.checkpoint), String(row.generation)) === row.checkpoint_hash;
@@ -116,6 +126,17 @@ function next(ctx: TickCtx, m: Row, row: Row): Step | null {
   return { op: "close", snap };
 }
 
+type Out = { code: number; out: string; err: string };
+const said = (r: { ok: boolean; error?: string }): Out => ({ code: r.ok ? 0 : 1, out: "", err: r.error ?? "" });
+async function contractSend(c: ContractSeat, id: string, text: string): Promise<Out> {
+  const r = await c.ask("terminal.send", { id, text, submit: true });
+  return r.ok ? said({ ok: true }) : said({ ok: false, error: `terminal.send: ${r.error.message}` });
+}
+async function contractClose(c: ContractSeat, wt: string, id: string): Promise<Out> {
+  const path = localPath(wt);
+  return path ? said(await c.close(path.replace(/\/+$/, ""), id)) : said({ ok: false, error: `${wt} is no local worktree` });
+}
+
 const pauseLifecycle: Fulfiller = {
   name: "pause", kinds: ["pause-control"],
   run(ctx) {
@@ -164,7 +185,7 @@ const pauseLifecycle: Fulfiller = {
       const command = `DS_STATE_ROOT=${quote(store.root)} ${[`${ROOT}/bin/role/pause-checkpoint.sh`, String(m.project), String(m.squad), String(m.role), String(m.suffix || "-"), a.episode, "<progress; unfinished work; decisions; test results; branch and PR/CI reference; how to continue>"].map(quote).join(" ")} --commands-finished`;
       const text = `dev-studio pause control: pause generation ${a.episode}, role ${m.role}${m.suffix ? `-${m.suffix}` : ""}, session ${session}, dispatch ${dispatch}. Finish the current step without starting another feature, review or repair cycle. Wait for every local/background command you own to finish; remote CI may continue. Write your checkpoint to ${journalPath(store, t)} and acknowledge ONLY with: ${command}. This is not worker_done, unit completion or task completion. After successful acknowledgment stop at your prompt; the loop verifies idle and closes only agent terminals, retaining your worktree. A failed helper leaves you Pausing; report its failure to the Lead.`;
       const seat = x.act.seat(store, a.project, a.squad ?? null, `pause-deliver:${a.episode}:${step.resend ?? 0}`, String(m.wt), now);
-      const sent = await seat.call("pause-deliver", [String(m.wt), session, text, run]);
+      const sent = seat.contract ? await contractSend(seat.contract, session, text) : await seat.call("pause-deliver", [String(m.wt), session, text, run]);
       if (!current()) return { dropped: "pause cancelled during delivery" };
       if (sent.code !== 0) return { retry: sent.err || sent.out || "pause instruction not delivered" };
       if (step.resend) store.upsert("episodes", idleKey(m, row), { state: `idle:${step.snap.spell}`, count: step.resend, source: "loop", observed_at: now });
@@ -175,7 +196,8 @@ const pauseLifecycle: Fulfiller = {
       for (const terminal of step.snap.terminals) {
         if (!current()) return { dropped: "pause cancelled before closure" };
         const seat = x.act.seat(store, a.project, a.squad ?? null, `pause-close:${a.episode}:${terminal}`, String(m.wt), now);
-        const closed = await seat.call("pause-close", [String(m.wt), terminal, run, String(row.terminals)]);
+        const closed = seat.contract ? await contractClose(seat.contract, String(m.wt), terminal)
+          : await seat.call("pause-close", [String(m.wt), terminal, run, String(row.terminals)]);
         if (!current()) {
           store.tx(() => {
             const latest = store.get("pause_members", memberKey(m));

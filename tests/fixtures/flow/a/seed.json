@@ -2,6 +2,8 @@
  "_comment": "tests/loop/flow-fixture.ts: project a of the Flow fixture (tests/board-db.ts seed; ago = seconds before DS_NOW)",
  "workers": [
   ["wtLead", "working"],
+  ["wtP5", null],
+  ["wtP6", null],
   ["wtB2", "working"],
   ["wtB9", "working"],
   ["wtB10", "working"],

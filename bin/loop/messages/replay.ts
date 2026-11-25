@@ -22,12 +22,14 @@ import { basename, dirname, join } from "node:path";
 import { alert, failRequest, finishRequest, requestActions, type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
 import { gone } from "./coordinator.ts";
 import { spawn } from "../io/orca.ts";
+import { identityEnv } from "../core/whoami.ts";
 import type { Action } from "../core/plugins.ts";
 import { now, type Row, type Store } from "../core/store.ts";
 import { actionBlock } from "../pause/pause.ts";
 import { SLOT_WAIT } from "../capacity/slot.ts";
 
-export type Replay = { kind?: string; key?: string; argv: string[]; cwd?: string; from?: string };
+// member, gen and wt: who filed it (whoami.ts filerIdentity), set back as DS_MEMBER, DS_GEN and DS_WT (U4).
+export type Replay = { kind?: string; key?: string; argv: string[]; cwd?: string; from?: string; member?: string; gen?: string; wt?: string };
 
 export function replayOf(raw: unknown): Replay | null {
   let p = raw;
@@ -60,7 +62,7 @@ export function movedScript(argv0: string): { path: string } | { error: string }
 }
 
 function rerun(store: Store, r: Replay, from = r.from, env: Record<string, string | undefined> = {}) {
-  return spawn(r.argv, { DS_STATE_ROOT: store.root, ORCA_TERMINAL_HANDLE: from, ...env }, 600_000, r.cwd && existsSync(r.cwd) ? r.cwd : undefined);
+  return spawn(r.argv, { DS_STATE_ROOT: store.root, ORCA_TERMINAL_HANDLE: from, ...identityEnv(r), ...env }, 600_000, r.cwd && existsSync(r.cwd) ? r.cwd : undefined);
 }
 
 // Request replays run as the terminal that asked (ORCA_TERMINAL_HANDLE says who sent it).
@@ -99,7 +101,7 @@ export function projectOf(x: { store: Exec["store"] }, a: Action): string {
   const wt = r?.cwd ? basename(r.cwd) : "";
   const named = labels.find((l) => wt.startsWith(`${process.env.DS_PREFIX ?? "ds-"}${l}-`));
   if (named) return named;
-  const t = r?.from ? store.db.query("SELECT project FROM observed_terminals WHERE handle = ?").get(r.from) as Row | null : null;
+  const t = r?.from ? store.db.query("SELECT project FROM observed_terminals WHERE handle = ? ORDER BY (gone_at IS NULL) DESC, observed_at DESC").get(r.from) as Row | null : null;
   if (t?.project) return String(t.project);
   return String((store.db.query("SELECT project FROM squads WHERE topic = ? ORDER BY id DESC").get(a.squad ?? "") as Row | null)?.project ?? "");
 }

@@ -4,7 +4,7 @@ argument-hint: [<project>]   (run in the Studio)
 allowed-tools: Read, Bash
 ---
 The one command to bring this project fully up to date with the latest dev-studio — **code,
-commands, instructions, AND skills**. Run it in the Studio. Do the steps in order:
+commands, instructions, AND skills**. Run it in the Studio. (The board's Update button and `ds update <project>` run the same update in the loop with no Studio turn; `/ds-update` stays the way when the loop is down.) Do the steps in order:
 
 1. **Pull + relink** the dev-studio checkout, and learn whether its branch actually moved —
    a restart only earns its keep when code or skills changed. If the branch is unchanged, a
@@ -49,11 +49,13 @@ commands, instructions, AND skills**. Run it in the Studio. Do the steps in orde
    types a `dev-studio reload:` line into this terminal once you are idle with an empty prompt: re-read
    `~/.dev-studio/AGENTS.md` and `~/.dev-studio/studio/studio.md` then, and run the `ds reload ack`
    command it ends with. Only when step 2 printed `restart` with `skills` among its classes, type
-   `/reload-skills` here too: the loop does not refresh the Studio's skills (no restart/reopen needed).
+   `/reload-skills` here too: the loop does not refresh the Studio's skills from a `/ds-update` run here
+   (no restart/reopen needed). An update started from the board or `ds update` is different: the loop
+   types `/reload-skills` into the Studio itself once it is idle (Claude Studio, skills among the classes).
    After `none` or `squads already on …` there is nothing to refresh.
 
 Report what refreshed. **When to use the others instead:** `/ds-reload` = re-read instructions
 only, no new sessions (quick, but won't pick up new skills); `/ds-restart` = restart workers
-without pulling (recover a wedged agent); `/ds-up` = create/reconcile the Studio for a project.
+without pulling (recover a wedged agent); `ds up <project>` (a shell command) = create/reconcile the Studio for a project.
 `/ds-update` is the "I just pulled, bring everyone fully current" button — and now a no-op when
 there's nothing new, so running it on a hunch won't churn sessions.

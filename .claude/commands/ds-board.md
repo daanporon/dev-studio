@@ -23,7 +23,7 @@ server as its child (log in `state/<label>/board-serve.log`), pings it every tic
 died or stopped answering — so it outlives the Studio session that asked. More than three restarts in
 ten minutes raise one Studio alert and leave it failed until the next `--serve`. It serves on
 `127.0.0.1` (the host's own browser) and the Tailscale IP (your laptop) only — never every interface.
-With no project it serves every project; `/ds-up` does not start one. End it with `--stop`.
+With no project it serves every project; `ds up` does not start one. End it with `--stop`.
 
 ```sh
 ~/.dev-studio/bin/board/board.sh <project> --serve        # prints the URL to open on your laptop

@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 LBL="zzpeer_$$"; SD="$DS_STATE_ROOT/$LBL"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$SD" "$TMP"' EXIT
+state_root_on_exit 'rm -rf "$SD" "$TMP"'
 PASS=0; FAIL=0
 check() { if [ "$2" = "$3" ]; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); printf 'FAIL: %s\n  expected: %s\n  actual:   %s\n' "$1" "$2" "$3" >&2; fi; }
 loglines() { if [ -f "$SD/cross-squad.md" ]; then wc -l < "$SD/cross-squad.md" | tr -d ' '; else echo 0; fi; }

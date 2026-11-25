@@ -136,6 +136,9 @@ check "tester --spec says no heartbeats" "1" "$(spec tester "test work" | grep -
 rm -f "$DS_STATE_ROOT/dummy/squads/_arttopic.json" "$DS_STATE_ROOT/dummy/dispatcher.json"
 
 # up.sh brings up a per-project instance, worktree-only (no orchestration).
+# U53: the host counts as installed and the loop as down (so on Orca the Studio starts directly, as below);
+# tests/up-backend.sh covers the install, the loop and the loop's start.
+export DS_UP_INSTALL_CHECK=true DS_UP_LOOP='exit 1'
 updisp="$DS_STATE_ROOT/testhome/dispatcher.json"
 ulog="$tmp/up.log"; : > "$ulog"
 STUB_LOG="$ulog" BACKEND="$stub" "$ROOT/bin/host/up.sh" name:testhome >/dev/null 2>&1
@@ -493,6 +496,12 @@ printf 'term_old\twt_dup\tagent\tclaude\n' > "$u97d/terms"; : > "$u97d/log"
 u97run U97_STATE=working >/dev/null 2>"$u97d/err"; check "U97: a busy old agent refuses with exit 3" "3" "$?"
 check "U97: the busy refusal says agent_busy" "1" "$(grep -c 'agent_busy' "$u97d/err")"
 check "U97: a busy old agent starts nothing and closes nothing" "0" "$(grep -cE 'orchestration worker-start|terminal close' "$u97d/log")"
+# U21c: DS_START_OLD_GONE (the loop's fresh walk found no agent) reads Orca's `working` as stale: close, then start.
+printf 'term_old\twt_dup\tagent\tclaude\n' > "$u97d/terms"; : > "$u97d/log"
+u97run U97_STATE=working DS_START_OLD_GONE=1 >/dev/null 2>&1; check "U21c: a stale working agent with the flag starts" "0" "$?"
+check "U21c: the flag closes the old agent" "1" "$(grep -c 'terminal close --terminal term_old' "$u97d/log")"
+check "U21c: the flag then starts" "1" "$(grep -c 'orchestration worker-start' "$u97d/log")"
+check "U21c: the flag skips the busy read" "0" "$(grep -c 'worktree ps' "$u97d/log")"
 printf 'term_old\twt_dup\tagent\tclaude\n' > "$u97d/terms"; : > "$u97d/log"
 u97run U97_CLOSE_FAIL=1 >/dev/null 2>&1; check "U97: a failed close refuses the start" "1" "$?"
 check "U97: a failed close starts nothing" "0" "$(grep -c 'orchestration worker-start' "$u97d/log")"
@@ -561,6 +570,16 @@ proc90 210 claude 206 /w/y2 '' 'claude\0--model\0opus\0--effort\0xhigh\0-p\0'
 proc90 211 muse 1 /w/y2 '' 'muse\0worker\0'
 check "agent-accounts: a sub's --effort is a sixth field (U105), left off when it has none" "$(printf '/w/y2\tsub\tclaude\topus\tsystem\txhigh')" \
   "$(DS_PROC="$fp90" DS_ORCA_DATA="$od" DS_CLAUDE_HOME="$tmp/home/.claude" "$ROOT/bin/backend/orca.sh" agent-accounts | grep '^/w/y2' | grep sub)"
+# U21e: `muse <subcommand>` (usage, skills, ...) is a helper: a sub line beside the member's own muse; a muse
+# with a prompt (or a second muse main) stays a main.
+proc90 220 muse 1 /w/u21 '' 'muse\0'
+proc90 221 muse 220 /w/u21 '' 'muse\0usage\0--json\0'
+proc90 222 muse 1 /w/u21 '' 'muse\0skills\0list\0'
+proc90 223 muse 1 /w/u21z '' 'muse\0fix the bug\0'
+proc90 224 muse 1 /w/u21z '' 'muse\0'
+check "agent-accounts: muse <subcommand> is a sub line, a muse with a prompt is a main (U21e)" \
+  "$(printf '/w/u21\tmain\tmuse\t-\tdefault\t-\t220\t-\t-\n/w/u21\tsub\tmuse\t-\tdefault\n/w/u21\tsub\tmuse\t-\tdefault\n/w/u21z\tmain\tmuse\t-\tdefault\t-\t223\t-\t-\n/w/u21z\tmain\tmuse\t-\tdefault\t-\t224\t-\t-')" \
+  "$(DS_PROC="$fp90" DS_ORCA_DATA="$od" DS_CLAUDE_HOME="$tmp/home/.claude" "$ROOT/bin/backend/orca.sh" agent-accounts | grep '^/w/u21' | sort)"
 # U149: a main line carries its --model and --effort flags, pid, start (boot time + stat field 22 in
 # clock ticks) and RSS (stat field 24 in pages, as kB); a stat without those fields, or a process
 # table without btime, reads "-" (the lines above).
@@ -576,15 +595,19 @@ check "conventions/backend.md documents agent-accounts" "1" "$(grep -c '^| `agen
 # cache alone (no provider call): one line per account-list account, Muse not_reported, no sidecar unknown.
 # shellcheck disable=SC2016 # a literal, not an expansion
 check "conventions/backend.md documents account-resets" "1" "$(grep -c '^| `account-resets` |' "$ROOT/conventions/backend.md")"
+# A fake Orca that is not running (every call fails), so account-list is the system login alone and
+# nothing here reaches the host's real orca (on a host whose bun sits beside it in PATH) or needs one
+# (a CI runner has none).
+noorca="$tmp/noorca"; mkdir -p "$noorca/bin"; printf '#!/bin/sh\nexit 1\n' > "$noorca/bin/orca"; chmod +x "$noorca/bin/orca"
 check "account-resets: muse not_reported, codex and a never-fetched claude unknown" \
   "$(printf 'claude\tsystem\t{"state":"unknown"}\nmuse\tdefault\t{"state":"not_reported"}\ncodex\tdefault\t{"state":"unknown"}')" \
-  "$(env -i PATH="${bun%/*}:/usr/bin:/bin" HOME="$tmp" DS_ORCA_DATA="$tmp/no-orca-data" DS_CLAUDE_HOME="$tmp/no-claude" DS_USAGE_CACHE="$tmp/usage-cache" \
+  "$(env -i DS_ORCA_CLI_BIN_DIR="$noorca/bin" PATH="${bun%/*}:/usr/bin:/bin" HOME="$tmp" DS_ORCA_DATA="$tmp/no-orca-data" DS_CLAUDE_HOME="$tmp/no-claude" DS_USAGE_CACHE="$tmp/usage-cache" \
     "$ROOT/bin/backend/orca.sh" account-resets 2>/dev/null)"
 # account-free-resets U4: account-reset-use is in the contract; it answers one outcome line, and an agent
 # with no free resets or a bad id is refused before any provider call (no login here, so none could run).
 # shellcheck disable=SC2016 # a literal, not an expansion
 check "conventions/backend.md documents account-reset-use" "1" "$(grep -c '^| `account-reset-use` |' "$ROOT/conventions/backend.md")"
-seamuse() { env -i PATH="${bun%/*}:/usr/bin:/bin" HOME="$tmp" DS_ORCA_DATA="$tmp/no-orca-data" DS_CLAUDE_HOME="$tmp/no-claude" DS_USAGE_CACHE="$tmp/usage-cache" \
+seamuse() { env -i DS_ORCA_CLI_BIN_DIR="$noorca/bin" PATH="${bun%/*}:/usr/bin:/bin" HOME="$tmp" DS_ORCA_DATA="$tmp/no-orca-data" DS_CLAUDE_HOME="$tmp/no-claude" DS_USAGE_CACHE="$tmp/usage-cache" \
   "$ROOT/bin/backend/orca.sh" account-reset-use "$@" 2>/dev/null; }
 check "account-reset-use: muse has no free resets" "$(printf 'failed\tmuse has no free resets')" "$(seamuse muse default g1 k1)"
 check "account-reset-use: a bad grant id is refused" "$(printf 'failed\tbad grant id')" "$(seamuse claude system 'g 1' k1)"

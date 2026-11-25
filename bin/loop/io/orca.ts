@@ -6,7 +6,8 @@
 // script) is a program and is still spawned.
 //
 // Every process the loop spawns gets childEnv(): no ORCA_* (an inherited agent handle would
-// clash with --from), DS_LOOP_CHILD=1 (a child script does its own Orca mechanics instead of
+// clash with --from) and no inherited worker identity (DS_MEMBER, DS_WT, DS_GEN, U4: only set on
+// purpose, as a replay sets its filer's), DS_LOOP_CHILD=1 (a child script does its own Orca mechanics instead of
 // writing a wish back to the loop), and the sender terminal and retry id of this call.
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -16,9 +17,11 @@ export type Out = { code: number; out: string; err: string };
 export type Via = { from?: string | null; retry?: string | null; env?: Record<string, string> };
 export interface Orca { run(op: string, args: string[], via?: Via): Promise<Out> }
 
+const IDENTITY = new Set(["DS_MEMBER", "DS_WT", "DS_GEN", "DS_START_MEMBER", "DS_START_GEN", "DS_START_OLD_GONE"]);
+
 export function childEnv(extra: Record<string, string | null | undefined> = {}): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith("ORCA_")) env[k] = v;
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith("ORCA_") && !IDENTITY.has(k)) env[k] = v;
   env.DS_LOOP_CHILD = "1";
   // Not a handle but where Orca keeps its data: the adapter needs it to find the managed accounts.
   if (process.env.ORCA_USER_DATA_PATH && !env.DS_ORCA_DATA) env.DS_ORCA_DATA = process.env.ORCA_USER_DATA_PATH;

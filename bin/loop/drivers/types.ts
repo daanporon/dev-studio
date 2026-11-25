@@ -2,11 +2,13 @@
 //   start(member, model, account, prompt)   a fresh session with this model on this account
 //   resume(member)                          the same conversation again (only where `resumes`)
 //   poke(member, text)                      type text and wait for the turn to start (--wait-submit)
+//   keys(member, keys)                      press named keys (Escape, Up, a digit…) with no Enter added
 //   answerMenu(screen)                      the keys that answer a menu the agent is known to show
 // A driver acts through a Seat: the squad's Run, a mutating call that carries a retry id and the
 // loop's sender terminal, and a plain backend op. The shared mechanics live here; claude.ts,
 // muse.ts and codex.ts say what differs.
 import { busy, errOf, type Out } from "../io/orca.ts";
+import { keyBytes, type Answer, type Capabilities, type Op, type Request, type Terminal } from "../../backend/contract.ts";
 
 export type Member = {
   id: number; project: string; squad: string; wt: string | null; role: string; suffix: string;
@@ -17,17 +19,35 @@ export type Squad = { project: string; topic: string; run_id: string | null; rep
 export type Seat = {
   squad: Squad;
   call(op: string, args: string[]): Promise<Out>;   // an Orca mutation: retry id stored first, from the sender terminal
-  send(op: string, args: string[]): Promise<Out>;   // a plain backend op
+  send(op: string, args: string[], env?: Record<string, string>): Promise<Out>;   // a plain backend op (env: extra for the adapter)
   window?(role: string): string;                     // the role's auto-compact window in tokens (auto_compact_<role>), `-` when unset
+  gen?(): string | null;                             // the generation (DS_GEN) the last Claude start through this seat ran under (U4)
+  contract?: ContractSeat;                           // U11: set for a squad whose backend is not `orca` (call/send then refuse)
+};
+// U11 (orca-backend-alternatives): what a driver acts through for a squad on a contract backend
+// (bin/backend/contract.ts). `start` and `close` are the seat key's one effect, written to orca_calls
+// (op = the contract op) like an Orca call; `ask` is a plain op (list, send, last_output).
+export type StartMeta = { launch: "fresh" | "continue"; prompt: string; agent: string; model: string; effort: string | null; account: string | null; line: string };
+export type ContractSeat = {
+  backend: string; caps: Capabilities; provider: string;
+  // terminal.create, then the launch line typed in it. The call's retry id is its DS_GEN: a replay
+  // first looks for a terminal of that generation (terminal.list) and makes none when it finds one.
+  start(req: Omit<Request<"terminal.create">, "env"> & { env?: Record<string, string> }, meta: StartMeta): Promise<{ ok: true; terminal: Terminal } | { ok: false; error: string; busy?: boolean }>;
+  close(cwd: string, id?: string): Promise<{ ok: boolean; error?: string }>;   // every terminal in that folder (only `id` when given)
+  ask<O extends Op>(op: O, req: Request<O>): Promise<Answer<O>>;
+  worktree(m: Member): Promise<{ ok: true; path: string } | { ok: false; error: string }>;   // made through the squad's provider
+  settings(role: string, path: string): string[];   // the claude `--settings` args (claude-launch.ts claudeSettings)
 };
 export type Started = { ok: true; wt: string } | { ok: false; error: string; busy?: boolean };
 // started: Orca saw the turn start; accepted: the text landed but no turn yet; failed: not sent.
 export type Poked = "started" | "accepted" | "failed";
+export type Keyed = { ok: true } | { ok: false; error: string };
 
 export interface Driver {
   start(m: Member, model: string, account: string | null, prompt: string): Promise<Started>;
   resume(m: Member): Promise<Started>;
   poke(m: Member, text: string): Promise<Poked>;
+  keys(m: Member, keys: string[]): Promise<Keyed>;
   stop(makeSeat: (op: string) => Seat, m: Member, run: string, keep: string): Promise<{ ok: boolean; error?: string }>;
   answerMenu(screen: string): string | null;
 }
@@ -49,7 +69,7 @@ export const standingNote = (role: string) => (STANDING.has(role) ? ` ${STANDING
 export const failed = (o: Out, what: string): Started => ({ ok: false, error: errOf(o, what), busy: busy(o) || /agent_busy/.test(o.err + o.out) });
 
 // The worktree name add-role.sh gives a role: ds-<project>-<role>-<suffix>-<topic>.
-function wtName(m: Member): string {
+export function wtName(m: Member): string {
   return `${process.env.DS_PREFIX ?? "ds-"}${m.project}-${m.role}${m.suffix ? `-${m.suffix}` : ""}-${m.squad}`;
 }
 
@@ -59,6 +79,10 @@ export function startedOn(op: string, a: string[]): { launch: "fresh" | "continu
   if (op === "worker-start") return { launch: "fresh", prompt: a[2], agent: a[3], model: a[4], effort: set(a[6]), account: set(a[7]) };
   if (op === "role-start") return { launch: "fresh", prompt: a[3], agent: a[4], model: a[5], effort: set(a[8]), account: set(a[9]) };
   if (op === "worker-resume") return { launch: "continue", prompt: "", agent: a[5], model: a[3], effort: null, account: set(a[4]) };
+  if (op === "terminal.create" && a[1]) {
+    const m = JSON.parse(a[1]) as StartMeta;
+    return { launch: m.launch, prompt: m.prompt, agent: m.agent, model: m.model, effort: m.effort, account: m.account };
+  }
   return null;
 }
 
@@ -103,4 +127,12 @@ export async function pokeVia(seat: Seat, m: Member, text: string): Promise<Poke
   if (!m.wt) return "failed";
   const o = await seat.send("poke", [m.wt, text]);
   return o.code === 0 ? "started" : o.code === 3 ? "accepted" : "failed";
+}
+
+// The backend's keys: the keys' bytes (contract.ts keyBytes) typed as one send with no Enter added
+// (`orca terminal send --text`, which hands control bytes to the terminal as they are).
+export async function keysVia(seat: Seat, m: Member, keys: string[]): Promise<Keyed> {
+  if (!m.wt) return { ok: false, error: "no worktree" };
+  const o = await seat.send("keys", [m.wt, keys.map(keyBytes).join("")]);
+  return o.code === 0 ? { ok: true } : { ok: false, error: errOf(o, "keys") };
 }

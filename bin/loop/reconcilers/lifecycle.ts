@@ -16,7 +16,10 @@
 //           the PR stays blocked (or waits on running checks), whatever reasons GitHub reshuffles in
 //           between; ready, merged, closed or a wait on required:* alone ends it (no pr-stale poke on
 //           that wait; U179's required-wait poke covers it). A Builder session placed or cleared (placed_at/cleared_at) after the last
-//           poke about the PR gets one more pr-stale poke once idle, outside the two
+//           poke about the PR gets one more pr-stale poke once idle, outside the two. U275: a Builder
+//           quiet for stale_repoke_min after the first poke (no check running, worktree under 5% CPU)
+//           gets the second; quiet is idle/done, or Orca's `working` that liveness's atPrompt reads as
+//           at its prompt (transcript still, only a background task open), timed from its last write
 //   U179    a unit PR waiting on required:<context> alone, none of them a human gate (isHumanGate /
 //           human_checks keep the pr-question path), unless the ship mode is local-only: once the wait
 //           is required_wait_min (15; 0 = off) old and the Builder has been idle that long, one
@@ -41,6 +44,14 @@
 //           U214: a failed check RUN the stretch never sent is news too, but one that only ran again and failed
 //           again on a head already told about waits red_repoke_min (15; 0 = off), needs an idle Builder, and
 //           pokes at most twice a head; its key carries a digest of the failed runs, and the poke names the lanes
+//   U2      (main-red-liveness-test) with auto_merge on, a dispatched unit PR into the default branch that is
+//           mergeable and only `behind` gets an `update-branch` action per head (fulfil/update-branch.ts merges
+//           the base in on GitHub), one PR per repo at a time, lowest PR number first: the slot (episode
+//           `lifecycle:update-branch`, subject the repo, key the PR ref) holds until the PR merges or closes,
+//           turns blocked for another reason, its update fails, or it has not merged DS_LOOP_UPDATE_HOLD_S
+//           (3600) after its last update. While the loop will update a PR its Builder gets no pr-stale or
+//           pr-news poke; a failed update (`update-branch-failed` for the head, or a failed or dropped claim)
+//           drops it from the line, so the usual "merge the base in" message goes out
 //   10      a feature squad all done (retest.ts; U238 a retest due instead, episode `retest|<topic>|<slug#pr,…>`): all_done_at, and one all-done nudge to an
 //           idle Lead quiet for DS_SWEEP_DONE_IDLE_MIN, episode `done|<topic>|<slug#pr,…>`
 // worktree.remove is sent again every DS_LOOP_LIFECYCLE_RETRY_S (600) while it still
@@ -51,8 +62,9 @@
 // U70: an open operator question about a PR (`pr` on its entry, ask-operator.sh --pr) whose PR stops being
 // ready for a human is closed via `reality`, and its Lead hears once (episode `lifecycle:qclose`, retried
 // until the poke lands). After a Builder's second pr-stale poke, a PR still not ready stale_lead_min later
-// (default 30; 0 = off) gets its Lead one request (episode `lifecycle:stale-lead`, one per stale stretch).
-// U178: a PR still blocked stale_alert_min (default 120; 0 = off) after that request raises one Studio
+// (default 30; 0 = off) gets its Lead one request (episode `lifecycle:stale-lead`, one per stale stretch);
+// a second poke due (stale_repoke_min after the first) but never sent starts that timer at its due time.
+// U178: a PR still blocked stale_alert_min (default 60; 0 = off) after that request raises one Studio
 // alert for the stretch; nothing re-pokes the Builder or the Lead on a timer.
 // The step-11 ready poke is U7's (the plan's "merge-unblock poke" wording names it; see the PR).
 import { recordLane } from "../capacity/unit-lanes.ts";
@@ -68,8 +80,13 @@ import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Ctx, Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { wake } from "../pause/wake.ts";
+import { atPrompt } from "./liveness.ts";
 import { allDone as allDoneIn, retestDue, settleIn } from "../squad/retest.ts";
 import { paused } from "../pause/pause.ts";
+import { onContract } from "../squad/backend.ts";
+import { finishOf } from "../squad/finish-read.ts";
+import { UPDATE_FAILED } from "../fulfil/update-branch.ts";
+import { debriefOn } from "../squad/archive-debrief.ts";
 
 const MERGE_TRIES = 3;
 // U249: GitHub's own word on the PR: the observer's autoMergeRequest is null (key present, value null).
@@ -212,7 +229,54 @@ function prNews(store: Store, project: string, pr: Row, u: Row, applies: boolean
   }
   if (list.includes("draft")) to.push("the PR is a draft.");
   if (!to.length) return null;
-  return { key, text: `${head} changed (${reasons}): ${to.join(" ")} The loop pokes you again when the PR changes; do not poll GitHub. If a blocker needs the Lead, orch.sh ask it.` };
+  return { key, text: `${head} changed (${reasons}): ${to.join(" ")}${pullFirst(store, project, pr)} The loop pokes you again when the PR changes; do not poll GitHub. If a blocker needs the Lead, orch.sh ask it.` };
+}
+
+// U2: a PR the loop will merge the base into, in its repo's line.
+type Updatable = { nwo: string; n: number; ref: string; head: string; topic: string; slug: string; lead: string | null; base: string };
+// U2: the update-branch action's episode for one head of a PR, and its claim row.
+const updateEp = (ref: string, head: string) => `update-branch:${ref}|${head}`;
+const updateClaim = (store: Store, project: string, ref: string) => store.get("episodes", { project, subject: ref, kind: "action:update-branch" });
+// U2: the loop merges the base into this PR itself: auto_merge on, a dispatched unit's open PR into the
+// default branch, mergeable, `behind` its only reason, and no update of this head failed.
+function loopUpdates(store: Store, project: string, pr: Row, u: Row, dflt: string | null): boolean {
+  if (u.status !== "dispatched" || !dflt || pr.base !== dflt || pr.state !== "OPEN" || pr.gone_at || pr.mergeable !== "MERGEABLE") return false;
+  const reasons = pr.reasons ? String(JSON.parse(String(pr.reasons))).split(",").filter(Boolean) : [];
+  if (reasons.length !== 1 || reasons[0] !== "behind" || autoMerge(store, project) === "off") return false;
+  const ref = String(pr.ref), head = headOf(pr);
+  const failed = store.get("episodes", { project, subject: ref, kind: UPDATE_FAILED });
+  if (failed && String(failed.episode_key ?? "") === head) return false;
+  const claim = updateClaim(store, project, ref);
+  return !(claim?.episode_key === updateEp(ref, head) && (claim.state === "failed" || claim.state === "dropped"));
+}
+// U2: after the loop merged the base in on GitHub, the Builder's worktree is a merge commit behind its remote.
+const pullFirst = (store: Store, project: string, pr: Row): string => {
+  const c = updateClaim(store, project, String(pr.ref));
+  return c?.state === "done" && c.result === "updated" ? " The loop merged the base into this branch on GitHub: git pull --no-rebase before you push." : "";
+};
+
+// 1d leftovers: kept worktrees of a squad (live or closed). A record whose tree is gone is dropped from the squad's row and,
+// through a `gone` removal, from its state file (live or archived); a tree still there goes through the removal check.
+function leftoverStep(ctx: TickCtx, s: Row, nwo: string | null, out: Action[]): void {
+  const { store, project, now: t } = ctx, topic = String(s.topic);
+  const retry = Math.floor(t / envInt("DS_LOOP_LIFECYCLE_RETRY_S", 600));
+  const member = (wt: unknown): Row | null => (wt ? store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? AND COALESCE(status, '') != 'gone'").get(project, topic, String(wt)) as Row | null : null);
+  const doc = JSON.parse(String(s.doc)) as Row, left = Array.isArray(doc.leftovers) ? (doc.leftovers as Row[]) : [];
+  const keep = left.filter((l) => paused(store, { project, squad: topic, member: String(l.wt) }) || !(member(l.wt) || !existsSync(String(l.path ?? ""))));
+  if (keep.length !== left.length) {
+    const next = JSON.stringify({ ...doc, leftovers: keep });
+    fact(store, "squads", Number(s.id), "doc", next, s.doc, "leftover_dropped", { project, squad: topic, payload: { dropped: left.filter((l) => !keep.includes(l)).map((l) => l.wt) } });
+    // The state file keeps the record until the removal's drop-leftover writes it out (the folder is gone: nothing to check).
+    for (const l of left) if (!keep.includes(l) && !member(l.wt) && !existsSync(String(l.path ?? "")))
+      out.push({ project, squad: topic, subject: String(l.wt), kind: "worktree.remove", episode: `leftover-gone:${l.wt}@${retry}`,
+        payload: { label: project, topic, wt: l.wt, path: l.path, branch: String(l.branch ?? ""), unit: l.unit ?? null, merged: false, gone: true } });
+  }
+  for (const l of keep) {
+    if (paused(store, { project, squad: topic, member: String(l.wt) })) continue;
+    const branch = String(l.branch ?? ""), merged = !!branch && !!nwo && !!store.db.query("SELECT 1 FROM observed_prs WHERE project = ? AND repo = ? AND head = ? AND state = 'MERGED'").get(project, nwo, branch);
+    out.push({ project, squad: topic, subject: String(l.wt), kind: "worktree.remove", episode: `leftover:${l.wt}@${retry}`,
+      payload: { label: project, topic, wt: l.wt, path: l.path, branch, unit: l.unit ?? null, merged } });
+  }
 }
 
 export function run(ctx: TickCtx): Action[] {
@@ -220,6 +284,8 @@ export function run(ctx: TickCtx): Action[] {
   const retry = Math.floor(t / envInt("DS_LOOP_LIFECYCLE_RETRY_S", 600));
   const squads = store.db.query("SELECT * FROM squads WHERE project = ? AND doc IS NOT NULL AND COALESCE(status, '') != 'closed' ORDER BY topic").all(project) as Row[];
   const extraGates = humanCheckNames(store, project), expected = prExpectedChecks(store, project);
+  // U2: per repo, the PRs the loop updates (in line) and the open PRs that are not blocked (still on their way to merge).
+  const updates = new Map<string, Updatable[]>(), onTrack = new Set<string>();
   for (const s of squads) {
     const topic = String(s.topic);
     const nwo = (store.get("config", { project, file: "github", key: `repo:${s.repo}` })?.value as string) || null;
@@ -246,6 +312,7 @@ export function run(ctx: TickCtx): Action[] {
     const tree = (wt: unknown): Row | null => (wt ? store.db.query("SELECT * FROM observed_worktrees WHERE project = ? AND wt = ? AND gone_at IS NULL").get(project, String(wt)) as Row | null : null);
     const lead = (s.lead_wt as string) || (store.db.query("SELECT wt FROM members WHERE project = ? AND squad = ? AND role = 'lead' AND COALESCE(status, '') != 'gone' ORDER BY ord DESC, id DESC").get(project, topic) as { wt: string } | null)?.wt;
     const babysits = store.get("config", { project, file: "ship-mode", key: "mode" })?.value !== "local-only";
+    const contract = onContract(store, project, topic);
     const units = () => store.db.query("SELECT rowid AS _rowid, * FROM units WHERE project = ? AND squad = ? ORDER BY ord IS NULL, ord, id").all(project, topic) as Row[];
     // U160: `hold` keeps a planned unit quiet; a unit dispatched by hand despite it is only held back by a blocking question (U28/#273).
     const waitingForRuling = (u: Row, questions = waiting(store, project, topic)) => (u.status !== "dispatched" && !!u.hold) || !!blockingForUnit(questions.map(entryOf), String(u.slug));
@@ -296,7 +363,9 @@ export function run(ctx: TickCtx): Action[] {
       const pr = u.pr ? prRow(u.pr, slug) : null;
       // 1c (U155): write the Builder's own archived wish; the decider (decide.ts) closes it
       // only once it is not working or waiting, and fulfil/close.ts removes its worktree.
-      if (u.status === "done" && pr?.state === "MERGED" && m && m.want !== "gone" && !paused(store, { project, squad: topic, member: bwt }) && !["working", "waiting"].includes(String(worker(bwt)?.state ?? ""))) {
+      // U12: off Orca, a finish row of its generation also says its work ended.
+      const idle = !["working", "waiting"].includes(String(worker(bwt)?.state ?? "")) || (!!m && contract && !!finishOf(store, m));
+      if (u.status === "done" && pr?.state === "MERGED" && m && m.want !== "gone" && !paused(store, { project, squad: topic, member: bwt }) && idle) {
         store.want("member", String(m.id), "gone", { by: "loop", why: `unit ${slug} done` });
       }
       // 9: dispatched, or done while its Builder is still a member
@@ -329,42 +398,53 @@ export function run(ctx: TickCtx): Action[] {
         end(row); end(mr); end(slr); end(nr); end(rwr);
         continue;
       }
+      const updating = loopUpdates(store, project, pr, u, dflt);
+      if (updating && nwo && dflt) {
+        const list = updates.get(nwo) ?? [];
+        list.push({ nwo, n: Number(pr.pr), ref: String(pr.ref), head: headOf(pr), topic, slug, lead: lead ?? null, base: dflt });
+        updates.set(nwo, list);
+      } else if (u.status === "dispatched" && !blocked) onTrack.add(String(pr.ref));
+      const staleRepoke = envOr(store, project, "DS_LOOP_STALE_REPOKE_MIN", "stale_repoke_min", 30);
       // The sweep's stale_prs pokes: ready or a wait on required:* alone ends the episode, any other
       // waiting arms a second poke.
       if (pr.verdict === "ready" || (pr.verdict === "waiting" && requiredOnly(all.filter(Boolean)))) { end(row); end(slr); } // the full list, as github.ts's carrySince reads it
       else if (pr.verdict === "waiting") { if (row && row.state !== "armed") store.upsert("episodes", sk, { state: "armed", observed_at: t }); }
-      else if (blocked && babysits && m && tree(bwt) && !gateFailOnly) {
+      else if (blocked && babysits && m && tree(bwt) && !gateFailOnly && !updating) {
         const key = `${pr.pr}|${pr.since ?? ""}`, same = row?.episode_key === key, n = same ? Number(row!.count ?? 0) : 0;
         // U182: merge the base in, never rebase; only a `base_update rebase` project keeps the rebase wording.
         const sf = stateFile(store, project, topic), fix = baseUpdate(store, project) === "rebase"
           ? `Fix it — rebase/resolve conflicts, fix the red check, address the open review threads — push, and stop at your prompt: the loop pokes you again when the PR changes (merge-ready included). If a blocker needs a reviewer or the Lead (changes requested, a thread you disputed), orch.sh ask your Lead instead of changing code. Don't send worker_done again.`
           : `Fix it — merge the base in and resolve conflicts, fix the red check, address the open review threads — push, and stop at your prompt: the loop pokes you again when the PR changes (merge-ready included). If a blocker needs a reviewer or the Lead (changes requested, a thread you disputed), orch.sh ask your Lead instead of changing code. Don't send worker_done again.`;
         // U160: a sent pr-stale poke told the Builder about the PR as it is now; the pr-news poke below fires only for a later change.
-        const staleRepoke = envOr(store, project, "DS_LOOP_STALE_REPOKE_MIN", "stale_repoke_min", 30);
-        // Quiet: no check running, the Builder idle at its prompt, its worktree under 5% CPU, and
-        // staleRepoke min since the latest of the first poke, the last news poke and its last output.
-        const quietDue = (ep: Row): boolean => {
-          if (staleRepoke <= 0 || all.includes("checks-running")) return false;
+        // Quiet: no check running, the Builder idle at its prompt (idle/done, or Orca's `working` that
+        // atPrompt reads as at its prompt: a still transcript with only a background task open), its
+        // worktree under 5% CPU, and staleRepoke min since the latest of the first poke, the last news
+        // poke and its last output (at its prompt: its transcript's last write, as the screen keeps moving).
+        const quiet = (ep: Row): { prompt: boolean } | null => {
+          if (staleRepoke <= 0 || all.includes("checks-running")) return null;
           const w = worker(bwt);
-          if (!w || (w.state !== "idle" && w.state !== "done")) return false;
+          if (!w) return null;
+          const p = w.state === "working" ? atPrompt(store, project, topic, slug, String(bwt), t, w) : null;
+          if (w.state !== "idle" && w.state !== "done" && !p) return null;
           const cpu = store.db.query("SELECT cpu_pct FROM observed_procs WHERE project = ? AND wt = ?").get(project, String(bwt)) as { cpu_pct: number | null } | null;
-          if (cpu && Number(cpu.cpu_pct ?? 0) >= 5) return false;
-          const last = Math.max(Number(ep.observed_at ?? 0), toldOf(store.get("episodes", nk), pr.since)?.at ?? 0, Number(w.last_output_at ?? 0));
-          return t - last >= staleRepoke * 60;
+          if (cpu && Number(cpu.cpu_pct ?? 0) >= 5) return null;
+          const last = Math.max(Number(ep.observed_at ?? 0), toldOf(store.get("episodes", nk), pr.since)?.at ?? 0, p ? p.since : Number(w.last_output_at ?? 0));
+          return t - last >= staleRepoke * 60 ? { prompt: !!p } : null;
         };
+        let q: { prompt: boolean } | null = null;
         const told = () => tell(store, project, topic, slug, pr, prNews(store, project, pr, u, u.status === "dispatched", sf, dflt)?.key ?? null, t);
         if (n === 0 || (same && row!.state === "armed" && n < 2)) {
-          const text = `dev-studio loop: PR #${pr.pr} for your unit ${slug} is not merge-ready (${reasons}).${threadList(pr)} ${fix}`;
+          const text = `dev-studio loop: PR #${pr.pr} for your unit ${slug} is not merge-ready (${reasons}).${threadList(pr)}${pullFirst(store, project, pr)} ${fix}`;
           const w = wake(ctx, bwt, text, "pr-stale", `${pr.problem ?? ""}|${pr.since ?? ""}#${n + 1}`, { allowWorking: claude(m) });
           out.push(...w.actions);
           if (w.status === "sent") store.upsert("episodes", sk, { squad: topic, episode_key: key, count: n + 1, state: "poked", source: "loop", started_at: same ? row!.started_at : t, observed_at: t,
             next_at: n + 1 >= 2 ? t : null });
           if (w.status === "sent") told();
-        } else if (same && row!.state === "poked" && n === 1 && quietDue(row!)) {
+        } else if (same && row!.state === "poked" && n === 1 && (q = quiet(row!))) {
           // U275: the Builder went quiet after the first poke without pushing: the second comes after
           // stale_repoke_min, so the Lead and card timers (which run from it) follow.
           const text = `dev-studio loop: PR #${pr.pr} for your unit ${slug} is still not merge-ready (${reasons}) and nothing has changed for ${staleRepoke} min.${threadList(pr)} ${fix}`;
-          const w = wake(ctx, bwt, text, "pr-stale", `${pr.problem ?? ""}|${pr.since ?? ""}#2`);
+          const w = wake(ctx, bwt, text, "pr-stale", `${pr.problem ?? ""}|${pr.since ?? ""}#2`, { allowWorking: q.prompt });
           out.push(...w.actions);
           if (w.status === "sent") { store.upsert("episodes", sk, { squad: topic, episode_key: key, count: 2, state: "poked", source: "loop", observed_at: t, next_at: t }); told(); }
         } else if (same) {
@@ -380,22 +460,30 @@ export function run(ctx: TickCtx): Action[] {
         }
       }
       // U70: the Builder's two pokes did not fix it; its Lead hears once per stale stretch.
+      // board-empty-state-and-port U4: the ladder never freezes on a poke that can't be sent. With one
+      // poke sent, the second is due stale_repoke_min after it; if wake() never sent it (limited, a
+      // draft, paused, really working, not quiet), the Lead's timer runs from that due time.
       const staleLead = envOr(store, project, "DS_LOOP_STALE_LEAD_MIN", "stale_lead_min", 30), skey = `${pr.pr}|${pr.since ?? ""}`;
+      const pokesSent = row?.episode_key === skey ? Number(row.count ?? 0) : 0;
+      const leadFrom = pokesSent >= 2 ? (row!.next_at != null ? Number(row!.next_at) : null)
+        : pokesSent === 1 && staleRepoke > 0 ? Number(row!.observed_at ?? 0) + staleRepoke * 60 : null;
       if (slr && slr.episode_key !== skey) end(slr);
-      if (blocked && !gateFailOnly && lead && staleLead > 0 && row?.episode_key === skey && Number(row.count ?? 0) >= 2 && row.next_at != null
-        && t >= Number(row.next_at) + staleLead * 60 && !(slr && slr.episode_key === skey)) {
+      if (blocked && !gateFailOnly && lead && staleLead > 0 && leadFrom != null
+        && t >= leadFrom + staleLead * 60 && !(slr && slr.episode_key === skey)) {
         const ws = bwt ? String(worker(bwt)?.state ?? "gone") : "gone";
-        const text = `dev-studio loop: PR #${pr.pr} for unit ${slug} is still not merge-ready (${reasons}) ${staleLead} min after its Builder's second pr-stale poke; the Builder is ${ws}. Look at it, re-dispatch the unit, or ask the operator. (One request per stale stretch.)`;
+        const after = pokesSent >= 2 ? `${staleLead} min after its Builder's second pr-stale poke`
+          : `${staleRepoke + staleLead} min after its Builder's first pr-stale poke (the second, due ${staleRepoke} min after it, could not be sent)`;
+        const text = `dev-studio loop: PR #${pr.pr} for unit ${slug} is still not merge-ready (${reasons}) ${after}; the Builder is ${ws}. Look at it, re-dispatch the unit, or ask the operator. (One request per stale stretch.)`;
         const w = wake(ctx, lead, text, "pr-stale-lead", `${pr.pr}|${pr.since ?? ""}#lead`);
         out.push(...w.actions);
         if (w.status === "sent") store.upsert("episodes", sl, { squad: topic, episode_key: skey, count: 1, state: "sent", source: "loop", started_at: t, observed_at: t });
       }
       // U178: still blocked stale_alert_min after the Lead's request: one Studio alert per stretch, no further poke.
-      const staleAlert = envOr(store, project, "DS_LOOP_STALE_ALERT_MIN", "stale_alert_min", 120);
+      const staleAlert = envOr(store, project, "DS_LOOP_STALE_ALERT_MIN", "stale_alert_min", 60);
       if (blocked && !gateFailOnly && lead && staleAlert > 0 && slr?.episode_key === skey && slr.state === "sent" && t >= Number(slr.started_at ?? 0) + staleAlert * 60) {
         out.push({ project, squad: topic, member: lead, subject: lead, kind: "alert", episode: `pr-stale:${pr.ref}|${pr.since ?? ""}`,
           payload: { title: "Red PR still blocked", card: "pr_stale", fields: { ref: pr.ref, pr: pr.pr, url: pr.url ?? null, blocked_since: pr.since ?? null },
-            text: `PR #${pr.pr}${pr.url ? ` ${pr.url}` : ""} (${topic}/${slug}) is still not merge-ready (${reasons}) ${staleAlert} min after its Lead was told, and its Builder was poked twice. The loop pokes no one again for this stretch. Its Lead can re-dispatch the unit or ask the operator; this card goes when the PR merges, closes or is no longer blocked.` } });
+            text: `PR #${pr.pr}${pr.url ? ` ${pr.url}` : ""} (${topic}/${slug}) is still not merge-ready (${reasons}) ${staleAlert} min after its Lead was told, and its Builder was poked ${pokesSent >= 2 ? "twice" : "once (a second poke could not be sent)"}. The loop pokes no one again for this stretch. Its Lead can re-dispatch the unit or ask the operator; this card goes when the PR merges, closes or is no longer blocked.` } });
         store.upsert("episodes", sl, { state: "alerted", observed_at: t });
       }
       // U179: a PR waiting on required:<context> alone, none a human gate (those take the pr-question
@@ -435,7 +523,7 @@ export function run(ctx: TickCtx): Action[] {
       }
       // U77, after step 9's pr-stale poke (a Builder poked this tick hears the news at its next step if it is a working Claude, else once it is idle): one poke when the
       // PR turns ready, or (U178) when a blocked one shows a new head or a blocking reason not yet sent in this stretch.
-      const news = gateFailOnly ? null : prNews(store, project, pr, u, u.status === "dispatched" && babysits && !!m && !!tree(bwt), stateFile(store, project, topic), dflt);
+      const news = gateFailOnly || updating ? null : prNews(store, project, pr, u, u.status === "dispatched" && babysits && !!m && !!tree(bwt), stateFile(store, project, topic), dflt);
       const nrow = store.get("episodes", nk), told = toldOf(nrow, pr.since);
       const nowHeard = pr.verdict === "blocked" && told ? heard(store, project, pr) : null;
       // U214: a repeat (a failed check ran again) is not fresh news, so it keeps to the wait, an idle Builder and two a head.
@@ -678,19 +766,8 @@ export function run(ctx: TickCtx): Action[] {
       if (w.status === "sent") store.upsert("episodes", { project, subject: String(e.subject), kind: "lifecycle:qclose" }, { state: "sent", ended_at: t, observed_at: t });
     }
 
-    // 1d leftovers
-    const doc = JSON.parse(String(s.doc)) as Row, left = Array.isArray(doc.leftovers) ? (doc.leftovers as Row[]) : [];
-    const keep = left.filter((l) => paused(store, { project, squad: topic, member: String(l.wt) }) || !(member(l.wt) || !existsSync(String(l.path ?? ""))));
-    if (keep.length !== left.length) {
-      const next = JSON.stringify({ ...doc, leftovers: keep });
-      fact(store, "squads", Number(s.id), "doc", next, s.doc, "leftover_dropped", { project, squad: topic, payload: { dropped: left.filter((l) => !keep.includes(l)).map((l) => l.wt) } });
-    }
-    for (const l of keep) {
-      if (paused(store, { project, squad: topic, member: String(l.wt) })) continue;
-      const branch = String(l.branch ?? ""), merged = !!branch && !!nwo && !!store.db.query("SELECT 1 FROM observed_prs WHERE project = ? AND repo = ? AND head = ? AND state = 'MERGED'").get(project, nwo, branch);
-      out.push({ project, squad: topic, subject: String(l.wt), kind: "worktree.remove", episode: `leftover:${l.wt}@${retry}`,
-        payload: { label: project, topic, wt: l.wt, path: l.path, branch, unit: l.unit ?? null, merged } });
-    }
+    // 1d leftovers (a closed squad's too: see the end of run())
+    leftoverStep(ctx, s, nwo, out);
 
     // 10 all done, parked (only held work left), or a retest due (U238): one rule for the units (squad-finish.ts via retest.ts, the same as
     // wake.ts, the board and the Lead tick). A held unit is open work: a held-only squad is not all done.
@@ -718,8 +795,42 @@ export function run(ctx: TickCtx): Action[] {
       continue;
     }
     const ep = `done|${topic}|${done.map((u) => `${u.slug}#${u.pr}`).sort().join(",")}`;
-    const text = `dev-studio loop: every unit of your squad is done (PR merged) or cancelled, and none is held. Do the testability handoff to your Thinker (skip it for docs-only or one-unit squads), write the debrief (squad-state.sh <state> set-debrief), then set-status done and tell the operator to run /ds-close-squad ${topic}. The loop never closes a squad.`;
+    const text = `dev-studio loop: every unit of your squad is done (PR merged) or cancelled, and none is held. Do the testability handoff to your Thinker (skip it for docs-only or one-unit squads), check the Try it page is current, then set-status done and tell the operator to run /ds-close-squad ${topic}. ${debriefOn(store, project) ? "Write no debrief now: the loop asks for it when the operator archives." : "Debriefs are off for this project: write none."} The loop never closes a squad.`;
     out.push(...wake(ctx, lead, text, "all-done", ep).actions);
+  }
+  out.push(...updateQueue(store, project, t, updates, onTrack));
+  // archive-leftovers U2: a closed squad's leftovers are checked too (only this step reads closed squads).
+  for (const s of store.db.query("SELECT * FROM squads WHERE project = ? AND doc IS NOT NULL AND status = 'closed' AND doc LIKE '%\"leftovers\"%' ORDER BY topic").all(project) as Row[]) {
+    const nwo = (store.get("config", { project, file: "github", key: `repo:${s.repo}` })?.value as string) || null;
+    leftoverStep(ctx, s, nwo, out);
+  }
+  return out;
+}
+
+// U2: one update in flight per repo. The slot names the PR it holds; a PR still in line (its update not
+// yet run, or behind again on a new head) keeps it, and so does one on its way to merge (checks running,
+// ready) for DS_LOOP_UPDATE_HOLD_S after its last update; anything else frees it for the lowest PR number
+// in line. The action is emitted every tick until the actuator has claimed it (it takes an episode once).
+function updateQueue(store: Store, project: string, t: number, updates: Map<string, Updatable[]>, onTrack: Set<string>): Action[] {
+  const out: Action[] = [], hold = envInt("DS_LOOP_UPDATE_HOLD_S", 3600);
+  const slots = store.db.query("SELECT * FROM episodes WHERE project = ? AND kind = 'lifecycle:update-branch'").all(project) as Row[];
+  for (const nwo of new Set([...updates.keys(), ...slots.map((r) => String(r.subject))])) {
+    const key = { project, subject: nwo, kind: "lifecycle:update-branch" }, line = (updates.get(nwo) ?? []).sort((a, b) => a.n - b.n);
+    const row = slots.find((r) => r.subject === nwo) ?? null;
+    let slot = row?.state === "updating" ? row : null;
+    const held = slot ? line.find((c) => c.ref === slot!.episode_key) : undefined;
+    // A free slot keeps its row (state `free`, the last PR it held), so nothing is deleted.
+    if (slot && !held && (!onTrack.has(String(slot.episode_key)) || t >= Number(slot.next_at ?? 0))) {
+      store.upsert("episodes", key, { state: "free", observed_at: t, next_at: null, ended_at: t });
+      slot = null;
+    }
+    const next = slot ? held : line[0];
+    if (!next) continue;
+    // A new head (the PR held, or the next in line) starts the hold clock again.
+    if (!slot || slot.episode_key !== next.ref || slot.result !== next.head)
+      store.upsert("episodes", key, { squad: next.topic, episode_key: next.ref, count: 1, state: "updating", result: next.head, source: "loop", started_at: t, observed_at: t, next_at: t + hold, ended_at: null });
+    out.push({ project, squad: next.topic, ...(next.lead ? { member: next.lead } : {}), subject: next.ref, kind: "update-branch", episode: updateEp(next.ref, next.head),
+      payload: { n: next.n, repo: nwo, ref: next.ref, head: next.head, unit: next.slug, topic: next.topic, base: next.base } });
   }
   return out;
 }

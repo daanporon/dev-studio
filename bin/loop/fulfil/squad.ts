@@ -11,8 +11,10 @@
 //   resume   running on a suspended squad: back to running, manual pause intents cleared;
 //            the members' standing wishes start them fresh from their journals.
 //   archive  gone, once every member is closed and worktree-free (the decider/close.ts):
-//            reclaim the Run's workers, move the squad JSON and its plans to the archive,
-//            and take the row off the live board (status closed). Branches and PRs are kept.
+//            reclaim the Run's workers, drop the squad's open questions (status dropped, kept in
+//            the archived JSON's dropped_questions; one card if any was blocking), move the squad
+//            JSON and its plans to the archive, and take the row off the live board (status
+//            closed). Branches and PRs are kept.
 import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { alert, type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
@@ -23,8 +25,12 @@ import { ensureTransition, intents, type Target } from "../pause/pause.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import { spawn } from "../io/orca.ts";
 import { effectiveRoster } from "../settings/roster.ts";
-import { limitInt } from "../settings/limits.ts";
+import { limit, limitInt } from "../settings/limits.ts";
+import { squadBackendRule } from "../../backend/registry.ts";
+import { projectStudioBackend } from "../squad/studio.ts";
 import { endSquad, stopsPending } from "../squad/exposed.ts";
+import { debriefOn, finalDebrief, stepOf, unitsOf } from "../squad/archive-debrief.ts";
+import * as questions from "../messages/questions.ts";
 import type { Action } from "../core/plugins.ts";
 import { payloadOf as actionPayload, type ActionPayload } from "../core/kinds.ts";
 
@@ -34,6 +40,7 @@ const rowOf = (x: Exec, a: Action): Row | null => {
   return id == null ? null : x.store.get("squads", { id });
 };
 const payloadOf = (r: Row): Row => { try { return JSON.parse(String(r.want_payload ?? "{}")) ?? {}; } catch { return {}; } };
+const DROP_WHY = "squad archived";
 const isoAt = (at: number) => new Date(at * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
 // The Lead's task spec: the loop holds the Run seat, so the Lead never adopts (U159).
@@ -62,7 +69,7 @@ function alwaysRoles(store: Store, project: string, type: string): string[] | nu
   return out;
 }
 
-export const STARTS = ["plan", "brainstorm", "ask", "investigate"];
+export const STARTS = ["plan", "brainstorm", "ask", "investigate", "fix"];
 
 // A feature squad's Thinker first start prompt adds the framing and, when the Studio named one, the start (U2).
 export function thinkerExtra(r: Row): string {
@@ -111,6 +118,14 @@ function holdForRevalidation(store: Store, r: Row, at: number): void {
 
 async function create(a: Action, x: Exec, r: Row): Promise<Result> {
   const { store, now: at } = x, project = String(r.project), topic = String(r.topic), id = Number(r.id);
+  // U11: a squad on a contract backend (not `orca`) has no Run, task or coordinator pane: create writes its
+  // doc and wishes its always-on roles, which start through the contract (core/actuator.ts contractSeat).
+  const contract = String(r.backend ?? "orca") !== "orca";
+  // U30: one rule for which backend a project's squads use. A wish asking for another is refused (a card and the
+  // wish_given_up event, through giveUp), never started.
+  const ruled = squadBackendRule({ backend: String(r.backend ?? "orca"), host: String(r.backend_host ?? ""), projectBackend: limit(store, project, "default_backend") ?? "",
+    studioBackend: projectStudioBackend(store, project), project });
+  if (ruled) return { failed: ruled };
   // Re-spawning an archived topic: the closed row starts over — a new Run, task, doc and
   // coordinator, and create keys scoped to this wish so no old call replays.
   if (["closed", "gone"].includes(String(r.status ?? ""))) {
@@ -124,11 +139,11 @@ async function create(a: Action, x: Exec, r: Row): Promise<Result> {
   // the Run's first coordinator, as the Studio's did. It holds the Run only until the Lead has a
   // worktree: then seats() opens the squad's own pane and takes the Run over (U210) — a project with no Studio worktree
   // (a loop-proof root) creates its squad this way. Else the project's outside pane.
-  const from = String(payloadOf(r).from ?? "");
-  let sender: string;
+  const from = contract ? "" : String(payloadOf(r).from ?? "");
+  let sender = "";
   if (from) sender = from;
-  else try { sender = await x.act.outside(store, project, at); } catch (e) { return { retry: (e as Error).message }; }
-  if (!r.run_id) {
+  else if (!contract) try { sender = await x.act.outside(store, project, at); } catch (e) { return { retry: (e as Error).message }; }
+  if (!r.run_id && !contract) {
     const o = await x.act.call(store, "run-create", [`squad: ${topic}`], { key: `squad:${id}:${r.want_at}:run-create`, project, squad: topic, member: null, sender, at });
     const run = o.out.trim().split("\n").pop() ?? "";
     if (o.code !== 0) return { retry: (o.err || o.out).trim() || "run-create failed" };
@@ -136,7 +151,7 @@ async function create(a: Action, x: Exec, r: Row): Promise<Result> {
     store.fact("squad_run", [{ table: "squads", key: { id }, set: { run_id: run, updated_at: at } }], { project, squad: topic, payload: { id, run_id: run } });
     r = { ...r, run_id: run };
   }
-  if (!r.task_id) {
+  if (!r.task_id && !contract) {
     const o = await x.act.call(store, "task-create", [String(r.run_id), leadPrompt(store, r), topic, ""], { key: `squad:${id}:${r.want_at}:task-create`, project, squad: topic, member: null, sender, at });
     const task = o.out.trim().split("\n").pop() ?? "";
     if (o.code !== 0) return { retry: (o.err || o.out).trim() || "task-create failed" };
@@ -156,8 +171,9 @@ async function create(a: Action, x: Exec, r: Row): Promise<Result> {
   });
   r = store.get("squads", { id })!;
   wishAlways(store, r, roles, "squad create");
-  store.fact("wish_done", [{ table: "squads", key: { id }, set: { status: "running", want_result: `done: run ${String(r.run_id)} created; ${roles.join(", ")} wished running`, updated_at: at } }],
-    { project, squad: topic, payload: { subject: "squad", id, want: "running", result: `run ${String(r.run_id)}` } });
+  const made = contract ? `on ${String(r.backend)}` : `run ${String(r.run_id)}`;
+  store.fact("wish_done", [{ table: "squads", key: { id }, set: { status: "running", want_result: `done: ${made} created; ${roles.join(", ")} wished running`, updated_at: at } }],
+    { project, squad: topic, payload: { subject: "squad", id, want: "running", result: made } });
   return { done: true, result: { run: r.run_id, task: r.task_id, roles } };
 }
 
@@ -183,19 +199,47 @@ async function archive(a: Action, x: Exec, r: Row): Promise<Result> {
   const stopped = new Set((store.db.query("SELECT DISTINCT stop_cmd FROM exposed WHERE project = ? AND squad = ? AND stop_state = 'done'").all(project, topic) as { stop_cmd: string }[]).map((x) => x.stop_cmd));
   for (const cmd of cleanup) if (typeof cmd === "string" && cmd && !stopped.has(cmd))
     await spawn(["sh", "-c", cmd], { ...x.act.childActivity(x.store, a) }, 120_000);
+  // morning-brief-stale-items U2: the squad's open questions are dropped, never left open on a closed squad
+  // (no board shows them, and the brief would carry them for ever). A blocking one gets one Needs-you card,
+  // raised before the drop so a failed card retries the archive; the same id on a replay replaces it.
+  const open = questions.pending(store, project, topic), blocking = open.filter((q) => q.blocking === 1);
+  if (blocking.length) {
+    const lines = blocking.map((q) => `- ${String(q.title ?? q.question ?? q.id)} (asked by ${String(q.asker ?? "?")})`);
+    const o = await alert(store, project, `archive-questions-${topic}`, String(r.want_at),
+      `The squad was archived with ${blocking.length === 1 ? "a blocking question" : `${blocking.length} blocking questions`} still open; ${blocking.length === 1 ? "it was" : "they were"} dropped:\n${lines.join("\n")}`,
+      { title: `Archived with a blocking question open: ${topic}`, option: "Seen", why: "archiving drops a squad's open questions", fields: { kind: "questions_dropped" } });
+    if (o.code !== 0) return { retry: `blocking-question card: ${(o.err || o.out).trim().slice(0, 200)}` };
+  }
+  const dropped = open.map((q) => ({ ...(questions.entryOf(q) as Row), dropped: DROP_WHY, dropped_at: isoAt(at) }));
   const dir = join(store.root, project, "squads"), live = join(dir, `${topic}.json`);
   if (r.doc != null) {
     const doc = squadDoc(store, project, topic) ?? JSON.parse(String(r.doc));
     doc.status = "closed"; doc.closed_at = isoAt(at); doc.topic = topic;
+    doc.waiting_on_you = [];
+    if (dropped.length) doc.dropped_questions = [...(Array.isArray(doc.dropped_questions) ? doc.dropped_questions : []), ...dropped];
+    // debrief-on-archive U1: the Lead's final debrief, else the done-time one under a line naming what it misses.
+    if (debriefOn(store, project)) {
+      const final = finalDebrief(doc, unitsOf(store, project, topic), stepOf(store, r));
+      doc.debrief = final.debrief; doc.debrief_source = final.source;
+    } else if (typeof doc.debrief === "string" && doc.debrief.trim()) doc.debrief_source = "done"; // hand-written: kept as written
+    else { delete doc.debrief; delete doc.debrief_source; }
     const arch = join(store.root, project, "archive");
     mkdirSync(arch, { recursive: true });
     const stamp = isoAt(at).replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
     writeFileSync(join(arch, `${topic}-${stamp}.json`), render(doc));
-    try { for (const f of readdirSync(dir)) if (f.startsWith(`${topic}-`) && (f.endsWith("-plan.md") || f.endsWith("-plan.approved.md"))) renameSync(join(dir, f), join(arch, f)); } catch { /* no plans */ }
+    try { for (const f of readdirSync(dir)) if (f.startsWith(`${topic}-`) && (f.endsWith("-plan.md") || f.endsWith("-plan.approved.md") || f === `${topic}-try-it.md`)) renameSync(join(dir, f), join(arch, f)); } catch { /* no plans */ }
   }
   try { rmSync(live, { force: true }); } catch { /* already gone */ }
-  store.fact("wish_done", [{ table: "squads", key: { id }, set: { status: "closed", want_result: "done: archived", updated_at: at } }],
-    { project, squad: topic, payload: { subject: "squad", id, want: "gone", result: "archived" } });
+  // The row's doc loses its queue in the same write, so a later questions.sync (an import, squad-state)
+  // never brings the dropped questions back as new open rows.
+  const rowDoc = r.doc == null ? null : (() => { try { return JSON.parse(String(r.doc)) as Row; } catch { return null; } })();
+  const set: Row = { status: "closed", want_result: "done: archived", updated_at: at };
+  if (rowDoc && Array.isArray(rowDoc.waiting_on_you) && rowDoc.waiting_on_you.length) set.doc = JSON.stringify({ ...rowDoc, waiting_on_you: [] });
+  store.tx(() => {
+    questions.drop(store, project, topic, DROP_WHY);
+    store.fact("wish_done", [{ table: "squads", key: { id }, set }],
+      { project, squad: topic, payload: { subject: "squad", id, want: "gone", result: "archived", ...(dropped.length ? { dropped_questions: dropped.length } : {}) } });
+  });
   return { done: true, result: "archived" };
 }
 

@@ -42,7 +42,7 @@ export async function run(argv: string[]): Promise<number> {
   if (a.argv.length < 1) { writeErr("usage: reassert-roles.sh <project>\n"); return 2; }
   const LABEL = dsLabel(a.argv[0]);
   const STATE_DIR = join(stateRoot(), LABEL);
-  if (!isDir(STATE_DIR)) { writeErr(`reassert-roles: no state for '${LABEL}' (${STATE_DIR}) — run /ds-up first\n`); return 1; }
+  if (!isDir(STATE_DIR)) { writeErr(`reassert-roles: no state for '${LABEL}' (${STATE_DIR}) — run ds up <git-url> first\n`); return 1; }
   // A migrated state root: the loop does it (U13b) — a request it fulfils by running the .sh again.
   if (loopOn()) {
     const rc = await loopFront(LABEL, "reassert-roles", "", "", `reassert-roles:${LABEL}:${loopKey(a.argv)}`, a, "hooks/reassert-roles.sh");

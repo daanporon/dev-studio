@@ -46,10 +46,22 @@ export function machineLevels(r: MachineRow, line: Line) {
   return { cores, load1, loadPct, memTotal, memAvail, memPct, swapTotal, swapPct, psi, lv: { load: level(loadPct, "load"), mem: level(memPct, "mem"), swap: swapLevel } };
 }
 
-// The first crit line a fresh sample crosses — load, memory, swap, then cpu/mem/io pressure — as
-// `<metric> <value> ≥ crit <line>`; null when none is crossed, or the sample is missing or stale.
-export function hostCrit(r: MachineRow | null, line: Line, now: number): string | null {
-  if (!r || r.observed_at == null || machineStale(Number(r.observed_at), now)) return null;
+// Is there a sample to judge the host by? `fresh`, `stale` (older than three cadences: the brake ignores
+// it) or `missing` (no row, or no time on it), with its age in seconds (null when missing).
+export type SampleState = { state: "fresh" | "stale" | "missing"; age_s: number | null };
+export function sampleState(r: MachineRow | null, now: number): SampleState {
+  if (!r || r.observed_at == null) return { state: "missing", age_s: null };
+  const at = Number(r.observed_at);
+  return { state: machineStale(at, now) ? "stale" : "fresh", age_s: Math.max(0, now - at) };
+}
+
+// A crossed crit line: the metric (`load`, `mem`, `swap`, `psi cpu|mem|io`), its value (rounded to 0.1),
+// the line and its limits key, and the unit (`%`, or "" for pressure).
+export type CritHit = { metric: string; value: number; crit: number; key: string; unit: string };
+// The first crit line a fresh sample crosses — load, memory, swap, then cpu/mem/io pressure; null when
+// none is crossed, or the sample is missing or stale.
+export function hostCritHit(r: MachineRow | null, line: Line, now: number): CritHit | null {
+  if (!r || sampleState(r, now).state !== "fresh") return null;
   const m = machineLevels(r, line), rd = (v: number) => Math.round(v * 10) / 10;
   const crossed: [string, number | null, string, string][] = [
     ["load", m.loadPct, m.lv.load, "machine_load_crit_pct"], ["mem", m.memPct, m.lv.mem, "machine_mem_crit_pct"], ["swap", m.swapPct, m.lv.swap, "machine_swap_crit_pct"],
@@ -57,6 +69,11 @@ export function hostCrit(r: MachineRow | null, line: Line, now: number): string 
   ];
   const hit = crossed.find(([, v, level]) => v != null && level === "crit");
   if (!hit) return null;
-  const pct = hit[3].endsWith("_pct") ? "%" : "";
-  return `${hit[0]} ${rd(hit[1]!)}${pct} ≥ crit ${line(hit[3])}${pct}`;
+  return { metric: hit[0], value: rd(hit[1]!), crit: line(hit[3])!, key: hit[3], unit: hit[3].endsWith("_pct") ? "%" : "" };
+}
+
+// hostCritHit as the brake's reason says it: `<metric> <value> ≥ crit <line>`.
+export function hostCrit(r: MachineRow | null, line: Line, now: number): string | null {
+  const h = hostCritHit(r, line, now);
+  return h ? `${h.metric} ${h.value}${h.unit} ≥ crit ${h.crit}${h.unit}` : null;
 }

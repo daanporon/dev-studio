@@ -1,0 +1,11 @@
+● Reading the plan's unit before the next edit.
+
+● Read(docs/plans/unit.md)
+  ⎿  Read 71 lines
+
+● Login reached its time limit · Please run /login
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

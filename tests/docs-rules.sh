@@ -6,11 +6,10 @@ fail=0
 need() { # <file> <fixed string>
   if grep -qF -- "$2" "$ROOT/$1"; then echo "ok   $1: $2"; else echo "FAIL $1 lacks: $2"; fail=1; fi
 }
-need AGENTS.md "A Builder runs the full suite before it opens its PR (CI is off): \`CI_JOBS=4 tests/ci.sh\` in its worktree"
-need .github/workflows/tests.yml "types: [opened, synchronize, reopened, edited]"
-need .github/workflows/tests.yml "if: github.event.action != 'edited' || github.event.changes.base"
-need .github/workflows/tests.yml "&& 'tests' || 'edit-no-tests'"
-need .github/workflows/tests.yml "cancel-in-progress: \${{ github.event.action != 'edited' }}"
+need AGENTS.md "A Builder runs targeted tests before it opens its PR, not the full suite"
+need .github/workflows/tests.yml "types: [opened, synchronize, reopened]"
+if grep -v '^[[:space:]]*#' "$ROOT/.github/workflows/tests.yml" | grep -q edited; then echo "FAIL .github/workflows/tests.yml has edited outside a comment"; fail=1; else echo "ok   .github/workflows/tests.yml has no edited trigger"; fi
+need .github/workflows/pr-title.yml "types: [opened, edited, reopened, synchronize]"
 need conventions/plan-shape.md "A unit that touches the board needs a board Check."
 need conventions/plan-shape.md "render"
 need conventions/plan-shape.md "the board on real squad state and look at the affected rows"
@@ -62,4 +61,7 @@ forbid() { # <file> <fixed string>
 }
 forbid bin/lib/watch.sh "skip it for docs-only"
 forbid roles/lead.md "skip it for docs-only"
+need AGENTS.md "A unit documents its scripts, tables and events in \`docs/scripts.md\`."
+agents_bytes="$(wc -c < "$ROOT/AGENTS.md")"
+if [ "$agents_bytes" -gt 40000 ]; then echo "FAIL AGENTS.md is $agents_bytes bytes (limit 40000): move the detail to docs/scripts.md and keep one index line"; fail=1; else echo "ok   AGENTS.md is $agents_bytes bytes (limit 40000)"; fi
 exit "$fail"

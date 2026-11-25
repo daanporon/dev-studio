@@ -85,7 +85,8 @@ export function readyUnits(store: Store, project: string, units: Unit[], now: nu
 
 // The planned units ready except for a Builder seat, in the order a free seat goes to them (U146): every
 // live feature squad's ready units, ranked by slot.ts queue() (urgent, blocks started work, the focus
-// squad's while its key is on, then the oldest), the same line slot() walks.
+// squad's while its key is on, dispatched, the most open dependents while the unlock key is on, then the
+// oldest), the same line slot() walks.
 export function readyLine(store: Store, project: string, now: number): { topic: string; id: number; slug: string }[] {
   const cand: { topic: string; id: number; slug: string }[] = [];
   for (const sq of liveSquads(store, project)) {

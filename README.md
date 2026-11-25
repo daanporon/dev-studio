@@ -30,10 +30,9 @@ worker depth" must be 2 or more, or a squad's workers fail to start.
 ```sh
 git clone https://github.com/OWNER/dev-studio.git
 cd dev-studio
-bin/host/install.sh --skills
 ```
 
-This links `~/.dev-studio` to the checkout, puts the `/ds-*` commands in
+`bin/ds up` installs on the first run (next section). To install alone: `bin/host/install.sh --skills`. That links `~/.dev-studio` to the checkout, puts the `/ds-*` commands in
 `~/.claude/commands`, installs the skills the squad members use, and starts the
 loop with a per-minute watchdog that restarts it. `bin/host/install.sh --check`
 changes nothing and fails when the loop or its watchdog is missing. Prerequisites
@@ -41,9 +40,10 @@ and fixes → [docs/USAGE.md](docs/USAGE.md).
 
 ## Your first squad
 
-1. In a shell on the host: `~/.dev-studio/bin/host/up.sh <git-url>` (or
-   `/ds-up <git-url>` in any Claude session). It adds the project and brings up
-   its Studio.
+1. In a shell on the host, in the clone: `bin/ds up <git-url> --skills`. It installs
+   dev-studio if needed, starts the loop, adds the project and brings up its Studio
+   and board. Add `--label <name>` to name the project and `--backend
+   <orca|orca-lite|tmux|herdr>` to pick where it runs (default `orca`).
 2. Open the `ds-<project>-studio` worktree in the Orca UI.
 3. In the Studio: `/ds-start-squad <topic>`. The loop creates the squad.
 4. Talk the topic through with the squad's Thinker, then approve its plan.
@@ -71,7 +71,6 @@ the loop carries out.
 
 | Command | Does |
 |---|---|
-| `/ds-up <git-url>` | Add a project and bring up its Studio |
 | `/ds-start-squad <topic>` | Start a squad on a topic |
 | `/ds-board` | Show the board |
 | `/ds-q` | Answer a squad's open questions |

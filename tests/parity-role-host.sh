@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="${PARITY_BASE:-3c71af0d}"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$DS_STATE_PARENT"' EXIT
+state_root_on_exit 'rm -rf "$TMP" "$DS_STATE_PARENT"'
 pass=0; fail=0
 
 if ! git -C "$ROOT" cat-file -e "$BASE^{commit}" 2>/dev/null; then

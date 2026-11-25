@@ -10,6 +10,8 @@
 //   limit     limited, nowhere to move                tell       same       same       "carry on"
 //   limit     out of credits, nowhere to move (U3)    nothing    same       same       -
 //   limit     out of credits, its hold cleared (U3)   tell       same       same       worksAgain()
+//   limit     login ended, nowhere to move            nothing    same       same       -
+//   limit     login ended, its hold cleared           tell       same       same       loginWorksAgain
 //
 // Every restart starts fresh from the brief (U95): no restart continues a conversation.
 // `context` is the prompt of a fresh start, or the text `tell` types; the handoff itself
@@ -35,6 +37,8 @@ export type Handoff = { launch: "fresh" | "continue" | "tell"; model: string; ac
 export const TELL = "dev-studio loop: your usage limit is over and there is no other account to move to — carry on where you left off.";
 // U3: an account out of credits has no "over" until its hold is cleared; then this, once (decide.ts).
 export const worksAgain = (agent: string, account: string) => `dev-studio loop: the ${agent}/${account} account works again — carry on where you left off.`;
+// claude-login-ended U2: the same once an ended login's hold is cleared (login.ts clearLogin).
+export const loginWorksAgain = "dev-studio loop: your account's login works again — carry on with your task.";
 
 function jrole(m: Member): string { return `${m.role}${m.suffix ? `-${m.suffix}` : ""}`; }
 

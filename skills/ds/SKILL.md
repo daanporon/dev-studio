@@ -1,6 +1,6 @@
 ---
 name: ds
-description: dev-studio cockpit commands (ds-accounts, ds-approve-fix, ds-board, ds-close-squad, ds-limits, ds-mode, ds-pause, ds-q, ds-reclaim, ds-reload, ds-restart, ds-resume, ds-roles, ds-start-squad, ds-suspend, ds-team, ds-up, ds-update). Use when the user invokes any /ds-* command or asks for the dev-studio board, squads, or studio operations.
+description: dev-studio cockpit commands (ds-accounts, ds-approve-fix, ds-board, ds-close-squad, ds-limits, ds-mode, ds-pause, ds-q, ds-reclaim, ds-reload, ds-restart, ds-resume, ds-roles, ds-start-squad, ds-suspend, ds-team, ds-update). Use when the user invokes any /ds-* command or asks for the dev-studio board, squads, or studio operations.
 ---
 
 # dev-studio commands (`ds-*`) on Muse and Codex
@@ -41,7 +41,6 @@ The commands:
 - `ds-start-squad` — Spawn a squad from a plain-language topic (derives the slug, framing, and repo)
 - `ds-suspend` — Suspend a squad — remove its worktrees to free terminal slots; keep state, branches and conversations for /ds-resume --suspended
 - `ds-team` — Show a squad's roster (who owns each role), jump to a role's terminal, or clean up stale terminals
-- `ds-up` — Bring up (or reconcile) a project's Studio
 - `ds-update` — Bring EVERYTHING to the latest dev-studio — pull, relink, and do only what the new commits need (restart / reload / nothing)
 
 ## Caveat: `allowed-tools` is advisory on Muse and Codex

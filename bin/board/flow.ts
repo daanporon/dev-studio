@@ -29,6 +29,7 @@ export type FlowUnit = {
   status: string;                       // planned | dispatched
   hold: boolean; hold_reason?: string | null;
   plan_blocked: boolean;                // dep-ready but its plan is not approved
+  resuming?: boolean;                   // the unit's Builder is resuming (pause.ts): not paused, it waits for a seat
   paused: boolean;                      // the unit's Builder (or the Lead's hold on a dispatched unit)
   blocked_by: string[];                 // unmet deps and open ext deps (squad()'s satisfied() rule)
   deps: string[];                       // its in-squad deps (Queued's since: the last one's unit_done)
@@ -40,9 +41,12 @@ export type FlowUnit = {
   stale: boolean;                       // stale PR health, unitPhase stale, or its Builder gone/unknown
   place?: number[] | null;              // slot.ts placeOf: the loop's pickup rank (queued units; focus included)
   urgent?: boolean;                     // the unit's doc urgent flag (⚡)
+  unlocks?: number; unlock?: "on";    // open units waiting on this one (⬆N); `unlock` on while the line ranks it by that
   focus?: "on" | "held" | "muted" | null;  // open unit of the focus squad: next in line / the squad holds its share / any other
   lane?: string; lane_rule?: string | null; lane_cpu_h?: number; lane_limit_h?: number;   // a light-tagged unit's lane (board-data unitLane)
   tier_key?: string | null;             // units.tier (standard | hard), not the display label
+  paused_at?: number | null;            // when the pause began (earliest open source); null: unknown or a Lead hold
+  paused_why?: string | null;           // paused by you | waits on … | plan taken back | Lead hold | pausing | resuming
   active_at?: number | null;            // newest sign of work of its Builder (U279); null: none seen
 };
 export type FlowReview = { project: string; squad: string; slug: string; state: ReviewState; since: number | null;
@@ -51,6 +55,7 @@ export type FlowEvent = { project: string; squad: string; unit: string; kind: st
 export type FlowInput = {
   now: number;
   units: FlowUnit[];
+  seated?: { project: string; squad: string; unit: string }[];   // units whose Builder holds a seat: never shown as queued
   events: FlowEvent[];                  // unit_dispatched, unit_pr, auto_merge_armed, unit_done of the window
   squads: { project: string; squad: string }[];   // the active squads (scope)
   floor_min: Record<string, number>;    // flow_stuck_floor_min per project
@@ -91,6 +96,11 @@ const waitsOn = (deps: string[]) => `waits on ${deps.slice(0, 3).join(", ")}${de
 const withDeps = (note: string, deps: string[]) => (deps.length ? `${note} · ${waitsOn(deps)}` : note);
 
 function queuedGroup(u: FlowUnit): { group: string; note: string | null } {
+  const q = queuedBase(u);
+  // A member that is resuming with no seat waits like any queued unit: it is not paused.
+  return u.resuming && q.group === "waiting for a slot" ? { group: q.group, note: "resumed · waiting for a seat" } : q;
+}
+function queuedBase(u: FlowUnit): { group: string; note: string | null } {
   if (u.paused) return { group: "held", note: "paused" };
   if (u.hold) return { group: "held", note: withDeps(u.hold_reason || "held", u.blocked_by) };
   if (u.blocked_by.length) return { group: "waiting on another unit", note: waitsOn(u.blocked_by) };
@@ -102,7 +112,7 @@ function queuedGroup(u: FlowUnit): { group: string; note: string | null } {
   const slot = reason.match(/^WAIT slot:\s*\S+\s+(.*)$/) ?? reason.match(/^queued:\s*(.*)$/);
   if (slot) return { group: "waiting for a slot", note: slot[1].trim() || null };
   const host = reason.match(/^WAIT host:\s*(.*)$/);
-  if (host) return { group: "waiting for a slot", note: `host busy: ${host[1].trim()}` };
+  if (host) return { group: "waiting for the host", note: null };   // the lane's banner carries the reason once
   if (p.slot === 1 && p.wait_until == null) return { group: "waiting for a slot", note: "starting" };
   return { group: "waiting for a slot", note: reason || null };
 }
@@ -134,7 +144,7 @@ export function reviewNote(r: FlowReview | null, now: number): string | null {
   return null;
 }
 
-export function unitStage(u: FlowUnit, t: Times = NO_TIMES, depsDoneAt: number | null = null, review: FlowReview | null = null, now = 0): { stage: Stage; group: string | null; since: number | null; note: string | null; open_pr: boolean } {
+export function unitStage(u: FlowUnit, t: Times = NO_TIMES, depsDoneAt: number | null = null, review: FlowReview | null = null, now = 0, seated = false): { stage: Stage; group: string | null; since: number | null; note: string | null; open_pr: boolean } {
   const prOpen = !!u.pr && OPEN_PR(u.pr.status);
   const paused = u.paused ? "paused" : null;
   if (u.question) return { stage: "needs_you", group: null, since: u.question.since, note: paused, open_pr: prOpen };
@@ -149,7 +159,7 @@ export function unitStage(u: FlowUnit, t: Times = NO_TIMES, depsDoneAt: number |
     return { stage: "merging", group: null, since: firstFrom(t.armed, lastPr), note: paused, open_pr: prOpen };
   }
   if (prOpen) return { stage: "pr_open", group: prGroup(u), since: firstPr, note: paused, open_pr: true };
-  if (u.status === "dispatched") {
+  if (u.status === "dispatched" || seated) {
     const closed = u.pr?.status === "closed";
     return { stage: "building", group: REVIEW_GROUP[review?.state ?? "coding"] ?? "coding", since: closed ? firstFrom(t.dispatched, lastPr) : first(t.dispatched),
       note: paused ?? reviewNote(review, now) ?? (closed ? "PR closed" : null), open_pr: false };
@@ -231,9 +241,11 @@ export function mergedPerDay(events: FlowEvent[], now: number, days = 30, done =
 }
 
 // Pickup order of the queued cards, per project (U6): waiting for an account (by wait_until, unknown
-// last, then place), waiting for a slot (by place), then units waiting on another unit (by place, so
-// units.id) and held, which cannot start and get no position. Sets `queue_pos` on the cards; returns
-// their keys in that order. The place comes from slot.ts placeOf, so the board and the loop agree.
+// last, then place), waiting for a slot (by place), then units waiting on another unit and held (by place too:
+// urgent, blocks started, focus, dispatched, most open dependents, units.id), which cannot start and get no
+// position. Every queued unit has a place (board-data.ts placeIn). Sets `queue_pos` on the cards; returns
+// their keys in that order, which `flow.cards` follows for its queued cards. The place comes from slot.ts
+// placeOf, so the board and the loop agree.
 const PLACE_LAST = [Infinity];
 const cmpPlace = (a: number[] | null | undefined, b: number[] | null | undefined) => {
   const x = a ?? PLACE_LAST, y = b ?? PLACE_LAST;
@@ -243,16 +255,25 @@ const cmpPlace = (a: number[] | null | undefined, b: number[] | null | undefined
 function queueOrder(cards: { key: string; project: string; stage: Stage; group: string | null; queue_pos: number | null }[], units: FlowUnit[]): string[] {
   const unit = new Map(units.map((u) => [ukey(u.project, u.squad, u.slug), u]));
   const q = cards.filter((c) => c.stage === "queued");
-  const rankOf = (g: string | null) => ["waiting for an account", "waiting for a slot", "waiting on another unit", "held"].indexOf(g ?? "");
+  const rankOf = (g: string | null) => ["waiting for an account", "waiting for the host", "waiting for a slot", "waiting on another unit", "held"].indexOf(g ?? "");
   const waitOf = (c: { key: string }) => { const p = unit.get(c.key)?.pick; return p?.wait_known === 1 && p.wait_until ? p.wait_until : Infinity; };
   q.sort((a, b) => a.project.localeCompare(b.project) || rankOf(a.group) - rankOf(b.group)
     || (a.group === "waiting for an account" ? waitOf(a) - waitOf(b) || 0 : 0)
     || cmpPlace(unit.get(a.key)?.place, unit.get(b.key)?.place) || a.key.localeCompare(b.key));
   const n = new Map<string, number>();
   for (const c of q) {
-    if (c.group === "waiting for an account" || c.group === "waiting for a slot") { const k = (n.get(c.project) ?? 0) + 1; n.set(c.project, k); c.queue_pos = k; }
+    if (c.group === "waiting for an account" || c.group === "waiting for the host" || c.group === "waiting for a slot") { const k = (n.get(c.project) ?? 0) + 1; n.set(c.project, k); c.queue_pos = k; }
   }
   return q.map((c) => c.key);
+}
+
+// The cards with the queued ones in `queued_order` (the other stages keep their places): the queued cards take
+// the queued slots of the array, so the page, which groups cards in the order it gets them, draws each group in rule order.
+function inQueuedOrder<T extends { key: string; stage: Stage }>(cards: T[], order: string[]): T[] {
+  const by = new Map(cards.filter((c) => c.stage === "queued").map((c) => [c.key, c]));
+  const sorted = order.map((k) => by.get(k)).filter((c): c is T => !!c);
+  let i = 0;
+  return cards.map((c) => (c.stage === "queued" ? sorted[i++] : c));
 }
 
 export function flowOf(input: FlowInput) {
@@ -262,10 +283,11 @@ export function flowOf(input: FlowInput) {
   for (const p of [...input.squads.map((s) => s.project), ...units.map((u) => u.project)])
     typical[p] ??= { building: null, pr_open: null, merging: null };
   const reviews = new Map((input.reviews ?? []).map((r) => [ukey(r.project, r.squad, r.slug), r]));
+  const seatedKeys = new Set((input.seated ?? []).map((h) => ukey(h.project, h.squad, h.unit)));
   const cards = units.map((u) => {
     const depsDone = u.deps.map((d) => last(times.get(ukey(u.project, u.squad, d))?.done ?? [])).filter((n): n is number => n != null);
     const k = ukey(u.project, u.squad, u.slug);
-    const s = unitStage(u, times.get(k), depsDone.length ? Math.max(...depsDone) : null, reviews.get(k) ?? null, now);
+    const s = unitStage(u, times.get(k), depsDone.length ? Math.max(...depsDone) : null, reviews.get(k) ?? null, now, seatedKeys.has(k));
     const inStage = s.since == null ? null : Math.max(0, now - s.since);
     const st = s.stage === "building" || s.stage === "pr_open" || s.stage === "merging" ? s.stage : null;
     const typ = st ? ((u.tier_key ?? u.tier) ? typical[u.project]?.tiers?.[(u.tier_key ?? u.tier)!]?.[st] : null) ?? typical[u.project]?.[st] ?? null : null;
@@ -273,6 +295,9 @@ export function flowOf(input: FlowInput) {
     // A ready PR waiting for its Builder has no typical time: the floor alone.
     const readyWait = s.stage === "merging" && s.note === "ready · waiting for finish-unit";
     const late = inStage != null && (readyWait ? inStage > floor : typ != null && inStage > Math.max(2 * typ, floor));
+    // A paused building, pr_open or merging card moves to the lane's `paused` group (unitStage keeps its stage and group);
+    // its note says why and its time is the pause's, while since / in_stage_s stay the stage's.
+    const isPaused = u.paused && (s.stage === "building" || s.stage === "pr_open" || s.stage === "merging");
     const stale = !u.paused && u.status === "dispatched" && u.stale;
     // Late is stuck when its Builder shows no sign of work for flow_quiet_min, else slow. A stale card, and
     // a ready PR waiting for its Builder to run finish-unit, are stuck whatever the activity.
@@ -283,9 +308,10 @@ export function flowOf(input: FlowInput) {
     const slow = live && !stuck && late;
     return {
       key: ukey(u.project, u.squad, u.slug), project: u.project, squad: u.squad, slug: u.slug, tier: u.tier,
-      stage: s.stage, group: s.group, since: s.since, in_stage_s: inStage, stuck, slow, stale, active_at: u.active_at ?? null, typical_s: typ,
+      stage: s.stage, group: isPaused ? "paused" : s.group, since: s.since, in_stage_s: inStage,
+      paused: isPaused, paused_s: isPaused && u.paused_at != null ? Math.max(0, now - u.paused_at) : null, stuck, slow, stale, active_at: u.active_at ?? null, typical_s: typ,
       needs_you: s.stage === "needs_you", ask: u.question?.id ? ukey(u.project, u.squad, u.question.id) : null,
-      note: s.note, pr: u.pr, open_pr: s.open_pr, queue_pos: null as number | null, urgent: u.urgent === true, focus: u.focus ?? null,
+      note: isPaused ? u.paused_why ?? s.note : s.stage === "queued" && u.paused ? u.paused_why ?? s.note : s.note, pr: u.pr, open_pr: s.open_pr, queue_pos: null as number | null, urgent: u.urgent === true, focus: u.focus ?? null, ...(u.unlocks ? { unlocks: u.unlocks, ...(u.unlock ? { unlock: "on" as const } : {}) } : {}),
       ...(u.lane ? { lane: u.lane, lane_rule: u.lane_rule ?? null, lane_cpu_h: u.lane_cpu_h, lane_limit_h: u.lane_limit_h } : {}),
     };
   });
@@ -297,7 +323,7 @@ export function flowOf(input: FlowInput) {
       took_s: disp != null && e.at >= disp ? e.at - disp : null,
       focus: input.focus_squad?.[e.project] === e.squad ? "muted" as const : null };
   });
-  const count = (st: Stage) => cards.filter((c) => c.stage === st).length;
+  const count = (st: Stage) => cards.filter((c) => c.stage === st && !c.paused).length;
   const squads: Record<string, { stuck: number; slow: number; longest_stuck_s: number | null; needs_you: number; last_merge_at: number | null }> = {};
   const sq = (k: string) => (squads[k] ??= { stuck: 0, slow: 0, longest_stuck_s: null, needs_you: 0, last_merge_at: null });
   for (const s of input.squads) sq(`${s.project}/${s.squad}`);
@@ -310,11 +336,11 @@ export function flowOf(input: FlowInput) {
   for (const e of done) { const s = sq(`${e.project}/${e.squad}`); if (s.last_merge_at == null || e.at > s.last_merge_at) s.last_merge_at = e.at; }
   return {
     counts: {
-      queued: count("queued"), building: count("building"), pr_open: count("pr_open"), needs_you: count("needs_you"), merging: count("merging"),
+      queued: count("queued"), building: count("building"), pr_open: count("pr_open"), needs_you: count("needs_you"), merging: count("merging"), paused: cards.filter((c) => c.paused).length,
       stuck: cards.filter((c) => c.stuck).length, slow: cards.filter((c) => c.slow).length, open_prs: cards.filter((c) => c.open_pr).length,
       merged_today: perDay[perDay.length - 1].merged,
     },
-    cards: cards.map(({ open_pr, ...c }) => c),
+    cards: inQueuedOrder(cards, queued_order).map(({ open_pr, ...c }) => c),
     queued_order,
     merged,
     per_day: perDay,
@@ -328,5 +354,5 @@ export type Flow = ReturnType<typeof flowOf>;
 
 export const flowLine = (f: Flow): string => {
   const c = f.counts;
-  return `FLOW ${c.queued} queued · ${c.building} building · ${c.pr_open} PR open · ${c.merging} merging · ${c.stuck} stuck${c.slow ? ` · ${c.slow} slow` : ""} · ${c.needs_you} needs you · ${c.merged_today} merged today`;
+  return `FLOW ${c.queued} queued · ${c.building} building · ${c.pr_open} PR open · ${c.merging} merging · ${c.stuck} stuck${c.slow ? ` · ${c.slow} slow` : ""} · ${c.needs_you} needs you${c.paused ? ` · ${c.paused} paused` : ""} · ${c.merged_today} merged today`;
 };

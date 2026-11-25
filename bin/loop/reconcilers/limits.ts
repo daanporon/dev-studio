@@ -29,10 +29,17 @@
 //   studioReady() holds (U264, fulfil/studio.ts: that tab closed, a fresh one opened on the pick).
 //   A Studio whose account is switched off (U5, kind `disabled`, like `gone`: no reset, no stamp) moves
 //   the same way.
+//   configurable-role-elevation U3: a Studio that is not limited, whose `studio` roster row resolves `up`
+//   (column 8) and that runs on a lower rung of its ladder than the studio pick, is moved back up the same
+//   way (backUp below): auto once studioReady() holds, ask after its own "move it" card (subject studio.up),
+//   off never; at most once per fallback_return_min, and never with a "held" card.
 //   Otherwise one `alert` per continuous account/notice condition (payload.kind out_of_credits)
 //   naming the next pick or wait, cleared when it clears.
 // U4 (provider-billing-fallback): an account out of credits with a member stuck on it (nowhere else to
 // go) gets one Needs-you card per account, from the workers looked at here (credits-card.ts).
+// claude-login-ended U2: an account whose login ended (login.ts: the probe's `login ended` note, or
+// Claude's `· Please run /login` line on a screen, kind `login`) is held host-wide; every member on it,
+// the Studio too, reads limited (kind `login`, no reset) while the hold lives, and moves like one.
 // The episode rows replace the sweep's .limit/.switch markers; loop/limited.json is
 // exported from them every tick for the board.
 import { alertId, alertPrefix } from "../core/actuator.ts";
@@ -45,12 +52,15 @@ import { envInt } from "../core/tick.ts";
 import { wake } from "../pause/wake.ts";
 import { scan, type LimitRow } from "../capacity/fingerprints.ts";
 import { limit, limitInt } from "../settings/limits.ts";
-import { accountList, pick as pickAccount, sameModel, workDone } from "../capacity/pick.ts";
+import { accountList, ladder, overrideOf, pick as pickAccount, placeRung, sameModel, workDone } from "../capacity/pick.ts";
+import { backUpOf } from "../settings/roster.ts";
 import { liveAccount, liveOf } from "./record.ts";
 import { liveSquads } from "./liveness.ts";
 import { MOVE, STUDIO_SQUAD, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
 import { creditsHoldS, holdCredits, probeCredits } from "../capacity/credits.ts";
+import { heldNotice, holdLogin, isLoginKey, loginHold, LOGIN_HOLD_S, loginTold, probeLogin } from "../capacity/login.ts";
 import { creditsCards } from "../capacity/credits-card.ts";
+import { loginCards } from "../capacity/login-card.ts";
 import { accountDisabled } from "../capacity/accounts.ts";
 
 export type Place = { plan?: string | null; agent: string; model: string; effort: string; account: string; fallback: boolean; rung?: number; reason?: string; why?: string };
@@ -76,7 +86,8 @@ const hhmm = (t: number) => { const d = new Date(t * 1000); return `${String(d.g
 
 export type Worker = { m: Row | null; wt: string; state: string; since: number | null; lastOutput: number | null; tail: string; ow: Row;
   squad: string; role: string; suffix: string; who: string; key: string; agent: string; account: string; model: string; expired?: boolean; cleared?: boolean };
-type Limit = { reset: number | null; notice: string; dialog: boolean; kind: string; link?: string };
+// `probe`: a login limit read off the account's hold, not off this worker's screen (loginOf).
+type Limit = { reset: number | null; notice: string; dialog: boolean; kind: string; link?: string; probe?: true };
 export type Listed = { wt: string; who: string; topic: string; line: string; since: number; wait_until?: number; switching?: true };
 
 export function makeLimits(opts: { pick?: Picker } = {}): Reconciler {
@@ -98,6 +109,8 @@ function run(ctx: TickCtx, pick: Picker): Action[] {
   const actions: Action[] = [], listed: Listed[] = [], running: { w: Worker; studio: boolean }[] = [];
   // U2: an account whose usage probe notes `out of credits` is held before any member fails on it.
   try { probeCredits(store, P, t); } catch (e) { store.event("plugin_error", { project: P, payload: { plugin: "limits", at: "credits-probe", error: (e as Error)?.message ?? String(e) } }); }
+  // claude-login-ended U2: and one whose probe notes `login ended`.
+  try { probeLogin(store, P, t); } catch (e) { store.event("plugin_error", { project: P, payload: { plugin: "limits", at: "login-probe", error: (e as Error)?.message ?? String(e) } }); }
   const proj = store.get("projects", { label: P });
   const studioWt = (proj?.studio_wt as string) || "";
   const members = store.db.query(`SELECT * FROM members WHERE project = ? AND wt IS NOT NULL AND wt != '' AND COALESCE(status, '') != 'gone'
@@ -127,6 +140,8 @@ function run(ctx: TickCtx, pick: Picker): Action[] {
   });
   // U4: one Needs-you card per account out of credits that still has a member stuck on it (credits-card.ts).
   guarded("credits-card", () => { actions.push(...creditsCards(ctx, pick, running)); });
+  // claude-login-ended U3: one Needs-you card per account whose login ended with a member on it (login-card.ts).
+  guarded("login-card", () => { actions.push(...loginCards(ctx, pick, running)); });
   guarded("limited.json", () => exportLimited(store.root, P, listed));
   return actions;
 }
@@ -184,7 +199,7 @@ export function usageFor(store: Store, w: Worker, max: number, t: number, silent
 }
 
 function kindOf(r: LimitRow): string {
-  return r.kind === "credits" ? "credits" : r.dialog ? "dialog" : /429|cooling down/i.test(r.notice) ? "pool" : /weekly/i.test(r.notice) ? "weekly" : "notice";
+  return r.kind === "credits" || r.kind === "login" ? r.kind : r.dialog ? "dialog" : /429|cooling down/i.test(r.notice) ? "pool" : /weekly/i.test(r.notice) ? "weekly" : "notice";
 }
 
 // The notices accounts-refresh.sh's skip list calls the pool's, not the account's. Not kindOf's
@@ -206,9 +221,10 @@ function limitOf(ctx: TickCtx, w: Worker, S: { limitPct: number; silentMin: numb
   }
   if (r) {
     const lim = { ...r, kind: kindOf(r) };
-    if (lim.kind === "credits") {
+    if (lim.kind === "credits" || lim.kind === "login") {
       // U2: the operator (or the probe) cleared this account while the notice is still on screen: the
-      // old notice stays cleared; a new billing line (another request_id) opens a new episode.
+      // old notice stays cleared; a new billing line (another request_id) opens a new episode. Same for
+      // an ended login's line (claude-login-ended U2).
       const ep = store.get("episodes", { project: ctx.project, subject: w.wt, kind: "limited" });
       if (ep?.source === "loop" && ep.state === "cleared" && ep.episode_key === `${w.agent}/${w.account}|${lim.notice}`) { w.cleared = true; return null; }
       return lim;
@@ -247,6 +263,23 @@ function goneOf(ctx: TickCtx, w: Worker): Limit | null {
   return w.state !== "working" && w.state !== "waiting" && onRemoved(ctx.store, w, ctx.now) ? { reset: null, notice: `account ${w.m!.account} is no longer listed`, dialog: false, kind: "gone" } : null;
 }
 
+// claude-login-ended U2: the account it runs on has a live login hold (login.ts) and its own screen shows
+// no login line: it reads limited all the same, with no reset, so it moves off the account.
+function loginOf(ctx: TickCtx, w: Worker): Limit | null {
+  const account = w.m ? liveAccount(w.ow, w.m, ctx.now) : w.account;
+  if (!account || account === "-" || loginHold(ctx.store, w.agent, account, ctx.now) === null) return null;
+  return { reset: null, notice: heldNotice(w.agent, account), dialog: false, kind: "login", probe: true };
+}
+
+// A login episode cleared (login.ts clearLogin) whose "works again" tell has not gone out yet is kept
+// `cleared` for an hour, so the decider can send it (switches.ts okKey); the screen keeps one with its
+// line on screen anyway (limitOf).
+function keepLoginCleared(ctx: TickCtx, w: Worker): void {
+  const ep = ctx.store.get("episodes", { project: ctx.project, subject: w.wt, kind: "limited" });
+  if (ep?.state === "cleared" && isLoginKey(ep.episode_key) && ctx.now - Number(ep.ended_at ?? 0) < LOGIN_HOLD_S
+    && !loginTold(ctx.store, ctx.project, w.wt, ep)) w.cleared = true;
+}
+
 // provider-billing-fallback U5: the Studio's account is switched off (accounts.ts). Read like `gone`:
 // no reset and no stamp, so the account is held only by its switch, and it ends when it is switched on.
 function disabledOf(ctx: TickCtx, w: Worker): Limit | null {
@@ -264,15 +297,22 @@ const accountLimitKey = (agent: string, account: string) => ({ project: "", subj
 // not accounts-refresh's one-hour guess), host-wide as `credits|<agent>/<account>` (credits.ts). A later
 // billing line on the same member, while its credits episode is open, is the same hold: the episode
 // takes the new notice and keeps its start.
+// claude-login-ended U2: an ended login (kind login) holds the account through login.ts, renewed while its
+// line stays on screen (a limit read off the hold, `probe`, renews nothing); the episode's until is the
+// hold's end. Its line and the hold's notice on the same account are one episode, as for credits.
 function open(ctx: TickCtx, w: Worker, lim: Limit, S: { limitS: number; creditsS: number }): { until: number; first: number } {
   const { store, project: P, now: t } = ctx;
   const key = { project: P, subject: w.wt, kind: "limited" }, ek = `${w.agent}/${w.account}|${lim.notice}`;
   const ep = store.get("episodes", key);
-  const credits = lim.kind === "credits";
+  const credits = lim.kind === "credits", login = lim.kind === "login";
   const same = ep && ep.state !== "closed" && ep.state !== "expired" && ep.state !== "cleared"
-    && (ep.episode_key === ek || (credits && ep.state === "credits" && Number(ep.ended_at ?? 0) > t && String(ep.episode_key ?? "").startsWith(`${w.agent}/${w.account}|`)));
+    && (ep.episode_key === ek || ((credits || login) && ep.state === lim.kind && Number(ep.ended_at ?? 0) > t && String(ep.episode_key ?? "").startsWith(`${w.agent}/${w.account}|`)));
   const first = same ? Number(ep.started_at ?? t) : t;
-  const until = credits ? first + S.creditsS : accountUntil(store, w.wt, lim.notice) ?? lim.reset ?? first + S.limitS;
+  const acct = w.account && w.account !== "-" ? w.account : null;
+  if (login && !lim.probe && acct) holdLogin(store, { agent: w.agent, account: acct, from: "screen", project: P, notice: lim.notice }, t);
+  const until = credits ? first + S.creditsS
+    : login ? (acct ? loginHold(store, w.agent, acct, t) : null) ?? t + LOGIN_HOLD_S
+    : accountUntil(store, w.wt, lim.notice) ?? lim.reset ?? first + S.limitS;
   if (same && ep.episode_key !== ek) store.upsert("episodes", key, { episode_key: ek, observed_at: t });
   if (!same) {
     store.fact("limited", [{ table: "episodes", key, set: { squad: w.squad || null, started_at: t, ended_at: until, count: 1, state: lim.kind, episode_key: ek, source: "loop", observed_at: t, picked: null } }],
@@ -283,9 +323,10 @@ function open(ctx: TickCtx, w: Worker, lim: Limit, S: { limitS: number; creditsS
   const stamp = POOL_NOTICE.test(lim.notice) || lim.kind === "gone" || lim.kind === "disabled" ? null : until;
   // A worker moving away does not reset the account's allowance. Keep the block host-wide,
   // even if usage becomes unknown and the member's limited episode closes on its new account.
+  // An ended login is held by login.ts (above), not by a stamp here.
   if (credits && stamp > t && w.account && w.account !== "-") {
     holdCredits(store, { agent: w.agent, account: w.account, until: stamp, from: "screen", project: P, notice: lim.notice, link: lim.link }, t);
-  } else if (stamp && stamp > t && lim.kind !== "pool" && w.account && w.account !== "-") {
+  } else if (!login && stamp && stamp > t && lim.kind !== "pool" && w.account && w.account !== "-") {
     const acctKey = accountLimitKey(w.agent, w.account);
     const prev = store.get("episodes", acctKey);
     if (!prev || stamp > Number(prev.ended_at ?? 0)) {
@@ -337,8 +378,9 @@ function switching(store: Store, P: string, m: Row | null): boolean {
 }
 
 function member(ctx: TickCtx, w: Worker, S: Settings, actions: Action[], listed: Listed[]): void {
-  const lim = limitOf(ctx, w, S) ?? (S.live.has(w.squad) ? goneOf(ctx, w) : null);
+  const lim = limitOf(ctx, w, S) ?? (S.live.has(w.squad) ? goneOf(ctx, w) ?? loginOf(ctx, w) : null);
   if (!lim) {
+    keepLoginCleared(ctx, w);
     close(ctx, w);
     actions.push(...endWait(ctx, w));
     return;
@@ -382,7 +424,7 @@ function endWait(ctx: TickCtx, w: Worker): Action[] {
 
 function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Action[], listed: Listed[]): void {
   const { store, project: P, now: t } = ctx;
-  const lim = limitOf(ctx, w, S) ?? goneOf(ctx, w) ?? disabledOf(ctx, w);
+  const lim = limitOf(ctx, w, S) ?? goneOf(ctx, w) ?? disabledOf(ctx, w) ?? loginOf(ctx, w);
   // The sweep's .alerted memory (imported) holds the episodes it already alerted on.
   const alerted = (subject: string, episode: string) => {
     const a = store.get("episodes", { project: P, subject, kind: "alerted" });
@@ -428,16 +470,21 @@ function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Act
     endMoveHold(store, P, t, ["studio:hold", "studio:approved"]);
     collapse(null);
     resolve("studio.limit");
+    backUp(ctx, w, pick, actions);
     return;
   }
+  // While the Studio is limited the limit path wins: no move-up is owed.
+  upGone(ctx, w, actions);
   const { until, first } = open(ctx, w, lim, S);
   listed.push({ wt: w.wt, who: "studio", topic: "", line: lim.notice, since: quietSince(w, t) });
   const base = `limit|${w.wt}|${w.agent}/${w.account}|${lim.notice}`;
   // The held card's episode is this one plus "|held" (below), so strip that to keep one episode per limit.
   const last = previous?.replace(/\|held$/, "") ?? null;
   const ep = last?.startsWith(`${base}|`) && !cleared ? last : `${base}|${first}`;
-  const text = lim.kind === "gone" || lim.kind === "disabled" ? `Studio's ${lim.notice}` : `Studio is out of credits on ${w.agent}/${w.account || "-"} (${lim.notice})`;
-  const title = lim.kind === "gone" ? "Studio's account removed" : lim.kind === "disabled" ? "Studio's account switched off" : "Studio out of credits";
+  const text = lim.kind === "gone" || lim.kind === "disabled" ? `Studio's ${lim.notice}`
+    : lim.kind === "login" ? `Studio's account ${w.agent}/${w.account || "-"}: login ended`
+    : `Studio is out of credits on ${w.agent}/${w.account || "-"} (${lim.notice})`;
+  const title = lim.kind === "gone" ? "Studio's account removed" : lim.kind === "disabled" ? "Studio's account switched off" : lim.kind === "login" ? "Studio's login ended" : "Studio out of credits";
   const p = pick({ project: P, squad: "", role: "studio", suffix: "", limited: { agent: w.agent, account: w.account, until } }, ctx);
   if (p && "wait" in p) {
     alert("studio.limit", ep, { kind: "out_of_credits", title, text: `${text} — every account is out until ${hhmm(p.wait)}; the loop does not restart the Studio`,
@@ -462,7 +509,7 @@ function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Act
     if (r.ready) {
       endMoveHold(store, P, t);
       actions.push({ project: P, squad: null, member: w.wt, subject: MOVE, kind: "studio-move", episode: `move|${handle}|${p.agent}:${p.account}@${t}`,
-        payload: { handle, agent: p.agent, account: p.account, model: p.model, effort: p.effort, from: `${w.agent}:${w.account || "-"}`, notice: lim.notice } });
+        payload: { handle, agent: p.agent, account: p.account, model: p.model, effort: p.effort, from: `${w.agent}:${w.account || "-"}`, why: "limit", notice: lim.notice } });
       return;
     }
     if (t - openMoveHold(store, P, t) < moveHoldS()) return;
@@ -477,11 +524,87 @@ function studio(ctx: TickCtx, w: Worker, S: Settings, pick: Picker, actions: Act
   else alert("studio.limit", ep, { ...card, text: `${text}; restart it on ${where} — run: ${cmd}` }, base);
 }
 
+// configurable-role-elevation U3: the Studio's move back up. Owed when its `studio` row resolves `up`
+// (roster.ts backUpOf), it is not pinned, it has an adopted handle, placeRung puts its live agent, model
+// and account on a rung below the top (a Studio on no rung is owed nothing; rungs that differ only in
+// effort place as the first of them), the studio pick lands on a higher rung, and the last move-up
+// (studio:up, stamped by fulfil/studio.ts when it started) is over fallback_return_min ago (0 = never).
+// auto (or ask once its card was answered "move it"): one studio-move with why "back-up" once
+// studioReady() holds, behind moving()'s settle guard; it waits without a time limit and never posts the
+// held card. ask: one card on subject studio.up. off: nothing. Not owed: its card and approval clear.
+function backUp(ctx: TickCtx, w: Worker, pick: Picker, actions: Action[]): void {
+  const { store, project: P, now: t } = ctx;
+  const mode = limit(store, P, "studio_move") ?? "auto";
+  const handle = (studioView(store, P)?.member?.handle as string | null) || null;
+  const owed = (): { p: Place; to: number; from: number } | null => {
+    if (mode !== "auto" && mode !== "ask") return null;
+    if (!handle || !backUpOf(store, P, "studio") || overrideOf(store, w.m)) return null;
+    const lad = ladder(store, { project: P, role: "studio" }, null);
+    if (!lad) return null;
+    const from = placeRung(store, lad.rungs, { agent: w.agent, model: w.model, account: w.account || null });
+    if (from === null || from === 0) return null;
+    const min = limitInt(store, P, "fallback_return_min", 15);
+    if (min <= 0) return null;
+    const marker = store.get("episodes", { project: P, subject: MOVE, kind: "studio:up" });
+    if (marker && t - Number(marker.started_at ?? 0) < min * 60) return null;
+    const p = pick({ project: P, squad: "", role: "studio", suffix: "", ...(w.m?.id != null ? { member: Number(w.m.id) } : {}) }, ctx);
+    if (!isPlace(p) || typeof p.rung !== "number") return null;
+    const to = p.rung - 1;
+    return to < from ? { p, to, from } : null;
+  };
+  const o = owed();
+  if (!o) { upGone(ctx, w, actions); return; }
+  const { p } = o, where = `${p.agent}:${p.model}@${p.account}`;
+  if (mode === "auto" || upApproved(store, P)) {
+    if (moving(store, P, t) || !studioReady(store, P, t).ready) return;
+    actions.push({ project: P, squad: null, member: w.wt, subject: MOVE, kind: "studio-move", episode: `up|${handle}|${p.agent}:${p.account}@${t}`,
+      payload: { handle, agent: p.agent, account: p.account, model: p.model, effort: p.effort, from: `${w.agent}:${w.account || "-"}`,
+        why: "back-up", notice: `moving back up to ${p.model}` } });
+    return;
+  }
+  // ask: one card per place and target rung; a card for another one is cleared first, and one the
+  // loop cleared (the move stopped being owed) comes back as a new card (`@<now>`).
+  const base = `up|${w.agent}:${w.model}@${w.account || "-"}|rung${o.to + 1}`;
+  const sent = store.get("episodes", { project: P, subject: UP, kind: "action:alert" });
+  const prev = typeof sent?.episode_key === "string" ? sent.episode_key : null;
+  const same = prev !== null && (prev === base || prev.startsWith(`${base}@`));
+  const cleared = prev !== null && store.get("episodes", { project: P, subject: UP, kind: "action:alert-clear" })?.episode_key === `cleared@${prev}`;
+  if (same && !cleared) return;
+  if (prev && !cleared) clearUp(ctx, w, actions, prev);
+  const ep = same ? `${base}@${t}` : base;
+  actions.push({ project: P, squad: null, member: w.wt, subject: UP, kind: "alert", episode: ep, payload: {
+    card: "studio_move_up", title: "Studio can move back up",
+    text: `Studio can move back up to ${where} (it runs on ${w.agent}:${w.model || "?"}@${w.account || "-"}, rung ${o.from + 1} of its ladder); answer "move it" and the loop moves it once it is idle with an empty prompt (its tab only, briefed from its journal)`,
+    option: "move it", why: "the studio row says move back up (roles.conf column 8)",
+    fields: { move: true, move_up: true, acts_on_answer: true } } });
+}
+
+// The move-up card's subject (its own, so the studio.limit collapse and sweep never touch it).
+const UP = "studio.up";
+// The move-up is no longer owed: clear its card and end its approval.
+function upGone(ctx: TickCtx, w: Worker, actions: Action[]): void {
+  const { store, project: P, now: t } = ctx;
+  endMoveHold(store, P, t, ["studio:up-approved"]);
+  const sent = store.get("episodes", { project: P, subject: UP, kind: "action:alert" });
+  if (typeof sent?.episode_key === "string") clearUp(ctx, w, actions, sent.episode_key);
+}
+function clearUp(ctx: TickCtx, w: Worker, actions: Action[], episode: string): void {
+  const { store, project: P } = ctx, ep = `cleared@${episode}`;
+  const done = store.get("episodes", { project: P, subject: UP, kind: "action:alert-clear" });
+  if (done?.episode_key !== ep) actions.push({ project: P, squad: null, member: w.wt, subject: UP, kind: "alert-clear", episode: ep, payload: { target: "project", id: alertId(UP, episode) } });
+}
+function upApproved(store: Store, P: string): boolean {
+  const a = store.get("episodes", { project: P, subject: MOVE, kind: "studio:up-approved" });
+  return !!a && a.ended_at == null;
+}
+
 // U264's move bookkeeping, all on subject `studio.move` (episodes):
 //   action:studio-move  the move's claim (fulfil/studio.ts); open while pending, acted or running
 //   studio:move         the last move tried (state closing|closed|started|failed|not moved), started_at
 //   studio:hold         since when the guard has kept a wanted move back
 //   studio:approved     the operator answered the ask card's "move it" (fulfil/studio.ts dismiss)
+//   studio:up-approved  the same for the move-up card (U3, fields.move_up)
+//   studio:up           when the last move back up started (fulfil/studio.ts): fallback_return_min's window
 const moveHoldS = () => envInt("DS_LOOP_STUDIO_MOVE_HOLD_S", 600);
 // After a move (made or not) the next waits this long: the observers must see the new tab and account.
 const moveSettleS = () => envInt("DS_LOOP_STUDIO_MOVE_SETTLE_S", 300);

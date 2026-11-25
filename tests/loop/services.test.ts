@@ -44,6 +44,18 @@ function freePort(): number {
   srv.stop(true);
   return p;
 }
+// The first of n ports in a row nothing listens on right now.
+function freeRun(n: number): number {
+  for (;;) {
+    const base = freePort();
+    if (base + n > 65535) continue;
+    const got: ReturnType<typeof Bun.serve>[] = [];
+    try { for (let i = 0; i < n; i++) got.push(Bun.serve({ hostname: "127.0.0.1", port: base + i, fetch: () => new Response("") })); }
+    catch { continue; }
+    finally { for (const g of got) g.stop(true); }
+    return base;
+  }
+}
 const now = () => Math.floor(Date.now() / 1000);
 function rig(s: Store) {
   const act = new LoopActuator({ orca: new FakeOrca(), fulfillers: [board as Fulfiller] });
@@ -114,6 +126,8 @@ describe("the board service", () => {
     expect(Number(third.pid)).not.toBe(Number(second.pid));
     expect(alive(Number(second.pid))).toBe(false);
     expect(await boardUp(port)).toBe(true);
+    // Its own old server held the port: the restart keeps it (U2).
+    expect(third.port).toBe(port);
     expect(events(s, "service_restarted").map((e) => e.why)).toEqual(["its process is gone", "it stopped answering /healthz"]);
   }, 60_000);
 
@@ -177,47 +191,95 @@ describe("the board service", () => {
     expect(await boardUp(port)).toBe(true);
   }, 30_000);
 
-  test("a port already in use leaves the row failed with the bind error and one service_failed toast", async () => {
-    const s = imported();
-    const holder = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("someone else", { status: 418 }) });
+  test("a port another process holds: the board starts on the next free port, pings there, and keeps it (U2)", async () => {
+    const s = imported(), base = freeRun(3);
+    const holder = Bun.serve({ hostname: "127.0.0.1", port: base, fetch: () => new Response("someone else", { status: 418 }) });
     try {
-      process.env.DS_BOARD_BIND_TRIES = "1";
       const { tick } = rig(s);
-      wish(s, holder.port);
+      wish(s, base);
       await tick();
       const r = svc(s)!;
-      expect(r.status).toBe("failed");
-      expect(r.pid).toBeNull();
-      expect(String(r.result)).toMatch(/could not bind 127\.0\.0\.1:\d+/);
-      expect(String(r.want_result)).toMatch(/^failed: /);
+      expect(r).toMatchObject({ status: "running", port: base + 1 });
+      expect(await (await fetch(`http://127.0.0.1:${base + 1}/healthz`)).json()).toMatchObject({ ok: true, pid: Number(r.pid), port: base + 1 });
+      expect(events(s, "service_starting")[0]).toMatchObject({ port: base + 1, asked: base });
+      // The reconciler pings the bound port: healthy, nothing to do.
+      expect((await tick()).acted).toEqual([]);
+      expect(Number(svc(s)!.last_ping_at)).toBeGreaterThan(Number(r.last_ping_at));
+      // The asked port coming free moves nothing; a dead board comes back on its registered port.
+      holder.stop(true);
+      expect((await tick()).acted).toEqual([]);
+      process.kill(Number(r.pid), "SIGKILL");
+      await gone(Number(r.pid));
+      await tick();
+      expect(svc(s)).toMatchObject({ status: "running", port: base + 1 });
+      expect(await boardUp(base + 1)).toBe(true);
+    } finally { holder.stop(true); }
+  }, 30_000);
+
+  test("a port held by another board that answers /healthz is not taken for ours: ours moves on (U2)", async () => {
+    const s = imported(), base = freeRun(2);
+    const holder = Bun.serve({ hostname: "127.0.0.1", port: base, fetch: () => Response.json({ ok: true, pid: 1, port: base }) });
+    try {
+      const { tick } = rig(s);
+      wish(s, base);
+      await tick();
+      const r = svc(s)!;
+      expect(r).toMatchObject({ status: "running", port: base + 1 });
+      expect(await boardUp(base + 1, "127.0.0.1", r.pid)).toBe(true);
+      expect(JSON.parse(String(r.restarts ?? "[]"))).toEqual([]);
+    } finally { holder.stop(true); }
+  }, 30_000);
+
+  test("no free port within DS_BOARD_PORT_TRIES leaves the row failed with one service_failed toast (U2)", async () => {
+    const s = imported(), base = freeRun(2);
+    const holders = [0, 1].map((i) => Bun.serve({ hostname: "127.0.0.1", port: base + i, fetch: () => new Response("") }));
+    try {
+      process.env.DS_BOARD_PORT_TRIES = "1";
+      const { tick } = rig(s);
+      wish(s, base);
+      await tick();
+      const r = svc(s)!;
+      expect(r).toMatchObject({ status: "failed", pid: null, port: base });
+      expect(String(r.result)).toBe(`ports ${base}-${base + 1} are all taken or registered to another board`);
+      expect(String(r.want_result)).toMatch(/^failed: ports /);
       expect((await tick()).acted).toEqual([]);
       const failed = events(s, "service_failed");
       expect(failed).toHaveLength(1);
-      expect(failed[0]).toMatchObject({ project: "fx", port: holder.port });
-      expect(String(failed[0].error)).toMatch(/could not bind/);
+      expect(failed[0]).toMatchObject({ project: "fx", port: base });
     } finally {
-      delete process.env.DS_BOARD_BIND_TRIES;
-      holder.stop(true);
+      delete process.env.DS_BOARD_PORT_TRIES;
+      for (const h of holders) h.stop(true);
     }
   }, 30_000);
 
-  test("a port held by another board that answers /healthz is not taken for ours: failed with the bind error", async () => {
-    const s = imported();
-    const holder = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ ok: true, pid: 1, port: 0 }) });
+  test("a port another scope's row registers is skipped, running or not (U2)", async () => {
+    const s = imported(), base = freeRun(3);
+    const holder = Bun.serve({ hostname: "127.0.0.1", port: base, fetch: () => new Response("") });
     try {
-      process.env.DS_BOARD_BIND_TRIES = "1";
+      // A stopped board of another scope keeps base + 1 as its port.
+      s.want("service", "board/fx/other", "stopped", { by: "test" });
+      s.db.run("UPDATE services SET port = ? WHERE topic = 'other'", [base + 1]);
       const { tick } = rig(s);
-      wish(s, holder.port);
+      wish(s, base);
       await tick();
-      const r = svc(s)!;
-      expect(r.status).toBe("failed");
-      expect(String(r.result)).toMatch(/could not bind/);
-      expect(JSON.parse(String(r.restarts ?? "[]"))).toEqual([]);
-      expect(events(s, "service_started")).toEqual([]);
-    } finally {
-      delete process.env.DS_BOARD_BIND_TRIES;
-      holder.stop(true);
-    }
+      expect(svc(s)).toMatchObject({ status: "running", port: base + 2 });
+    } finally { holder.stop(true); }
+  }, 30_000);
+
+  test("two scopes starting at once on a held port get two different ports (U2)", async () => {
+    const s = imported(), base = freeRun(3);
+    const holder = Bun.serve({ hostname: "127.0.0.1", port: base, fetch: () => new Response("") });
+    try {
+      const { tick } = rig(s);
+      wish(s, base);
+      s.want("service", "board/fx/two", "running", { payload: { port: base }, fill: { port: base }, by: "test" });
+      await tick();
+      const rows = s.db.query("SELECT * FROM services WHERE name = 'board' ORDER BY id").all() as Row[];
+      for (const r of rows) pids.add(Number(r.pid));
+      expect(rows.map((r) => r.status)).toEqual(["running", "running"]);
+      expect(rows.map((r) => Number(r.port)).sort()).toEqual([base + 1, base + 2]);
+      for (const r of rows) expect(await boardUp(Number(r.port), "127.0.0.1", r.pid)).toBe(true);
+    } finally { holder.stop(true); }
   }, 30_000);
 
   test("a new port on a running board restarts it there, uncounted", async () => {
@@ -301,11 +363,13 @@ describe("liveness before wishes (U76)", () => {
 describe("a start in flight", () => {
   test("failing after a newer wish replaced it does not give the newer wish up", async () => {
     const s = imported();
-    const holder = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("someone else", { status: 418 }) });
     try {
       process.env.DS_BOARD_BIND_TRIES = "5";
       const { act, begin, tick } = rig(s);
-      wish(s, holder.port);
+      // An address this host does not have: no port is held there, so the start goes ahead and the
+      // server's bind fails (U2: a held port is no longer how a start fails).
+      const first = freePort();
+      s.want("service", "board/fx", "running", { payload: { port: first, bind: "192.0.2.1" }, fill: { port: first }, by: "test" });
       await begin();                       // the server retries the bind for ~1 s
       const next = freePort();
       wish(s, next);
@@ -318,7 +382,6 @@ describe("a start in flight", () => {
       expect(await boardUp(next)).toBe(true);
     } finally {
       delete process.env.DS_BOARD_BIND_TRIES;
-      holder.stop(true);
     }
   }, 30_000);
 });
@@ -357,6 +420,20 @@ describe("ds want board", () => {
     const down = JSON.parse(ds(s.root, "want", "board", "--project", "fx").out);
     expect(down).toMatchObject({ was_down: true, changed: true });
     expect(Number(svc(s)!.want_at)).toBeGreaterThan(at - 50);
+  });
+  test("a board the loop moved (asked 8799, bound 8800) asked again without --port is a no-op on 8800 (U2)", () => {
+    const s = imported();
+    ds(s.root, "want", "board", "--project", "fx", "--port", "8799");
+    const live = Bun.spawn(["bash", "-c", "exec -a board-server sleep 30"]);
+    try {
+      s.db.run("UPDATE services SET status = 'running', port = 8800, pid = ? WHERE project = 'fx'", [live.pid]);
+      expect(JSON.parse(ds(s.root, "want", "board", "--project", "fx").out)).toMatchObject({ port: 8800, changed: false });
+      // Another bind is a new wish on the registered port, not the asked one.
+      expect(JSON.parse(ds(s.root, "want", "board", "--project", "fx", "--bind", "127.0.0.1").out)).toMatchObject({ port: 8800, changed: true });
+    } finally { live.kill("SIGKILL"); }
+    // After --stop the next ask starts from the registered port.
+    ds(s.root, "want", "board", "--project", "fx", "--stop");
+    expect(JSON.parse(ds(s.root, "want", "board", "--project", "fx").out)).toMatchObject({ port: 8800, want_payload: { port: 8800 }, changed: true });
   });
   test("--wait after a failed start waits for the new wish instead of reporting the old failure", () => {
     const s = imported();

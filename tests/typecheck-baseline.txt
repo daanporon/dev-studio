@@ -39,7 +39,6 @@ bin/loop/core/decide.ts: error TS2339: Property 'why' does not exist on type '{ 
 bin/loop/core/store.ts: error TS2345: Argument of type '[unknown, string, {}]' is not assignable to parameter of type 'SQLQueryBindings[] | [null] | [string] | 
 bin/loop/fulfil/cleanup-act.ts: error TS2322: Type 'string | null' is not assignable to type 'string | undefined'.
 bin/loop/fulfil/pending.ts: error TS2345: Argument of type '[unknown, unknown, string, unknown]' is not assignable to parameter of type 'SQLQueryBindings[] | [n
-bin/loop/fulfil/studio.ts: error TS2322: Type '(a: Action, x: Exec) => Promise<{ failed: string; done?: undefined; result?: undefined; wait?: undefined; at?: un
 bin/loop/fulfil/studio.ts: error TS2722: Cannot invoke an object which is possibly 'undefined'.
 bin/loop/io/tidy.ts: error TS2365: Operator '/' cannot be applied to types 'number | bigint' and 'number'.
 bin/loop/observers/reviews.ts: error TS2322: Type 'unknown' is not assignable to type 'SQLQueryBindings'.

@@ -8,5 +8,13 @@ DS_STATE_PARENT="$(mktemp -d -p "${DS_TEST_STATE_BASE:-${TMPDIR:-/tmp}}" dsstate
 mkdir -p "$DS_STATE_PARENT/state"
 DS_STATE_ROOT="$DS_STATE_PARENT/state"
 export DS_STATE_ROOT DS_STATE_PARENT
-# Best effort when run alone: a test that sets its own EXIT trap later replaces this one.
-trap 'rm -rf "$DS_STATE_PARENT"' EXIT
+# A script that needs its own cleanup calls state_root_on_exit '<cmd>' (single-quoted, expanded at exit),
+# never a bare `trap … EXIT`, which would replace this one and leak the folder (tests/state-root-trap.sh).
+# Calls add up; the state folder is removed last.
+_STATE_ROOT_CMDS=""
+state_root_on_exit() {
+  _STATE_ROOT_CMDS="$1"
+  # shellcheck disable=SC2064
+  trap 'eval "$_STATE_ROOT_CMDS"; rm -rf "$DS_STATE_PARENT"' EXIT
+}
+state_root_on_exit ':'

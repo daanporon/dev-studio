@@ -7,8 +7,9 @@
 // below wraps bin/backend/orca.sh, bin/loop/fakes/orca.ts replays recorded outputs.
 //
 // A project's worktrees: its directory rows, its members rows, its Studio worktree, and any worktree
-// named <prefix><label>-… . A row whose worktree or terminal left gets gone_at (kept, not deleted);
-// seen again, gone_at clears. An empty `ps` while rows are live is an Orca hiccup, not a mass exit:
+// named <prefix><label>-… and no longer label's prefix (`ds-dev-studio-public-…` is not dev-studio's).
+// A row whose worktree or terminal left, or whose worktree is no longer the project's, gets gone_at
+// (kept, not deleted); seen again, gone_at clears. An empty `ps` while rows are live is an Orca hiccup, not a mass exit:
 // the tick throws (plugin_error) and nothing is marked gone.
 import { join } from "node:path";
 import type { Observer, TickCtx } from "../core/plugins.ts";
@@ -17,11 +18,14 @@ import { envInt } from "../core/tick.ts";
 import { builderQuestions, idleBuilderDue, knob, liveSquads, SETTLED } from "../reconcilers/liveness.ts";
 import { paused } from "../pause/pause.ts";
 import { stopping } from "../squad/cancel.ts";
-import { stopOpen } from "../squad/member-state.ts";
+import { lastStart, stopOpen } from "../squad/member-state.ts";
 import { HEADLESS } from "./codex.ts";
 import { backendOp, backendPath, inProcess } from "../io/orca.ts";
 import { redact } from "../core/redact.ts";
 import { adoptStudio, STUDIO_SQUAD, studioAgent } from "../squad/studio.ts";
+import { loopProjects } from "../settings/projects.ts";
+import { offOrca, studioContract } from "../squad/backend.ts";
+import { KEYS_STALE_S } from "../chat/keys.ts";
 
 export type PsAgent = { state?: string; stateStartedAt?: number; lastAssistantMessage?: string };
 export type PsWorktree = { worktreeId: string; path?: string; branch?: string; displayName?: string; lastOutputAt?: number;
@@ -277,6 +281,16 @@ export function liveModel(store: Store, project: string, wt: string, m: MainAgen
 // the walk read the worktree empty and no dispatch is live; otherwise unknown (a failed walk, mains
 // that disagree, or no walk yet). Orca's worker state and a leftover terminal are no evidence.
 // U231: a dispatch counts only when the latest dispatch read for its run saw it (`current`).
+// U21a: when the walk first read none in the current spell (observed_workers.walk_none_at). A walk that
+// reads none keeps a spell begun after the member's last start and begins one otherwise; a walk that
+// finds the agent ends it (null); a failed or split walk (`unknown`) proves nothing and keeps it.
+export function walkNoneAt(walk: unknown, prev: unknown, startedAt: number, now: number): number | null {
+  const was = prev == null ? null : Number(prev);
+  if (walk === "running") return null;
+  if (walk !== "none") return was;
+  return was != null && was > startedAt ? was : now;
+}
+
 export function presence(walk: unknown, dispatch: unknown, current = true): "running" | "none" | "unknown" {
   if (walk === "running" || (current && typeof dispatch === "string" && dispatch && !SETTLED.has(dispatch))) return "running";
   return walk === "none" ? "none" : "unknown";
@@ -296,15 +310,23 @@ export const mangle = (p: string) => p.replace(/[^A-Za-z0-9]/g, "-");
 export const prefix = () => process.env.DS_PREFIX || "ds-";
 const TAILS = 8; // screen reads in flight at once
 const STUDIO_SETTLE_S = 5; // the Studio's screen is re-read once its output has rested this long
+const SCREEN_EVERY_S = 3; // U19: a watched member's screen (board keys, a screen-only chat) is re-read at most this often
 
 // The project's worktree ids besides its directory rows: members, the Studio, and the name prefix.
+// A worktree belongs to one project: a name that also starts with a longer label's prefix
+// (`ds-dev-studio-public-` beside `ds-dev-studio-`) is that project's, not this one's.
 function knownWts(store: Store, project: string, ps: PsWorktree[]): Set<string> {
   const ids = new Set((store.db.query("SELECT wt FROM members WHERE project = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone' UNION SELECT builder_wt AS wt FROM units WHERE project = ? AND status = 'cancelled' AND COALESCE(builder_wt, '') != ''")
     .all(project, project) as { wt: string }[]).map((r) => r.wt));
   const studio = (store.get("projects", { label: project })?.studio_wt as string | null) ?? null;
   if (studio) ids.add(studio);
   const named = `${prefix()}${project}-`;
-  for (const w of ps) if ((w.displayName ?? "").startsWith(named)) ids.add(w.worktreeId);
+  const labels = new Set([...loopProjects(store.root), ...(store.db.query("SELECT label FROM projects").all() as { label: string }[]).map((r) => r.label)]);
+  const longer = [...labels].filter((l) => l.startsWith(`${project}-`)).map((l) => `${prefix()}${l}-`);
+  for (const w of ps) {
+    const name = w.displayName ?? "";
+    if (name.startsWith(named) && !longer.some((p) => name.startsWith(p))) ids.add(w.worktreeId);
+  }
   return ids;
 }
 
@@ -343,11 +365,17 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
         ctx.facts.unreadRuns = coordinatorMail(store, unread);
         if (terminals) ctx.facts.terminalHandles = new Set(terminals.map((t) => t.handle));
       }
-      const live = store.db.query("SELECT COUNT(*) AS n FROM observed_workers WHERE project = ? AND gone_at IS NULL").get(project) as { n: number };
+      const live = store.db.query("SELECT COUNT(*) AS n FROM observed_workers WHERE project = ? AND gone_at IS NULL AND wt NOT LIKE 'local::%'").get(project) as { n: number };
       if (ps.length === 0 && live.n > 0) throw new Error("orca ps listed no worktrees (an Orca hiccup?); nothing marked gone");
 
-      const ids = knownWts(store, project, ps);
+      // U12: squads on Orca and the Studio only. A member of a squad off Orca, and any folder such a
+      // squad's worktrees row owns, is the contract observer's (observers/contract.ts): never read,
+      // never marked gone here.
+      const off = offOrca(store, project);
+      const offPath = (w: PsWorktree) => { const p = pathOf(w); return !!p && off.paths.has(p.replace(/\/+$/, "")); };
+      const ids = knownWts(store, project, ps.filter((w) => !offPath(w)));
       for (const d of dir) if (d.wt) ids.add(d.wt);
+      for (const wt of ids) if (off.wts.has(wt) || wt.startsWith("local::") || off.paths.has(String(wtPath(wt) ?? "").replace(/\/+$/, ""))) ids.delete(wt);
       const byWt = new Map(dir.map((d) => [d.wt, d]));
       const mine = ps.filter((w) => ids.has(w.worktreeId) && !w.isArchived);
       const mail = new Map<string, number>();
@@ -355,7 +383,9 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
       const tokensOf = store.db.query("SELECT SUM(output) AS n FROM observed_tokens WHERE worker = ?");
       const read = Array.isArray(procs) ? procs : null;
       const proj = store.get("projects", { label: project });
-      const studioWt = (proj?.studio_wt as string | null) || "";
+      // U51: a Studio off Orca is the contract observer's: not walked, adopted or read here.
+      const studioOff = !!studioContract(store, project);
+      const studioWt = studioOff ? "" : (proj?.studio_wt as string | null) || "";
       const walks = read ? mainAgents(ps, read, new Map(studioWt ? [[studioWt, studioAgent(proj)]] : [])) : null;
       const subs = read ? subAgents(ps, read) : null;
 
@@ -363,6 +393,11 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
       // A member with a board chat queued (fulfil/chat.ts) is re-read like the Studio below: once its
       // output moved past the last read and rested STUDIO_SETTLE_S, so memberReady() sees the prompt it settled on.
       const chatting = new Set((store.db.query("SELECT DISTINCT member FROM requests WHERE project = ? AND kind = 'chat' AND done_at IS NULL AND member IS NOT NULL").all(project) as Row[]).map((r) => String(r.member)));
+      // U19: a member the board pressed keys at within KEYS_STALE_S, or one whose chat panel shows its screen
+      // (observed_chat source 'screen'), is re-read once its output moved past the last read, at most every SCREEN_EVERY_S,
+      // so the panel's screen view follows a menu as it changes.
+      const watched = new Set((store.db.query(`SELECT member AS wt FROM requests WHERE project = ? AND kind = 'keys' AND member IS NOT NULL AND created_at >= ?
+        UNION SELECT wt FROM observed_chat WHERE project = ? AND source = 'screen' AND gone_at IS NULL`).all(project, now - KEYS_STALE_S, project) as Row[]).map((r) => String(r.wt)));
       store.tx(() => {
         for (const w of mine) {
           const path = pathOf(w), d = byWt.get(w.worktreeId), state = workerState(w);
@@ -376,7 +411,8 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
           const prev = store.get("observed_workers", { project, wt: w.worktreeId });
           const out = secs(w.lastOutputAt) ?? 0;
           if (!prev || prev.tail_at == null || prev.gone_at != null || prev.state !== state || prev.tokens !== tokens || prev.suspect
-            || (chatting.has(w.worktreeId) && out >= Number(prev.tail_at) && now - out >= STUDIO_SETTLE_S)) tails.push(w.worktreeId);
+            || (chatting.has(w.worktreeId) && out >= Number(prev.tail_at) && now - out >= STUDIO_SETTLE_S)
+            || (watched.has(w.worktreeId) && out > Number(prev.tail_at) && now - Number(prev.tail_at) >= SCREEN_EVERY_S)) tails.push(w.worktreeId);
           // The main agent (U149) and its sub-agents refresh on the walk's cadence and are kept when a
           // read fails; sub_agents is NULL once none are live, so a sub line never overwrites `account`.
           let ran: Row = procs === "failed" ? { walk: "unknown" } : {};
@@ -384,7 +420,8 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
             const { walk, main } = walks.get(w.worktreeId) ?? { walk: "none" as const, main: null };
             const sub = JSON.stringify(subs!.get(w.worktreeId) ?? []);
             const live = main ? liveModel(store, project, w.worktreeId, main) : { model: null, effort: null };
-            ran = { walk, agent: main?.agent ?? null, account: main?.account ?? null, account_at: now, pid: main?.pid ?? null,
+            const m = store.db.query("SELECT placed_at, started FROM members WHERE project = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project, w.worktreeId) as Row | null;
+            ran = { walk, walk_none_at: walkNoneAt(walk, prev?.walk_none_at, m ? lastStart(m) : 0, now), agent: main?.agent ?? null, account: main?.account ?? null, account_at: now, pid: main?.pid ?? null,
               started_at: main?.start ?? null, rss_kb: main?.rss ?? null, live_model: live.model, live_effort: live.effort,
               sub_agents: sub !== "[]" ? sub : null };
           }
@@ -417,13 +454,22 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
           store.upsert("observed_workers", { project, wt }, { gone_at: previous?.gone_at ?? now, observed_at: now,
             doc: { agent_states: [], terminals_seen_at: terminals ? now : null } });
         }
+        // U12: the contract observer's rows (a `local::` worktree, a member off Orca) are left alone.
+        const theirs = JSON.stringify([...off.wts]);
         for (const t of ["observed_worktrees", "observed_workers"]) {
-          store.db.run(`UPDATE ${t} SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt NOT IN (SELECT value FROM json_each(?))`, [now, project, seen]);
+          store.db.run(`UPDATE ${t} SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt NOT IN (SELECT value FROM json_each(?))
+            AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?))`, [now, project, seen, theirs]);
         }
-        if (terminals || !adapter.terminals) store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND handle NOT IN (SELECT value FROM json_each(?))",
-          [now, project, JSON.stringify(terminals ? terminals.filter((t) => t.connected === true && t.writable !== false && t.orphaned !== true).map((t) => t.handle) : dir.flatMap((d) => d.terminals ?? []))]);
+        if (terminals || !adapter.terminals) store.db.run(`UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND handle NOT IN (SELECT value FROM json_each(?))
+            AND COALESCE(wt, '') NOT LIKE 'local::%' AND COALESCE(wt, '') NOT IN (SELECT value FROM json_each(?))`,
+          [now, project, JSON.stringify(terminals ? terminals.filter((t) => t.connected === true && t.writable !== false && t.orphaned !== true).map((t) => t.handle) : dir.flatMap((d) => d.terminals ?? [])), theirs]);
+        // A terminal row whose worktree is no longer the project's (an over-wide name match before) is
+        // gone too, though its handle is still live under the project that owns it.
+        store.db.run(`UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt IS NOT NULL AND wt NOT IN (SELECT value FROM json_each(?))
+            AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?))`,
+          [now, project, JSON.stringify([...ids]), theirs]);
         // U261: only a listing that succeeded can adopt, keep or release the Studio's terminal.
-        if (terminals) adoptStudio(store, project, now);
+        if (terminals && !studioOff) adoptStudio(store, project, now);
       });
 
       // A standing member's dispatch status and when it was seen to change (U64). worker-list has no

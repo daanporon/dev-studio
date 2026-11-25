@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ROOT, stateRoot, backend, chomp, run, settingsAt, writeErr, writeOut } from "./shared.ts";
 import { readRoster } from "../loop/settings/settings.ts";
+import { filerIdentity, whoAmI } from "../loop/core/whoami.ts";
 import { ownText } from "./settings-rows.ts";
 
 // the old shell lib ds_limit_env (the historical names); bin/loop/settings/limits.ts ENV_NAMES is the same list.
@@ -71,8 +72,9 @@ export function psPath(ps: string, wt: string): string {
   return "";
 }
 
-/** `$BACKEND ps` then psPath. */
+/** `$BACKEND ps` then psPath; a `local::<path>` id (a member or Studio off Orca, U50) is its own path. */
 export async function worktreePath(wt: string): Promise<string> {
+  if (wt.startsWith("local::")) return wt.slice("local::".length);
   return psPath((await backend(["ps"])).out, wt);
 }
 
@@ -158,9 +160,9 @@ export function loopKey(args: string[]): string {
 export async function loopFront(label: string, kind: string, subject: string, id: string, key: string,
   a: LoopArgs, self: string): Promise<number | null> {
   if (!loopOn()) return null;
-  const from = process.env.ORCA_TERMINAL_HANDLE ?? "";
+  const from = whoAmI().handle ?? "";
   const replay = JSON.stringify({ kind, key, argv: [join(ROOT, "bin", self), ...a.argv], cwd: process.env.PWD ?? process.cwd(),
-    ...(from === "" ? {} : { from }) });
+    ...(from === "" ? {} : { from }), ...filerIdentity() });
   const about = [...(label ? ["--project", label] : []), ...(subject ? ["--squad", subject] : []), ...(id ? ["--member", id] : [])];
   const p = Bun.spawn([join(ROOT, "bin", "ds"), "--state", stateRoot(), "nudge", kind, "--json", replay, "--key", key,
     "--by", process.env.DS_WHO || kind, ...about, ...(a.wait ? ["--wait", a.wait] : [])], { stdio: ["inherit", "inherit", "inherit"] });

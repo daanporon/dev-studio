@@ -138,7 +138,7 @@ if [ ! -e "$SKILLS_MARKER" ]; then good; else bad "without --skills the installe
 
 # Closing line: the exact next step.
 out="$(cd "$REPO" && PATH="$STUB" ./bin/host/install.sh "$DEST" 2>&1)"
-if grep -qF 'Next: ~/.dev-studio/bin/host/up.sh <git-url>  (in this shell)' <<<"$out"; then good; else bad "missing the closing next-step line: $out"; fi
+if grep -qF 'Next: ~/.dev-studio/bin/ds up <git-url>  (in this shell)' <<<"$out"; then good; else bad "missing the closing next-step line: $out"; fi
 
 
 # U246: a repeat install starts few processes. A counting bun on the stub PATH logs every start: at most 4 (the

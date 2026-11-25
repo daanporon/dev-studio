@@ -7,6 +7,7 @@ import { errOf } from "../io/orca.ts";
 import { actionBlock } from "../pause/pause.ts";
 import { failRequest, finishRequest, requestActions } from "../core/actuator.ts";
 import { recordRepair } from "../reconcilers/nesting.ts";
+import { wtFolder } from "../drivers/contract.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
 
 type P = ActionPayload<"wt-set-parent">;
@@ -19,7 +20,8 @@ const nesting: Fulfiller = {
   stale(a, x) {
     const p = payloadOf<"wt-set-parent">(a);
     const r = p.wt ? x.store.db.query("SELECT parent FROM observed_worktrees WHERE project = ? AND wt = ? AND gone_at IS NULL").get(a.project, p.wt) as { parent: string | null } | null : null;
-    const right = !r || r.parent === p.parent;
+    // A contract squad's observed parent is `local::<path>` (observers/contract.ts), the wish's may be Orca's form: by folder.
+    const right = !r || r.parent === p.parent || (r.parent != null && String(r.parent).startsWith("local::") && wtFolder(r.parent) === wtFolder(p.parent));
     if (right && p.request != null) finishRequest(x.store, a, { ok: true, noop: "already under its parent" }, x.now);   // a nudge on a right tree: done, no Orca call
     return right;
   },
@@ -32,8 +34,17 @@ const nesting: Fulfiller = {
     if (block) return block === "paused" ? { wait: block } : { dropped: block };
     // A nudge names a worktree, not a squad: the member row of that worktree says which squad's Run holds it.
     const squad = a.squad ?? (x.store.db.query("SELECT squad FROM members WHERE project = ? AND wt = ? AND squad IS NOT NULL AND COALESCE(status, '') != 'gone' LIMIT 1").get(a.project, p.wt) as { squad: string } | null)?.squad ?? null;
-    const o = await x.act.seat(x.store, a.project, squad, `${a.subject}:${a.episode}`, p.wt, x.now).call("wt-set-parent", [p.wt, p.parent]);
-    if (o.code !== 0) return { retry: errOf(o, "wt-set-parent") };
+    const seat = x.act.seat(x.store, a.project, squad, `${a.subject}:${a.episode}`, p.wt, x.now);
+    // U21f: a squad on a backend whose worktrees are Orca's moves it through that backend, both worktrees by folder.
+    if (seat.contract) {
+      const cwd = wtFolder(p.wt), parent = wtFolder(p.parent);
+      if (!cwd || !parent) return { failed: `wt-set-parent on backend ${seat.contract.backend} needs folders, got ${p.wt} and ${p.parent}` };
+      const r = await seat.contract.ask("worktree.set_parent", { cwd, parent });
+      if (!r.ok) return { retry: r.error.message };
+    } else {
+      const o = await seat.call("wt-set-parent", [p.wt, p.parent]);
+      if (o.code !== 0) return { retry: errOf(o, "wt-set-parent") };
+    }
     recordRepair(x.store, a.project, p.wt, x.now);
     x.store.event("wt_parent_set", { project: a.project, squad: a.squad, member: p.wt, payload: { wt: p.wt, parent: p.parent } });
     finishRequest(x.store, a, { ok: true, wt: p.wt, parent: p.parent }, x.now);

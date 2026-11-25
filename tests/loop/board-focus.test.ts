@@ -113,20 +113,20 @@ const tile = (normal: number, urgent: number, light = 0) => {
 test("the Builders tile: 5 normal + 2 urgent reads 7/8, normal 7/6 (⚡2), light 0/1 (2)", () => {
   const h = tile(5, 2);
   expect(h.builders_working).toBe(7);
-  expect(buildersText(h)).toBe("7/8 · normal 7/6 (⚡2) · light 0/1 (2)");
+  expect(buildersText(h)).toBe("7/8 · normal 7/6 (⚡2, 7 working) · light 0/1 (2)");
   expect(h.builders_left).toBe(1);
   expect(h.builders_over.list.map((x: any) => x.why)).toEqual(["urgent", "urgent"]);
 });
 
 test("the Builders tile: all 8 taken leaves no light seat, 4 live shows the plain numbers", () => {
-  expect(buildersText(tile(6, 2))).toBe("8/8 · normal 8/6 (⚡2) · light 0/0 (2)");
-  expect(buildersText(tile(4, 0))).toBe("4/8 · normal 4/6 · light 0/2");
+  expect(buildersText(tile(6, 2))).toBe("8/8 · normal 8/6 (⚡2, 8 working) · light 0/0 (2)");
+  expect(buildersText(tile(4, 0))).toBe("4/8 · normal 4/6 (4 working) · light 0/2");
 });
 
-test("the Builders tile: a light Builder counts in its own lane, and no light lane means no tile text", () => {
-  expect(buildersText(tile(5, 0, 1))).toBe("6/8 · normal 5/6 · light 1/2");
+test("the Builders tile: a light Builder counts in its own lane, and no light lane drops the light part", () => {
+  expect(buildersText(tile(5, 0, 1))).toBe("6/8 · normal 5/6 (6 working) · light 1/2");
   const f = fixture({ a: { live: [{ slug: "a0" }] }, b: {}, limits: { max_builders: "6" } });
-  expect(buildersText(f.board().header)).toBeNull();
+  expect(buildersText(f.board().header)).toBe("1/6 · normal 1/6 (1 working)");   // no light lane: no light part
 });
 
 test("the page: the ⋯ menu, the ★/⚡ marks, the Builders tile text and no task text on the top line", () => {
@@ -219,11 +219,11 @@ test("the mounted page: the Builders tile reads seats in use over the total, wit
   };
   const t1 = await tileOf(null, mk(5, 2));
   expect(t1.v).toBe("7/8");
-  expect(t1.d).toContain("normal 7/6 (⚡2) · light 0/1 (2)");
+  expect(t1.d).toContain("normal 7/6 (⚡2, 7 working) · light 0/1 (2)");
   expect(t1.d).not.toContain("of 8");
   expect((await tileOf(null, mk(5, 0, 1))).v).toBe("6/8");
   const f = fixture({ a: { live: [{ slug: "a0" }] }, b: {}, limits: { max_builders: "6" } });
-  expect((await tileOf(null, f.board())).v).toBe("1");
+  expect((await tileOf(null, f.board())).v).toBe("1/6");
 });
 
 test("the mounted page: dim and bright ★ on Flow cards, none on another squad's, and the Runs on row (U5)", async () => {
@@ -279,4 +279,17 @@ test("the squads table row fits the narrowest wide layout (935px)", () => {
   const total = cols.reduce((n, c) => n + min(c), 0) + gap * (cols.length - 1) + 2 * Number(pad) + border;
   expect(cols.length).toBe(9);
   expect(total).toBeLessThanOrEqual(935);
+});
+
+test("squad order: a starred squad sorting last by name renders above running squads, below one with a question", () => {
+  const f = fixture({ a: { queued: [{ slug: "a1" }] }, b: { queued: [{ slug: "b1" }] }, limits: { max_builders: "3", focus_squad: "b" } });
+  expect(f.board().squads.map((s: any) => s.topic)).toEqual(["b", "a"]);
+  const s = open(f.root);
+  const doc: any = JSON.parse(readFileSync(join(f.root, "p", "squads", "a.json"), "utf8"));
+  doc.waiting_on_you = [{ id: "q", asker: "lead", blocking: true, question: "x", since: "2026-10-08T09:00:00Z" }];
+  writeFileSync(join(f.root, "p", "squads", "a.json"), JSON.stringify(doc));
+  s.close();
+  const r = spawnSync(join(REPO, "bin/ds"), ["import"], { env: { ...process.env, DS_STATE_ROOT: f.root }, encoding: "utf8" });
+  expect(r.status).toBe(0);
+  expect(f.board().squads.map((x: any) => x.topic)).toEqual(["a", "b"]);
 });

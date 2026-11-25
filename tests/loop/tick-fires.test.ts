@@ -18,10 +18,14 @@ const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
 const T = 1_800_000_000;
 const temps: string[] = [], stores: Store[] = [];
+// "members reads in parallel" points DS_STATE_ROOT at its temp state; put it back, or a later test file in
+// the same `bun test` process opens the default store there and recreates the removed dir (CI temp-dirs).
+const stateRoot = process.env.DS_STATE_ROOT;
 afterEach(() => {
   for (const s of stores.splice(0)) { try { s.close(); } catch { /* closed */ } }
   for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
   delete process.env.DS_LOOP_READ_SLOTS;
+  if (stateRoot === undefined) delete process.env.DS_STATE_ROOT; else process.env.DS_STATE_ROOT = stateRoot;
 });
 function imported(): Store {
   const d = mkdtempSync(join(tmpdir(), "zztickfires-"));
@@ -113,12 +117,15 @@ describe("actions fire without the tick waiting", () => {
   });
 
   test("a poke running at a crash is put back to pending on boot", async () => {
-    const { s, act, loop } = rig(() => [pokeAction(1)], { outcome: () => new Promise<Result>(() => {}), bgTimeoutMs: 60_000 });
+    let release: (r: Result) => void = () => {};
+    const { s, act, loop } = rig(() => [pokeAction(1)], { outcome: () => new Promise<Result>((res) => { release = res; }), bgTimeoutMs: 60_000 });
     await loop.tick(T);
     expect(claim(s, "req:1")!.state).toBe("running");
     await new LoopActuator({ orca: new FakeBackend(), fulfillers: [] }).boot(s, T + 10);
     expect(claim(s, "req:1")!.state).toBe("pending");
-    void act;
+    // let the hung call end before the temp dir goes, so nothing fires into a removed state root
+    release({ done: true });
+    await act.drain();
   });
 
   test("tick_slow names the top 5 steps and the actuator's time per kind", async () => {

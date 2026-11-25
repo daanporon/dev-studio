@@ -17,6 +17,46 @@ case "$JOBS" in '' | *[!0-9]*) JOBS=1 ;; esac
 JOBS=$((10#$JOBS)) # base 10: 08 would be a bad octal number, and no shellcheck slice would run
 [ "$JOBS" -ge 1 ] || JOBS=1
 
+# A host-wide slot, outside GitHub: at most CI_SLOTS (default 2) local runs go at once, so a few Builders
+# finishing together do not load the host. A slot is a flock on one of N lock files in CI_SLOT_DIR
+# (default ${XDG_RUNTIME_DIR:-/tmp}/ds-ci-slots), held on fd 9 for the whole run, so a killed run frees it
+# at once. A waiting run prints who holds the slots now and again every minute. CI_SLOTS=0, GITHUB_ACTIONS
+# set, or a run started by a test inside a run that holds a slot (DS_CI_SLOT_HELD): no slot. The run then
+# lowers its own priority, which every test it starts inherits.
+ci_slot() {
+  local n="${CI_SLOTS:-2}" dir i f last=0 now holders
+  case "$n" in '' | *[!0-9]*) n=2 ;; esac
+  n=$((10#$n))
+  [ "$n" -ge 1 ] && [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${DS_CI_SLOT_HELD:-}" ] || return 0
+  dir="${CI_SLOT_DIR:-${XDG_RUNTIME_DIR:-/tmp}/ds-ci-slots}"
+  mkdir -p "$dir" || return 0
+  command -v flock > /dev/null 2>&1 || return 0
+  while :; do
+    for ((i = 1; i <= n; i++)); do
+      f="$dir/slot-$i.lock"
+      exec 9> "$f" || return 0
+      if flock -n 9; then
+        printf 'pid %s  %s  since %s\n' "$$" "$ROOT" "$(date '+%F %T')" > "$f.note"
+        export DS_CI_SLOT_HELD=1
+        return 0
+      fi
+      exec 9>&-
+    done
+    now="$SECONDS"
+    if [ "$last" = 0 ] || [ $((now - last)) -ge 60 ]; then
+      holders="$(cat "$dir"/slot-*.lock.note 2> /dev/null)"
+      printf 'ci: all %s slots are taken, waiting. Holders:\n%s\n' "$n" "${holders:-  (unknown)}"
+      last="$now"
+    fi
+    sleep 2
+  done
+}
+ci_slot
+if [ -z "${GITHUB_ACTIONS:-}" ]; then
+  renice -n 10 -p "$$" > /dev/null 2>&1 || true
+  command -v ionice > /dev/null 2>&1 && { ionice -c3 -p "$$" > /dev/null 2>&1 || true; }
+fi
+
 # A test that cannot run in CI, with the reason. Prefer making a test hermetic to adding a line here.
 skip_reason() {
   case "$1" in
@@ -36,6 +76,9 @@ serial_reason() {
 
 # A runner has no git identity, and many tests commit in their temp repos.
 export GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@localhost GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@localhost
+# U4 (orca-backend-alternatives): a role terminal the loop started carries DS_MEMBER, DS_WT and DS_GEN, which
+# whoAmI() reads before the Orca handle. A test sets the identity it means; it never inherits the caller's.
+unset DS_MEMBER DS_WT DS_GEN DS_START_MEMBER DS_START_GEN
 
 OUT="$(mktemp -d)"
 # No test scans the host's real session logs: an unset DS_TOKEN_DIR becomes an empty temp dir (bun tests
@@ -44,6 +87,9 @@ if [ -z "${DS_TOKEN_DIR:-}" ]; then
   mkdir -p "$OUT/token-dir"
   export DS_TOKEN_DIR="$OUT/token-dir"
 fi
+# squad-cpu-usage U3: the bun tests' migrated template loop.db (tests/loop/preload-db-template.ts), built once
+# for the run and shared by every job; under $OUT so the temp-dirs guard below never sees it.
+[ -n "${DS_LOOP_DB_TEMPLATE_DIR:-}" ] || export DS_LOOP_DB_TEMPLATE_DIR="$OUT/db-template"
 # U284: one temp root for the run. Every job gets TMPDIR and XDG_RUNTIME_DIR pointed at $RUN_TMP/t (which the
 # fixtures and tests/lib/hook-tree.sh use), under the fast runtime dir when there is one. It is removed when the run
 # ends, on failure too; before that, anything a test left in it is listed and fails the run (guard below).
@@ -62,7 +108,10 @@ start="$SECONDS"
 failed=()
 
 # job <id> <cmd...>: run it into $OUT/<id>.log, then write "<rc> <seconds>" to $OUT/<id>.res. A hang fails too.
+# It drops the slot's fd 9 first (callers run it in a background or ( ) subshell), so only the run itself
+# holds the slot and a killed run frees it.
 job() {
+  exec 9>&-
   local id="$1" began="$SECONDS" rc=0
   shift
   DS_LOOP_JUNIT="$OUT/$id.junit.xml" timeout "${CI_TEST_TIMEOUT:-600}" "$@" > "$OUT/$id.log" 2>&1 < /dev/null || rc=$?
@@ -155,7 +204,7 @@ for i in "${order[@]}"; do
     wait
     flush
     # shellcheck disable=SC2086 # the command is words with no spaces inside
-    job "$i" bash ${cmds[i]}
+    ( job "$i" bash ${cmds[i]} )
     flush
     continue
   fi
@@ -203,6 +252,11 @@ fi
 left="$(find "$RUN_TMP/t" -mindepth 1 -maxdepth 1 -printf '%f\n' 2> /dev/null | sed -E 's/[-.]?[A-Za-z0-9]{6,}$//; s/-$//' | sort | uniq -c | sort -rn | awk '{ printf "  %s x%s\n", $2, $1 }')"
 [ -z "$left" ] || left="$left
   e.g. $(find "$RUN_TMP/t" -mindepth 1 -maxdepth 1 -printf '%f ' 2> /dev/null | cut -c1-300)"
+  for d in $(find "$RUN_TMP/t" -mindepth 1 -maxdepth 1 -type d 2> /dev/null | head -3); do
+    left="$left
+  contents of $(basename "$d"):
+$(find "$d" 2> /dev/null | head -12 | sed 's/^/    /')"
+  done
 if [ -n "$left" ]; then
   printf 'FAIL  %-26s tests left temp dirs behind (by prefix):\n%s\n' temp-dirs "$left"
   failed+=("temp-dirs")

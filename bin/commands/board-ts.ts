@@ -3,6 +3,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ROOT, dsLabel, chomp, run as runCmd, writeOut, writeErr } from "../lib/shared";
+import { freePort, lastPort } from "../board/free-port.ts";
 
 export const help = `[<project>] [--topic <slug>] [--watch [s]] [--json] [--serve [port]] [--stop] [--serve-fg [port]] — the overview board: text, JSON, or the live web board (board.sh)`;
 
@@ -97,10 +98,13 @@ async function main(argv: string[]): Promise<number> {
     try { row = JSON.parse(w.stdout.toString()); } catch { /* jq would have failed; treat as empty */ }
     if (row?.was_down === true) { out(`board (${scope}): was down, the loop restarts it on its next tick\n`); return 0; }
     const has = (v: unknown) => v !== null && v !== undefined && v !== false && v !== "";
+    // The row's port is the one the board bound (the loop moves it on when the asked one is taken).
     const wport = has(row?.port) ? String(row.port) : String(PORT);
+    const asked = PORT_GIVEN ? String(PORT) : has(row?.want_payload?.port) ? String(row.want_payload.port) : wport;
+    const moved = row?.status === "running" && asked !== wport ? ` (${asked} was taken)` : "";
     let tnet = "";
     if (!process.env.DS_BIND) tnet = chomp((await runCmd(["tailscale", "ip", "-4"])).out).split("\n")[0] ?? "";
-    out(`board (${scope}): the loop runs it on :${wport} — open http://127.0.0.1:${wport}/ on this host${tnet ? ` or http://${tnet}:${wport}/ over the tailnet` : ""} (status: ${has(row?.status) ? row.status : "starting on the next tick"})\n`);
+    out(`board (${scope}): the loop runs it on :${wport}${moved} — open http://127.0.0.1:${wport}/ on this host${tnet ? ` or http://${tnet}:${wport}/ over the tailnet` : ""} (status: ${has(row?.status) ? row.status : "starting on the next tick"})\n`);
     return 0;
   }
 
@@ -125,7 +129,7 @@ async function main(argv: string[]): Promise<number> {
 }
 
 async function serveFg(_argv: string[], c: { bun: string; data: string[]; PROJECT: string; TOPIC: string; PORT: number; SROOT: string }): Promise<number> {
-  const { bun, data, PROJECT, TOPIC, PORT, SROOT } = c;
+  const { bun, data, PROJECT, TOPIC, SROOT } = c;
   // Scope-keyed pidfile (all / project / project+topic) so distinct scopes run side by side.
   const scope = PROJECT ? join(SROOT, dsLabel(PROJECT), `board-serve${TOPIC ? `-${TOPIC}` : ""}`) : join(SROOT, `board-serve${TOPIC ? `-${TOPIC}` : ""}`);
   mkdirSync(dirname(scope), { recursive: true });
@@ -139,6 +143,11 @@ async function serveFg(_argv: string[], c: { bun: string; data: string[]; PROJEC
   const tnet = chomp((await runCmd(["tailscale", "ip", "-4"])).out).split("\n")[0] ?? "";
   const bind = process.env.DS_BIND || `127.0.0.1${tnet ? ` ${tnet}` : ""}`;
   if (!process.env.DS_BIND && !tnet) err("board (serve): no tailnet IP found (is tailscale up?) — serving on this host only");
+  // The asked port, or the next free one when another process holds it (bin/board/free-port.ts). A
+  // restart on exit 75 keeps the port: its own server just let it go (the server retries the bind).
+  const PORT = await freePort(c.PORT, bind);
+  if (PORT === null) { err(`board (serve): ports ${c.PORT}-${lastPort(c.PORT)} are all taken (lsof -nP -iTCP:${c.PORT} -sTCP:LISTEN)`); rmSync(pidfile, { force: true }); return 1; }
+  const moved = PORT !== c.PORT ? ` (${c.PORT} was taken)` : "";
   let tdns = "";
   try {
     const ts = await runCmd(["tailscale", "status", "--json"]);
@@ -169,7 +178,7 @@ async function serveFg(_argv: string[], c: { bun: string; data: string[]; PROJEC
       return 1;
     }
     const turl = ` ${bind} `.includes(` ${tnet} `) && tnet ? ` or http://${tnet}:${PORT}/ over the tailnet` : "";
-    out(`board (serve): listening on ${bind}:${PORT} — open http://127.0.0.1:${PORT}/ on this host${turl}  (Ctrl-C to stop)\n`);
+    out(`board (serve): listening on ${bind}:${PORT}${moved} — open http://127.0.0.1:${PORT}/ on this host${turl}  (Ctrl-C to stop)\n`);
     const rc = await srv.exited;
     // 75: board-server.ts changed on disk (a pull) — run again on the new code, keeping pid and pidfile.
     if (rc === 75) continue;

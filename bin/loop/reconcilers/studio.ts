@@ -10,11 +10,24 @@
 // restart) is typed here, the way compaction.ts types the Studio's /compact: through wake() into the
 // adopted handle only, and only while studioReady() holds. A session adopted after reload_at satisfies
 // the wish without an ack, as decide.ts's fresh process start does for a member.
+//
+// board-actions-as-wishes U3: the Studio's skills after an update (reloadStudioSkills below). A Claude Studio is not
+// restarted by an update, so once an `update` request ends done with `skills` among its classes the loop types
+// `/reload-skills` into the adopted handle through wake() once studioReady() holds: one episode per request
+// (`reload-skills:<request id>`, cap 1), never while paused (wake's own rule), nothing for another agent or for a
+// Studio session adopted after the request finished.
+//
+// studio-hung-agent-broken U2: the operator's Restart Studio (restartStudio below). The broken Studio's card
+// (liveness.ts) answered "Restart Studio" leaves an open studio:restart-approved (fulfil/studio.ts dismiss); it
+// becomes exactly one studio-move, why "restart", on the Studio's own agent, account, model and effort, which
+// skips studioReady() (fulfil/studio.ts move). The move ends the approval whatever comes of it; one that no
+// longer fits (no adopted handle, or not the terminal the card named) is ended with no move. The loop files
+// this move only on that answer, never on its own.
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import { quote } from "../pause/pause.ts";
 import { wake } from "../pause/wake.ts";
-import { STUDIO_SQUAD, studioReady, studioView } from "../squad/studio.ts";
+import { BACKEND_WANTED, MOVE, RESTART_APPROVED, START_WANTED, STUDIO_SQUAD, studioReady, studioView, type BackendTarget, type StartPick } from "../squad/studio.ts";
 import { alertAction } from "./alerts.ts";
 
 const KEY = "studio.adopt";
@@ -73,4 +86,106 @@ export function reloadStudio(ctx: TickCtx): Action[] {
   return wake(ctx, v.wt, studioReloadText(store, project), "reload", `reload:${at}`, { handle }).actions;
 }
 
-export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx)] } satisfies Reconciler;
+const SKILLS_WINDOW_S = 86_400;   // an update older than this is history, not a pending refresh
+
+export function reloadStudioSkills(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx;
+  const v = studioView(store, project), m = v?.member as Row | null | undefined;
+  if (!v || !m || m.status === "gone" || v.agent !== "claude") return [];
+  const handle = (m.handle as string | null) || null;
+  if (!handle) return [];
+  // The newest finished update of this project that carried skills (not the newest update: a later one without
+  // skills has nothing to refresh, but it does not undo an earlier one still pending).
+  const rows = store.db.query("SELECT id, done_at, result FROM requests WHERE kind = 'update' AND project = ? AND done_at IS NOT NULL AND done_at >= ? ORDER BY id DESC")
+    .all(project, now - SKILLS_WINDOW_S) as Row[];
+  for (const r of rows) {
+    let res: { ok?: boolean; classes?: unknown } = {};
+    try { res = JSON.parse(String(r.result ?? "{}")) ?? {}; } catch { continue; }
+    if (res.ok !== true || !Array.isArray(res.classes) || !res.classes.includes("skills")) continue;
+    if (adoptedAt(store, project, handle) > Number(r.done_at)) return [];
+    if (!studioReady(store, project, now).ready) return [];
+    // A slash command has no ack to wait for: once its poke was made the request is served (wake's cap would
+    // otherwise raise an "unanswered" note for it).
+    const ep = store.get("episodes", { project, subject: v.wt, kind: "wake:reload-skills" });
+    if (ep?.episode_key === `reload-skills:${r.id}` && Number(ep.count ?? 0) >= 1) return [];
+    return wake(ctx, v.wt, "/reload-skills", "reload-skills", `reload-skills:${r.id}`, { handle, cap: 1 }).actions;
+  }
+  return [];
+}
+
+export function restartStudio(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx;
+  const key = { project, subject: MOVE, kind: RESTART_APPROVED };
+  const ok = store.get("episodes", key);
+  if (!ok || ok.ended_at != null) return [];
+  // A move already claimed (a limit move, or this restart) settles first.
+  const claim = store.get("episodes", { project, subject: MOVE, kind: "action:studio-move" });
+  if (claim && claim.ended_at == null && ["pending", "acted", "running"].includes(String(claim.state))) return [];
+  const v = studioView(store, project), m = v?.member as Row | null | undefined, handle = (m?.handle as string | null) || null;
+  const named = (ok.result as string | null) || null, episode = `restart|${handle}@${ok.started_at}`;
+  // This restart's own claim already ended (a move the actuator gave up on ends without move()'s own end): try once.
+  const tried = claim?.episode_key === episode && claim.ended_at != null;
+  if (tried || !v || !m || m.status === "gone" || !handle || (named && named !== handle)) {
+    store.upsert("episodes", key, { ended_at: now, state: "ended", observed_at: now });
+    return [];
+  }
+  const agent = String(m.agent || v.agent), account = String(m.account || "-");
+  return [{ project, squad: null, member: v.wt, subject: MOVE, kind: "studio-move", episode,
+    payload: { handle, agent, account, model: String(m.model || "-"), effort: String(m.effort || "-"), from: `${agent}:${account}`, why: "restart" } }];
+}
+
+// U53 (project-start): `ds up`'s first start of the Studio (START_WANTED, squad/studio.ts wantStudioStart) becomes
+// exactly one studio-move, why "start", on the pick the wish holds: no tab to close, no studioReady() guard. It
+// waits while the project's Studio worktree is not known yet or another move is claimed; a Studio already running
+// there (a held handle, or a candidate terminal), or this start's own claim ended, ends the wish with no move.
+export function startStudio(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx;
+  const key = { project, subject: MOVE, kind: START_WANTED };
+  const w = store.get("episodes", key);
+  if (!w || w.ended_at != null) return [];
+  const claim = store.get("episodes", { project, subject: MOVE, kind: "action:studio-move" });
+  if (claim && claim.ended_at == null && ["pending", "acted", "running"].includes(String(claim.state))) return [];
+  const v = studioView(store, project);
+  if (!v) return [];
+  const episode = String(w.episode_key ?? `start@${w.started_at}`);
+  const tried = claim?.episode_key === episode && claim.ended_at != null;
+  const running = (!!v.member?.handle && v.candidates.some((t) => t.handle === v.member!.handle)) || v.candidates.length > 0;
+  if (tried || running) {
+    store.upsert("episodes", key, { ended_at: now, state: running ? "running" : "ended", observed_at: now });
+    return [];
+  }
+  let pick: StartPick = {};
+  try { const o = JSON.parse(String(w.result ?? "{}")); if (o && typeof o === "object") pick = o; } catch { /* no pick: the defaults */ }
+  const agent = v.agent, account = pick.account || "-";
+  return [{ project, squad: null, member: v.wt, subject: MOVE, kind: "studio-move", episode,
+    payload: { agent, account, model: pick.model || "-", effort: pick.effort || "-", from: `${agent}:${account}`, why: "start" } }];
+}
+
+// U54 (project-start): `ds up <label> --backend <x>`'s move (BACKEND_WANTED, squad/studio.ts wantStudioBackend) becomes
+// exactly one studio-move, why "backend", on the Studio's own agent, account, model and effort, naming the target the
+// wish holds and the Studio's handle (none when no Studio runs: then nothing is closed). It waits while another move is
+// claimed; this move's own claim ended, or a wish with no target, ends the wish with no move. Open squads are checked
+// by the move itself, right before it acts.
+export function backendStudio(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx;
+  const key = { project, subject: MOVE, kind: BACKEND_WANTED };
+  const w = store.get("episodes", key);
+  if (!w || w.ended_at != null) return [];
+  const claim = store.get("episodes", { project, subject: MOVE, kind: "action:studio-move" });
+  if (claim && claim.ended_at == null && ["pending", "acted", "running"].includes(String(claim.state))) return [];
+  const v = studioView(store, project);
+  const episode = String(w.episode_key ?? `backend@${w.started_at}`);
+  let t: Partial<BackendTarget> = {};
+  try { const o = JSON.parse(String(w.result ?? "{}")); if (o && typeof o === "object") t = o; } catch { /* no target: ended below */ }
+  const tried = claim?.episode_key === episode && claim.ended_at != null;
+  if (tried || !v || !t.backend || !t.wt) {
+    store.upsert("episodes", key, { ended_at: now, state: "ended", observed_at: now });
+    return [];
+  }
+  const m = v.member, agent = String(m?.agent || v.agent), account = String(m?.account || "-");
+  return [{ project, squad: null, member: v.wt, subject: MOVE, kind: "studio-move", episode,
+    payload: { ...(m?.handle ? { handle: String(m.handle) } : {}), agent, account, model: String(m?.model || "-"), effort: String(m?.effort || "-"),
+      from: `${agent}:${account}`, why: "backend", backend: t.backend, provider: t.provider ?? "", wt: t.wt } }];
+}
+
+export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx), ...reloadStudioSkills(ctx), ...restartStudio(ctx), ...startStudio(ctx), ...backendStudio(ctx)] } satisfies Reconciler;

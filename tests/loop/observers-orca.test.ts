@@ -10,7 +10,7 @@ import { importJson } from "../../bin/loop/db/import-json.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { since } from "../../bin/loop/core/events.ts";
 import { FakeOrca } from "../../bin/loop/fakes/orca.ts";
-import { mangle, orcaObserver, parseAgentAccounts } from "../../bin/loop/observers/orca.ts";
+import { mangle, orcaObserver, parseAgentAccounts, walkNoneAt } from "../../bin/loop/observers/orca.ts";
 import { codexObserver, scanRollouts } from "../../bin/loop/observers/codex.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -424,6 +424,33 @@ describe("U149: the main agent's presence, kind, process and live model", () => 
     expect(main(s, BUILDER).presence).toBe("running");
   });
 
+  test("U21a walk_none_at: set by the first walk that finds no agent, kept by later ones and by a failed walk, cleared by one that finds it", async () => {
+    const s = imported(), o = FakeOrca.recorded(RECORDED), l = loopOf(s, o);
+    const at = () => s.get("observed_workers", { project: "fx", wt: LEAD })!.walk_none_at;
+    o.procs = FakeOrca.accounts(ACCOUNTS);
+    await l.tick(T);
+    expect(at()).toBeNull();
+    o.procs = FakeOrca.accounts(ACCOUNTS).filter((p) => !p.cwd.endsWith("ds-dev-studio-lead-demo"));
+    await l.tick(T + 30);
+    expect(at()).toBe(T + 30);
+    await l.tick(T + 60);
+    expect(at()).toBe(T + 30);
+    o.procs = null;                                     // a failed walk proves nothing: the time is kept
+    await l.tick(T + 90);
+    expect(at()).toBe(T + 30);
+    o.procs = FakeOrca.accounts(ACCOUNTS);
+    await l.tick(T + 120);
+    expect(at()).toBeNull();
+  });
+
+  test("U21a walkNoneAt: a spell begun at or before the member's last start starts again", () => {
+    expect(walkNoneAt("none", null, 100, 500)).toBe(500);
+    expect(walkNoneAt("none", 200, 100, 500)).toBe(200);
+    expect(walkNoneAt("none", 100, 100, 500)).toBe(500);
+    expect(walkNoneAt("unknown", 200, 100, 500)).toBe(200);
+    expect(walkNoneAt("running", 200, 100, 500)).toBeNull();
+  });
+
   test("two mains that disagree read unknown; in the Studio worktree only the Studio's agent counts", async () => {
     const s = imported(), o = FakeOrca.recorded(RECORDED), l = loopOf(s, o);
     o.procs = [
@@ -504,5 +531,58 @@ describe("U149: the main agent's presence, kind, process and live model", () => 
     utimesSync(p, START + 60, START + 60);
     scanRollouts(s, dir, START - 60, T + 30);
     expect(s.get("observed_rollouts", { path: p })?.model).toBe("gpt-6.1-terra");
+  });
+});
+
+// studio-chat-queued-busy U1: `ds-fx-public-…` worktrees are fx-public's, not fx's, though their
+// names start with `ds-fx-`; rows fx recorded for them before read gone after one tick.
+describe("one project per worktree", () => {
+  const PUB_STUDIO = `${W}/ds-fx-public-studio`, PUB_LEAD = `${W}/ds-fx-public-lead-chat`;
+  function twoLabels(): { s: Store; o: FakeOrca } {
+    const s = imported(), o = FakeOrca.recorded(RECORDED);
+    mkdirSync(join(s.root, "fx-public", "squads"), { recursive: true });
+    for (const [wt, name] of [[PUB_STUDIO, "ds-fx-public-studio"], [PUB_LEAD, "ds-fx-public-lead-chat"]])
+      o.worktrees.push({ worktreeId: wt, path: wt.split("::")[1], branch: "refs/heads/main", displayName: name, lastOutputAt: (T - 30) * 1000, unread: 0, agents: [] } as never);
+    return { s, o };
+  }
+  const wtsOf = (s: Store, project: string) => (s.db.query("SELECT wt FROM observed_worktrees WHERE project = ? AND gone_at IS NULL").all(project) as Row[]).map((r) => String(r.wt));
+
+  test("fx's observer records none of the ds-fx-public-… worktrees; fx-public's records them", async () => {
+    const { s, o } = twoLabels();
+    await loopOf(s, o, ["fx", "fx-public"]).tick(T);
+    expect(errors(s)).toEqual([]);
+    expect(wtsOf(s, "fx")).not.toContain(PUB_STUDIO);
+    expect(wtsOf(s, "fx")).not.toContain(PUB_LEAD);
+    expect(wtsOf(s, "fx")).toContain(STUDIO);                          // fx's own name match still holds
+    expect(wtsOf(s, "fx-public").sort()).toEqual([PUB_LEAD, PUB_STUDIO]);
+    expect(Object.keys(workers(s))).not.toContain(PUB_LEAD);
+  });
+
+  test("a longer label known only as a projects row still claims its names", async () => {
+    const s = imported(), o = FakeOrca.recorded(RECORDED);
+    o.worktrees.push({ worktreeId: PUB_LEAD, path: PUB_LEAD.split("::")[1], displayName: "ds-fx-public-lead-chat", agents: [] } as never);
+    s.upsert("projects", { label: "fx-public" }, { observed_at: T });
+    await loopOf(s, o).tick(T);
+    expect(wtsOf(s, "fx")).not.toContain(PUB_LEAD);
+  });
+
+  test("fx's earlier rows for a fx-public worktree and its live terminal read gone after one tick", async () => {
+    const { s, o } = twoLabels();
+    o.tabs = [...await o.terminals(), { handle: "term_pub", worktreeId: PUB_LEAD, connected: true, agentIdentity: "claude", title: "pub lead" }];
+    // What the over-wide name match wrote before: fx rows for a fx-public worktree.
+    s.upsert("observed_worktrees", { project: "fx", wt: PUB_LEAD }, { observed_at: T - 60, gone_at: null });
+    s.upsert("observed_workers", { project: "fx", wt: PUB_LEAD }, { state: "idle", observed_at: T - 60, gone_at: null });
+    s.upsert("observed_terminals", { project: "fx", handle: "term_pub" }, { wt: PUB_LEAD, observed_at: T - 60, gone_at: null });
+    await loopOf(s, o, ["fx", "fx-public"]).tick(T);
+    expect(errors(s)).toEqual([]);
+    const term = (project: string) => s.get("observed_terminals", { project, handle: "term_pub" });
+    expect(term("fx")?.gone_at).toBe(T);
+    expect(term("fx-public")?.gone_at).toBeNull();
+    expect(s.get("observed_workers", { project: "fx", wt: PUB_LEAD })?.gone_at).toBe(T);
+    expect(s.get("observed_worktrees", { project: "fx", wt: PUB_LEAD })?.gone_at).toBe(T);
+    expect(s.db.query("SELECT COUNT(*) AS n FROM observed_terminals WHERE handle = 'term_pub'").get()).toEqual({ n: 2 }); // stamped, not deleted
+    // fx's own terminals stay live.
+    expect(term("fx")).toBeTruthy();
+    expect((s.db.query("SELECT COUNT(*) AS n FROM observed_terminals WHERE project = 'fx' AND gone_at IS NULL").get() as Row).n).toBe(4);
   });
 });

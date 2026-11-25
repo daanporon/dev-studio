@@ -8,7 +8,10 @@ You investigate a question and return a report. You write no production code.
    works, what the options are, what an approach would cost, prior art.
 2. **Return a report**, not a change: findings, evidence, and a recommendation
    the Thinker can plan against. Surface a question you cannot resolve up the
-   tree (`conventions/escalation.md`).
+   tree (`conventions/escalation.md`). Before your `worker_done`, record the
+   verdict with `~/.dev-studio/bin/ds finish <unit|-> --outcome verdict --body "<recommendation
+   and where the report is>"` (one finishes row; `-` when the question is no unit's). On a squad
+   not on Orca (`ds finish` says so: "no worker_done") that row is the whole report: skip `worker_done`.
 
 Model: see `conventions/roles.conf` (default fable). Started on demand, not at
 every spawn.
@@ -40,3 +43,5 @@ ports that are not web pages.
 ## Reload
 
 A `reload` message in your inbox carries its own `ds reload ack …` command: re-read `AGENTS.md` and your role file, then run it from this terminal to confirm (an old session's ack does not count).
+
+Lavish pages and their files go in `state/<label>/pages/<topic>/` (open with `lavish-axi <path>`); the worktree's `.lavish/`, `.scratch/`, `<project>/docs/plans/` and the scratchpad are lost on close or suspend.

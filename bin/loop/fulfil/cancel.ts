@@ -5,6 +5,7 @@ import { alert, type Exec, type Fulfiller, type Result } from "../core/actuator.
 import { errOf, spawn } from "../io/orca.ts";
 import type { Row } from "../core/store.ts";
 import { closeTidy } from "../io/tidy.ts";
+import { byContract, contractCloseTerminals, contractRemoveTree } from "../squad/removal.ts";
 
 async function cleanup(a: Action, x: Exec): Promise<Result> {
   const p = a.payload as Row, wt = String(p.wt ?? "");
@@ -23,6 +24,19 @@ async function cleanup(a: Action, x: Exec): Promise<Result> {
   // the removal and no second probe gates it.
   const path = String(p.path ?? ""), tidy = a.kind === "cancel.remove" && path && existsSync(path) ? await closeTidy.before(a, x, path) : null;
   if (tidy && cancel.stale!(a, x)) return { dropped: "cancellation target changed" };
+  // U11c: a squad on a contract backend: its terminals close through the contract and its worktree goes
+  // through its provider (forced, as worktree-rm here), both by path; its PR is closed as on Orca. The remove
+  // closes the folder's terminals first too: no observer fills observed_terminals for these members yet (U12),
+  // so a live Builder can read not live and its cancel skip the stop.
+  const w = { project: a.project, squad: a.squad, wt, path };
+  if (a.kind !== "cancel.pr" && byContract(x.store, w)) {
+    const c = await contractCloseTerminals(a, x, w);
+    if (c.code !== 0) return { retry: errOf(c, "terminal.close") };
+    const o = a.kind === "cancel.stop" ? c : await contractRemoveTree(a, x, w, true);
+    if (o.code !== 0) return { retry: errOf(o, "worktree remove") };
+    if (tidy) await closeTidy.after(a, x, path, tidy);
+    return { done: true };
+  }
   const op = a.kind === "cancel.stop" ? "terminal-close-worktree" : a.kind === "cancel.remove" ? "worktree-rm" : "pr-close";
   const args = a.kind === "cancel.pr" ? [String(p.repo), String(p.pr)] : a.kind === "cancel.remove" ? [`id:${wt}`, "force"] : [`id:${wt}`, "--strict"];
   const o = await x.act.orca.run(op, args);
@@ -40,7 +54,7 @@ const cancel: Fulfiller = {
       return prNumber(u.pr) !== Number(p.pr) || cancellationRepository(x.store, u) !== p.repo || sharedPr(x.store, u) || pr?.state !== "OPEN" || pr.gone_at != null;
     }
     if (String(u.builder_wt ?? "") !== String(p.wt) || sharedBuilder(x.store, u)) return true;
-    const reality = cancellationReality(x.store, a.project, String(p.wt));
+    const reality = cancellationReality(x.store, a.project, String(p.wt), u);
     return a.kind === "cancel.remove" ? !reality.present || !reality.tree || reality.live : !reality.live;
   },
   exec: (a, x) => ({ background: cleanup(a, x) }),

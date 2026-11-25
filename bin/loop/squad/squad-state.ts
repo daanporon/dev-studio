@@ -62,7 +62,7 @@ const USAGE = `usage: squad-state.sh <file> <command> [args]
   set-unit-hold    <file> <slug> on|off [--why <text>]    (on requires a reason and a planned unit; off releases only a reasoned hold)
   set-unit-urgent  <file> <slug> on|off [--why <text>]    (on marks a planned or dispatched unit urgent — its Builder starts next, even at max_builders; refused on done or cancelled; off releases it)
   set-unit-wait    <file> <slug> <epoch>    (no account/model free: hold the unit until then; "" clears)
-  set-unit-status  <file> <slug> <planned|dispatched|done> [builder_worktree_id] [--no-pr]   (refuses done/dispatched on a cancelled unit — set it planned to revive it, which clears the cancel fields)
+  set-unit-status  <file> <slug> <planned|dispatched|done> [builder_worktree_id] [--no-pr]   (refuses done/dispatched on a cancelled unit — set it planned to revive it, which clears the cancel fields; refuses done without a recorded PR unless --no-pr, and on the loop's store refuses done while the recorded PR is not observed MERGED — the loop marks it done on the merge)
   set-unit-pr      <file> <slug> <pr-number>    (record the unit's PR; "" clears it)
   cancel-unit      <file> <slug> [--into <unit-slug|U<n>|#N|PR#N>] [--why <text>] [--check]   (writes a cancellation wish; the loop closes the Builder, removes its dirty worktree and closes its open PR while preserving branches)
   add-leftover     <file> <wt> <path> <branch> <reason> <waits_on> [--unit <slug>] [--file <f>]... [--n-files <n>] [--unpushed <n>]   (record a worktree that couldn't be removed without losing work; upsert by wt)
@@ -80,11 +80,11 @@ const USAGE = `usage: squad-state.sh <file> <command> [args]
   set-repo         <file> <repo-selector>
   set-host         <file> <saved-env-or-empty>
   set-framing      <file> <framing-text>
-  set-debrief      <file> <text> | --file <path>   (the squad's short debrief — six parts, the sixth a feature squad's "Try it" — written before set-status done; empty is refused)
+  set-debrief      <file> <text> | --file <path>   (the squad's debrief — six parts, the sixth "Try it" from the approved plan — the Lead writes it when the loop asks at archive; empty is refused; also records debrief_at and debrief_units)
   set-spawn        <file> <repo> <host> <framing>   (all three at once)
   set-type         <file> <feature|testing>
   set-autonomy     <file> <checkpoints|lfg>
-  set-status       <file> <running|blocked|waiting-on-you|suspended|done|failed>   (done refuses while a feature squad has a unit dispatched, planned or held — a unit is done when its PR merges — without a debrief, and, for a feature squad, a debrief without its "Try it" part)
+  set-status       <file> <running|blocked|waiting-on-you|suspended|done|failed>   (done refuses while a feature squad has a unit dispatched, planned or held — a unit is done when its PR merges)
   enqueue-question <file> <id> <asker> <blocking:true|false> <question> [card_wt] [suggestion] [why] [options A|B|C] [title] [choices JSON [{label,does}]] [picker JSON {source,tool_use_id,transcript_path,picker_answerable}] [pr number] [doc_path]
   resolve-question <file> <id> [--answer <text>] [--via terminal|picker|board|reality]   (clears card_wt's NEEDS YOU note once no open question uses it; the loop's store keeps the answer)
   answered-questions <file> [--limit N] [--before <seq>]   (answered questions, newest first: seq\\tid\\tanswered_at\\tvia\\ttitle\\tanswer; none before the loop's switch)
@@ -304,6 +304,33 @@ function backend(file: string, cmd: string, args: string[]): Backend {
 // so every existing reader keeps working.
 const unitsOf = (doc: Doc): J[] => arr(doc.units);
 const firstUnit = (units: J[], slug: J) => units.find((u) => u?.slug === slug) ?? null;
+
+// The state (OPEN, CLOSED, MERGED) the loop last observed for a unit's PR, or null when it has no row:
+// found the way the lifecycle reconciler's prRow finds it (by `<nwo>#<pr>`, else by `<topic>/<slug>`).
+function observedPrState(b: StoreBackend, doc: Doc, slug: string, pr: string): string | null {
+  const { store, project, topic } = b, m = pr.match(/(\d+)\/?$/);  // lifecycle.ts num(): '#12', a URL
+  if (!m) return null;
+  const n = Number(m[1]);
+  const repo = (store.get("squads", { project, topic })?.repo as string | undefined) || (typeof doc.repo === "string" ? doc.repo : "");
+  const nwo = repo ? (store.get("config", { project, file: "github", key: `repo:${repo}` })?.value as string) || "" : "";
+  const row = (nwo && store.get("observed_prs", { project, ref: `${nwo}#${n}` }))
+    || (store.db.query("SELECT * FROM observed_prs WHERE project = ? AND ref = ? AND pr = ?").get(project, `${topic}/${slug}`, n) as Row | null);
+  return row?.state ? String(row.state) : null;
+}
+
+// debrief-in-needs-you pages U1: a feature squad's manual test steps live in `<squads dir>/<topic>-try-it.md`, which the
+// Thinker keeps current. `set-status done` refuses when it is missing, or (on the store) older than the squad's newest
+// unit_done event. Returns the refusal line, or null. A file outside a `squads/` folder (a scratch file) is not checked.
+function tryItRefusal(b: Backend, file: string, units: J[]): string | null {
+  if (basename(dirname(file)) !== "squads" || !units.some((u) => u?.status === "done")) return null;
+  const page = join(dirname(file), `${basename(file, ".json")}-try-it.md`);
+  const fix = `the Thinker writes it (roles/thinker.md, "After the build"): ask it, then run set-status done again`;
+  let mt: number;
+  try { mt = Math.floor(statSync(page).mtimeMs / 1000); } catch { return `no Try it page — ${page} is missing; ${fix}`; }
+  if (!(b instanceof StoreBackend)) return null;
+  const last = (b.store.db.query("SELECT MAX(at) AS at FROM events WHERE project = ? AND squad = ? AND kind = 'unit_done'").get(b.project, b.topic) as { at: number | null } | null)?.at;
+  return last != null && mt < last ? `the Try it page is out of date — ${page} is older than the last unit done; ${fix}` : null;
+}
 
 // satisfied(s, self): dep slug s counts for dependent self. A dep on a CANCELLED unit counts when its
 // work landed elsewhere: folded into this unit itself, into a unit that is done (cancelled->cancelled
@@ -525,6 +552,32 @@ function main(argv: string[]): void {
   const need = (n: number) => { if (a.length < n) usage(); };
   const b = backend(file, cmd, a);
   const set = <T,>(fn: (doc: Doc) => T): T => b.update(fn);
+  // A done squad that gets open work is running again in the same write, so the loop seats its Builders
+  // (slot.ts leaves out every done squad). Only status `done` moves; a close in flight (squads.want = 'gone')
+  // keeps it done. A held unit alone does not reopen it (settle()'s planned/dispatched lists).
+  type Reopen = { kind: "none" } | { kind: "closing" } | { kind: "reopened"; n: number };
+  const reopenDone = (d: Doc): Reopen => {
+    if (raw(alt(d.status, "")) !== "done") return { kind: "none" };
+    const f = settle({ type: d.type, units: arr(d.units), members: [] });
+    const n = f.planned.length + f.dispatched.length;
+    if (!n) return { kind: "none" };
+    if (b instanceof StoreBackend) {
+      const w = b.store.db.query("SELECT want FROM squads WHERE project = ? AND topic = ?").get(b.project, b.topic) as { want?: string | null } | null;
+      if (w?.want === "gone") return { kind: "closing" };
+    }
+    d.status = "running";
+    return { kind: "reopened", n };
+  };
+  const reopenNote = (r: Reopen): void => {
+    if (r.kind === "closing") return warn("squad-state: note: squad is closing; left done");
+    if (r.kind !== "reopened") return;
+    warn(`squad-state: note: squad was done; set back to running for ${r.n} open unit(s)`);
+    const sd = dirname(file);
+    if (basename(sd) !== "squads") return;
+    const j = spawnSync(join(dirname(dirname(import.meta.dir)), "role", "journal.sh"), [basename(dirname(sd)), basename(file, ".json"), "lead", "add", "decision",
+      "squad set back to running", "register-plan/add-unit added open work to a done squad"], { stdio: "ignore" });
+    if (j.status !== 0) warn("squad-state: warning: journal note failed (continuing)");
+  };
   const units = (doc: Doc, fn: (u: J) => J) => { doc.units = unitsOf(doc).map((u) => (u?.slug === a[0] ? fn(u) : u)); };
   const value = (i: number, msg: string) => { if (i + 1 >= a.length) die(2, msg); return a[i + 1]; };
 
@@ -639,8 +692,7 @@ function main(argv: string[]): void {
     case "set-host": need(1); return set((d) => { d.host = a[0] === "" ? null : a[0]; });
     case "set-framing": need(1); return set((d) => { d.framing = a[0]; });
     case "set-debrief": {
-      // The squad's debrief (set out to do / shipped / learned / still open / cost): set-status done
-      // needs one. It rides in the doc, so the archive keeps it with the squad.
+      // The squad's debrief (set out to do / shipped / learned / still open / cost): the loop asks for it at archive; set-status done does not. It rides in the doc, so the archive keeps it with the squad.
       need(1);
       let text = a[0];
       if (a[0] === "--file") {
@@ -649,7 +701,8 @@ function main(argv: string[]): void {
       }
       text = text.trim();
       if (text === "") die(1, "squad-state: set-debrief: refusing an empty debrief");
-      return set((d) => { d.debrief = text; });
+      // debrief_at and debrief_units say when and over which units: the archive names the units added after it.
+      return set((d) => { d.debrief = text; d.debrief_at = nowDate(); d.debrief_units = unitsOf(d).map((u) => u?.slug).filter((x) => typeof x === "string"); });
     }
     case "set-spawn": need(3); return set((d) => { d.repo = a[0]; d.host = a[1] === "" ? null : a[1]; d.framing = a[2]; });
     case "add-unit": {
@@ -676,11 +729,13 @@ function main(argv: string[]): void {
       // A unit's plan is stored canonical absolute (like register-plan and approve-plan), so a
       // relative plan still matches the approval whatever the caller typed.
       const planArg = pos[1] ?? "";
-      return set((d) => {
+      const reopened = set((d) => {
         const us = unitsOf(d);
         d.units = us.some((u) => u?.slug === slug) ? us : [...us, { slug, status: "planned", builder_wt: pos[0] ?? "", plan: planArg === "" ? "" : cliPlanPath(planArg),
           deps: (pos[2] ?? "").split(",").filter((x) => x !== ""), hold, ...(tier === "" ? {} : { tier }), ...(about === "" ? {} : { about }), ...(ext.length ? { ext_deps: ext } : {}) }];
+        return reopenDone(d);
       });
+      return reopenNote(reopened);
     }
     case "register-plan": {
       // Register every unit line of an approved plan (conventions/plan-shape.md step d) in one go,
@@ -689,8 +744,10 @@ function main(argv: string[]): void {
       let planText: string;
       const planPath = cliPlanPath(a[0]);
       try { if (!statSync(planPath).isFile()) throw new Error(); planText = readFileSync(planPath, "utf8"); } catch { return die(1, `squad-state: register-plan: cannot read plan '${a[0]}'`); }
-      const res = set((d) => registerPlan(d, planText, planPath));
+      let reopened: Reopen = { kind: "none" };
+      const res = set((d) => { const r = registerPlan(d, planText, planPath); reopened = reopenDone(d); return r; });
       for (const n of res.notes) warn(`squad-state: ${n}`);
+      reopenNote(reopened);
       // U46: a ref to a squad or unit that does not exist is reported, not refused; the unit waits and the loop raises one card.
       for (const x of res.ext) if (extStatus(file, b, x.ref) === "missing") warn(`squad-state: note: ${interp(x.slug)} waits on ${interp(x.ref)}, which is not a known squad unit — fix it with drop-ext-dep / add-ext-dep`);
       for (const r of res.rows) say(r);
@@ -859,6 +916,19 @@ function main(argv: string[]): void {
         if (st === "done" && !noPr && arr(d.units).some((u) => u?.slug === a[0] && alt(u.pr, "") === "")) {
           die(1, `squad-state: unit '${a[0]}' has no PR — record it with set-unit-pr, or pass --no-pr if it truly has none`);
         }
+        // A unit with a recorded PR is done only once that PR merged: until then its Builder stays to
+        // fix checks, conflicts and review threads, and the loop marks the unit done and retires the
+        // Builder on the merge (lifecycle.ts 1b/1c). --no-pr does not skip this: it claims there is no
+        // PR, and there is one. The file backend has no loop to mark it done, so it keeps the old rule.
+        const prUnit = st === "done" && b instanceof StoreBackend ? firstUnit(unitsOf(d), a[0]) : null;
+        if (prUnit && alt(prUnit.pr, "") !== "") {
+          const pr = String(prUnit.pr), state = observedPrState(b as StoreBackend, d, a[0], pr);
+          if (state !== "MERGED") {
+            const said = state === null ? "has no observed state yet (the loop has not read it)" : `is ${state.toLowerCase()}`;
+            const closed = state === "CLOSED" ? "; a closed PR needs a new PR (set-unit-pr) or cancel-unit" : "";
+            die(1, `squad-state: unit '${a[0]}' is not done — its PR #${pr} ${said}. The loop marks the unit done and closes its Builder when the PR merges${closed}`);
+          }
+        }
         units(d, (u) => {
           const n = { ...u, status: st };
           if (st === "planned" && u.status === "cancelled" && b instanceof StoreBackend) {
@@ -993,10 +1063,8 @@ function main(argv: string[]): void {
               else lines.push(`unit ${slug} is a held follow-up — promote it with add-role.sh <project> <topic> builder ${slug}, or cancel-unit ${slug} --why "<why>"`);
             }
           }
+          if (feature) { const t = tryItRefusal(b, file, us); if (t) lines.push(t); }
           if (lines.length) die(1, `squad-state: refusing done: ${lines.join("\n  ")}\n  or leave the squad parked; it is not done`);
-          if (typeof d.debrief !== "string" || d.debrief.trim() === "") die(1, `squad-state: refusing done: no debrief — write one first: squad-state.sh ${file} set-debrief "<6 parts: set out to do / shipped (PR #s) / learned / still open / cost / Try it>"`);
-          // A feature squad's debrief carries a "Try it" part (brief-other-prs U3): a line that starts, after an optional list marker or **, with "Try it".
-          if (feature && !/^[ \t]*(?:\*\*|__)?(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:\*\*|__)?[ \t]*try it/im.test(d.debrief)) die(1, `squad-state: refusing done: the debrief has no "Try it" part — add as a sixth part, as the Thinker gave it: "6. **Try it:** 1. <where, what to do, what you should see> …" (1-5 steps that work on main), or one line "Try it: nothing to try by hand — <why>"`);
         }
         const was = raw(alt(d.status, ""));
         d.status = a[0];
@@ -1056,7 +1124,8 @@ function main(argv: string[]): void {
       }, { id, text, via });
       // Answered: clear the asker's "NEEDS YOU" card note (set by ask-operator.sh) unless another open
       // question still sits on that card. Best-effort — the board is already right.
-      if (wt !== "" && left === 0) {
+      // A worktree off Orca (`local::`, U11b) has no card note: the question was the card, and it is gone.
+      if (wt !== "" && left === 0 && !wt.startsWith("local::")) {
         const r = spawnSync(process.env.BACKEND || join(dirname(dirname(import.meta.dir)), "backend", "orca.sh"), ["ping", wt, ""], { stdio: "ignore" });
         if (r.status !== 0) warn(`squad-state: answered, but could not clear the NEEDS YOU note on ${wt}`);
       }

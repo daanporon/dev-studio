@@ -1,6 +1,6 @@
 // cardPlace (bin/board/card-place.ts): which Studio cards are Needs-you asks, loop notes, or held back.
 import { describe, expect, test } from "bun:test";
-import { cardPlace } from "../../bin/board/card-place.ts";
+import { cardPlace, debriefTopic } from "../../bin/board/card-place.ts";
 
 const NOW = Date.parse("2026-11-13T12:00:00Z") / 1000;
 const ago = (min: number) => new Date((NOW - min * 60) * 1000).toISOString().replace(/\.\d+Z$/, "Z");
@@ -34,6 +34,18 @@ describe("cardPlace", () => {
     ["Loop stalled", { id: "loop-stall-1", title: "Loop stalled" }],
   ])("note: %s", (_n, a) => expect(cardPlace(a, NOW)).toBe("note"));
 
+  test("a debrief card is needs whatever its id, however old (never a loop note)", () => {
+    for (const a of [{ reason: "debrief-x", id: "loop-debrief-x-abc", title: "Debrief: x" }, { id: "sweep-debrief-x-1", title: "Debrief: x" },
+      { id: "sweep-debrief-x-1", title: "Debrief: x", since: ago(7 * 24 * 60) }, { reason: "debrief-x", id: "loop-debrief-x-abc", since: ago(7 * 24 * 60) }])
+      expect(cardPlace(a, NOW)).toBe("needs");
+  });
+  test("debriefTopic: the reason, else a sweep id; a loop-debrief id alone is not parsed", () => {
+    expect(debriefTopic({ reason: "debrief-a-b", id: "loop-debrief-a-b-1x" })).toBe("a-b");
+    expect(debriefTopic({ id: "sweep-debrief-a-b-12" })).toBe("a-b");
+    expect(debriefTopic({ id: "loop-debrief-a-b-1x" })).toBeNull();
+    expect(debriefTopic({ id: "brief-2026-11-16" })).toBeNull();
+  });
+
   test("U9: a squad's request refusal is a note for refusal_needs_min, then needs; any other refusal is needs", () => {
     const c = { kind: "loop_refusal", subject: "req:11246", squad: "sq", id: "x", title: "Loop action refused" };
     expect(cardPlace({ ...c, since: ago(5) }, NOW, 10, 240)).toBe("note");
@@ -66,6 +78,12 @@ describe("cardPlace", () => {
     expect(cardPlace({ kind: "credits_moved", id: "loop-credits.moved_muse_default-k", title: "muse/default out of credits", since: ago(60) }, NOW)).toBe("note");
   });
 
+  test("claude-login-ended U3: a login-ended card is Needs-you at once; the moved note is a note", () => {
+    const card = { kind: "login_ended", id: "loop-login.card_claude_x-k", title: "work: login ended" };
+    expect(cardPlace({ ...card, since: ago(0) }, NOW)).toBe("needs");
+    expect(cardPlace({ kind: "login_moved", id: "loop-login.moved_claude_x-k", title: "claude/x login ended", since: ago(60) }, NOW)).toBe("note");
+  });
+
   test("studio.ctx and Restart failed never wait", () => {
     expect(cardPlace({ id: "loop-studio.ctx-1", title: "studio.ctx", since: ago(0) }, NOW)).toBe("needs");
     expect(cardPlace({ kind: "restart_failed", id: "x", title: "t", since: ago(0) }, NOW)).toBe("needs");
@@ -82,5 +100,21 @@ describe("U287 merge cards", () => {
   test("another cause waits for the grace, then is Needs-you", () => {
     expect(cardPlace({ ...card, since: new Date((NOW - 60) * 1000).toISOString() }, NOW)).toBe("later");
     expect(cardPlace({ ...card, since: new Date((NOW - 3600) * 1000).toISOString() }, NOW)).toBe("needs");
+  });
+});
+
+describe("loopnotes U3: cards that need a person", () => {
+  const cards = [
+    { id: "sweep-studio.adopt-1", title: "Studio terminal not adopted" },
+    { id: "sweep-x-2", title: "Lifecycle failed" },
+  ];
+  test("an adopt card and a Lifecycle-failed card are later inside the grace, needs after it", () => {
+    for (const c of cards) {
+      expect(cardPlace({ ...c, since: new Date((NOW - 60) * 1000).toISOString() }, NOW)).toBe("later");
+      expect(cardPlace({ ...c, since: new Date((NOW - 3600) * 1000).toISOString() }, NOW)).toBe("needs");
+    }
+  });
+  test("an unrelated title is still a note", () => {
+    expect(cardPlace({ id: "sweep-other-1", title: "Something else", since: new Date((NOW - 3600) * 1000).toISOString() }, NOW)).toBe("note");
   });
 });

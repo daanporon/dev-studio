@@ -33,18 +33,24 @@ function hooks() {
 // The page's own markdown renderer (it escapes before it formats).
 const mdToHtml = new Function(`${cut("esc")} ${cut("mdToHtml")} return mdToHtml;`)();
 
+const goneUrls = new Set<string>();   // stored chat images the fetch stub answers 404 for
 function panel(reply: any = { agent: "claude", source: "transcript", turns: [], updated_at: 1, sends: [] }) {
   const h = hooks(), posts: any[] = [], fetches: string[] = [], timers: any[] = [], cleared: any[] = [], listeners = new Map<string, any>();
   let closed = 0;
-  const fetchStub = async (url: string) => { fetches.push(url); return { ok: true, status: 200, json: async () => reply }; };
+  const answers: any[] = [], sentQ = new Map<string, string>(), askingKey = (k: string, since: string) => (k && since ? k + "@" + since : k);
+  const marks = new Map<string, any>(), lstoreStub = { get: (k: string, d: any) => marks.has(k) ? marks.get(k) : d, set: (k: string, v: any) => { marks.set(k, v); } };
+  const drafts = new Map<string, any>(), storeStub = { get: (k: string, d: any) => drafts.has(k) ? JSON.parse(drafts.get(k)) : d, set: (k: string, v: any) => { drafts.set(k, JSON.stringify(v)); }, del: (k: string) => { drafts.delete(k); } };
+  const fetchStub = async (url: string) => { fetches.push(url); return { ok: !goneUrls.has(url), status: goneUrls.has(url) ? 404 : 200, json: async () => reply }; };
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
-  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document",
-    `${chatSrc} return { ChatPanel, chatTone, chatTools, chatRows, CHAT_MAX };`);
+  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store", "sendAnswer", "sentQ", "askingKey",
+    `${cut("QOptions")} ${chatSrc} return { QOptions, ChatPanel, ChatCtl, ChatFailCtl, chatCount, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
   const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); return { ok: true, id: 7 }; }, fetchStub,
-    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc);
-  const props = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; } };
+    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub,
+    async (...a: any[]) => { answers.push(a); sentQ.set(askingKey(a[0] + "/" + a[1] + "/" + a[2], a[4]), "12:00"); }, sentQ, askingKey);
+  let seen = 0;
+  const props: any = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; }, onSeen: () => { seen++; } };
   const render = () => { h.reset(); return mod.ChatPanel(props); };
-  return { h, mod, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
+  return { h, mod, answers, sentQ, marks, props, seen: () => seen, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
 }
 
 // The class of a rendered row (`class="…"` written out, or `class=${…}` as the second value after key).
@@ -152,11 +158,10 @@ test("Send posts one chat request with the trimmed line and clears the input; an
   const p = panel();
   p.render();
   const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
-  expect(at("maxLength")).toBe(2000);
-  await attrAfter(p.render(), 'class="btn pri"', "onClick")();
+  await attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
   expect(p.posts).toEqual([]);
   at("onInput")({ target: { value: "  check the flaky test  " } });
-  expect(attrAfter(p.render(), 'class="btn pri"', "disabled")).toBe(false);
+  expect(attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "disabled")).toBe(false);
   let prevented = 0;
   await at("onKeyDown")({ key: "Enter", preventDefault: () => prevented++ });
   expect(prevented).toBe(1);
@@ -176,6 +181,21 @@ test("each send not yet in the transcript shows at the bottom where it is: queue
   expect(textOf(rows[0])).toContain("queued");
   expect(textOf(rows[0])).toContain(" · working");
   expect(textOf(rows[4])).toContain("never ready: working");
+});
+
+test("chat-missing-replies U2: a delivered send with no operator turn sits among the turns at its typed time (done_at), queued and failed at the bottom", () => {
+  const p = panel();
+  p.render();
+  const turns = [{ role: "assistant", text: "before", at: T - 60 }, { role: "assistant", text: "after", at: T + 300 }];
+  const sends = [{ id: 1, text: "lost question", at: T - 30, done_at: T, state: "turn started", why: null },
+    { id: 2, text: "waiting", at: T + 10, done_at: null, state: "queued", why: "busy" },
+    { id: 3, text: "broken", at: T + 20, done_at: null, state: "failed", why: "never ready" },
+    { id: 4, text: "typed late", at: T + 400, done_at: T + 500, state: "sent", why: null }];
+  p.setData({ agent: "claude", source: "transcript", turns, sends });
+  const rows = rowsOf(p.render());
+  expect(rows.map((r) => (textOf(r).match(/before|lost question|after|waiting|broken|typed late/) || [])[0])).toEqual(["before", "lost question", "after", "typed late", "waiting", "broken"]);
+  expect(textOf(rows[1])).toContain("turn started");
+  expect(p.mod.chatRows(turns, sends.slice(0, 1)).map((r: any) => r.day ? "day" : r.send ? "send" : "turn")).toEqual(["turn", "send", "turn"]);
 });
 
 test("crew-terminal-access U5: a send is shown once: pending at the bottom, then as its timed operator turn", () => {
@@ -200,33 +220,189 @@ test("crew-terminal-access U5: a send is shown once: pending at the bottom, then
   expect(p.mod.chatRows([{ role: "user", from: "operator", text: "next", at: T }], [{ id: 9, text: "next", at: T + 500, state: "sent" }]).map((r: any) => !!r.send)).toEqual([false, true]);
 });
 
-test("crew-terminal-access U5: the input wraps, a pasted multi-line message goes as one line, Shift+Enter sends nothing, a 2000-character counter", async () => {
+test("crew-terminal-access U5, U19: the input wraps, a multi-line message keeps its line breaks, Shift+Enter is a new line, a 2000-character counter", async () => {
   const p = panel();
   p.render();
   const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
   expect(nodes(p.render()).some((n) => n.strings.includes('<textarea class="chat-in" rows="1"'))).toBe(true);
-  expect(at("maxLength")).toBe(2000);
-  at("onInput")({ target: { value: "a\nb\r\n\tc\u0085d" } });
+  expect(String(at("title"))).toContain("Enter sends, Shift+Enter a new line");
+  at("onInput")({ target: { value: "a\nb\r\n\tc\u0085d\re\u0007f\n" } });
   let prevented = 0;
+  // Shift+Enter is left to the browser, which puts the line break in.
   await at("onKeyDown")({ key: "Enter", shiftKey: true, preventDefault: () => prevented++ });
-  expect(prevented).toBe(1);
+  expect(prevented).toBe(0);
   expect(p.posts).toEqual([]);
   await at("onKeyDown")({ key: "Enter", isComposing: true, preventDefault: () => prevented++ });
   expect(p.posts).toEqual([]);
   await at("onKeyDown")({ key: "Enter", preventDefault: () => prevented++ });
-  expect(p.posts).toEqual([["api/chat", { project: "p", topic: "one", wt: "/w/b 1", text: "a b c d" }]]);
+  expect(prevented).toBe(1);
+  expect(p.posts).toEqual([["api/chat", { project: "p", topic: "one", wt: "/w/b 1", text: "a\nb\n\tc d\ne f" }]]);
   const left = () => {
-    const n = nodes(p.render()).find((n) => n.strings.includes(" left</span>"))!;
+    const n = nodes(p.render()).find((n) => n.strings.includes('class="chat-in"'))!;
     const i = n.values.findIndex((v: any) => typeof v === "string" && v.startsWith("chat-left"));
     return n.values.slice(i, i + 2);
   };
   at("onInput")({ target: { value: "x".repeat(10) } });
-  expect(left()).toEqual(["chat-left", 1990]);
+  expect(left()).toEqual(["chat-left", "1990 left"]);
   at("onInput")({ target: { value: "x".repeat(1950) } });
-  expect(left()).toEqual(["chat-left low", 50]);
+  expect(left()).toEqual(["chat-left low", "50 left"]);
+  // chat-multiline-send-fails U2: the counter counts code points of the posted text, as the server does.
+  at("onInput")({ target: { value: "x".repeat(2000) } });
+  expect(left()).toEqual(["chat-left low", "0 left"]);
+  at("onInput")({ target: { value: "x".repeat(2001) } });
+  expect(left()).toEqual(["chat-left low", "1 over"]);
+  at("onInput")({ target: { value: "😀".repeat(2000) } });
+  expect(left()).toEqual(["chat-left low", "0 left"]);
+  at("onInput")({ target: { value: "a\r\nb" + "x".repeat(1997) } });   // CR LF counts 1: 2000 in all
+  expect(left()).toEqual(["chat-left low", "0 left"]);
+  // Over the limit Send posts nothing and keeps the text.
+  at("onInput")({ target: { value: "y".repeat(2013) } });
+  const before = p.posts.length;
+  await attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
+  expect(p.posts.length).toBe(before);
+  expect(p.h.states).toContain("not sent: 2013 characters, the limit is 2000");
+  expect(p.h.states).toContain("y".repeat(2013));
   // Only line breaks: nothing to send.
   at("onInput")({ target: { value: "\n\n" } });
-  expect(attrAfter(p.render(), 'class="btn pri"', "disabled")).toBe(true);
+  expect(attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "disabled")).toBe(true);
+});
+
+test("U19: on a touch screen Enter is a new line and only Send sends", async () => {
+  const had = (globalThis as any).matchMedia;
+  (globalThis as any).matchMedia = (q: string) => ({ matches: q === "(pointer:coarse)" });
+  try {
+    const p = panel();
+    p.render();
+    const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
+    expect(String(at("title"))).toContain("Send sends");
+    expect(at("enterkeyhint")).toBe("enter");
+    at("onInput")({ target: { value: "line one" } });
+    let prevented = 0;
+    await at("onKeyDown")({ key: "Enter", preventDefault: () => prevented++ });
+    expect([prevented, p.posts]).toEqual([0, []]);
+    at("onInput")({ target: { value: "line one\nline two" } });
+    await attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
+    expect(p.posts).toEqual([["api/chat", { project: "p", topic: "one", wt: "/w/b 1", text: "line one\nline two" }]]);
+  } finally { (globalThis as any).matchMedia = had; }
+});
+
+// The key row's buttons: [key, label, node] in order. Chat has none; Screen shows them all.
+const keyButtons = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("chat-key"))
+  .map((n) => [n.values[0], n.values[n.values.length - 1], n]);
+const stopBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-stop"));
+const bannerBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-banner"));
+const questionView = (root: any) => nodes(root).find((n) => n.strings.includes("data-chat-question"));
+const segBtn = (root: any, v: string) => nodes(root).find((n) => segMatch(n, v));
+const hasKeyRow = (root: any) => nodes(root).some((n) => n.strings.includes('class="chat-keys"'));
+const menuTail = "❯ 1. Yes\n  2. No\n  3. Other";
+const segMatch = (n: any, v: string) => n.strings.startsWith("<button key=") && String(n.values[1]).includes("chat-segb") && n.values[0] === v;
+// Switch the panel to Screen: the three-way control's Screen button while something is asked, else the one toggle.
+const toScreen = (p: any) => {
+  const root = p.render();
+  fnIn(nodes(root).find((n) => segMatch(n, "screen")) ?? nodes(root).find((n) => n.strings.includes('class="btn sm chat-scr"')))();
+};
+const idle = { agent: "claude", source: "transcript", sends: [], turns: [], working: false };
+
+test("U19: Chat never shows a key row; idle has no Stop; working has a round ■ Stop in the card before Send that posts Escape", async () => {
+  const p = panel();
+  p.render();
+  p.setData(idle);
+  let root = p.render();
+  expect(hasKeyRow(root)).toBe(false);
+  expect(keyButtons(root)).toEqual([]);
+  expect(stopBtn(root)).toBeUndefined();
+  p.setData({ ...idle, working: true });
+  root = p.render();
+  expect(hasKeyRow(root)).toBe(false);
+  const stop = stopBtn(root);
+  expect(stop.strings).toContain('aria-label="Stop"');
+  expect(stop.strings).toContain("■");
+  // It sits inside the card, in the row before Send.
+  const card = nodes(root).find((n) => n.strings.includes('class="chat-card"'));
+  expect(JSON.stringify(card)).toContain("chat-stop");
+  const row = nodes(card).find((n) => n.strings.includes('class="chat-row"'));
+  const k = row.values.indexOf(stop);
+  expect(k).toBeGreaterThan(-1);
+  expect(row.strings.split("\u0000")[k + 1]).toContain("chat-send");   // Stop is the value right before the Send button
+  await fnIn(stop)();
+  expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
+  expect(p.h.states).toContain("pressed Esc");
+});
+
+test("U19: a menu on the member's screen opens the Question view; in Chat it is a banner, no key row; tapping it opens the Question view", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, screen: { tail: menuTail, menu: 3, prompt: ["Do you want to proceed?"], options: ["Yes", "No", "Other"], at: T, age_s: 1 } });
+  let root = p.render();
+  expect(questionView(root)).toBeDefined();
+  expect(hasKeyRow(root)).toBe(false);
+  fnIn(segBtn(root, "chat"))();
+  root = p.render();
+  expect(questionView(root)).toBeUndefined();
+  expect(hasKeyRow(root)).toBe(false);
+  expect(JSON.stringify(bannerBtn(root))).toContain("Do you want to proceed?");
+  fnIn(bannerBtn(root))();
+  root = p.render();
+  expect(bannerBtn(root)).toBeUndefined();
+  expect(questionView(root)).toBeDefined();
+  // No menu on screen: no banner, and the one Screen toggle.
+  p.setData({ ...idle, screen: { tail: "> ", menu: 0, at: T, age_s: 1 } });
+  root = p.render();
+  expect(bannerBtn(root)).toBeUndefined();
+  expect(questionView(root)).toBeUndefined();
+  expect(nodes(root).some((n) => n.strings.includes('class="btn sm chat-scr"'))).toBe(true);
+});
+
+test("U19: under Screen every key shows, with the menu digits, in every state; its Esc stays Esc and each press posts api/keys", async () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
+  toScreen(p);
+  let keys = keyButtons(p.render());
+  expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab"]);
+  expect(keys[0][1]).toBe("Esc");
+  await fnIn(keys[0][2])();
+  expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
+  p.setData({ ...idle, working: true, screen: { tail: menuTail, menu: 3, at: T, age_s: 1 } });
+  toScreen(p);
+  keys = keyButtons(p.render());
+  expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab", "1", "2", "3"]);
+  expect(keys[0][1]).toBe("Esc");   // working: Stop is in the card, not here
+  expect(stopBtn(p.render())).toBeDefined();
+  await fnIn(keys[6][2])();
+  expect(p.posts.at(-1)).toEqual(["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]);
+});
+
+test("U19: a member with no transcript shows its live screen; a toggle switches between screen and chat", () => {
+  const screenOf = (root: any) => nodes(root).find((n) => n.strings.includes('class="chat-screen"'));
+  const toggle = (root: any) => nodes(root).find((n) => n.strings.includes('class="btn sm chat-scr"'));
+  const p = panel();
+  p.render();
+  p.setData({ agent: "muse", source: "screen", sends: [], turns: [{ role: "screen", text: "old", at: null }],
+    screen: { tail: "Pick one:\n❯ 1. Yes\n  2. No", at: T, age_s: 4 } });
+  let root = p.render();
+  expect(screenOf(root).values).toContain("Pick one:\n❯ 1. Yes\n  2. No");
+  expect(screenOf(root).values).toContain("read 4 s ago");
+  expect(toggle(root).values).toContain("Chat");
+  // The toggle sits in the header, just before ✕.
+  const head = nodes(root).find((n) => n.strings.includes('class="mhd"'));
+  expect(JSON.stringify(head)).toContain("chat-scr");
+  fnIn(toggle(root))();
+  root = p.render();
+  expect(screenOf(root)).toBeUndefined();
+  expect(rowsOf(root).map(cls)).toEqual(["chat-turn screen"]);
+  // A member with a transcript opens on the conversation, its screen one press away.
+  const q = panel();
+  q.render();
+  q.setData({ agent: "claude", source: "transcript", sends: [], turns: [{ role: "assistant", text: "hi", at: T }], screen: { tail: "x", at: T, age_s: 90 } });
+  root = q.render();
+  expect(screenOf(root)).toBeUndefined();
+  expect(toggle(root).values).toContain("Screen");
+  fnIn(toggle(root))();
+  expect(screenOf(q.render()).values).toContain("read 2 min ago");
+  // No screen read: no toggle.
+  q.setData({ agent: "claude", source: "transcript", sends: [], turns: [], screen: null });
+  expect(toggle(q.render())).toBeUndefined();
 });
 
 test("crew-terminal-access U5: the log follows the newest row, stays put once scrolled up, and ↓ jumps back", () => {
@@ -256,12 +432,13 @@ test("crew-terminal-access U5: the log follows the newest row, stays put once sc
 test("a squad question card opens the chat panel of the member its answer goes to; a Studio alert has none", () => {
   const h = hooks();
   const ChatPanel = () => null;
-  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel",
+  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions",
     `${cut("AskOverlay")} return AskOverlay;`);
   const AskOverlay = make(h.useState, h.useEffect, html, async () => {}, new Map(), (n: any) => n.label + "/" + n.squad + "/" + n.id,
-    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel);
+    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel, (v: any) => ({ current: v }), (n: any) => n.label + "/" + n.squad + "/" + n.id, () => "00:00:00", () => null);
   const q = { label: "p", squad: "one", id: "q1", kind: "blocking", from: "builder-x", chat_wt: "/w/bx", chat_label: "builder-x", title: "T", text: "T", choices: [], suggestion: null, source: "lead" };
-  const render = (n: any) => { h.reset(); return nodes(AskOverlay({ items: [n], at: "p/one/q1", setAt: () => {}, onClose: () => {}, onShow: () => {}, toast: () => {} })); };
+  const cardActions = new Function("docLabel", cut("cardActions") + " return cardActions;")(() => "doc");
+  const render = (n: any) => { h.reset(); return nodes(AskOverlay({ cardActions, data: { squads: [] }, items: [n], at: "p/one/q1", setAt: () => {}, onClose: () => {}, onShow: () => {}, toast: () => {} })); };
   const btn = render(q).find((n) => n.strings.includes('class="btn chat-btn"'))!;
   expect(btn.values).toContain("builder-x");
   fnIn(btn)();
@@ -286,4 +463,251 @@ test("crew-terminal-access U8: each send claims its own turn, the earlier of two
   rows = p.mod.chatRows([{ role: "assistant", text: "x", at: T + 90 }, op("a", T + 105)], [send(1, "a", T), send(2, "a", T + 100)]);
   expect(turnsIn(rows).filter((r) => r.turn.from === "operator")).toHaveLength(1);
   expect(sendsIn(rows)).toHaveLength(0);
+});
+
+test("chat-with-studio U1: the Studio chat titles itself, marks the newest reply seen once loaded, and a squad chat marks nothing", () => {
+  const p = panel();
+  p.props.topic = "_studio"; p.props.wt = "/w/studio"; p.props.label = "Studio";
+  const title = (root: any) => nodes(root).find((n) => n.strings.includes('class="mhd"'))!;
+  const root = p.render();
+  expect(JSON.stringify(title(root))).toContain("Chat · Studio · p");
+  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [
+    { role: "assistant", text: "old", at: T }, { role: "assistant", text: "new", at: T + 50 },
+    { role: "assistant", tool: "2 tools", text: "x", at: T + 90 }, { role: "user", text: "q", at: T + 99 }] });
+  p.render(); p.h.effects[2]();
+  expect(p.marks.get("b:chat-seen:p//w/studio")).toBe(T + 50);
+  expect(p.seen()).toBe(1);
+  const q = panel();
+  q.render(); q.setData({ agent: "claude", source: "transcript", sends: [], turns: [{ role: "assistant", text: "a", at: T }] });
+  q.render(); q.h.effects[2]();
+  expect(q.marks.size).toBe(0);
+});
+
+test("studio-chat-queued-busy U4: a waiting send shows its age, why, give-up time and tone, and Cancel / Send now on the right ones", async () => {
+  const p = panel();
+  p.render();
+  const q = { text: "a", state: "queued", failing: false, now: false, first: false, why: "busy: working", age_s: 420, gives_up_at: T + 600 };
+  p.setData({ agent: "claude", source: "transcript", turns: [], sends: [
+    { id: 1, ...q, first: true },                                                              // plain queued, oldest
+    { id: 2, ...q, why: "an earlier message waits", gives_up_at: null, age_s: 5 },             // behind an earlier chat: no clock
+    { id: 3, ...q, failing: true, why: "send failed" },                                         // failing: red
+    { id: 4, text: "d", state: "cancelled", why: null },
+    { id: 5, ...q, now: true, why: "busy: working" }] });
+  const rows = rowsOf(p.render());
+  expect(rows.map(cls)).toEqual(["chat-turn op wait", "chat-turn op wait", "chat-turn op bad", "chat-turn op mut", "chat-turn op wait"]);
+  const t = rows.map(textOf);
+  expect(t[0]).toContain("queued 7 min · busy: working");
+  expect(t[0]).toContain("gives up at ");
+  expect(t[1]).toContain("queued <1 min");
+  expect(t[1]).not.toContain("gives up at");
+  expect(t[2]).toContain("send failing 7 min · send failed");
+  expect(t[3]).toContain("cancelled");
+  expect(t[3]).not.toContain("Cancel");
+  expect(t[4]).toContain("send now asked · busy: working");
+  // the control row: one component per queued send, none on the cancelled one
+  const ctls = (n: any) => nodes(n).filter((m) => m.values.some((v: any) => typeof v === "function" && v.name === "ChatCtl")).length;
+  expect(rows.map(ctls)).toEqual([1, 1, 1, 0, 1]);
+  const btns = (x: any) => [textOf(p.mod.ChatCtl({ x, project: "p", reload: () => {} }))];
+  expect(btns({ id: 1, first: true, now: false }).join()).toContain("Send now");
+  expect(btns({ id: 2, first: false, now: false }).join()).not.toContain("Send now");
+  expect(btns({ id: 5, first: true, now: true }).join()).not.toContain("Send now");
+  expect(btns({ id: 5, first: true, now: true }).join()).toContain("Cancel");
+});
+
+test("studio-chat-queued-busy U4: a press posts once, disables both buttons and reloads; a 409 says already typed", async () => {
+  for (const [status, msg] of [[0, ""], [409, "already typed"]] as const) {
+    const p = panel(); let reloads = 0;
+    const posts: any[] = [];
+    const src = (post: any) => new Function("useState", "html", "post", `${chatSrc} return { ChatCtl };`)(p.h.useState, html, post).ChatCtl;
+    const Ctl = src(async (...a: any[]) => { posts.push(a); if (status) throw Object.assign(new Error("already typed"), { status }); return {}; });
+    p.h.reset();
+    const btn = nodes(Ctl({ x: { id: 8, first: true, now: false }, project: "p", reload: () => { reloads++; } })).find((n) => n.strings.includes('chat-now'))!;
+    await fnIn(btn)();
+    expect(posts).toEqual([["api/chat-now", { project: "p", id: 8 }]]);
+    expect(reloads).toBe(1);
+    p.h.reset();
+    const after = nodes(Ctl({ x: { id: 8, first: true, now: false }, project: "p", reload: () => {} }));
+    expect(after.filter((n) => n.strings.includes("<button")).every((n) => n.values.includes(true))).toBe(true);
+    expect(textOf(after)).toContain(msg);
+  }
+});
+
+// Board chat U19b: the digit keys (under Screen) show only while the screen read shows a numbered menu.
+test("U19b: digits 1 to N show only for a numbered menu on screen", async () => {
+  const { menuOptions } = await import("../../bin/board/board-data.ts");
+  const keysFor = (tail: string | null) => {
+    const p = panel();
+    p.render();
+    p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], screen: tail === null ? null : { tail, menu: menuOptions(tail), at: T, age_s: 1 } });
+    if (tail !== null) toScreen(p);
+    return keyButtons(p.render()).map((k) => k[0]);
+  };
+  const base = ["Escape", "Up", "Down", "Enter", "Tab"];
+  expect(keysFor("● Working on it…\n\n> \n")).toEqual(base);
+  expect(keysFor(null)).toEqual([]);   // no screen read: no Screen, no keys
+  const perm = " Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again\n   3. No, and tell Claude what to do differently (esc)\n";
+  expect(keysFor(perm)).toEqual([...base, "1", "2", "3"]);
+  // A numbered list in ordinary output has no selection marker.
+  expect(keysFor("Steps:\n1. first\n2. second\n3. third\n\n> ")).toEqual(base);
+  expect(menuOptions(" ❯ 1. Yes, I trust this folder\n   2. No, exit\n")).toBe(2);
+  expect(menuOptions("❯ 1. a\n  2. b\n  3. c\n  4. d\n  5. e\n  6. f\n")).toBe(6);
+});
+
+// chat-multiline-send-fails U2: a failed or cancelled send gets Edit and Dismiss; Edit fills the box.
+test("U2: Edit on a failed send fills an empty box as is, appends below a draft, restores its images and notes a gone one", async () => {
+  const failed = { id: 5, text: "para one\n\npara two", files: [{ name: "aaaa.png", url: "u/aaaa" }, { name: "bbbb.png", url: "u/bbbb" }], state: "failed", why: "never ready", at: T, done_at: T + 1 };
+  const withSends = (p: any) => p.setData({ agent: "claude", source: "transcript", sends: [failed, { ...failed, id: 6, state: "queued" }, { ...failed, id: 7, state: "cancelled" }, { ...failed, id: 8, state: "sent" }], turns: [], working: false });
+  const failCtls = (p: any) => nodes(p.render()).filter((m) => m.values.some((v: any) => typeof v === "function" && v.name === "ChatFailCtl"));
+  // Only a failed or cancelled send has the pair; a queued one keeps Cancel, a sent one nothing.
+  const p = panel(); p.render(); withSends(p);
+  expect(failCtls(p)).toHaveLength(2);
+  const edit = failCtls(p)[0].values.at(-1);   // <ChatFailCtl x project reload edit>
+  expect(typeof edit).toBe("function");
+  goneUrls.add("u/bbbb");
+  try {
+    await edit(failed);
+    expect(p.h.states).toContain("para one\n\npara two");   // an empty box takes the text as is
+    expect(String(p.h.states.find((v: any) => typeof v === "string" && v.includes("bbbb.png")))).toContain("image bbbb.png is gone, not restored");
+    expect(p.h.states.find((v: any) => Array.isArray(v) && v[0]?.id === "aaaa.png")).toEqual([{ id: "aaaa.png", url: "u/aaaa", name: "aaaa.png" }]);
+    // A box holding a draft: the text goes below it after a blank line.
+    p.setData({ agent: "claude", source: "transcript", sends: [failed], turns: [], working: false });
+    attrAfter(p.render(), 'class="chat-in"', "onInput")({ target: { value: "my draft" } });
+    await edit(failed);
+    expect(p.h.states).toContain("my draft\n\npara one\n\npara two");
+  } finally { goneUrls.clear(); }
+});
+
+test("U2: Dismiss posts api/chat-dismiss for that send; a refusal shows its text and re-enables the buttons", async () => {
+  const x = { id: 5, text: "t", state: "failed" };
+  const posts: any[] = [];
+  let reloads = 0;
+  const h = hooks(), ctl = new Function("useState", "html", "post", `${chatSrc} return { ChatFailCtl };`)(h.useState, html, async (...a: any[]) => { posts.push(a); }).ChatFailCtl;
+  const root = ctl({ x, project: "p", reload: () => reloads++, edit: () => {} });
+  const dismiss = nodes(root).flatMap((n) => n.values).filter((v: any) => typeof v === "function")[1];
+  await dismiss();
+  expect(posts).toEqual([["api/chat-dismiss", { project: "p", id: 5 }]]);
+  expect(reloads).toBe(1);
+});
+
+// chat-key-buttons U2: the Question view.
+const bq = (id: string, over: any = {}) => ({ id, title: "Title " + id, question: "Question " + id + "?", choices: [{ label: "Yes", does: "do it" }, { label: "No", does: null }], since: "2026-11-25T10:00:00Z",
+  blocking: true, source: "lead", answerable: true, ...over });
+// A node's text: its strings with the values filled in (functions and false leave nothing).
+const flat = (v: any): string => Array.isArray(v) ? v.map(flat).join("") : v?.strings !== undefined
+  ? v.strings.split("\u0000").map((x: string, i: number) => x + (i < v.values.length ? flat(v.values[i]) : "")).join("") : typeof v === "function" || v == null || v === false ? "" : String(v);
+const btnWith = (root: any, text: string) => nodes(root).find((n) => n.strings.includes(text) && n.values.some((v: any) => typeof v === "function"))!;
+// The rendered QOptions of the Question view (the stub html leaves a component as a node): its props come from the attributes.
+const qoptions = (p: any, root: any) => {
+  const n = nodes(root).find((x) => x.values[0] === p.mod.QOptions)!;
+  const names = n.strings.split("\u0000").map((seg: string) => /(\w+)=$/.exec(seg)?.[1]);
+  const props: any = {};
+  names.forEach((k: string | undefined, i: number) => { if (k) props[k] = n.values[i]; });
+  return p.mod.QOptions(props);
+};
+const optBtns = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("<span class=\"n\">"));
+const qopts = (root: any) => nodes(root).filter((n) => n.strings.includes("chat-qopt") || n.values.some((v: any) => typeof v === "string" && v.includes("chat-qopt")));
+
+test("U2: a blocking board question opens the Question view once; a non-blocking one shows only the banner", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q1")] });
+  let root = p.render();
+  expect(questionView(root)).toBeDefined();
+  expect(flat(questionView(root))).toContain("Title q1");
+  expect(flat(questionView(root))).toContain("Question q1?");
+  expect(hasKeyRow(root)).toBe(false);
+  // The operator goes back to Chat: it stays there while the same asking is open (opened once).
+  fnIn(segBtn(root, "chat"))();
+  p.setData({ ...idle, questions: [bq("q1")] });
+  root = p.render();
+  expect(questionView(root)).toBeUndefined();
+  expect(JSON.stringify(bannerBtn(root))).toContain("builder-x asks: Title q1");
+  // A new asking (another since) opens it again.
+  p.setData({ ...idle, questions: [bq("q1", { since: "2026-11-25T11:00:00Z" })] });
+  expect(questionView(p.render())).toBeDefined();
+  // Non-blocking: no auto-open, the banner and the three-way control.
+  const n = panel();
+  n.render();
+  n.setData({ ...idle, questions: [bq("q2", { blocking: false })] });
+  root = n.render();
+  expect(questionView(root)).toBeUndefined();
+  expect(JSON.stringify(bannerBtn(root))).toContain("asks: Title q2");
+  expect(segBtn(root, "question")).toBeDefined();
+  fnIn(bannerBtn(root))();
+  expect(questionView(n.render())).toBeDefined();
+});
+
+test("U2: two open questions page '1 of 2', the screen menu first; a choice posts the answer with its since and the card's key leaves", async () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q1")], screen: { tail: menuTail, menu: 2, prompt: ["Do you want to proceed?"], options: ["Yes", "No"], at: T, age_s: 1 } });
+  let root = p.render();
+  expect(flat(questionView(root))).toContain("1 of 2");
+  expect(flat(questionView(root))).toContain("Do you want to proceed?");
+  // Next: the board question; its choice answers it.
+  nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Next question"')).values.filter((v: any) => typeof v === "function")[1]();
+  root = p.render();
+  expect(flat(questionView(root))).toContain("2 of 2");
+  expect(flat(questionView(root))).toContain("Title q1");
+  const choices = nodes(qoptions(p, questionView(root))).filter((n) => n.strings.startsWith("<button key="));
+  expect(choices.map((c) => c.values[0])).toEqual(["Yes", "No"]);
+  await fnIn(choices[0])();
+  expect(p.answers).toEqual([["p", "one", "q1", "Yes", "2026-11-25T10:00:00Z"]]);
+  // Answered: it is gone from the view (the page marks it sent), the panel is back on Chat or the next item.
+  root = p.render();
+  expect(flat(questionView(root) ?? "")).not.toContain("Title q1");
+});
+
+test("U2: a terminal-only picker shows its text and Open Screen to answer, no answer buttons", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q9", { source: "picker", answerable: false })], screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
+  const root = p.render();
+  expect(flat(questionView(root))).toContain("Title q9");
+  const list = nodes(qoptions(p, questionView(root)));
+  expect(list.some((n) => n.strings.startsWith("<button"))).toBe(false);   // read-only rows only
+  expect(flat(list)).toContain("Yes");
+  btnWith(questionView(root), "Open Screen to answer").values.filter((v: any) => typeof v === "function").pop()();
+  expect(hasKeyRow(p.render())).toBe(true);
+});
+
+test("U2: a screen menu with no board question has one button per option that posts api/keys with its digit, and Esc leaves the menu", async () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, screen: { tail: menuTail, menu: 3, prompt: ["Do you want to proceed?"], options: ["Yes", "No", "Other"], at: T, age_s: 1 } });
+  const root = p.render();
+  const btns = nodes(questionView(root)).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("chat-qopt"));
+  expect(btns).toHaveLength(3);
+  expect(hasKeyRow(root)).toBe(false);
+  await fnIn(btns[1])();
+  expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]]);
+  // After the press the panel is back on Chat.
+  await fnIn(btnWith(questionView(root), "Esc · leave the menu"))();
+  expect(p.posts.at(-1)).toEqual(["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]);
+});
+
+test("U2: a member with an open question carries a ? in the switcher and tabs", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle });
+  const crew = [{ wt: "/w/b 1", label: "builder-x", role: "builder", unread: 0, reply_due: 0, reply_at: null, asks: 0 }, { wt: "/w/l", label: "lead", role: "lead", unread: 0, reply_due: 0, reply_at: null, asks: 2 }];
+  p.h.states[p.h.states.findIndex((v: any) => Array.isArray(v) && v.length === 0)] = crew;
+  const marks = nodes(p.render()).filter((n) => n.strings.includes("chat-ask"));
+  expect(marks.length).toBeGreaterThan(0);
+});
+
+test("U4: the free-text answer box is keyed by question id + since, so paging remounts it empty", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q1", { choices: [] }), bq("q2", { choices: [], since: "2026-11-25T11:00:00Z" })] });
+  let root = p.render();
+  const boxKey = () => nodes(questionView(root)).find((n) => n.strings.includes("chat-qtext")).values[0];
+  const first = boxKey();
+  expect(first).toContain("q1");
+  nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Next question"')).values.filter((v: any) => typeof v === "function")[1]();
+  root = p.render();
+  const second = boxKey();
+  expect(second).toContain("q2");
+  expect(second).toContain("2026-11-25T11:00:00Z");
+  expect(second).not.toBe(first);
 });

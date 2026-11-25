@@ -8,8 +8,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tests/lib/state-root.sh"  # temp DS_STATE_ROOT: no write to the live state (U253)
 # shellcheck source=tests/lib/twins.sh
 . "$ROOT/tests/lib/twins.sh"
-LBL="zzns_$$"; OTHER="zzno_$$"; SD="$DS_STATE_ROOT/$LBL"; TMP="$(mktemp -d)"
-trap 'rm -rf "$SD" "$DS_STATE_ROOT/$OTHER" "$TMP"' EXIT
+LBL="zzns_$$"; OTHER="zzno_$$"; SD="$DS_STATE_ROOT/$LBL"
+# shellcheck disable=SC2034  # TMP is read by the exit command below
+TMP="$(mktemp -d)"
+state_root_on_exit 'rm -rf "$SD" "$DS_STATE_ROOT/$OTHER" "$TMP"'
 mkdir -p "$SD/squads" "$DS_STATE_ROOT/$OTHER"
 printf '{"home_repo":"path:/x"}' > "$SD/dispatcher.json"
 printf '{"run_id":"run_x","lead_wt":"wt_lead","status":"running"}' > "$SD/squads/nt.json"
