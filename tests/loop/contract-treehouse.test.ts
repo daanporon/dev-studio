@@ -83,6 +83,9 @@ if ("skip" in got) {
     loop.boot(T);
     const tick = async (k = 1) => { for (let i = 0; i < k; i++) { at += 5; await loop.tick(at); await act.drain(); } };
     s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });   // U30: the project's backend
+    // U54: one backend per project: the fixture's Studio runs on tmux too, or a tmux squad is refused.
+    const proj = s.get("projects", { label: "fx" });
+    if (proj?.studio_wt) s.upsert("projects", { label: "fx" }, { doc: JSON.stringify({ ...JSON.parse(String(proj.doc ?? "{}")), studio_backend: "tmux" }), observed_at: T });
     s.want("squad", `fx/${SQ}`, "running", { payload: { repo: `path:${repo}`, type: "feature" },
       fill: { repo: `path:${repo}`, type: "feature", backend: "tmux", worktree_provider: "treehouse" }, by: "test" });
     return { s, orca, contract, tick, queue, now: () => at, d, repo, pools: join(d, "pools") };

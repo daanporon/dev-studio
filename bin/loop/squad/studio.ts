@@ -102,16 +102,21 @@ export function studioMember(store: Store, project: string, wt: string): Row | n
 
 // What the loop knows of the project's Studio: its worktree, agent, member row, the terminals Orca
 // lists there and the ones that could be it. null when the project has no Studio worktree.
+// The terminals the loop sees open in worktree `wt` of the project (U54: also the new worktree of a backend move).
+export function studioTerms(store: Store, project: string, wt: string) {
+  return (store.db.query("SELECT handle, title, doc FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle")
+    .all(project, wt) as Row[]).map((r) => {
+      const d = parse(r.doc);
+      return { handle: String(r.handle), title: (r.title as string | null) ?? null, identity: (d.identity as string | null) ?? null, gen: d.gen == null ? null : String(d.gen) };
+    });
+}
+
 export function studioView(store: Store, project: string): StudioView | null {
   const proj = store.get("projects", { label: project });
   const wt = (proj?.studio_wt as string | null) || "";
   if (!wt) return null;
   const agent = studioAgent(proj);
-  const terms = (store.db.query("SELECT handle, title, doc FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle")
-    .all(project, wt) as Row[]).map((r) => {
-      const d = parse(r.doc);
-      return { handle: String(r.handle), title: (r.title as string | null) ?? null, identity: (d.identity as string | null) ?? null, gen: d.gen == null ? null : String(d.gen) };
-    });
+  const terms = studioTerms(store, project, wt);
   const member = studioMember(store, project, wt);
   // /ds-up may hand over the handle it started (dispatcher.json studio_handle, U262).
   const recorded = (member?.handle as string | null) || (parse(proj?.doc).studio_handle as string | null) || null;

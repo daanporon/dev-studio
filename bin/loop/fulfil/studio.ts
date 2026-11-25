@@ -45,7 +45,7 @@ import { setAccountEnabled } from "../capacity/accounts.ts";
 import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
 import { LOGGED_IN } from "../capacity/login-card.ts";
 import { clearLogin } from "../capacity/login.ts";
-import { BACKEND_WANTED, MOVE, openSquads, RESTART_APPROVED, RESTART_STUDIO, START_WANTED, STUDIO_SQUAD, studioBackend, studioCandidates, studioMember, studioPrompt, studioReady,
+import { BACKEND_WANTED, MOVE, openSquads, RESTART_APPROVED, RESTART_STUDIO, START_WANTED, STUDIO_SQUAD, studioBackend, studioCandidates, studioMember, studioPrompt, studioReady, studioTerms,
   studioRestartCmd, studioView } from "../squad/studio.ts";
 import { setBackendRow } from "../settings/settings.ts";
 import { defaultProvider, isBackend } from "../../backend/registry.ts";
@@ -295,9 +295,7 @@ async function moveBackend(a: Action, x: Exec): Promise<Result> {
     // On Orca a replay after "starting" takes a Studio terminal already in the new worktree, or waits out the start
     // window; off Orca the start is ledgered (startOff), so starting again gets that terminal back.
     if (was === "starting" && !seat.contract) {
-      const terms = (store.db.query("SELECT handle, title, doc FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle").all(P, plan.wt) as Row[])
-        .map((r) => { let d: Row = {}; try { d = JSON.parse(String(r.doc ?? "{}")); } catch { /* none */ } return { handle: String(r.handle), title: (r.title as string | null) ?? null, identity: (d.identity as string | null) ?? null }; });
-      handle = studioCandidates(terms, p.agent)[0]?.handle ?? "";
+      handle = studioCandidates(studioTerms(store, P, plan.wt), p.agent)[0]?.handle ?? "";
       const since = Number(row?.observed_at ?? 0);
       if (!handle && at - since < moveStartS()) return { wait: "the new Studio's studio-start may still be running", at: since + moveStartS() };
     }
