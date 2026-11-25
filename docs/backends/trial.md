@@ -30,7 +30,7 @@ disagree with it.
 | Loop restart | open. By design agents are Orca terminals and outlive the loop | open. By design the server runs as its own unit (`server-unit`), so agents outlive the loop; the live check is empty | open. By design its own unit and `resume_agents_on_restore = false`; the live check is empty |
 | Upgrade | open (the Orca upgrade is the trial's step) | measured: a tmux 3.8 client was not refused by a 3.4 server, the agent survived, the old client still answered. A release that changes the protocol version would refuse every call; the drill reports `refused` | open. A herdr upgrade restarts every agent on it; the trial measures how many and how long |
 | State detection | native, from Orca's pane state | none from the backend; the loop's own reader gives state (output, transcript, `esc to interrupt`) | native, but weak without herdr's hooks: the trial's sampling table is empty |
-| Set on a project with | `default_backend orca-lite` | `default_backend tmux` | `default_backend herdr` |
+| Set on a project with | `ds up <p> --backend orca-lite` | `ds up <p> --backend tmux` | `ds up <p> --backend herdr` |
 
 Each backend's own row of tests is green on its fake or real binary (`tests/loop/backend-orca-lite.test.ts`,
 `backend-tmux.test.ts`, `backend-herdr.test.ts`, the conformance suite in `backend-contract.test.ts`), so

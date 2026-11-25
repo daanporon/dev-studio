@@ -83,9 +83,8 @@ import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSyn
 import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
-import { BACKEND_NAMES, DEFAULT_BACKEND, isBackend, squadBackendRule } from "../backend/registry.ts";
-import { projectStudioBackend } from "../loop/squad/studio.ts";
-import { limit } from "../loop/settings/limits.ts";
+import { BACKEND_NAMES, squadBackendRule } from "../backend/registry.ts";
+import { studioBackend } from "../loop/squad/studio.ts";
 import { chatProblem } from "../loop/chat/limits.ts";
 import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
@@ -307,10 +306,9 @@ async function request(req: Request) {
   if (Object.hasOwn(WISH_ACTIONS, action)) return write((s) => wishAction(s, project, action, topic, role));
   return write((s) => {
     if (sf && !one(s, "SELECT 1 AS x FROM projects WHERE label = ?", project)) no(409, `no project ${project} on this board`);
-    // U33: the project's backend is not a choice; another one is refused with U30's reason.
+    // U33, U57: the Studio's backend is not a choice; another one is refused with the `ds up --backend` line.
     if (sf?.backend) {
-      const v = limit(s, project, "default_backend");
-      const refused = squadBackendRule({ backend: sf.backend, projectBackend: isBackend(v) ? v : DEFAULT_BACKEND, studioBackend: projectStudioBackend(s, project), project });
+      const refused = squadBackendRule({ backend: sf.backend, studioBackend: studioBackend(s.get("projects", { label: project })), project });
       if (refused) no(409, refused);
     }
     if (a.topic) squadRow(s, project, topic);

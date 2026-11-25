@@ -59,13 +59,12 @@ for c in "t8 --framing-file $TMP/nope.md" "t9 --framing-file $TMP/empty.md" "t10
 done
 ck "spawn framing-file: missing names the path" "$(run bin/commands/spawn-squad.sh --repo fx --topic t8 --framing-file "$TMP/nope.md" 2>&1 >/dev/null | grep -c "$TMP/nope.md")" "1"
 
-# U30: one rule for which backend a project's squads use: its default_backend, nothing else. The flag may only
-# name it; any other backend (orca and herdr included) is refused naming default_backend.
-mkdir -p "$S/tx/squads"; echo '{"home_repo":"tx"}' > "$S/tx/dispatcher.json"
+# U30, U57: one rule for which backend a project's squads use: its Studio's, nothing else. The flag may only
+# name it; any other backend (orca and herdr included) is refused naming ds up --backend.
+mkdir -p "$S/tx/squads"; echo '{"home_repo":"tx","studio_backend":"tmux"}' > "$S/tx/dispatcher.json"
 "$TMP/bin/ds" import >/dev/null 2>&1 || true
 for r in builder builder-review builder-review-standard; do "$TMP/bin/ds" config set tx roles.conf "$r" "claude opus ondemand - claude:sonnet" >/dev/null; done
 mkdir -p "$TMP/fakebin"; printf '#!/bin/sh\n' >"$TMP/fakebin/tmux"; chmod +x "$TMP/fakebin/tmux"
-PATH="$TMP/fakebin:$PATH" "$TMP/bin/ds" config set tx limits.conf default_backend tmux >/dev/null
 if command -v tmux >/dev/null 2>&1; then
   run bin/commands/spawn-squad.sh --repo tx --topic b1 >/dev/null 2>"$TMP/err" || cat "$TMP/err" >&2
   ck "tmux project, no flag: starts on tmux" "$(sql "SELECT backend FROM squads WHERE topic = 'b1'")" "tmux"
@@ -75,7 +74,7 @@ fi
 for b in orca herdr; do
   set +e; run bin/commands/spawn-squad.sh --repo tx --topic "b-$b" --backend "$b" >/dev/null 2>"$TMP/err"; rc=$?; set -e
   ck "tmux project, --backend $b: refused" "$rc" "1"
-  ck "tmux project, --backend $b: names default_backend and the project's backend" "$(grep -c "backend $b is refused: this project's squads start on tmux (its default_backend)" "$TMP/err")" "1"
+  ck "tmux project, --backend $b: names the Studio's backend and ds up --backend" "$(grep -c "backend $b is refused: this project's Studio runs on tmux.*ds up tx --backend $b" "$TMP/err")" "1"
   ck "tmux project, --backend $b: nothing written" "$(sql "SELECT COUNT(*) FROM squads WHERE topic = 'b-$b'")" "0"
 done
 ck "orca project, --backend orca: starts on orca" "$(run bin/commands/spawn-squad.sh --repo fx --topic o1 --backend orca >/dev/null 2>&1; sql "SELECT backend FROM squads WHERE topic = 'o1'")" "orca"

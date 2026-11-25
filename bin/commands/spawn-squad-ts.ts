@@ -39,8 +39,8 @@ export async function run(raw: string[]): Promise<number> {
 
   const label = dsLabel(repo);
   const disp = readJson(join(stateRoot(), label, "dispatcher.json")), home = disp?.home_repo;
-  // U54: the project's Studio backend (dispatcher.json studio_backend, empty meaning orca), once it has a Studio.
-  const studioBackend = disp?.studio_wt ? String(disp.studio_backend ?? "").trim() || "orca" : null;
+  // U57: a squad starts on the Studio's backend (dispatcher.json studio_backend, empty meaning orca), the one backend of the project.
+  const studioBackend = String(disp?.studio_backend ?? "").trim() || "orca";
   if (typeof home === "string" && home !== "") repo = home;
 
   // The effective roster (U267, settings.ts readRoster): the project's rows override their roles, the
@@ -57,7 +57,7 @@ export async function run(raw: string[]): Promise<number> {
     if (backend !== "" && backend !== placed) { writeErr(`spawn-squad: squad ${topic} runs on ${placed}; a squad's backend is written once at spawn\n`); return 1; }
   } else {
     const word = (key: string) => String(readGet(label, "limits.conf", key, settingsAt()).value ?? "").trim().split(/\s+/)[0];
-    const c = chooseSquadBackend({ flag: backend, projectBackend: word("default_backend"), providerSetting: word("worktree_provider"), studioBackend, project: label });
+    const c = chooseSquadBackend({ flag: backend, providerSetting: word("worktree_provider"), studioBackend, project: label });
     if (!c.ok) { writeErr(`spawn-squad: ${c.error}\n`); return 1; }
     on = { backend: c.backend, backend_host: c.host, worktree_provider: c.provider };
     // U11: on a contract backend only an agent with a driver launch line can start (bin/loop/drivers/contract.ts).

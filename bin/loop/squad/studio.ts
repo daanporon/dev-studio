@@ -55,13 +55,6 @@ export function studioBackend(proj: Row | null): string {
   return String(parse(proj?.doc).studio_backend ?? "").trim() || "orca";
 }
 
-// U54 (project-start): the backend a project's Studio holds it to, or null for a project with no Studio worktree yet
-// (a first `ds up` writes its backend before the Studio exists). Squads and `default_backend` must match it.
-export function projectStudioBackend(store: Store, project: string): string | null {
-  const proj = store.get("projects", { label: project });
-  return proj?.studio_wt ? studioBackend(proj) : null;
-}
-
 // U54: the project's squads that are not closed, a paused one included (it would reopen its panes on the old
 // backend, an Orca one's Run in the Studio's worktree): a backend move is refused while any is open.
 export function openSquads(store: Store, project: string): string[] {

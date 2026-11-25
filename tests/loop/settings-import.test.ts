@@ -92,19 +92,17 @@ describe("planImport", () => {
     expect(historyOf(s, DST).length).toBe(before);
   });
 
-  test("U32: an import from a tmux project leaves the target's backend and worktree tool alone", () => {
+  test("U32, U57: an import leaves the target's worktree tool alone when its Studio's backend cannot use it", () => {
     const { s, o: o0 } = fixture();
     writeFileSync(join(o0.conventions, "roles.conf"), "lead claude sonnet always\nbuilder claude sonnet always\n");   // a contract backend launches claude only
     const o = { ...o0, which: (b: string) => `/usr/bin/${b}` };
-    raw(s, SRC, "limits.conf", "default_backend", "tmux");
     raw(s, SRC, "limits.conf", "worktree_provider", "git");
     const plan = planImport(s, DST, { project: SRC }, o);
-    expect(brief(find(plan, "limits.conf", "default_backend"))).toEqual(["skip", "project-specific", false, true]);
     // a tool the target's own backend cannot use is refused outright, so it can't even be ticked
     expect(find(plan, "limits.conf", "worktree_provider")).toMatchObject({ action: "skip", pick: false, can_pick: false });
-    expect(PROJECT_SPECIFIC_LIMITS).toContain("default_backend");
+    expect(PROJECT_SPECIFIC_LIMITS).not.toContain("default_backend");
     applyImport(s, DST, { project: SRC }, plan.filter((r) => r.pick).map((r) => ({ file: r.file, key: r.key, expect: r.current })), "board", { ...o, board: true });
-    expect(get(s, DST, "limits.conf", "default_backend", o)).toMatchObject({ value: "orca", source: "default" });
+    expect(get(s, DST, "limits.conf", "worktree_provider", o)).toMatchObject({ value: "auto", source: "default" });
   });
 
   test("configurable-role-elevation U1: an import keeps column 8 and refuses `up` on an elevate row", () => {

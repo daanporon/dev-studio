@@ -26,7 +26,7 @@ Spawn a squad for it, deriving what the operator didn't spell out:
      `brainstorm`; "small fix", a ticket or note with the decisions made -> `plan`. Unsure -> leave `--start` off
      (the Thinker's Start triage in `roles/thinker.md` picks).
    - `--backend orca|orca-lite|tmux|herdr` (optional): pass the operator's own `--backend` or Start-dialog pick
-     through unchanged; never derive one. Left off, the squad starts on the project's `default_backend`.
+     through unchanged; never derive one. Left off, the squad starts on the Studio's backend (`ds up <project> --backend <x>` moves the project).
 3. **Show the derived slug, repo, and framing**, then run
    `~/.dev-studio/bin/commands/spawn-squad.sh --repo <sel> --topic <slug> --framing "<sentence>" [flags]`
    and report that the squad wish is written: the loop creates its Run, Lead and
