@@ -768,7 +768,11 @@ test("update banner: running, done with warnings, and failed with its log path",
   const a = await mountPage(upBoard({ run: run({}) }), false);
   try { expect(bannerText(a)).toContain("Dev-studio update running — pulling… (2 min)"); expect(banner(a).textContent).not.toContain("waiting for the Studio"); } finally { await a.window.happyDOM.close(); }
   const b = await mountPage(upBoard({ run: run({ state: "done", line: "advanced a -> b", squads_line: "update-squads: [fixture] reload — instructions — 7 wishes", warnings: ["update: WARNING disk low"] }) }), false);
-  try { expect(bannerText(b)).toContain("advanced a -> b — reload — instructions — 7 wishes"); expect(bannerText(b)).toContain("update: WARNING disk low"); } finally { await b.window.happyDOM.close(); }
+  try { expect(bannerText(b)).toContain("advanced a -> b — 7 workers on older code reload"); expect(bannerText(b)).toContain("update: WARNING disk low"); } finally { await b.window.happyDOM.close(); }
+  const d = await mountPage(upBoard({ run: run({ state: "done", line: "already current (fe92a557…)", squads_line: "update-squads: [fixture] restart — code, instructions, skills — 25 wish(es) (one a reload of the Studio)" }) }), false);
+  try { expect(bannerText(d)).toContain("already current (fe92a55) — 25 workers on older code restart once idle; the Studio reloads"); } finally { await d.window.happyDOM.close(); }
+  const e = await mountPage(upBoard({ run: run({ state: "done", line: "already current (fe92a557…)" }) }), false);
+  try { expect(bannerText(e)).toContain("already current (fe92a55)"); expect(bannerText(e)).not.toContain("workers"); } finally { await e.window.happyDOM.close(); }
   const c = await mountPage(upBoard({ run: run({ state: "failed", line: "DS-UPDATE: refused: dirty", log: "/x/state/loop/update/3.log" }) }), false);
   try { expect(bannerText(c)).toContain("Dev-studio update failed: DS-UPDATE: refused: dirty"); expect(bannerText(c)).toContain("/x/state/loop/update/3.log"); expect(banner(c).className).toContain("err"); } finally { await c.window.happyDOM.close(); }
 });

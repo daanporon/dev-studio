@@ -1524,6 +1524,13 @@ has "U2 update: warning on its own line" "$(render "$LBL")" "  update: WARNING o
 upreq "$UNOW" '{"ok":false,"state":"failed","error":"boom","line":"DS-UPDATE: failed: boom","log":"/x/2.log"}'
 jt "U2 update: a failed request shows state failed" "$TMP/upd.json" '.update.run | .state=="failed" and .log=="/x/2.log"'
 has "U2 update: failed text names line and log" "$(render "$LBL")" "UPDATE failed: DS-UPDATE: failed: boom — log /x/2.log"
+# a done request leaves 5 minutes after done_at; a failed one stays for the hour
+upreq "$((UNOW-240))" '{"ok":true,"state":"done","line":"DS-UPDATE: already current (a1b2c3d4…)"}'
+jt "U5 update: a done request 4 minutes old shows run" "$TMP/upd.json" '.update.run.state=="done"'
+upreq "$((UNOW-360))" '{"ok":true,"state":"done","line":"DS-UPDATE: already current (a1b2c3d4…)"}'
+jt "U5 update: a done request 6 minutes old is gone" "$TMP/upd.json" '(.update // {}) | .run == null'
+upreq "$((UNOW-1800))" '{"ok":false,"state":"failed","error":"boom","line":"DS-UPDATE: failed: boom"}'
+jt "U5 update: a failed request 30 minutes old still shows" "$TMP/upd.json" '.update.run.state=="failed"'
 dbw "DELETE FROM requests WHERE kind = 'update'"
 dbw "DELETE FROM observed_update"
 
