@@ -169,7 +169,7 @@ async function move(a: Action, x: Exec) {
       return { done: true, result: `not moved: ${why}` };
     }
     step("closing");
-    const c = await closeStudio(seat, v.wt, p.handle);
+    const c = await closeStudio(seat, v.wt, p.handle ?? "");   // not a start, so the move names the Studio's handle
     if (c.code !== 0) {
       step("not moved", true);
       store.event("studio_move_failed", { project: P, squad: "_studio", member: v.wt, payload: { handle: p.handle, to, step: "close", error: errOf(c, "terminal-close") } });
