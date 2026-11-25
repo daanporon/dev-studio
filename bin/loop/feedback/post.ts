@@ -10,9 +10,9 @@
 //                  list (a missing or empty one is a hit), the kinds of hit without the matched value
 //   Gh             the GitHub calls a post makes (REST through `gh api`, DS_GH for a stub): find a post by
 //                  its key, create an issue, comment on one, and the reset time of a used-up budget
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import { limit, limitEnv } from "../settings/limits.ts";
@@ -44,6 +44,14 @@ export function parseOrigin(url: string): string | null {
   const m = /^(?:https?:\/\/(?:[^@/]+@)?|ssh:\/\/git@|git@)github\.com[/:]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
   return m ? `${m[1]}/${m[2]}` : null;
 }
+const real = (p: string): string => { try { return realpathSync(p); } catch { return resolve(p); } };
+/** The reason a store may not use the checkout's origin, or null: its state root is not the host's real one (`~/.dev-studio/state`
+ *  or this checkout's `state/`) and `DS_FEEDBACK_ORIGIN` is unset, so a test run would file issues on the real repo (U11). */
+export function testRootReason(store: Store): string | null {
+  if (process.env.DS_FEEDBACK_ORIGIN !== undefined) return null;
+  const root = real(store.root);
+  return root === real(join(homedir(), ".dev-studio", "state")) || root === real(join(ROOT, "state")) ? null : "test state root: set DS_FEEDBACK_ORIGIN";
+}
 let originMemo: string | null | undefined;
 /** The dev-studio checkout's `origin` as owner/name, read once per process (`DS_FEEDBACK_ORIGIN` stands in for the URL in tests); null for a missing or non-GitHub origin. */
 export function checkoutOrigin(): string | null {
@@ -62,11 +70,12 @@ export function feedbackRepo(store: Store): string | null {
   if (!feedbackProjects(store).length) return null;
   const ok = (v: unknown): string | null => { const t = String(v ?? "").trim(); return REPO.test(t) ? t : null; };
   const ev = process.env[limitEnv("feedback_repo")]?.trim();
-  if (ev) return ok(ev) ?? (ev === "-" ? checkoutOrigin() : null);
+  const origin = (): string | null => (testRootReason(store) ? null : checkoutOrigin());
+  if (ev) return ok(ev) ?? (ev === "-" ? origin() : null);
   const rows = store.db.query("SELECT project, value FROM config WHERE file = 'limits.conf' AND key = 'feedback_repo' ORDER BY project = '' DESC, project")
     .all() as { project: string; value: string | null }[];
   for (const r of rows) { const v = ok(r.value); if (v) return v; }
-  return checkoutOrigin();
+  return origin();
 }
 // The words the label workflow (.github/scripts/feedback-labels.mjs) takes in prompt.ts's marker line, and
 // the hidden key line an add-to comment ends with (an issue gets it from prompt.ts finalBody).
