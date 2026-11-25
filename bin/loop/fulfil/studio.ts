@@ -36,7 +36,7 @@
 import { closeSync, constants as fsc, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { CHAT_FILE_NAME, chatFileDir, START_TOPIC } from "../chat/files.ts";
-import { alert, failRequest, finishRequest, requestActions, type Exec, type Fulfiller } from "../core/actuator.ts";
+import { alert, failRequest, finishRequest, requestActions, type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
 import type { Action } from "../core/plugins.ts";
 import { errOf, spawn, type Out } from "../io/orca.ts";
 import { ROOT, type Row } from "../core/store.ts";
@@ -45,7 +45,10 @@ import { setAccountEnabled } from "../capacity/accounts.ts";
 import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
 import { LOGGED_IN } from "../capacity/login-card.ts";
 import { clearLogin } from "../capacity/login.ts";
-import { MOVE, RESTART_APPROVED, RESTART_STUDIO, START_WANTED, STUDIO_SQUAD, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
+import { BACKEND_WANTED, MOVE, openSquads, RESTART_APPROVED, RESTART_STUDIO, START_WANTED, STUDIO_SQUAD, studioBackend, studioCandidates, studioMember, studioPrompt, studioReady, studioTerms,
+  studioRestartCmd, studioView } from "../squad/studio.ts";
+import { setBackendRow } from "../settings/settings.ts";
+import { defaultProvider, isBackend } from "../../backend/registry.ts";
 import { localPath } from "../drivers/contract.ts";
 import type { ContractSeat, Member, Seat } from "../drivers/types.ts";
 import { memberLabel, startIdentity } from "../core/whoami.ts";
@@ -84,7 +87,7 @@ function attachImages(root: string, label: string, fdir: string, request: number
     ? `\n## Attached images\n\nThe operator attached these images to the brief. Open each with your file-reading tool:\n${lines.join("\n")}\n`
     : "";
 }
-type Move = { handle?: string; agent?: string; account?: string; model?: string; effort?: string; from?: string; why?: string };
+type Move = { handle?: string; agent?: string; account?: string; model?: string; effort?: string; from?: string; why?: string; backend?: string; provider?: string; wt?: string };
 
 // How long a replay that finds the "starting" step waits for that start's terminal before starting again:
 // above the background timeout and studio-start's own wait for the new tab to settle.
@@ -140,7 +143,8 @@ async function startOff(x: Exec, seat: Seat, wt: string, p: Move, prompt: string
   return no(closed.ok ? why : `${why}; closing it failed too: ${closed.error}`);
 }
 
-async function move(a: Action, x: Exec) {
+async function move(a: Action, x: Exec): Promise<Result> {
+  if ((a.payload as Move | undefined)?.why === "backend") return moveBackend(a, x);
   const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project, up = p.why === "back-up", restart = p.why === "restart", start = p.why === "start";
   if (!P || (!p.handle && !start) || !p.agent || !p.account) return { failed: "a Studio move needs a project, the Studio's handle and a pick" };
   const key = { project: P, subject: MOVE, kind: "studio:move" };
@@ -239,6 +243,128 @@ async function move(a: Action, x: Exec) {
     if (up) store.upsert("episodes", { project: P, subject: MOVE, kind: "studio:up" }, { episode_key: a.episode, state: "started", started_at: at, ended_at: at, source: "loop", observed_at: at });
   })();
   return { done: true, result: `moved to ${to}: ${handle}` };
+}
+
+// U54 (project-start): the move a backend move keeps on its studio:move row (`result`), written before it acts, so a
+// replay after a crash goes on from its last step: the target backend, tool and worktree (`ds up` made it), where the
+// Studio ran (backend, worktree, terminal), the new Studio's generation, and once started its terminal.
+type BackendPlan = { to: string; provider: string; wt: string; from: string; fromWt: string; handle: string | null; gen: string; newHandle?: string; newGen?: string | null };
+
+// U54: the Studio moved to another backend (`ds up <label> --backend <x>`, why "backend"). Refused, changing nothing,
+// while any squad of the project is open (a paused one too) or when the Studio already runs there. Steps, each kept
+// on the episode: planned (the plan written), starting (the new Studio in the new worktree, through the target's seat),
+// begun (its terminal recorded), closing / closed (the old Studio's terminal, through the old backend), then the
+// switch: dispatcher.json's studio_backend and studio_wt, the project's default_backend row and the projects row, the
+// `_studio` member row carried to the new worktree (its id, account history and limit stamp kept), one studio_moved
+// event, started. The old worktree is left for cleanup. A start that fails closes nothing and cards it; a close that
+// fails still switches (the new Studio is the project's) and cards the old terminal for the operator to close.
+async function moveBackend(a: Action, x: Exec): Promise<Result> {
+  const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project;
+  if (!P || !p.agent || !p.account || !p.backend || !isBackend(p.backend) || !p.wt) {
+    if (P) endApproval(x, P, BACKEND_WANTED);
+    return { failed: "a backend move needs a project, a pick, a known target backend and its worktree" };
+  }
+  const key = { project: P, subject: MOVE, kind: "studio:move" };
+  const row = store.get("episodes", key), mine = row?.episode_key === a.episode, was = mine ? String(row!.state) : null;
+  if (was === "started" || was === "failed" || was === "not moved") return { done: true, result: `already ${was}` };
+  let plan: BackendPlan | null = null;
+  if (mine) try { const o = JSON.parse(String(row!.result ?? "")); if (o && typeof o === "object" && o.to) plan = o; } catch { /* not planned yet */ }
+  const save = (state: string, extra: Row = {}) => store.upsert("episodes", key, { episode_key: a.episode, state, result: JSON.stringify(plan), source: "loop", observed_at: at, ...extra });
+  const endWish = () => endApproval(x, P, BACKEND_WANTED);
+  const v = studioView(store, P);
+  if (!plan) {
+    const from = studioBackend(store.get("projects", { label: P })), open = openSquads(store, P);
+    const why = !v ? "the project has no Studio worktree"
+      : from === p.backend ? `the Studio already runs on ${p.backend}`
+      : open.length ? `squad${open.length === 1 ? "" : "s"} ${open.join(", ")} ${open.length === 1 ? "is" : "are"} still open on ${from} (a paused squad counts): close ${open.length === 1 ? "it" : "them"} first`
+      : null;
+    if (why || !v) {
+      store.upsert("episodes", key, { episode_key: a.episode, state: "not moved", result: why, started_at: at, ended_at: at, source: "loop", observed_at: at });
+      endWish();
+      return { done: true, result: `not moved: ${why}` };
+    }
+    plan = { to: p.backend, provider: p.provider || defaultProvider(p.backend), wt: p.wt, from, fromWt: v.wt,
+      handle: (v.member?.handle as string | null) ?? null, gen: crypto.randomUUID() };
+    save("planned", { started_at: at, ended_at: null });
+  }
+  const to = `${p.agent}:${p.account}`, ident = memberLabel({ project: P, squad: STUDIO_SQUAD, role: "studio" });
+  // 1. The new Studio, in the new worktree on the target backend; the old one still runs (and is still the project's).
+  if (!plan.newHandle) {
+    const seat = x.act.studioSeatOn(store, P, plan.to, plan.provider, `${a.subject}:${a.episode}:new`, plan.wt, at, plan.to === "orca" ? null : ident);
+    let handle = "", s: Out | null = null;
+    // On Orca a replay after "starting" takes a Studio terminal already in the new worktree, or waits out the start
+    // window; off Orca the start is ledgered (startOff), so starting again gets that terminal back.
+    if (was === "starting" && !seat.contract) {
+      handle = studioCandidates(studioTerms(store, P, plan.wt), p.agent)[0]?.handle ?? "";
+      const since = Number(row?.observed_at ?? 0);
+      if (!handle && at - since < moveStartS()) return { wait: "the new Studio's studio-start may still be running", at: since + moveStartS() };
+    }
+    if (!handle) {
+      save("starting");
+      const proj = store.get("projects", { label: P });
+      const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), `the operator moved the project from ${plan.from} to ${plan.to} with \`ds up\`, on ${to}`);
+      s = seat.contract ? await startOff(x, seat, plan.wt, p, prompt)
+        : await seat.send("studio-start", [plan.wt, p.account, p.model || "-", p.effort || "-", seat.window?.("studio") || "-", prompt], startIdentity(ident, plan.gen));
+      handle = s.code === 0 ? s.out.trim().split("\n").pop()!.trim() : "";
+    }
+    if (!handle) {
+      const err = errOf(s!, "studio-start");
+      save("failed", { ended_at: at });
+      endWish();
+      store.event("studio_move_failed", { project: P, squad: STUDIO_SQUAD, member: plan.fromWt, payload: { handle: plan.handle, to, backend: plan.to, step: "start", error: err } });
+      await alert(store, P, MOVE, `failed|${a.episode}`, `The loop could not start the Studio on ${plan.to} in ${plan.wt} (${err}). Nothing was closed: the project stays on ${plan.from}. Fix it and re-run: ds up ${P} --backend ${plan.to}`,
+        { title: "Studio move failed", option: "done — looked at it", why: `ds up ${P} --backend ${plan.to}`, fields: { kind: "studio_move_backend" } });
+      return { done: true, result: `not moved: ${err}` };
+    }
+    plan.newHandle = handle;
+    plan.newGen = seat.contract ? seat.gen?.() ?? null : s ? plan.gen : null;
+    save("begun");
+  }
+  // 2. The old Studio's terminal, through the old backend (the project still names it). A closing step a crash cut
+  // short whose terminal is no longer listed was closed.
+  if (plan.handle && was !== "closed") {
+    const listed = !!v?.terms.some((t) => t.handle === plan!.handle);
+    if (!(was === "closing" && !listed)) {
+      save("closing");
+      const old = x.act.seat(store, P, null, `${a.subject}:${a.episode}`, plan.fromWt, at);
+      const c = await closeStudio(old, plan.fromWt, plan.handle);
+      if (c.code !== 0) {
+        const err = errOf(c, "terminal-close");
+        store.event("studio_move_failed", { project: P, squad: STUDIO_SQUAD, member: plan.fromWt, payload: { handle: plan.handle, to, backend: plan.to, step: "close", error: err } });
+        await alert(store, P, MOVE, `close|${a.episode}`, `The Studio now runs on ${plan.to} (${plan.newHandle}), but the loop could not close the old one, ${plan.handle} on ${plan.from} in ${plan.fromWt} (${err}) — close it yourself, so only one Studio runs`,
+          { title: "Old Studio still open", option: "done — closed it", why: `close ${plan.handle} on ${plan.from}`, fields: { kind: "studio_move_backend" } });
+      }
+    }
+    store.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND handle = ? AND gone_at IS NULL", [at, P, plan.handle]);
+    save("closed");
+  }
+  // 3. The switch. dispatcher.json first (tmp+rename; written again on a replay), then the rows in one transaction.
+  const disp = join(store.root, P, "dispatcher.json");
+  let doc: Row = {};
+  try { const o = JSON.parse(readFileSync(disp, "utf8")); if (o && typeof o === "object") doc = o; } catch { /* none yet */ }
+  doc.studio_wt = plan.wt;
+  if (plan.to === "orca") delete doc.studio_backend; else doc.studio_backend = plan.to;
+  delete doc.studio_handle;
+  mkdirSync(join(store.root, P), { recursive: true });
+  writeFileSync(`${disp}.tmp`, JSON.stringify(doc, null, 2) + "\n");
+  renameSync(`${disp}.tmp`, disp);
+  store.upsert("projects", { label: P }, { studio_wt: plan.wt, doc: JSON.stringify(doc), observed_at: at });
+  setBackendRow(store, P, plan.to, "ds up (Studio moved)", at);
+  const m = studioMember(store, P, plan.fromWt);
+  const set: Row = { wt: plan.wt, handle: plan.newHandle, agent: p.agent, account: p.account === "-" ? null : p.account, gen: plan.newGen ?? null, status: "running", observed_at: at, updated_at: at };
+  if (p.model && p.model !== "-") set.model = p.model;
+  const moved = { project: P, squad: STUDIO_SQUAD, member: plan.wt, payload: { handle: plan.newHandle, previous: plan.handle, from: p.from ?? null, to, model: p.model ?? null, why: "backend",
+    backend: plan.to, was: plan.from, wt: plan.wt, old_wt: plan.fromWt } };
+  store.db.transaction(() => {
+    if (m) {
+      // Any other `_studio` row at the new worktree (a Studio that ran there before) gives way to the carried one.
+      if (plan!.wt !== plan!.fromWt) store.db.run("DELETE FROM members WHERE project = ? AND squad = ? AND wt = ? AND id != ?", [P, STUDIO_SQUAD, plan!.wt, m.id as number]);
+      store.fact("studio_moved", [{ table: "members", key: { id: m.id }, set }], moved);
+    } else store.event("studio_moved", moved);
+    save("started", { ended_at: at });
+    endWish();
+  })();
+  return { done: true, result: `moved to ${plan.to}: ${plan.newHandle}` };
 }
 
 // Ends the open approval of this kind on the Studio's move subject.

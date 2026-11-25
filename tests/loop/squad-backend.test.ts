@@ -313,3 +313,22 @@ describe("the Studio's seat", () => {
     }
   });
 });
+
+// U54 (project-start): one backend per project. A squad on a backend other than the Studio's is refused with the
+// reason and the command that moves the whole project, whatever default_backend says.
+test("U54: on a project whose Studio runs on tmux, an Orca squad wish is refused, naming ds up --backend", async () => {
+  const which = (b: string) => `/usr/bin/${b}`;
+  const why = "backend orca is refused: this project's Studio runs on tmux, and a project keeps one backend for its Studio and squads; to move the whole project: ds up realp --backend orca";
+  expect(squadBackendRule({ backend: "orca", projectBackend: "orca", studioBackend: "tmux", project: "realp" })).toBe(why);
+  expect(chooseSquadBackend({ projectBackend: "orca", studioBackend: "tmux", project: "realp", which })).toEqual({ ok: false, error: `${why} (asked for by the project's default_backend)` });
+  expect(squadBackendRule({ backend: "tmux", projectBackend: "tmux", studioBackend: "tmux" })).toBeNull();
+  expect(squadBackendRule({ backend: "orca", projectBackend: "orca", studioBackend: null })).toBeNull();
+  const { spawn, row, root } = rig();
+  mkdirSync(join(root, "p"), { recursive: true });
+  writeFileSync(join(root, "p", "dispatcher.json"), JSON.stringify({ home_repo: "path:/fake", studio_wt: "local::/fake/studio", studio_backend: "tmux" }));
+  const a = await spawn("--topic", "orcawish");
+  expect(a.code).toBe(1);
+  expect(a.err).toContain("backend orca is refused: this project's Studio runs on tmux");
+  expect(a.err).toContain("ds up p --backend orca");
+  expect(row("orcawish")).toBeNull();
+});

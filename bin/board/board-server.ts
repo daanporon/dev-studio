@@ -84,6 +84,7 @@ import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { BACKEND_NAMES, DEFAULT_BACKEND, isBackend, squadBackendRule } from "../backend/registry.ts";
+import { projectStudioBackend } from "../loop/squad/studio.ts";
 import { limit } from "../loop/settings/limits.ts";
 import { chatProblem } from "../loop/chat/limits.ts";
 import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
@@ -254,7 +255,7 @@ async function request(req: Request) {
     // U33: the project's backend is not a choice; another one is refused with U30's reason.
     if (sf?.backend) {
       const v = limit(s, project, "default_backend");
-      const refused = squadBackendRule({ backend: sf.backend, projectBackend: isBackend(v) ? v : DEFAULT_BACKEND });
+      const refused = squadBackendRule({ backend: sf.backend, projectBackend: isBackend(v) ? v : DEFAULT_BACKEND, studioBackend: projectStudioBackend(s, project), project });
       if (refused) no(409, refused);
     }
     if (a.topic) squadRow(s, project, topic);

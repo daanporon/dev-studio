@@ -55,6 +55,32 @@ export function studioBackend(proj: Row | null): string {
   return String(parse(proj?.doc).studio_backend ?? "").trim() || "orca";
 }
 
+// U54 (project-start): the backend a project's Studio holds it to, or null for a project with no Studio worktree yet
+// (a first `ds up` writes its backend before the Studio exists). Squads and `default_backend` must match it.
+export function projectStudioBackend(store: Store, project: string): string | null {
+  const proj = store.get("projects", { label: project });
+  return proj?.studio_wt ? studioBackend(proj) : null;
+}
+
+// U54: the project's squads that are not closed, a paused one included (it would reopen its panes on the old
+// backend, an Orca one's Run in the Studio's worktree): a backend move is refused while any is open.
+export function openSquads(store: Store, project: string): string[] {
+  return (store.db.query("SELECT topic FROM squads WHERE project = ? AND COALESCE(status, 'running') NOT IN ('done', 'failed', 'closed', 'gone') ORDER BY topic")
+    .all(project) as { topic: string }[]).map((r) => r.topic);
+}
+
+// U54: `ds up <label> --backend <x>`'s wish to move the project's Studio, an open episode on MOVE whose result holds
+// the target ({backend, provider, wt}: the new Studio's worktree, which `ds up` made). reconcilers/studio.ts turns
+// it into one studio-move, why "backend"; fulfil/studio.ts ends it whatever comes of it.
+export const BACKEND_WANTED = "studio:backend-wanted";
+export type BackendTarget = { backend: string; provider: string; wt: string };
+export function wantStudioBackend(store: Store, project: string, target: BackendTarget, at: number): string {
+  const episode = `backend@${at}`;
+  store.upsert("episodes", { project, subject: MOVE, kind: BACKEND_WANTED }, { episode_key: episode, state: "wanted", started_at: at, ended_at: null,
+    result: JSON.stringify(target), source: "up", observed_at: at });
+  return episode;
+}
+
 // The Studio's terminals: the agent's own kind, not a `ds-loop …` pane (a codex morning briefing, a
 // loop restart), however many shells sit beside it.
 export function studioCandidates(terms: StudioTerm[], agent: string): StudioTerm[] {
@@ -76,16 +102,21 @@ export function studioMember(store: Store, project: string, wt: string): Row | n
 
 // What the loop knows of the project's Studio: its worktree, agent, member row, the terminals Orca
 // lists there and the ones that could be it. null when the project has no Studio worktree.
+// The terminals the loop sees open in worktree `wt` of the project (U54: also the new worktree of a backend move).
+export function studioTerms(store: Store, project: string, wt: string) {
+  return (store.db.query("SELECT handle, title, doc FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle")
+    .all(project, wt) as Row[]).map((r) => {
+      const d = parse(r.doc);
+      return { handle: String(r.handle), title: (r.title as string | null) ?? null, identity: (d.identity as string | null) ?? null, gen: d.gen == null ? null : String(d.gen) };
+    });
+}
+
 export function studioView(store: Store, project: string): StudioView | null {
   const proj = store.get("projects", { label: project });
   const wt = (proj?.studio_wt as string | null) || "";
   if (!wt) return null;
   const agent = studioAgent(proj);
-  const terms = (store.db.query("SELECT handle, title, doc FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle")
-    .all(project, wt) as Row[]).map((r) => {
-      const d = parse(r.doc);
-      return { handle: String(r.handle), title: (r.title as string | null) ?? null, identity: (d.identity as string | null) ?? null, gen: d.gen == null ? null : String(d.gen) };
-    });
+  const terms = studioTerms(store, project, wt);
   const member = studioMember(store, project, wt);
   // /ds-up may hand over the handle it started (dispatcher.json studio_handle, U262).
   const recorded = (member?.handle as string | null) || (parse(proj?.doc).studio_handle as string | null) || null;

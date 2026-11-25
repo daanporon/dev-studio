@@ -22,6 +22,7 @@ import { DEFAULT_BACKEND } from "../../backend/registry.ts";
 import { confRows, confText } from "../db/import-config.ts";
 import { limitEnv } from "./limits.ts";
 import { FOCUS_KEY, focusProblem, NO_FOCUS } from "../squad/focus.ts";
+import { projectStudioBackend } from "../squad/studio.ts";
 import { levelOf, PROJECT_PATTERN, ROLES, shippedRules, skillRuleProblem } from "./skills.ts";
 import { RETURNS } from "./roster.ts";
 import { dbPath, now as clock, openReadOnly, ROOT, stateRoot, type Store } from "../core/store.ts";
@@ -165,6 +166,12 @@ function checked(store: Store, project: string, file: SettingsFile, key: string,
     if (key === FOCUS_KEY && v !== NO_FOCUS) { const why = focusProblem(store, project, v); if (why) fail(why); }
     // U32: a backend or worktree tool that does not fit this host or the roster is refused here, not at the next spawn.
     if (key === "default_backend" || key === "worktree_provider") { const why = backendFitProblem(store, project, key, v, o); if (why) fail(why); }
+    // U54 (project-start): one backend per project: while its Studio runs on another backend the project moves whole.
+    if (key === "default_backend") {
+      const studio = projectStudioBackend(store, project), want = v || DEFAULT_BACKEND;
+      if (studio && want !== studio)
+        fail(`the project's Studio runs on ${studio}, and a project keeps one backend for its Studio and squads: move the whole project with \`ds up ${project} --backend ${want}\``);
+    }
     return v;
   }
   if (file === "roles.conf") {
@@ -254,6 +261,13 @@ export function set(store: Store, project: string, file: string, key: string, va
   if (f === "roles.conf" && !rowOf(store, project, f, key) && words(v) === words(shipped(f, o).get(key)?.value ?? "")) return [];
   // A roster edit writes that role's row only (U267): every other role keeps following the default.
   return done(store, project, store.tx(() => one(write(store, project, f, key, v, null, actor, at))));
+}
+
+/** U54 (project-start): the project's `default_backend` row written as a Studio backend move left it (fulfil/studio.ts
+ *  moveBackend), without set()'s checks: `ds up` checked the backend before it filed the move, and the Studio now runs there. */
+export function setBackendRow(store: Store, project: string, backend: string, actor: string, at: number): Change[] {
+  checkProject(project);
+  return done(store, project, store.tx(() => one(write(store, project, "limits.conf", "default_backend", backend, null, actor, at))));
 }
 
 // Drop the project's row of one key: back to the default (for roles.conf the role's default row,

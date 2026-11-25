@@ -5,8 +5,8 @@
 //   3. add or reconcile the project: `--label` names it (else the repo's name) and clones into repos/<label>; a label
 //      already up with another repo is refused (`--force-new` no longer overrides that); `--backend` is checked with
 //      the squads' rule (chooseSquadBackend) and on first bring-up written as the project's `default_backend`
-//      (limits.conf) and `studio_backend` (dispatcher.json); a different `--backend` on a reconcile is refused (moving
-//      a project is U54's); `--worktree` writes `worktree_provider`. Off Orca the Studio's worktree comes from the
+//      (limits.conf) and `studio_backend` (dispatcher.json); a different `--backend` on a reconcile moves the whole
+//      project (U54, moveProject below); `--worktree` writes `worktree_provider`. Off Orca the Studio's worktree comes from the
 //      project's provider (bin/loop/io/worktrees.ts) as `local::<path>`;
 //   4. file the Studio's first start for the loop (squad/studio.ts wantStudioStart; reconcilers/studio.ts startStudio
 //      turns it into one studio-move, why "start") and wait for the loop to adopt its terminal. With the loop down, an
@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { ROOT, stateRoot, dsLabel, dsPrefix, backend, chomp, readJson, run as sh, settingsAt, writeOut, writeErr } from "../lib/shared";
 import { inherit, isUrl } from "../lib/upkeep";
 import { compactWindowOf, roleRow, writeRoleFile } from "../lib/lib";
-import { MOVE, START_WANTED, STUDIO_SQUAD, studioCandidates, studioMember, studioPrompt, wantStudioStart } from "../loop/squad/studio.ts";
+import { BACKEND_WANTED, MOVE, openSquads, START_WANTED, STUDIO_SQUAD, studioCandidates, studioMember, studioPrompt, wantStudioBackend, wantStudioStart } from "../loop/squad/studio.ts";
 import type { LiveTerminal } from "../loop/observers/orca.ts";
 import { whoAmI } from "../loop/core/whoami.ts";
 import { chooseSquadBackend, type BackendName } from "../backend/registry.ts";
@@ -149,13 +149,11 @@ export async function run(argv: string[]): Promise<number> {
   // The backend: the project's own on a reconcile (dispatcher.json studio_backend, empty meaning orca); on first
   // bring-up `--backend` (default orca), checked with the squads' rule against the worktree tool asked for.
   const current = String(prevDoc?.studio_backend ?? "").trim() || "orca";
-  if (reconcile && backendFlag && backendFlag !== current) {
-    writeErr(`up: '${label}' runs on ${current}; moving a project to ${backendFlag} is not built yet (orca-backend-alternatives U54: \`ds up ${label} --backend ${backendFlag}\` will move it). Nothing changed.\n`);
-    return 2;
-  }
   // The worktree tool: `--worktree`, else on a reconcile the project's stored `worktree_provider` (so a project first
   // brought up with treehouse keeps it), else the backend's default.
   const provider = worktree || (reconcile ? String(readGet(label, "limits.conf", "worktree_provider", settingsAt()).value ?? "").trim().split(/\s+/)[0] : "");
+  if (reconcile && backendFlag && backendFlag !== current)
+    return moveProject({ label, from: current, to: backendFlag, provider, worktree, home: existingHome, loopUp, wtName: `${prefix}${label}-studio-${backendFlag}` });
   const chosen = chooseSquadBackend({ flag: reconcile ? current : backendFlag || "orca", projectBackend: reconcile ? current : backendFlag || "orca", providerSetting: provider });
   if (!chosen.ok) { writeErr(`up: ${chosen.error}\n`); return 2; }
   const b = chosen.backend, offOrca = b !== "orca";
@@ -307,6 +305,79 @@ export async function run(argv: string[]): Promise<number> {
     if (rc !== 0) writeErr("up: WARNING — the board's wish was not taken (see above); `ds board " + label + " --serve` retries it\n");
   } else writeErr(`up: the board needs the loop: once it runs, \`${DS()} board-ts ${label} --serve\`\n`);
   writeOut(`${reachLine(b, label, root, wtName)} Re-run to reconcile.\n`);
+  return 0;
+}
+
+/** U54 (project-start): `ds up <label> --backend <x>` on a project up on another backend moves the whole project: the
+ *  target is checked with the squads' rule, refused (nothing changed) while any squad is open, a paused one too, or
+ *  with the loop down; the new Studio's worktree is made here (Orca's worktree-ensure, else the provider's `local::`
+ *  folder, named for the target so it never meets the old one), then the move is filed for the loop
+ *  (squad/studio.ts wantStudioBackend; fulfil/studio.ts moveBackend starts the new Studio, closes the old one and
+ *  switches the project) and waited for. `--worktree` is written once the project is on its new backend. */
+async function moveProject(o: { label: string; from: string; to: string; provider: string; worktree: string; home: string; loopUp: boolean; wtName: string }): Promise<number> {
+  const { label, from, to } = o;
+  const chosen = chooseSquadBackend({ flag: to, projectBackend: to, providerSetting: o.provider });
+  if (!chosen.ok) { writeErr(`up: ${chosen.error}\n`); return 2; }
+  const repoPath = o.home.startsWith("path:") ? o.home.slice(5) : "";
+  if (to !== "orca" && repoPath === "") { writeErr(`up: a project on ${to} needs a local repo (path:<dir>), not '${o.home}'. Nothing changed.\n`); return 2; }
+  const { open } = await import("../loop/core/store.ts");
+  const s = open();
+  try {
+    const squads = openSquads(s, label);
+    if (squads.length) {
+      writeErr(`up: '${label}' still has open squad${squads.length === 1 ? "" : "s"} on ${from}: ${squads.join(", ")} (a paused squad counts). Close ${squads.length === 1 ? "it" : "them"} first, then re-run ds up ${label} --backend ${to}. Nothing changed.\n`);
+      return 2;
+    }
+    if (!o.loopUp) { writeErr(`up: only the loop moves a project's Studio, and it is not running (see above). Nothing changed.\n`); return 1; }
+    let wt = "";
+    if (to === "orca") {
+      if (repoPath !== "") { const r = await backend(["repo-ensure", repoPath]); if (r.err) writeErr(r.err); }
+      const ensure = await backend(["worktree-ensure", o.home, o.wtName, "", ""]);
+      if (ensure.err) writeErr(ensure.err);
+      if (ensure.rc !== 0) return ensure.rc;
+      wt = chomp(ensure.out);
+    } else {
+      const { createWorktree } = await import("../loop/io/worktrees.ts");
+      try {
+        const { row } = await createWorktree(s, chosen.provider, { repo: repoPath, name: o.wtName, branch: o.wtName, base: "HEAD", parent: null, project: label, squad: STUDIO_SQUAD, role: "studio" });
+        wt = `local::${row.path}`;
+      } catch (e) {
+        writeErr(`up: could not make the Studio worktree through ${chosen.provider}: ${(e as Error).message}. Nothing changed.\n`);
+        return 1;
+      }
+    }
+    if (wt === "") { writeErr(`up: could not make the Studio worktree on ${to}. Nothing changed.\n`); return 1; }
+    await writeRoleFile(wt, "studio", label, "", "");
+    const armed = Bun.spawn([join(ROOT, "bin", "hooks", "arm-rewake.sh"), wt, "--", "--worktree", "--requests", label], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    if ((await armed.exited) !== 0) writeErr("up: WARNING — could not arm the Studio's rewake (a cross-squad escalation won't wake it)\n");
+    const at = Math.floor(Date.now() / 1000);
+    const episode = wantStudioBackend(s, label, { backend: to, provider: chosen.provider, wt }, at);
+    writeOut(`up: asked the loop to move '${label}' from ${from} to ${to} (${episode}, Studio in ${wt}); waiting for it\n`);
+    const waitS = Number(process.env.DS_UP_START_WAIT_S ?? "") || 180, until = Date.now() + waitS * 1000;
+    for (;;) {
+      const mv = s.get("episodes", { project: label, subject: MOVE, kind: "studio:move" });
+      if (mv?.episode_key === episode && ["started", "failed", "not moved"].includes(String(mv.state))) {
+        if (mv.state !== "started") {
+          let why = String(mv.result ?? "");
+          try { if (JSON.parse(why)?.to) why = "see the board's card"; } catch { /* a plain reason */ }
+          writeErr(`up: the loop did not move '${label}' (${mv.state}: ${why})\n`);
+          return 1;
+        }
+        break;
+      }
+      const w = s.get("episodes", { project: label, subject: MOVE, kind: BACKEND_WANTED });
+      if (w?.episode_key === episode && w.ended_at != null && mv?.episode_key !== episode) { writeErr(`up: the loop dropped the move of '${label}' (see the board)\n`); return 1; }
+      if (Date.now() >= until) { writeErr(`up: the loop has not moved '${label}' within ${waitS}s; its wish stays filed — watch the board, or re-run ds up\n`); return 1; }
+      await Bun.sleep(1000);
+    }
+  } finally { s.close(); }
+  if (o.worktree) {
+    const { changeSettings } = await import("../loop/settings/settings-migrate.ts");
+    const { set } = await import("../loop/settings/settings.ts");
+    if (changeSettings("up", (st) => { set(st, label, "limits.conf", "worktree_provider", o.worktree, "ds up"); return true; }) === null) return 2;
+  }
+  writeOut(`up: moved '${label}' from ${from} to ${to}; the old Studio worktree is left for cleanup\n`);
+  writeOut(`${reachLine(to as BackendName, label, stateRoot(), o.wtName)}\n`);
   return 0;
 }
 
