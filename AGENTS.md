@@ -31,7 +31,7 @@ updates them with `git -C ~/.dev-studio pull` / `reset --hard`. **Scripts** you 
 (`bin/*/*.sh`, the backend adapter) always run their latest on-disk version — nothing
 to refresh. The **loop** restarts itself on new loop code: between ticks it compares its commit with
 the checkout's HEAD and exits 75 for systemd to start the new code (`bin/loop/core/code-watch.ts`).
-**Never pull, reset or check out the host checkout yourself** — only `/ds-update` moves it. To read
+**Never pull, reset or check out the host checkout yourself** — only `/ds-update` (or the operator's `ds update <project>`) moves it. To read
 the newest code, run `git -C ~/.dev-studio fetch -q` and `git -C ~/.dev-studio show origin/main:<path>`.
 **Instructions** only change for you when you **re-read the file**, so:
 
@@ -184,6 +184,7 @@ A unit documents its scripts, tables and events in `docs/scripts.md`. AGENTS.md 
 - `bin/role/notes.sh <project> <role> print|add|drop` — per-project, per-role tips for the next role.
 - `bin/role/ds-feedback.sh "<what>"` — jot a dev-studio snag for the operator; never edit dev-studio.
 - `bin/ds finish <unit|-> --outcome … --body …` — the finish record a worker writes when its work ends.
+- `bin/ds update <project>` — the operator's or Studio's update, never a squad role's: the loop pulls, reinstalls, restarts itself and refreshes the project's squads, no Studio turn.
 - `bin/ds expose <name> <url> [--stop "<cmd>"] [--squad] [--self]` — publish a URL you host so the board lists it.
 - `bin/lib/directory.sh list|reach <squad> <role>` — the phone book: who a member is and how to reach it.
 - `bin/board/board.sh` — the board (text, `--json`, `--serve`).

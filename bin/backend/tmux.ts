@@ -238,6 +238,7 @@ export function tmuxBackend(o: TmuxOptions): TmuxBackend {
       }
       return okAnswer("backend.info", { name: "tmux", version, capabilities: { ...TMUX_CAPS } });
     }
+    if (op === "worktree.parent" || op === "worktree.set_parent") return fail("unsupported", "tmux nests no worktrees");
     if (op === "terminal.create") return create(req as Request<"terminal.create">);
     if (op === "terminal.list") return list();
     const id = (req as { id: string }).id;

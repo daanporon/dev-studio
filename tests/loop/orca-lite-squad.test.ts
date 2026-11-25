@@ -5,7 +5,7 @@
 // wt-make (the Builder's nested under the Lead's), the tabs are opened with terminal-create and the
 // launch line typed with terminal-type, and nothing about the squad touches a Run. Hermetic: a copy of
 // the fixture state, a temp repo, DS_ORCA_WORKSPACES and the trusted HOME under the temp dir.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,4 +115,50 @@ test("a squad on orca-lite: Lead and Builder in Orca-made worktrees, nested, tab
   expect(r.s.db.query("SELECT run_id, task_id FROM squads WHERE project = 'fx' AND topic = ?").get(SQ)).toEqual({ run_id: null, task_id: null });
   const runOps = r.orca.calls.filter((c) => /^(run-|worker-|task-|adopt|dispatch)/.test(c.op) && JSON.stringify(c).includes(SQ));
   expect(runOps).toEqual([]);
+});
+
+// U21f: the tree stays in Orca for an orca-lite squad: Studio (on Orca) > Lead > the Lead's other members.
+describe("orca-lite squad nesting (U21f)", () => {
+  const STUDIO_PATH = "/orca/studio-wt";
+  async function nested() {
+    const r = await rig();
+    r.orca.wts.set(STUDIO_PATH, { id: "wt-studio", path: STUDIO_PATH, repo: "r", branch: "studio", parent: null });
+    r.s.db.run("UPDATE projects SET studio_wt = ? WHERE label = 'fx'", [`studio-repo::${STUDIO_PATH}`]);   // Orca's `<id>::<path>` form
+    const lead = await started(r, () => members(r.s).find((m) => m.role === "lead"));
+    r.s.db.run("INSERT INTO members (project, squad, role, suffix, agent, model, account, observed_at, updated_at) VALUES ('fx', ?, 'thinker', '', 'claude', 'opus', 'system', ?, ?)", [SQ, T, T]);
+    const id = Number((r.s.db.query("SELECT id FROM members WHERE squad = ? AND role = 'thinker'").get(SQ) as Row).id);
+    r.s.want("member", String(id), "running", { payload: { prompt: "think" } });
+    const th = await started(r, () => members(r.s).find((m) => m.id === id));
+    return { r, lead, th };
+  }
+  const observe = (r: Rig, m: Row, parent: string | null) =>
+    r.s.upsert("observed_worktrees", { project: "fx", wt: String(m.wt) }, { path: pathOf(m), branch: "b", parent, observed_at: r.now(), gone_at: null });
+  const sets = (r: Rig) => r.orca.of("wt-set-parent");
+
+  test("the Lead starts under an Orca-form Studio, the Thinker under the Lead, and a hand move is repaired through the backend", async () => {
+    const { r, lead, th } = await nested();
+    expect(r.orca.wts.get(pathOf(lead))!.parent).toBe("wt-studio");
+    expect(r.orca.wts.get(pathOf(th))!.parent).toBe(r.orca.wts.get(pathOf(lead))!.id);
+    const before = sets(r).length;
+    // A hand move in Orca: the Thinker is seen at the top level (the observer reads Orca's parent as a `local::` folder).
+    r.orca.wts.get(pathOf(th))!.parent = null;
+    observe(r, lead, `local::${STUDIO_PATH}`); observe(r, th, null);
+    await r.tick(3);
+    const made = sets(r).slice(before);
+    expect(made.map((c) => c.args)).toEqual([[r.orca.wts.get(pathOf(th))!.id, r.orca.wts.get(pathOf(lead))!.id]]);
+    // Seen under its Lead by folder: nothing more.
+    observe(r, th, lead.wt as string);
+    await r.tick(3);
+    expect(sets(r)).toHaveLength(before + 1);
+  }, 30_000);
+
+  test("a squad on tmux files no wt-set-parent for a worktree seen under the wrong parent", async () => {
+    const { r, lead, th } = await nested();
+    r.s.db.run("DROP TRIGGER IF EXISTS squads_backend_once");   // test only: the backend is written once at spawn
+    r.s.db.run("UPDATE squads SET backend = 'tmux' WHERE project = 'fx' AND topic = ?", [SQ]);
+    const before = sets(r).length;
+    observe(r, lead, null); observe(r, th, null);
+    await r.tick(3);
+    expect(sets(r)).toHaveLength(before);
+  }, 30_000);
 });

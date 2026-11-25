@@ -46,6 +46,8 @@ throws a `ContractError`; the conformance suite runs every backend through it.
 | `terminal.read` | `{id, screen?, lines?}` | `{text}` |
 | `terminal.last_output` | `{id}` | `{at: epoch seconds \| null}` |
 | `agent.state` | `{id}` | `{state: "working" \| "waiting" \| "idle" \| "unknown"}` |
+| `worktree.parent` | `{cwd}` | `{parent: string \| null}` — the folder the worktree is nested under in the backend's own tree (`parents: native` only, else `unsupported`) |
+| `worktree.set_parent` | `{cwd, parent}` | `{}` — nests the worktree under another, both by folder (`parents: native` only, else `unsupported`); the loop's `wt-set-parent` goes through it (U21f) |
 
 A **terminal** is `{id, cwd, label, group, parent, gen, created_at}`:
 

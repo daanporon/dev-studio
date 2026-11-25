@@ -86,6 +86,9 @@ export const REQUESTS = {
   "worktree.remove": obj({ label: opt(str), topic: opt(str), wt: opt(str), path: opt(str), unit: opt(str), merged: opt(bool), gone: opt(bool) }),
   "plan-revoke": obj({ plan: str, why: str, keep_started: opt(bool) }),
   "unit-action": obj({ action: str, slug: str, why: opt(str) }),
+  // board-actions-as-wishes U1: `ds update <project>` (fulfil/update.ts): pull, reinstall, restart the loop and
+  // refresh the project's squads in a job outside the loop; its progress and result live in the request's `result`.
+  update: obj({ by: opt(str), ...THROUGH }),
   "wt-set-parent": obj({ wt: str, parent: str, request: opt(num) }),
 } as const satisfies Record<string, ObjShape<any>>;
 export type RequestKind = keyof typeof REQUESTS;

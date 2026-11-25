@@ -32,6 +32,7 @@ type Term = { t: Terminal; env: Record<string, string>; lines: string[]; input: 
 export type FakeContract = Backend & {
   caps: Capabilities;
   terms: Map<string, Term>;
+  trees: Map<string, string>;   // worktree folder -> its parent folder (parents native)
   calls: { op: Op; req: unknown }[];
   lie: Op | null;
   now: () => number;
@@ -44,6 +45,7 @@ export function fakeContract(caps: Partial<Capabilities> = {}, opts: { name?: st
   const b: FakeContract = {
     caps: { ...DEFAULT_CAPS, ...caps },
     terms: new Map(),
+    trees: new Map(),
     calls: [],
     lie: null,
     now: opts.now ?? (() => Math.floor(Date.now() / 1000)),
@@ -78,11 +80,18 @@ export function fakeContract(caps: Partial<Capabilities> = {}, opts: { name?: st
         gen: env.DS_GEN ?? null,
         created_at: b.now(),
       };
+      if (b.caps.parents === "native" && r.parent && r.parent !== r.cwd) b.trees.set(r.cwd, r.parent);
       b.terms.set(id, { t, env, lines: [], input: "", state: "idle", last: null });
       return okAnswer("terminal.create", { terminal: { ...t } });
     }
     if (op === "terminal.list") return okAnswer("terminal.list", { terminals: [...b.terms.values()].map((x) => ({ ...x.t })) });
     if (op === "terminal.close") return okAnswer("terminal.close", { closed: b.terms.delete(r.id) });
+    if (op === "worktree.parent" || op === "worktree.set_parent") {
+      if (b.caps.parents !== "native") return fail("unsupported", "this backend nests no worktrees");
+      if (op === "worktree.parent") return okAnswer("worktree.parent", { parent: b.trees.get(r.cwd) ?? null });
+      b.trees.set(r.cwd, r.parent);
+      return okAnswer("worktree.set_parent", {});
+    }
     const x = b.terms.get(r.id);
     if (!x) return fail("not_found", `no terminal ${r.id}`);
     if (op === "terminal.send") {
