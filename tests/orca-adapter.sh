@@ -760,7 +760,7 @@ chmod +x "$TMP/curl"
 # A fake `muse` on PATH (FAKE_MUSE_OUT / FAKE_MUSE_RC; default: exit 1, so the Claude cases see no muse row).
 cat > "$TMP/muse" <<'FAKE'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$MUSE_LOG"
+printf '%s\n' "$*" >> "$MUSE_LOG"; pwd -P > "${MUSE_LOG}.cwd"
 printf '%s' "${FAKE_MUSE_OUT:-}"; exit "${FAKE_MUSE_RC:-1}"
 FAKE
 chmod +x "$TMP/muse"; export MUSE_LOG="$TMP/muse.log"
@@ -883,6 +883,7 @@ musedo() { rm -rf "$DS_USAGE_CACHE"; : > "$MUSE_LOG"; "$ADAPTER" account-usage 2
 export FAKE_MUSE_RC=0 FAKE_MUSE_OUT="$MUSE_OK"
 eq  "account-usage muse: ok -> row with pcts + reset epoch s" "$(musedo)" "$(printf 'muse\tdefault\t25\t1893041361\t8\t1893577600')"
 has "account-usage muse: runs 'muse usage --json'"  "$(cat "$MUSE_LOG")" "usage --json"
+eq  "account-usage muse: runs in the usage cache folder, not its caller's (U21e)" "$(cat "$MUSE_LOG.cwd")" "$(cd "$DS_USAGE_CACHE" && pwd -P)"
 : > "$MUSE_LOG"; "$ADAPTER" account-usage >/dev/null 2>&1 || true
 eq  "account-usage muse: cached -> no second call"  "$(wc -c < "$MUSE_LOG" | tr -d ' ')" "0"
 FAKE_MUSE_RC=1 eq "account-usage muse: exit 1 -> no row"  "$(FAKE_MUSE_RC=1 musedo)" ""

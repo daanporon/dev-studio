@@ -3131,30 +3131,58 @@ function chatCrew(db: Db, project: string, topic: string) {
   try { for (const c of db.all("SELECT wt, source, turns, gone_at FROM observed_chat WHERE project = ?", project)) chats.set(String(c.wt), c); }
   catch { /* loop.db before migration 0044 */ }
   const counts = msgCounts(db, project, topic);
+  const asks = new Map<string, number>();
+  for (const q of chatQuestionsAll(db, project, topic)) if (q.wt) asks.set(String(q.wt), (asks.get(String(q.wt)) ?? 0) + 1);
   return live.map((m) => {
     const c = chats.get(String(m.wt)), n = counts.get(`${m.role ?? ""}\0${m.suffix ?? ""}`);
     let reply_at: number | null = null;
     if (c && c.gone_at == null && c.source !== "screen")
       for (const t of arr(parse(String(c.turns ?? "[]"))))
         if (t?.role === "assistant" && !t.tool && t.at != null && Number.isFinite(Number(t.at)) && (reply_at == null || Number(t.at) > reply_at)) reply_at = Number(t.at);
-    return { wt: String(m.wt), label: (m.role ?? "") + (m.suffix ? "-" + m.suffix : ""), role: m.role ?? null, unread: n?.unread ?? 0, reply_due: n?.reply_due ?? 0, reply_at };
+    return { wt: String(m.wt), label: (m.role ?? "") + (m.suffix ? "-" + m.suffix : ""), role: m.role ?? null, unread: n?.unread ?? 0, reply_due: n?.reply_due ?? 0, reply_at, asks: asks.get(String(m.wt)) ?? 0 };
   });
 }
 
 // Board chat U19b: the option count of a numbered menu at the bottom of a screen (a Claude permission prompt,
 // the folder-trust prompt), else 0. The last run of option lines numbered 1, 2, 3… within the last 25 non-blank
 // lines counts, and only when one of them carries the selection marker; a numbered list in plain output has none.
-export function menuOptions(tail: string): number {
+export function menuOptions(tail: string): number { return menuText(tail).count; }
+
+// The same scan with the menu's text (the Question view): `options` are the last run's labels with the marker and
+// number stripped, `prompt` the up to 4 non-blank lines just above the run (the question the menu asks).
+export function menuText(tail: string): { count: number; prompt: string[]; options: string[] } {
   const lines = tail.split("\n").filter((l) => l.trim() !== "").slice(-25);
-  let run: boolean[] = [];
-  let last: boolean[] = [];
-  for (const l of lines) {
-    const m = /^\s*([❯>›▶»])?\s*(\d{1,2})\.\s+\S/.exec(l);
-    if (!m) continue;
+  let run: { mark: boolean; label: string; at: number }[] = [];
+  let last: typeof run = [];
+  lines.forEach((l, at) => {
+    const m = /^\s*([❯>›▶»])?\s*(\d{1,2})\.\s+(\S.*)$/.exec(l);
+    if (!m) return;
     if (Number(m[2]) === 1) run = [];
-    if (Number(m[2]) === run.length + 1) { run.push(!!m[1]); last = run.slice(); }
-  }
-  return last.length >= 2 && last.some(Boolean) ? last.length : 0;
+    if (Number(m[2]) === run.length + 1) { run.push({ mark: !!m[1], label: m[3].trim(), at }); last = run.slice(); }
+  });
+  if (last.length < 2 || !last.some((o) => o.mark)) return { count: 0, prompt: [], options: [] };
+  const prompt = lines.slice(Math.max(0, last[0].at - 4), last[0].at).map((l) => l.trim());
+  return { count: last.length, prompt, options: last.map((o) => o.label) };
+}
+
+// The open questions whose card opens a chat with this member (the cards' chat_wt rule in squad(): the card's
+// worktree, else the Lead's), as the Question view shows them. Blocking first, then oldest first. [] for the Studio.
+function chatQuestionsAll(db: Db, project: string, topic: string) {
+  if (topic === "_studio") return [];
+  let st: any = null;
+  try { st = squadDoc(db.s, project, topic); } catch { return []; }
+  if (!st || typeof st !== "object") return [];
+  const leadWt = arr(st.members).find((m: any) => m?.role === "lead")?.wt ?? null;
+  return arr(st.waiting_on_you).map((x: any) => ({
+      wt: (typeof x.card_wt === "string" && x.card_wt) || (typeof st.lead_wt === "string" && st.lead_wt) || leadWt || null,
+      id: x.id ?? null, title: String(x.title ?? shortTitle(String(x.question ?? ""), x.id ?? null)), question: redact(String(x.question ?? "")),
+      choices: (arr(x.choices).length ? arr(x.choices) : (arr(x.options).length ? arr(x.options) : x.suggestion ? [x.suggestion] : []).map((l: any) => ({ label: String(l), does: null })))
+        .map((c: any) => ({ label: redact(String(c?.label ?? "")), does: c?.does ? redact(String(c.does)) : null })),
+      since: x.since ?? null, blocking: x.blocking === true, source: x.source ?? null, answerable: !(x.source === "picker" && x.picker_answerable !== true),
+    })).sort((a: any, b: any) => (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1) || String(a.since ?? "").localeCompare(String(b.since ?? "")));
+}
+function chatQuestions(db: Db, project: string, topic: string, wt: string) {
+  return chatQuestionsAll(db, project, topic).filter((q: any) => q.wt === wt).map(({ wt: _w, ...q }: any) => q);
 }
 
 // GET /api/chat: one member's recent turns (observed_chat, redacted and capped by the loop) and its last
@@ -3183,8 +3211,8 @@ export function chatJson(o: { project: string; topic: string; wt: string }, root
       crew: chatCrew(db, o.project, o.topic),
       agent: (c?.agent as string | null) ?? (m.agent as string | null) ?? null, source: (c?.source as string | null) ?? null,
       turns: c && c.gone_at == null ? (parse(String(c.turns ?? "[]")) ?? []) : [], updated_at: c?.updated_at == null ? null : Number(c.updated_at),
-      working: w?.gone_at == null && w?.state === "working", sends,
-      screen: t && t.tail != null ? { tail: String(t.tail), menu: menuOptions(String(t.tail)), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
+      working: w?.gone_at == null && w?.state === "working", sends, questions: chatQuestions(db, o.project, o.topic, o.wt),
+      screen: t && t.tail != null ? { tail: String(t.tail), ...((x) => ({ menu: x.count, prompt: x.prompt, options: x.options }))(menuText(String(t.tail))), at: tailAt, age_s: tailAt == null ? null : Math.max(0, now - tailAt) } : null,
     };
   }, root);
 }

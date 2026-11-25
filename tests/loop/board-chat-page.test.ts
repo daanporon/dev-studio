@@ -37,18 +37,20 @@ const goneUrls = new Set<string>();   // stored chat images the fetch stub answe
 function panel(reply: any = { agent: "claude", source: "transcript", turns: [], updated_at: 1, sends: [] }) {
   const h = hooks(), posts: any[] = [], fetches: string[] = [], timers: any[] = [], cleared: any[] = [], listeners = new Map<string, any>();
   let closed = 0;
+  const answers: any[] = [], sentQ = new Map<string, string>(), askingKey = (k: string, since: string) => (k && since ? k + "@" + since : k);
   const marks = new Map<string, any>(), lstoreStub = { get: (k: string, d: any) => marks.has(k) ? marks.get(k) : d, set: (k: string, v: any) => { marks.set(k, v); } };
   const drafts = new Map<string, any>(), storeStub = { get: (k: string, d: any) => drafts.has(k) ? JSON.parse(drafts.get(k)) : d, set: (k: string, v: any) => { drafts.set(k, JSON.stringify(v)); }, del: (k: string) => { drafts.delete(k); } };
   const fetchStub = async (url: string) => { fetches.push(url); return { ok: !goneUrls.has(url), status: goneUrls.has(url) ? 404 : 200, json: async () => reply }; };
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
-  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store",
-    `${chatSrc} return { ChatPanel, ChatCtl, ChatFailCtl, chatCount, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
+  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store", "sendAnswer", "sentQ", "askingKey",
+    `${cut("QOptions")} ${chatSrc} return { QOptions, ChatPanel, ChatCtl, ChatFailCtl, chatCount, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
   const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); return { ok: true, id: 7 }; }, fetchStub,
-    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub);
+    (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub,
+    async (...a: any[]) => { answers.push(a); sentQ.set(askingKey(a[0] + "/" + a[1] + "/" + a[2], a[4]), "12:00"); }, sentQ, askingKey);
   let seen = 0;
   const props: any = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; }, onSeen: () => { seen++; } };
   const render = () => { h.reset(); return mod.ChatPanel(props); };
-  return { h, mod, marks, props, seen: () => seen, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
+  return { h, mod, answers, sentQ, marks, props, seen: () => seen, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
 }
 
 // The class of a rendered row (`class="…"` written out, or `class=${…}` as the second value after key).
@@ -289,8 +291,16 @@ const keyButtons = (root: any) => nodes(root).filter((n) => n.strings.startsWith
   .map((n) => [n.values[0], n.values[n.values.length - 1], n]);
 const stopBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-stop"));
 const bannerBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-banner"));
+const questionView = (root: any) => nodes(root).find((n) => n.strings.includes("data-chat-question"));
+const segBtn = (root: any, v: string) => nodes(root).find((n) => segMatch(n, v));
 const hasKeyRow = (root: any) => nodes(root).some((n) => n.strings.includes('class="chat-keys"'));
 const menuTail = "❯ 1. Yes\n  2. No\n  3. Other";
+const segMatch = (n: any, v: string) => n.strings.startsWith("<button key=") && String(n.values[1]).includes("chat-segb") && n.values[0] === v;
+// Switch the panel to Screen: the three-way control's Screen button while something is asked, else the one toggle.
+const toScreen = (p: any) => {
+  const root = p.render();
+  fnIn(nodes(root).find((n) => segMatch(n, "screen")) ?? nodes(root).find((n) => n.strings.includes('class="btn sm chat-scr"')))();
+};
 const idle = { agent: "claude", source: "transcript", sends: [], turns: [], working: false };
 
 test("U19: Chat never shows a key row; idle has no Stop; working has a round ■ Stop in the card before Send that posts Escape", async () => {
@@ -319,34 +329,42 @@ test("U19: Chat never shows a key row; idle has no Stop; working has a round ■
   expect(p.h.states).toContain("pressed Esc");
 });
 
-test("U19: a menu on the member's screen shows a banner in Chat, no key row; tapping it shows Screen", () => {
+test("U19: a menu on the member's screen opens the Question view; in Chat it is a banner, no key row; tapping it opens the Question view", () => {
   const p = panel();
   p.render();
-  p.setData({ ...idle, screen: { tail: menuTail, menu: 3, at: T, age_s: 1 } });
+  p.setData({ ...idle, screen: { tail: menuTail, menu: 3, prompt: ["Do you want to proceed?"], options: ["Yes", "No", "Other"], at: T, age_s: 1 } });
   let root = p.render();
+  expect(questionView(root)).toBeDefined();
   expect(hasKeyRow(root)).toBe(false);
-  expect(bannerBtn(root).strings).toContain("screen shows a menu — Open ›");
+  fnIn(segBtn(root, "chat"))();
+  root = p.render();
+  expect(questionView(root)).toBeUndefined();
+  expect(hasKeyRow(root)).toBe(false);
+  expect(JSON.stringify(bannerBtn(root))).toContain("Do you want to proceed?");
   fnIn(bannerBtn(root))();
   root = p.render();
   expect(bannerBtn(root)).toBeUndefined();
-  expect(hasKeyRow(root)).toBe(true);
-  // No menu on screen: no banner.
+  expect(questionView(root)).toBeDefined();
+  // No menu on screen: no banner, and the one Screen toggle.
   p.setData({ ...idle, screen: { tail: "> ", menu: 0, at: T, age_s: 1 } });
-  p.h.states.forEach((v: any, i: number) => { if (v === true) p.h.states[i] = null; });
-  expect(bannerBtn(p.render())).toBeUndefined();
+  root = p.render();
+  expect(bannerBtn(root)).toBeUndefined();
+  expect(questionView(root)).toBeUndefined();
+  expect(nodes(root).some((n) => n.strings.includes('class="btn sm chat-scr"'))).toBe(true);
 });
 
 test("U19: under Screen every key shows, with the menu digits, in every state; its Esc stays Esc and each press posts api/keys", async () => {
   const p = panel();
   p.render();
   p.setData({ ...idle, screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
-  fnIn(nodes(p.render()).find((n) => n.strings.includes('class="btn sm chat-scr"')))();
+  toScreen(p);
   let keys = keyButtons(p.render());
   expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab"]);
   expect(keys[0][1]).toBe("Esc");
   await fnIn(keys[0][2])();
   expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
   p.setData({ ...idle, working: true, screen: { tail: menuTail, menu: 3, at: T, age_s: 1 } });
+  toScreen(p);
   keys = keyButtons(p.render());
   expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab", "1", "2", "3"]);
   expect(keys[0][1]).toBe("Esc");   // working: Stop is in the card, not here
@@ -414,10 +432,10 @@ test("crew-terminal-access U5: the log follows the newest row, stays put once sc
 test("a squad question card opens the chat panel of the member its answer goes to; a Studio alert has none", () => {
   const h = hooks();
   const ChatPanel = () => null;
-  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss",
+  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions",
     `${cut("AskOverlay")} return AskOverlay;`);
   const AskOverlay = make(h.useState, h.useEffect, html, async () => {}, new Map(), (n: any) => n.label + "/" + n.squad + "/" + n.id,
-    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel, (v: any) => ({ current: v }), (n: any) => n.label + "/" + n.squad + "/" + n.id, () => "00:00:00");
+    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel, (v: any) => ({ current: v }), (n: any) => n.label + "/" + n.squad + "/" + n.id, () => "00:00:00", () => null);
   const q = { label: "p", squad: "one", id: "q1", kind: "blocking", from: "builder-x", chat_wt: "/w/bx", chat_label: "builder-x", title: "T", text: "T", choices: [], suggestion: null, source: "lead" };
   const cardActions = new Function("docLabel", cut("cardActions") + " return cardActions;")(() => "doc");
   const render = (n: any) => { h.reset(); return nodes(AskOverlay({ cardActions, data: { squads: [] }, items: [n], at: "p/one/q1", setAt: () => {}, onClose: () => {}, onShow: () => {}, toast: () => {} })); };
@@ -521,7 +539,7 @@ test("U19b: digits 1 to N show only for a numbered menu on screen", async () => 
     const p = panel();
     p.render();
     p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], screen: tail === null ? null : { tail, menu: menuOptions(tail), at: T, age_s: 1 } });
-    if (tail !== null) fnIn(nodes(p.render()).find((n) => n.strings.includes('class="btn sm chat-scr"')))();
+    if (tail !== null) toScreen(p);
     return keyButtons(p.render()).map((k) => k[0]);
   };
   const base = ["Escape", "Up", "Down", "Enter", "Tab"];
@@ -569,4 +587,111 @@ test("U2: Dismiss posts api/chat-dismiss for that send; a refusal shows its text
   await dismiss();
   expect(posts).toEqual([["api/chat-dismiss", { project: "p", id: 5 }]]);
   expect(reloads).toBe(1);
+});
+
+// chat-key-buttons U2: the Question view.
+const bq = (id: string, over: any = {}) => ({ id, title: "Title " + id, question: "Question " + id + "?", choices: [{ label: "Yes", does: "do it" }, { label: "No", does: null }], since: "2026-11-25T10:00:00Z",
+  blocking: true, source: "lead", answerable: true, ...over });
+// A node's text: its strings with the values filled in (functions and false leave nothing).
+const flat = (v: any): string => Array.isArray(v) ? v.map(flat).join("") : v?.strings !== undefined
+  ? v.strings.split("\u0000").map((x: string, i: number) => x + (i < v.values.length ? flat(v.values[i]) : "")).join("") : typeof v === "function" || v == null || v === false ? "" : String(v);
+const btnWith = (root: any, text: string) => nodes(root).find((n) => n.strings.includes(text) && n.values.some((v: any) => typeof v === "function"))!;
+// The rendered QOptions of the Question view (the stub html leaves a component as a node): its props come from the attributes.
+const qoptions = (p: any, root: any) => {
+  const n = nodes(root).find((x) => x.values[0] === p.mod.QOptions)!;
+  const names = n.strings.split("\u0000").map((seg: string) => /(\w+)=$/.exec(seg)?.[1]);
+  const props: any = {};
+  names.forEach((k: string | undefined, i: number) => { if (k) props[k] = n.values[i]; });
+  return p.mod.QOptions(props);
+};
+const optBtns = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("<span class=\"n\">"));
+const qopts = (root: any) => nodes(root).filter((n) => n.strings.includes("chat-qopt") || n.values.some((v: any) => typeof v === "string" && v.includes("chat-qopt")));
+
+test("U2: a blocking board question opens the Question view once; a non-blocking one shows only the banner", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q1")] });
+  let root = p.render();
+  expect(questionView(root)).toBeDefined();
+  expect(flat(questionView(root))).toContain("Title q1");
+  expect(flat(questionView(root))).toContain("Question q1?");
+  expect(hasKeyRow(root)).toBe(false);
+  // The operator goes back to Chat: it stays there while the same asking is open (opened once).
+  fnIn(segBtn(root, "chat"))();
+  p.setData({ ...idle, questions: [bq("q1")] });
+  root = p.render();
+  expect(questionView(root)).toBeUndefined();
+  expect(JSON.stringify(bannerBtn(root))).toContain("builder-x asks: Title q1");
+  // A new asking (another since) opens it again.
+  p.setData({ ...idle, questions: [bq("q1", { since: "2026-11-25T11:00:00Z" })] });
+  expect(questionView(p.render())).toBeDefined();
+  // Non-blocking: no auto-open, the banner and the three-way control.
+  const n = panel();
+  n.render();
+  n.setData({ ...idle, questions: [bq("q2", { blocking: false })] });
+  root = n.render();
+  expect(questionView(root)).toBeUndefined();
+  expect(JSON.stringify(bannerBtn(root))).toContain("asks: Title q2");
+  expect(segBtn(root, "question")).toBeDefined();
+  fnIn(bannerBtn(root))();
+  expect(questionView(n.render())).toBeDefined();
+});
+
+test("U2: two open questions page '1 of 2', the screen menu first; a choice posts the answer with its since and the card's key leaves", async () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q1")], screen: { tail: menuTail, menu: 2, prompt: ["Do you want to proceed?"], options: ["Yes", "No"], at: T, age_s: 1 } });
+  let root = p.render();
+  expect(flat(questionView(root))).toContain("1 of 2");
+  expect(flat(questionView(root))).toContain("Do you want to proceed?");
+  // Next: the board question; its choice answers it.
+  nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Next question"')).values.filter((v: any) => typeof v === "function")[1]();
+  root = p.render();
+  expect(flat(questionView(root))).toContain("2 of 2");
+  expect(flat(questionView(root))).toContain("Title q1");
+  const choices = nodes(qoptions(p, questionView(root))).filter((n) => n.strings.startsWith("<button key="));
+  expect(choices.map((c) => c.values[0])).toEqual(["Yes", "No"]);
+  await fnIn(choices[0])();
+  expect(p.answers).toEqual([["p", "one", "q1", "Yes", "2026-11-25T10:00:00Z"]]);
+  // Answered: it is gone from the view (the page marks it sent), the panel is back on Chat or the next item.
+  root = p.render();
+  expect(flat(questionView(root) ?? "")).not.toContain("Title q1");
+});
+
+test("U2: a terminal-only picker shows its text and Open Screen to answer, no answer buttons", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q9", { source: "picker", answerable: false })], screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
+  const root = p.render();
+  expect(flat(questionView(root))).toContain("Title q9");
+  const list = nodes(qoptions(p, questionView(root)));
+  expect(list.some((n) => n.strings.startsWith("<button"))).toBe(false);   // read-only rows only
+  expect(flat(list)).toContain("Yes");
+  btnWith(questionView(root), "Open Screen to answer").values.filter((v: any) => typeof v === "function").pop()();
+  expect(hasKeyRow(p.render())).toBe(true);
+});
+
+test("U2: a screen menu with no board question has one button per option that posts api/keys with its digit, and Esc leaves the menu", async () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, screen: { tail: menuTail, menu: 3, prompt: ["Do you want to proceed?"], options: ["Yes", "No", "Other"], at: T, age_s: 1 } });
+  const root = p.render();
+  const btns = nodes(questionView(root)).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("chat-qopt"));
+  expect(btns).toHaveLength(3);
+  expect(hasKeyRow(root)).toBe(false);
+  await fnIn(btns[1])();
+  expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]]);
+  // After the press the panel is back on Chat.
+  await fnIn(btnWith(questionView(root), "Esc · leave the menu"))();
+  expect(p.posts.at(-1)).toEqual(["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]);
+});
+
+test("U2: a member with an open question carries a ? in the switcher and tabs", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle });
+  const crew = [{ wt: "/w/b 1", label: "builder-x", role: "builder", unread: 0, reply_due: 0, reply_at: null, asks: 0 }, { wt: "/w/l", label: "lead", role: "lead", unread: 0, reply_due: 0, reply_at: null, asks: 2 }];
+  p.h.states[p.h.states.findIndex((v: any) => Array.isArray(v) && v.length === 0)] = crew;
+  const marks = nodes(p.render()).filter((n) => n.strings.includes("chat-ask"));
+  expect(marks.length).toBeGreaterThan(0);
 });
