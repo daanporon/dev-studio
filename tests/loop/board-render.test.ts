@@ -194,6 +194,26 @@ test("Start squad: a multi-line brief and the fields are one POST that keeps eve
     expect(d.r.errors).toEqual([]);
   } finally { await d.w.happyDOM.close(); }
 });
+test("Reload instructions: the loop's answer is the toast, not a Studio request id", async () => {
+  const r = await mount(board, false);
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.confirm = () => true;
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) !== "api/request") return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    posts.push(JSON.parse(init.body));
+    const b = { ok: true, action: "reload", wishes: 3 };
+    return { ok: true, status: 202, json: async () => b, text: async () => JSON.stringify(b) };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    const find = () => [...doc.querySelectorAll("button")].find((b: any) => /Reload dev-studio instructions/.test(b.getAttribute("title") || "")) as any;
+    for (let k = 0; k < 80 && !find(); k++) await wait(25);
+    find().dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await wait(100);
+    expect(posts).toEqual([{ project: "fixture", action: "reload" }]);
+    expect(doc.body.textContent).toContain("asked the loop: 3 members re-read their instructions");
+    expect(doc.body.textContent).not.toContain("asked the Studio");
+  } finally { await w.happyDOM.close(); }
+});
 test("Start squad: empty, oversized and bad-slug texts say what is wrong and post nothing", async () => {
   const d = await startDialog(() => ({ status: 202, body: { id: 1 } }));
   try {

@@ -1887,15 +1887,20 @@ function linkedQ(text, slug) {
   return out;
 }
 
-// studio(): files a request the Studio runs (POST /api/request: a requests row the loop writes out as
-// the Studio's request file). The page runs nothing itself; the request shows under "Waiting for
-// the Studio" until the Studio deletes it.
+// studio(): close and start file a request the Studio runs (POST /api/request: a requests row the loop
+// writes out as the Studio's request file, shown under "Waiting for the Studio" until it is deleted).
+// restart, suspend, resume and reload write the loop's wishes themselves and answer {action, wishes}.
+// The page runs nothing itself.
 async function studio(body, toast, ask) {
   if (ask && !confirm(ask)) return false;
   const say = (m) => { toast(m); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast(null), 4000); };
   try {
     const b = await post("api/request", body);
-    say("asked the Studio (request #" + b.id + ")");
+    const n = b.wishes, plural = (w, k) => k + " " + w + (k === 1 ? "" : "s");
+    say(body.action === "restart" ? "asked the loop: restart " + plural("role", n) + (body.topic ? " of " + body.topic : "")
+      : body.action === "reload" ? "asked the loop: " + plural("member", n) + " re-read their instructions (the Studio when it is idle)"
+      : b.wishes != null ? "asked the loop: " + body.action + " " + body.topic
+      : "asked the Studio (request #" + b.id + ")");
     return true;
   } catch (e) { say("not sent: " + (e.message || e)); return false; }
 }
@@ -3232,8 +3237,8 @@ function SquadMenu({ s, toast }) {
       ${!parked && (s.focus
         ? html`<button class="btn sm squad-focus-clear" title="Stop giving this squad's Builders the first free seat" onClick=${() => setFocus(null)}>Unfocus squad</button>`
         : s.can_focus && html`<button class="btn sm squad-focus" title="Its queued Builders take the next free seat, after urgent and unblocking work, inside the limit" onClick=${() => setFocus(s.topic)}>${others ? "Focus squad (replaces " + others + ")" : "Focus squad"}</button>`)}
-      ${!parked && html`<button class="btn sm" disabled=${(s.members || []).some((m) => m.role === "lead" && m.pause && m.pause.state !== "active")} title="Ask the Studio to restart this squad's Lead" onClick=${() => studio({ project: s.label, action: "restart", topic: s.topic, role: "lead" }, toast)}>Restart Lead</button>
-      <button class="btn sm" disabled=${(s.members || []).some((m) => m.pause && m.pause.state !== "active")} title="Ask the Studio to restart every role of this squad" onClick=${() => studio({ project: s.label, action: "restart", topic: s.topic }, toast, "Restart every role of " + s.topic + "?")}>Restart squad</button>
+      ${!parked && html`<button class="btn sm" disabled=${(s.members || []).some((m) => m.role === "lead" && m.pause && m.pause.state !== "active")} title="Restart this squad's Lead (the loop does it)" onClick=${() => studio({ project: s.label, action: "restart", topic: s.topic, role: "lead" }, toast)}>Restart Lead</button>
+      <button class="btn sm" disabled=${(s.members || []).some((m) => m.pause && m.pause.state !== "active")} title="Restart every role of this squad (the loop does it)" onClick=${() => studio({ project: s.label, action: "restart", topic: s.topic }, toast, "Restart every role of " + s.topic + "?")}>Restart squad</button>
       <button class="btn sm" title="Remove its worktrees to free terminal slots; branches, state and conversations are kept for Resume" onClick=${() => studio({ project: s.label, action: "suspend", topic: s.topic }, toast, "Suspend " + s.topic + "? Its worktrees are removed (branches, state and conversations are kept). Resume brings it back.")}>Suspend squad</button>`}
       <div class="sep" role="separator"></div>
       <button class="btn sm red" title="Finished for good: removes its worktrees and moves it to Archived (it can't be resumed; unmerged branches are kept)" onClick=${() => studio({ project: s.label, action: "close", topic: s.topic }, toast, closeConfirm(s))}>Archive squad</button>
@@ -4271,7 +4276,7 @@ function App() {
     <div class="sqhead"><span class="asof" title="squads · workers · PRs · tokens">${[asOf(data.as_of && data.as_of.squads), data.as_of && data.as_of.workers && "workers " + hhmmss(new Date(data.as_of.workers * 1000)), data.as_of && data.as_of.prs && "PRs " + hhmmss(new Date(data.as_of.prs * 1000))].filter(Boolean).join(" · ")}</span>
       <div class="sqctl">
         ${data.project && html`<button class="btn sm" onClick=${() => setStartOpen(true)}>Start squad</button>
-          <button class="btn sm" title="Ask the Studio to reload dev-studio instructions in every squad" onClick=${() => studio({ project: data.project, action: "reload" }, setToast, "Reload instructions in every squad of " + data.project + "?")}>Reload all</button>
+          <button class="btn sm" title="Reload dev-studio instructions in every squad (the Studio when it is idle)" onClick=${() => studio({ project: data.project, action: "reload" }, setToast, "Reload instructions in every squad of " + data.project + "?")}>Reload all</button>
           ${data.project_controls && html`<${PauseControls} target=${{ scope: "project", project: data.project }} pause=${(data.projects || []).find((p) => p.label === data.project)?.pause} label=${"project " + data.project} toast=${setToast} all=${true} />`}`}
         ${Object.entries(filters).map(([k, [lbl, f]]) => html`<button key=${k} class=${"chip" + (filter === k ? " on" : "")} onClick=${() => setFilter(k)}>${lbl}<b>${squads.filter(f).length}</b></button>`)}
       </div></div>

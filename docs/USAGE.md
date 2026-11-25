@@ -398,8 +398,12 @@ failed with the reason, a member started, a unit done, a usage limit, a Studio a
 Answering a question (`POST /api/answer`) marks it answered at once and the loop types your
 answer into the asking agent's terminal (a mirrored terminal picker gets it as keystrokes:
 the option's digit, or "Type something." + your text); if that never lands, the question
-opens again. The action buttons (`POST /api/request`: close, restart, suspend, resume,
-reload, start) have the loop file the `/ds-…` command for the Studio to run. Settings
+opens again. The action buttons (`POST /api/request`): close and start have the loop file the `/ds-…` command
+for the Studio to run; restart, suspend, resume and reload write the loop's wishes themselves
+(`by: board`; the answer is `{ok, action, wishes}`, no request id), so they work with the Studio
+stopped, and the Studio's own reload is queued until it is idle. A second press while the first is
+pending gets a 409. The Studio's `/ds-restart`, `/ds-suspend`, `/ds-resume` and `/ds-reload`
+still work from its chat or a terminal. Settings
 (`/api/limits`, `/api/roles`) go through `limits.sh` / `roles.sh` on the loop's side, and a
 crew row's **pin** / **auto** (`POST /api/override`) sets a member's model or account until its
 work is done, or clears it. Each squad lists its **past answers**
@@ -680,7 +684,8 @@ then propagate differently:
   catch up on their own; to apply an update **immediately**, run
   **`/ds-reload`** in the Studio (or `bin/commands/notify-squads.sh <project>`), which
   writes a reload wish on every roster member; the loop delivers each one to its
-  owner's inbox. (You do this from the Studio, your
+  owner's inbox. (The board's **Reload instructions** button writes the same wishes itself, and one
+  for the Studio, which reloads when it is idle. You do this from the Studio, your
   cockpit.)
 
 **A reload is a message, so the agent must be reachable to see it.** Each standing agent
