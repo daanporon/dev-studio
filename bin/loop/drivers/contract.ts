@@ -62,7 +62,8 @@ export const contract: DriverModule = {
     };
     return {
       start: (m, model, acct, prompt) => launch(m, acct, { launch: "fresh", prompt, agent: "claude", model, effort: m.effort, account: acct },
-        ["--model", model, ...(m.effort ? ["--effort", m.effort] : [])], prompt),
+        // U52a: a Studio's pick may name no model or effort (`-`), as studio-start takes them on Orca.
+        [...(model && model !== "-" ? ["--model", model] : []), ...(m.effort && m.effort !== "-" ? ["--effort", m.effort] : [])], prompt),
       resume: (m) => {
         if (!m.wt || !m.model) return Promise.resolve({ ok: false, error: "resume needs a worktree and a model" });
         return launch(m, m.account, { launch: "continue", prompt: "", agent: "claude", model: m.model, effort: null, account: m.account },

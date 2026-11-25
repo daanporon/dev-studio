@@ -25,7 +25,9 @@
 //            episode, so a replay after a crash never closes twice, and one that finds "starting" records the
 //            terminal that start opened (or waits DS_LOOP_STUDIO_MOVE_START_S, 300) instead of starting again. A start that fails after the close
 //            posts a card (subject studio.move, so limits.ts's studio.limit sweep never drops it) with the
-//            manual command; the close is never retried.
+//            manual command; the close is never retried. U52a (project-start): a Studio off Orca (studio_backend)
+//            is closed by its terminal id in its folder and started through the contract driver (startOff), its
+//            new terminal kept only once Claude's prompt shows (DS_LOOP_STUDIO_PROMPT_S, 60).
 // The file is named by the request, so a crash between the write and the claim's settle writes it
 // again in place, never twice. Its requests row (the one the state observer would import, key
 // file:<label>/_studio/<name>) is written at once, so the board refuses a second click meanwhile.
@@ -34,14 +36,16 @@ import { basename, join, relative, resolve } from "node:path";
 import { CHAT_FILE_NAME, chatFileDir, START_TOPIC } from "../chat/files.ts";
 import { alert, failRequest, finishRequest, requestActions, type Exec, type Fulfiller } from "../core/actuator.ts";
 import type { Action } from "../core/plugins.ts";
-import { errOf, spawn } from "../io/orca.ts";
+import { errOf, spawn, type Out } from "../io/orca.ts";
 import { ROOT, type Row } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { setAccountEnabled } from "../capacity/accounts.ts";
 import { FIXED, SWITCH_OFF } from "../capacity/credits-card.ts";
 import { LOGGED_IN } from "../capacity/login-card.ts";
 import { clearLogin } from "../capacity/login.ts";
-import { MOVE, RESTART_APPROVED, RESTART_STUDIO, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
+import { MOVE, RESTART_APPROVED, RESTART_STUDIO, STUDIO_SQUAD, studioPrompt, studioReady, studioRestartCmd, studioView } from "../squad/studio.ts";
+import { localPath } from "../drivers/contract.ts";
+import type { ContractSeat, Member, Seat } from "../drivers/types.ts";
 import { memberLabel, startIdentity } from "../core/whoami.ts";
 
 type P = { action?: string; topic?: string; line?: string; framing?: string; files?: string[]; id?: string; answer?: string; request?: number };
@@ -83,6 +87,56 @@ type Move = { handle?: string; agent?: string; account?: string; model?: string;
 // How long a replay that finds the "starting" step waits for that start's terminal before starting again:
 // above the background timeout and studio-start's own wait for the new tab to settle.
 const moveStartS = () => envInt("DS_LOOP_STUDIO_MOVE_START_S", 300);
+// U52a: how long a Studio start off Orca waits for Claude's prompt on its screen (below the background timeout).
+const promptS = () => envInt("DS_LOOP_STUDIO_PROMPT_S", 60);
+
+// U52a (project-start): the Studio's own terminal closed, on Orca its tab, off Orca its terminal by id in its
+// folder: never another terminal there (a shell the operator opened beside it stays).
+async function closeStudio(seat: Seat, wt: string, handle: string): Promise<Out> {
+  if (!seat.contract) return seat.send("terminal-close", [handle]);
+  const path = localPath(wt);
+  if (!path) return { code: 2, out: "", err: `the Studio's worktree ${wt} is not a local folder` };
+  const c = await seat.contract.close(path, handle);
+  return c.ok ? { code: 0, out: "", err: "" } : { code: 1, out: "", err: c.error ?? "close failed" };
+}
+
+// Claude's input row: `❯`, or a prompt inside its box; a shell's bare `> ` continuation is not one.
+export const claudePrompt = (screen: string): boolean => screen.split("\n").some((l) => /^\s*(?:[│┃]\s*[>❯›]|❯)(?:\s|$)/.test(l));
+
+// Null once Claude's prompt shows on the terminal's screen, else why it did not within promptS().
+async function promptShown(c: ContractSeat, id: string): Promise<string | null> {
+  const until = Date.now() + promptS() * 1000;
+  for (;;) {
+    const r = await c.ask("terminal.read", { id, screen: true });
+    if (r.ok && claudePrompt(r.text)) return null;
+    if (!r.ok && r.error.code === "not_found") return "its terminal closed before Claude's prompt showed";
+    if (Date.now() >= until) return `Claude's prompt did not show on its terminal within ${promptS()}s`;
+    await Bun.sleep(Math.min(1000, Math.max(0, until - Date.now())));
+  }
+}
+
+// U52a: a Studio start off Orca, through the contract driver (the launch line studio-start builds on Orca:
+// the pick's model and effort, the Studio's settings with its compact window and skills, the folder trusted
+// on the account) and the seat's one ledgered start (DS_GEN its retry id, a replay finds that terminal
+// again). The contract has no wait for the TUI, so the screen is read until Claude's prompt shows; a terminal
+// that never shows it is closed and the start fails, which cards it. Out: the new terminal's id.
+async function startOff(x: Exec, seat: Seat, wt: string, p: Move, prompt: string): Promise<Out> {
+  const c = seat.contract!, path = localPath(wt), no = (err: string): Out => ({ code: 1, out: "", err });
+  if (!path) return no(`the Studio's worktree ${wt} is not a local folder`);
+  const account = p.account === "-" ? null : p.account ?? null;
+  const m: Member = { id: 0, project: seat.squad.project, squad: STUDIO_SQUAD, wt, role: "studio", suffix: "", agent: p.agent ?? null,
+    model: p.model ?? null, effort: p.effort ?? null, account };
+  const r = await x.act.driver(seat, p.agent ?? null).start(m, p.model || "-", account, prompt);
+  if (!r.ok) return no(r.error);
+  const gen = seat.gen?.() ?? null, l = await c.ask("terminal.list", {});
+  if (!l.ok) return no(`terminal.list: ${l.error.message}`);
+  const t = l.terminals.find((y) => y.gen === gen);
+  if (!t) return no(`no terminal of generation ${gen} in ${path}`);
+  const why = await promptShown(c, t.id);
+  if (why === null) return { code: 0, out: `${t.id}\n`, err: "" };
+  const closed = await c.close(path, t.id);
+  return no(closed.ok ? why : `${why}; closing it failed too: ${closed.error}`);
+}
 
 async function move(a: Action, x: Exec) {
   const p = (a.payload ?? {}) as Move, { store, now: at } = x, P = a.project, up = p.why === "back-up", restart = p.why === "restart";
@@ -96,7 +150,9 @@ async function move(a: Action, x: Exec) {
   if (was === "started" || was === "failed" || was === "not moved") return { done: true, result: `already ${was}` };
   const v = studioView(store, P);
   if (!v) return { failed: "the project has no Studio worktree" };
-  const to = `${p.agent}:${p.account}`, seat = x.act.seat(store, P, null, `${a.subject}:${a.episode}`, v.wt, at);
+  // U52a: off Orca (U51's v.contract) the seat is the contract one, and the start carries the Studio's DS_MEMBER.
+  const ident = v.contract ? memberLabel({ project: P, squad: STUDIO_SQUAD, role: "studio" }) : null;
+  const to = `${p.agent}:${p.account}`, seat = x.act.seat(store, P, null, `${a.subject}:${a.episode}`, v.wt, at, ident);
   // A closing step a crash cut short: a tab Orca no longer lists was closed, so start the new one;
   // one still listed is checked again from the start.
   const closedBefore = was === "closing" && !v.terms.some((t) => t.handle === p.handle);
@@ -109,7 +165,7 @@ async function move(a: Action, x: Exec) {
       return { done: true, result: `not moved: ${why}` };
     }
     step("closing");
-    const c = await seat.send("terminal-close", [p.handle]);
+    const c = await closeStudio(seat, v.wt, p.handle);
     if (c.code !== 0) {
       step("not moved", true);
       store.event("studio_move_failed", { project: P, squad: "_studio", member: v.wt, payload: { handle: p.handle, to, step: "close", error: errOf(c, "terminal-close") } });
@@ -132,9 +188,10 @@ async function move(a: Action, x: Exec) {
   }
   // A replay after "starting" (a crash, or the background call timing out while studio-start still runs):
   // a new Studio terminal in the worktree is that start's, so it is recorded instead of opening another;
-  // with none yet, wait out the start window before starting again.
-  let handle = "", s: { code: number; out: string; err: string } | null = null;
-  if (was === "starting") {
+  // with none yet, wait out the start window before starting again. Off Orca the start is ledgered (startOff),
+  // so a replay runs it again and gets that terminal back.
+  let handle = "", s: Out | null = null;
+  if (was === "starting" && !seat.contract) {
     handle = (v.member?.handle && v.member.handle !== p.handle ? String(v.member.handle) : v.candidates.find((c) => c.handle !== p.handle)?.handle) ?? "";
     const since = Number(row?.observed_at ?? 0);
     if (!handle && at - since < moveStartS()) return { wait: "the Studio's studio-start may still be running", at: since + moveStartS() };
@@ -146,8 +203,9 @@ async function move(a: Action, x: Exec) {
     const proj = store.get("projects", { label: P });
     const reason = restart ? `the operator restarted it from the board (it was not responding), on ${to}` : up ? `moved back up from ${p.from ?? "a fallback"} to ${to}` : `${p.from ?? "its account"} hit its limit, now on ${to}`;
     const prompt = studioPrompt(ROOT, P, String(proj?.home_repo ?? ""), join(store.root, P), reason);
-    s = await seat.send("studio-start", [v.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt],
-      startIdentity(memberLabel({ project: P, squad: "_studio", role: "studio" }), gen));
+    s = seat.contract ? await startOff(x, seat, v.wt, p, prompt)
+      : await seat.send("studio-start", [v.wt, p.account, p.model || "-", p.effort || "-", seat.window("studio") || "-", prompt],
+        startIdentity(memberLabel({ project: P, squad: "_studio", role: "studio" }), gen));
     handle = s.code === 0 ? s.out.trim().split("\n").pop()!.trim() : "";
   }
   if (!handle) {
@@ -160,7 +218,8 @@ async function move(a: Action, x: Exec) {
       { title: "Studio move failed", option: "done — restarted it", why: cmd, fields: { kind: "out_of_credits" } });
     return { done: true, result: `closed, not started: ${err}` };
   }
-  const set: Row = { handle, agent: p.agent, account: p.account === "-" ? null : p.account, limited_until: null, gen: s || kept ? gen : null, observed_at: at, updated_at: at };
+  const set: Row = { handle, agent: p.agent, account: p.account === "-" ? null : p.account, limited_until: null,
+    gen: seat.contract ? seat.gen?.() ?? null : s || kept ? gen : null, observed_at: at, updated_at: at };
   if (p.model && p.model !== "-") set.model = p.model;
   const moved = { project: P, squad: "_studio", member: v.wt, payload: { handle, previous: p.handle, from: p.from ?? null, to, model: p.model ?? null, why: restart ? "restart" : up ? "back-up" : "limit" } };
   store.db.transaction(() => {
