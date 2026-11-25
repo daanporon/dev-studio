@@ -18,7 +18,7 @@
 // DS_UP_START_WAIT_S (default 180) is how long it waits for the loop to start the Studio.
 import { existsSync, mkdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, stateRoot, dsLabel, dsPrefix, backend, chomp, readJson, run as sh, writeOut, writeErr } from "../lib/shared";
+import { ROOT, stateRoot, dsLabel, dsPrefix, backend, chomp, readJson, run as sh, settingsAt, writeOut, writeErr } from "../lib/shared";
 import { inherit, isUrl } from "../lib/upkeep";
 import { compactWindowOf, roleRow, writeRoleFile } from "../lib/lib";
 import { MOVE, START_WANTED, STUDIO_SQUAD, studioCandidates, studioMember, studioPrompt, wantStudioStart } from "../loop/squad/studio.ts";
@@ -26,6 +26,8 @@ import type { LiveTerminal } from "../loop/observers/orca.ts";
 import { whoAmI } from "../loop/core/whoami.ts";
 import { chooseSquadBackend, type BackendName } from "../backend/registry.ts";
 import { herdrBin } from "../backend/herdr-bin.ts";
+import { herdrPlace } from "../backend/herdr.ts";
+import { readGet } from "../loop/settings/settings";
 
 export const help = `[<git-url> | <label> | --home <selector>] [--label <name>] [--backend <orca|orca-lite|tmux|herdr>] [--worktree <auto|git|treehouse>] [--account <id>] [--skills] — install if needed, start the loop, add or reconcile a project, have the loop start its Studio, start the board (up.sh)`;
 
@@ -51,17 +53,17 @@ export function normRepo(u: string): string {
 }
 
 /** Whether `arg` names the repo a project is already up with (`home`): the same selector, the same URL as the
- *  clone's origin, the same folder, or a name:/id: selector (it names the label). */
+ *  clone's origin, the same folder, or a name:/id: selector (it names the label). A home saved as a name:/id:
+ *  selector has no local clone to compare, so any arg that gave the same label counts as the same project. */
 async function sameRepo(home: string, arg: string): Promise<boolean> {
-  if (home === arg) return true;
-  const path = home.startsWith("path:") ? home.slice(5) : "";
+  if (home === arg || !home.startsWith("path:")) return true;
+  const path = home.slice(5);
   if (isUrl(arg)) {
-    if (!path) return false;
     const o = await sh(["git", "-C", path, "remote", "get-url", "origin"]);
     return o.rc === 0 && normRepo(chomp(o.out)) === normRepo(arg);
   }
   if (arg.startsWith("path:")) {
-    try { return !!path && realpathSync(arg.slice(5)) === realpathSync(path); } catch { return false; }
+    try { return realpathSync(arg.slice(5)) === realpathSync(path); } catch { return false; }
   }
   return true; // a name:/id: selector names the project by its label, not a repo
 }
@@ -75,7 +77,7 @@ async function step(envName: string, cmd: string[]): Promise<number> {
 /** How to reach the Studio once it runs, by its backend. */
 export function reachLine(b: BackendName, label: string, root: string, wtName: string): string {
   if (b === "tmux") return `Attach to the Studio: tmux -L ds-${label.replace(/[^A-Za-z0-9_.-]/g, "-")} attach -t _studio`;
-  if (b === "herdr") return `Attach to the Studio: HERDR_SOCKET_PATH=${join(root, label, "loop", "herdr", "herdr.sock")} HERDR_SESSION=ds-herdr-${label} ${herdrBin() ?? "herdr"}`;
+  if (b === "herdr") { const h = herdrPlace(root, label); return `Attach to the Studio: HERDR_SOCKET_PATH=${h.socket} HERDR_SESSION=${h.session} ${herdrBin() ?? "herdr"}`; }
   return `Open the ${wtName} worktree in the Orca UI and work there.`;
 }
 
@@ -151,7 +153,10 @@ export async function run(argv: string[]): Promise<number> {
     writeErr(`up: '${label}' runs on ${current}; moving a project to ${backendFlag} is not built yet (orca-backend-alternatives U54: \`ds up ${label} --backend ${backendFlag}\` will move it). Nothing changed.\n`);
     return 2;
   }
-  const chosen = chooseSquadBackend({ flag: reconcile ? current : backendFlag || "orca", projectBackend: reconcile ? current : backendFlag || "orca", providerSetting: worktree });
+  // The worktree tool: `--worktree`, else on a reconcile the project's stored `worktree_provider` (so a project first
+  // brought up with treehouse keeps it), else the backend's default.
+  const provider = worktree || (reconcile ? String(readGet(label, "limits.conf", "worktree_provider", settingsAt()).value ?? "").trim().split(/\s+/)[0] : "");
+  const chosen = chooseSquadBackend({ flag: reconcile ? current : backendFlag || "orca", projectBackend: reconcile ? current : backendFlag || "orca", providerSetting: provider });
   if (!chosen.ok) { writeErr(`up: ${chosen.error}\n`); return 2; }
   const b = chosen.backend, offOrca = b !== "orca";
   if (offOrca && !(reconcile ? existingHome.startsWith("path:") : isUrl(arg) || arg.startsWith("path:"))) {

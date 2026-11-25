@@ -126,6 +126,15 @@ sleep 1
 has "tmux again: still one Studio" "starts=1 live=1 " "$(summary zzup-tmux)"
 check "tmux again: the same worktree" "$wt" "$(jq -r .studio_wt "$disp")"
 stop_loop
+# A reconcile with no --worktree keeps the project's stored worktree_provider (here treehouse, which this host
+# lacks), not the backend's default: refused, the Studio's worktree unchanged.
+printf '#!/bin/sh\nexit 0\n' > "$tmp/treehouse"; chmod +x "$tmp/treehouse"
+DS_TREEHOUSE_BIN="$tmp/treehouse" "$ROOT/bin/ds" config set zzup-tmux limits.conf worktree_provider treehouse >/dev/null 2>&1
+check "tmux, stored treehouse: set" "treehouse" "$("$ROOT/bin/ds" config get zzup-tmux limits.conf worktree_provider 2>/dev/null | jq -r .value)"
+out="$(DS_TREEHOUSE_BIN="$tmp/no-treehouse" up zzup-tmux)"; rc=$?
+check "tmux, stored treehouse: refused" "2" "$rc"
+has "tmux, stored treehouse: the provider's reason" "worktree_provider treehouse needs 'treehouse'" "$out"
+check "tmux, stored treehouse: the same worktree" "$wt" "$(jq -r .studio_wt "$disp")"
 
 # 8. Off Orca with the loop down: stops with the loop's error.
 "$ROOT/bin/ds" config set zzup-down roles.conf builder claude opus ondemand high claude:sonnet >/dev/null 2>&1

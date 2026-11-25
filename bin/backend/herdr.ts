@@ -350,6 +350,15 @@ export async function startHerdr(o: { bin: string; dir: string; name: string; ho
 // this client started.
 export type ProjectHerdr = Backend & { dir: string; socket: string; ensureServer(): Promise<HerdrServer | null>; server(): HerdrServer | null };
 
+// Where a project's herdr server lives: its folder and socket (a short folder under the runtime dir when the socket
+// path would pass 100 bytes) and its session name, as startHerdr makes it. `ds up`'s attach line uses it too.
+export function herdrPlace(stateRoot: string, project: string): { dir: string; socket: string; session: string } {
+  let dir = join(stateRoot, project, "loop", "herdr");
+  if (Buffer.byteLength(join(dir, "herdr.sock")) > 100)
+    dir = join(process.env.XDG_RUNTIME_DIR || tmpdir(), `ds-herdr-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}`);
+  return { dir, socket: join(dir, "herdr.sock"), session: `ds-herdr-${project.replace(/[^A-Za-z0-9_-]/g, "-")}` };
+}
+
 // The project's herdr backend, as the loop makes it (bin/loop/squad/contracts.ts): its server is the unit
 // ds-herdr-<project>, its files (config.toml, herdr.sock, server.log) in <stateRoot>/<project>/loop/herdr/,
 // or in a short folder under the runtime dir when that socket path would pass 100 bytes. The server is
@@ -358,10 +367,7 @@ export type ProjectHerdr = Backend & { dir: string; socket: string; ensureServer
 // used as it is. The binary is `bin`, else herdrBin(); `home`, `shell` and `maxRuntimeS` are for tests.
 export function projectHerdr(project: string, o: { stateRoot: string; bin?: string; home?: string; shell?: string; timeoutMs?: number; maxRuntimeS?: number }): ProjectHerdr {
   const safe = project.replace(/[^A-Za-z0-9_.-]/g, "-");
-  let dir = join(o.stateRoot, project, "loop", "herdr");
-  if (Buffer.byteLength(join(dir, "herdr.sock")) > 100)
-    dir = join(process.env.XDG_RUNTIME_DIR || tmpdir(), `ds-herdr-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}`);
-  const socket = join(dir, "herdr.sock");
+  const { dir, socket } = herdrPlace(o.stateRoot, project);
   const fresh = () => herdrBackend(socket, { timeoutMs: o.timeoutMs });   // checks the server's protocol again
   let inner = fresh();
   let starting: Promise<HerdrServer | null> | null = null, last: HerdrServer | null = null;
