@@ -2981,7 +2981,7 @@ function StartSquad({ project, projects, toast, onClose }) {
     try {
       const b = await post("api/request", body);
       onClose();
-      say("sent to the Studio: start squad " + (slug.trim() || "slug from the text") + " (request #" + b.id + ")");
+      say("starting squad… " + (slug.trim() || "a name picked from the text") + " (request #" + b.id + ")");
     } catch (e) {
       busy.current = false; setSending(false);
       const gone = /^image (\S+) is gone/.exec(String(e.message || ""));
@@ -3016,7 +3016,7 @@ function StartSquad({ project, projects, toast, onClose }) {
         <div class=${"start-count" + (bytes > BRIEF_MAX ? " bad" : " mut")}>${lines} line${lines === 1 ? "" : "s"} · ${(bytes / 1024).toFixed(1)} KiB of 32 KiB</div>
         ${err && err.field === "text" && html`<div class="start-err bad">${err.msg}</div>`}
         <div style=${{ display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "10px" }}>
-          <label>Topic slug<br/><input class="start-slug" ref=${refs.slug} type="text" value=${slug} placeholder="made from the text when empty" onInput=${(e) => { setSlug(e.target.value); setErr(null); }} />
+          <label>Topic slug<br/><input class="start-slug" ref=${refs.slug} type="text" value=${slug} placeholder="blank: a name is picked from the brief" onInput=${(e) => { setSlug(e.target.value); setErr(null); }} />
             ${err && err.field === "slug" && html`<div class="start-err bad">${err.msg}</div>`}</label>
           <label>Project<br/>${labels.length > 1 ? html`<select class="start-project" value=${proj} onChange=${(e) => changeProject(e.target.value)}>${labels.map((l) => html`<option key=${l} value=${l}>${l}</option>`)}</select>` : html`<span class="mono">${proj}</span>`}</label>
           <label>Type<br/><select class="start-type" value=${type} onChange=${(e) => { setType(e.target.value); if (e.target.value === "testing") setStart("auto"); }}><option value="feature">feature</option><option value="testing">testing</option></select></label>
@@ -4268,7 +4268,7 @@ function App() {
     <${LoopNotes} notes=${data.loop_notes || []} open=${notesOpen} setOpen=${(o) => { setNotesOpen(o); lstore.set("b:notes", o); }} sq=${notesSq} setSq=${(v) => { setNotesSq(v); lstore.set("b:notes-sq", v); }} toast=${setToast} onShow=${show} />
     ${startOpen && data.project && html`<${StartSquad} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setStartOpen(false)} />`}
 
-    ${(data.requests || []).length > 0 && html`<h2>Waiting for the Studio<small>it runs these on its next tick, then they disappear</small></h2>
+    ${(data.requests || []).length > 0 && html`<h2>Waiting<small>the Studio runs its requests on its next tick and the loop starts squads itself; then they disappear</small></h2>
       <div class="live-list">${data.requests.map((r) => html`<div key=${r.label + "/" + r.file}>${r.text.replace(/^board: the operator asks you to run: /, "")} <span class="mut">· ${fmtAge(r.age_min)} ago${data.project ? "" : " · " + r.label}</span></div>`)}</div>`}
 
     <details class="sq-sec" id="squads" open=${sqOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== sqOpen) { setSqOpen(o); lstore.set("b:squads", o); } }}>

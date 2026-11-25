@@ -267,11 +267,17 @@ With explicit flags (`--repo` + `--topic`) it passes them straight through to
 /ds-start-squad --repo <project-selector> --topic add-login [--autonomy checkpoints|lfg] [--framing "what this squad should do"]
 ```
 
-The board's **Start squad** dialog does the same: its brief (up to 32 KiB) is written to
-`state/<project>/framings/board-start-<request>.md` and the Studio's line passes it as
-`--framing-file`. A start can carry up to 8 images (PNG, JPEG, WebP or GIF, at most 5 MiB each),
+The board's **Start squad** dialog starts a squad too, through the loop with no Studio turn: it files a
+`squad-start` request, and the loop writes the brief (up to 32 KiB) to
+`state/<project>/framings/board-start-<request>.md`, names the squad and writes its running wish, as
+`/ds-start-squad` would. A name you type is used as is (a taken one is refused at once). Leave it blank
+and one short model call on the Studio's own agent and account picks a 2-4 word name from the brief
+alone; when that call fails or answers something that is not a name, the brief's first words are the
+name, with `-2`, `-3` … when it is taken. While it starts the board lists "starting a squad: …" under
+Waiting, and a failed start shows its error there. A second Start with the same brief while one is
+open is refused. A start can carry up to 8 images (PNG, JPEG, WebP or GIF, at most 5 MiB each),
 uploaded while the dialog is open to `state/<project>/chat-files/_start/` (pruned after
-`chat_files_keep_d` days, like chat images). When the Studio's request is filed they are copied to
+`chat_files_keep_d` days, like chat images). When the loop starts the squad they are copied to
 `state/<project>/framings/board-start-<request>/` and kept with the brief, never pruned, and the
 brief ends with an `## Attached images` section listing their absolute paths, so every role that
 reads the brief can open them. Images are not checked for secrets.

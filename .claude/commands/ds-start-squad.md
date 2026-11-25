@@ -7,7 +7,8 @@ The operator's request: **$ARGUMENTS**
 
 Spawn a squad for it, deriving what the operator didn't spell out:
 
-0. **`--framing-file <path>` in `$ARGUMENTS`** (the board's Start squad dialog): the brief is in that file.
+0. **`--framing-file <path>` in `$ARGUMENTS`** (a board Start filed before the loop took them over; the board's
+   Start squad dialog now starts its squad through the loop, `squad-start`, and sends you nothing): the brief is in that file.
    Read it only to derive what is missing (the `--topic` slug by the rule in step 2, when there is no `--topic`);
    pass `--framing-file <path>` through to `spawn-squad.sh` with the other flags, and never use `--framing`
    or retype the brief.

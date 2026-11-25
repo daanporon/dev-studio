@@ -2147,11 +2147,21 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   // Requests waiting for the Studio (the sweep's restart requests and the board's own), oldest
   // first: requests rows filed under requests/_studio/, gone once the Studio has done them, and the
   // board's `studio` rows the loop hasn't written out as such a file yet.
-  const requests = db ? labels.flatMap((l) => db.all(`SELECT key, kind, payload, created_at FROM requests WHERE project = ? AND done_at IS NULL
-    AND (substr(key, 1, ?) = ? OR kind = 'studio') ORDER BY id`, l, `file:${l}/_studio/`.length, `file:${l}/_studio/`).map((r) => {
+  // board-actions-as-wishes U6: the loop's own board Starts too, "starting a squad: <the brief's first words>",
+  // open ones and ones failed in the last hour (with the error), so a refused start is seen.
+  const requests = db ? labels.flatMap((l) => db.all(`SELECT id, key, kind, payload, result, created_at, done_at FROM requests WHERE project = ?
+    AND ((done_at IS NULL AND (substr(key, 1, ?) = ? OR kind IN ('studio', 'squad-start')))
+      OR (kind = 'squad-start' AND done_at > ? AND json_extract(result, '$.ok') = 0)) ORDER BY id`,
+    l, `file:${l}/_studio/`.length, `file:${l}/_studio/`, NOW() - 3600).map((r) => {
     const p = parse(r.payload) ?? {};
+    const age_min = Math.max(0, Math.floor((NOW() - (Number(r.created_at) || NOW())) / 60));
+    if (r.kind === "squad-start") {
+      const words = String(p.framing ?? "").replace(/\s+/g, " ").trim(), brief = words.length > 60 ? `${words.slice(0, 60)}…` : words;
+      const err = r.done_at != null ? String((parse(r.result) ?? {}).error ?? "failed") : null;
+      return { label: l, file: `squad-start-${r.id}`, text: `starting a squad: ${brief}${err ? ` — failed: ${err}` : ""}`, ...(err ? { error: err } : {}), age_min };
+    }
     const text = r.kind === "studio" ? String(p.line ?? "") : String(p.text ?? "").split("\n")[0];
-    return { label: l, file: r.kind === "studio" ? "(queued)" : basename(String(p.file ?? r.key)), text, age_min: Math.max(0, Math.floor((NOW() - (Number(r.created_at) || NOW())) / 60)) };
+    return { label: l, file: r.kind === "studio" ? "(queued)" : basename(String(p.file ?? r.key)), text, age_min };
   })).sort((a, b) => b.age_min - a.age_min) : [];
 
   const active = squads.filter((s) => questionsCount(s.status));

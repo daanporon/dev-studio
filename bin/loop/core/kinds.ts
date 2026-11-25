@@ -89,6 +89,9 @@ export const REQUESTS = {
   // board-actions-as-wishes U1: `ds update <project>` (fulfil/update.ts): pull, reinstall, restart the loop and
   // refresh the project's squads in a job outside the loop; its progress and result live in the request's `result`.
   update: obj({ by: opt(str), ...THROUGH }),
+  // board-actions-as-wishes U6: the board's Start squad (fulfil/squad-start.ts): the dialog's checked fields; the loop
+  // writes the brief file, names the squad (the slug, else one model call) and writes its running wish.
+  "squad-start": obj({ framing: str, files: opt(arr(str)), slug: opt(str), type: opt(str), autonomy: opt(str), start: opt(str), backend: opt(str), by: opt(str), ...THROUGH }),
   "wt-set-parent": obj({ wt: str, parent: str, request: opt(num) }),
 } as const satisfies Record<string, ObjShape<any>>;
 export type RequestKind = keyof typeof REQUESTS;

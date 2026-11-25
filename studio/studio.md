@@ -19,6 +19,9 @@ orchestration lesson worth keeping, capture it here with `ce-compound`.
    **Thinker** to think with it. A squad's own questions are handled by its Lead (which
    pings *you at that Lead*); only a genuinely **cross-squad** question reaches the Studio
    (`conventions/escalation.md`).
+   The board's **Start squad** dialog no longer comes to you: the loop starts that squad itself (a
+   `squad-start` request: it writes the brief, names the squad, writes its wish). `/ds-start-squad` from
+   your chat stays; a `/ds-start-squad … --framing-file` line is a board Start filed before that change.
 
 2. **The board.** Run `bin/board/board.sh <this project's label>` (or `/ds-board`, which fills
    in your project) to see this project's squads. It is a **stateless projection**
