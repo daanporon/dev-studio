@@ -53,7 +53,8 @@ import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst } from
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
 import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
 import { feedbackOn, feedbackRepo } from "../loop/feedback/post.ts";
-import { BACKEND_NAMES, DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
+import { DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
+import { studioBackend } from "../loop/squad/studio.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
 
@@ -2233,8 +2234,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     project: label || null,
     projects: db ? labels.map((project) => ({ label: project, pause: { ...projection(db.s, { project }),
       descendants_paused: !!db.one("SELECT 1 FROM pause_intents WHERE project = ? AND cleared_at IS NULL LIMIT 1", project) },
-      // U9: what the Start squad dialog presets its Backend field to.
-      default_backend: ((v) => (isBackend(v) ? v : DEFAULT_BACKEND))(limit(db.s, project, "default_backend")) })) : [],
+      // U9, U57: the backend the Start squad dialog shows: the Studio's, which new squads start on.
+      studio_backend: studioBackend(db.s.get("projects", { label: project })) })) : [],
     prerequisites: db ? labels.flatMap((project) => [
       ...db.all("SELECT squad, slug, status, hold FROM units WHERE project = ? ORDER BY squad, id", project).map((u) => ({ kind: "unit", project, squad: u.squad, slug: u.slug,
         label: `${project}/${u.squad}/${u.slug}`, state: u.status, hold: !!u.hold, url: `#sq-${project}/${u.squad}` })),
@@ -2645,7 +2646,7 @@ function withDb<T>(fn: (db: Db) => T, root = stateRoot()): T | null {
 export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] }[] = [
   { name: "Context & compaction", keys: ["studio_move"], prefixes: ["context_", "compact_", "auto_compact_"] },
   { name: "Accounts & model picking", keys: ["limit_pct", "limit_wait_max", "credits_hold_h", "fallback_return_min"], prefixes: ["pick_"] },
-  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "default_backend", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "debrief", "archive_debrief_min", "notes_cap"] },
+  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "debrief", "archive_debrief_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
   { name: "Board & machine", keys: ["update_run_max_min", "board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
@@ -2686,7 +2687,7 @@ export function limitsJson(project: string, root = stateRoot()) {
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
       const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
-      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "default_backend" ? [...BACKEND_NAMES] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
+      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
     const used = new Set(limits.map((l) => l.group));
     return { project, groups: [...LIMIT_GROUPS.map((g) => g.name).filter((n) => used.has(n)), ...(used.has("Other") ? ["Other"] : [])], limits };

@@ -263,19 +263,20 @@ runs a squad on it through `projectHerdr` (U16c, below), on a trial project only
 Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
 lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
 `herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
-others, the first being its default). A spawn starts on the project's `default_backend` (U30, below): `orca`, `tmux` (U16b),
+others, the first being its default). A spawn starts on the Studio's backend (U30, U57, below): `orca`, `tmux` (U16b),
 `herdr` (U16c) or `orca-lite` (U16a). The loop itself can run a squad on any
 contract backend (U11, "Started" below).
 
-- **One rule (U30).** A project's squads start on its `default_backend` and nothing else
-  (`squadBackendRule`, `bin/backend/registry.ts`): `--backend` (or the board's pick) naming another
-  backend, `orca` included, is refused with `backend tmux is refused: this project's squads start on orca
-  (its default_backend); to change it set the project's default_backend …`, and a squad wish
-  (`ds want squad … --fill '{"backend":…}'`) asking for another is refused by `bin/loop/fulfil/squad.ts`
-  with a `wish_given_up` event and a card, so one project's backend never leaks onto another. Once the project
-  has a Studio, its backend wins (U54, one backend per project): a squad on any other is refused with `backend orca
-  is refused: this project's Studio runs on tmux, and a project keeps one backend for its Studio and squads; to
-  move the whole project: ds up <project> --backend orca`. The flag and the
+- **One rule (U30, U57).** A project's squads start on its Studio's backend and nothing else
+  (`squadBackendRule`, `bin/backend/registry.ts`; the Studio's backend is `studioBackend` in
+  `bin/loop/squad/studio.ts`: dispatcher.json `studio_backend`, empty meaning orca, written by the first
+  `ds up` before the Studio exists and by a move): `--backend` (or the board's pick) naming another backend,
+  `orca` included, is refused with `backend orca is refused: this project's Studio runs on tmux, and a project
+  keeps one backend for its Studio and squads; to move the whole project: ds up <project> --backend orca`,
+  and a squad wish (`ds want squad … --fill '{"backend":…}'`) asking for another is refused by
+  `bin/loop/fulfil/squad.ts` with a `wish_given_up` event and a card. There is no `default_backend` setting
+  any more: `ds config set <project> limits.conf default_backend <x>` is refused with the same `ds up` pointer,
+  and a row left in a project's settings is ignored, never read. The flag and the
   wish's `backend` stay for squads on other hosts later (the rule takes the squad's backend and
   `backend_host`; today only `local`). An entry's `find` looks for its binary where
   PATH would not (herdr: `herdrBin()`), and `install` is named when it is missing. The tmux trial's
@@ -285,17 +286,14 @@ contract backend (U11, "Started" below).
   against fresh, and the lease check). The comparison of the three backends, Treehouse's measured gain and
   the recommendation for what new squads try next are `docs/backends/trial.md` (U16d).
 
-- **Set and change (U32, U34, U54).** A project's backend is the one setting `default_backend`, set with
-  `ds config set <project> limits.conf default_backend <x>` or in the project's settings. There is no
-  trial switch to flip and flip back: a project runs on its backend until the operator changes it. While
-  the project's Studio runs on another backend that change is refused, naming `ds up <project> --backend <x>`:
-  that moves the whole project (below, "Moving a project").
-  The Studio follows the project: it runs on the project's backend, and `ds up <label> --backend <x>` is the one
-  way to change both together. User-facing steps: `docs/USAGE.md`, "Start a project on a backend".
-  The change is checked when set (a `worktree_provider` the backend cannot use, a missing binary, a
-  roster row naming an agent `<x>` cannot launch) and prints `new squads start on <x>; N running squads
-  stay on <old>`. A running squad is never moved: it keeps its backend until it is closed and started
-  again. A settings import leaves `default_backend` and `worktree_provider` alone. Still on Orca: the
+- **Set and change (U32, U34, U54, U57).** A project's backend is its Studio's, set by the first
+  `ds up <url> --backend <x>` (default `orca`); that run checks the backend against the host and the roster
+  before it writes anything. There is no trial switch to flip and flip back: a project runs on its backend
+  until the operator moves it, and `ds up <label> --backend <x>` is the one way to change the Studio and
+  its squads together (below, "Moving a project"). User-facing steps: `docs/USAGE.md`, "Start a project on a backend".
+  A `worktree_provider` is checked against the Studio's backend when set (a tool the backend cannot use, a
+  missing binary, a roster row naming an agent the backend cannot launch). A running squad is never moved: it
+  keeps its backend until it is closed and started again. A settings import leaves `worktree_provider` alone. Still on Orca: the
   account list (until `plan-accounts`).
 - **Moving a project (U54).** `ds up <project> --backend <x>` on a project up on another backend moves its
   Studio, and so the project. It is refused, changing nothing, while any squad of the project is open (a
@@ -303,18 +301,18 @@ contract backend (U11, "Started" below).
   Orca's on `orca`, else the worktree tool's `local::` folder) and files the move for the loop
   (`studio:backend-wanted`); the loop's one `studio-move`, why `backend`, keeps each step on its episode, so a
   crash replays from the last one: the new Studio started, the old one closed, then `studio_backend` and
-  `studio_wt` (dispatcher.json), `default_backend` and the `_studio` member row carried over with its account
+  `studio_wt` (dispatcher.json) and the `_studio` member row carried over with its account
   history. The old worktree is left for cleanup.
-- **Chosen at spawn.** the project's limits key `default_backend` (default `orca`) says it;
-  `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend pick) may only name that backend. The worktree tool is the
+- **Chosen at spawn.** the Studio's backend says it (the board's Start squad dialog shows
+  `<backend> (the Studio's)`); `spawn-squad --backend <name>` (the dialog sends its Backend pick) may only name that backend. The worktree tool is the
   project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
   refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet, a
-  backend other than the project's `default_backend` and a binary missing on PATH (the backend's, or treehouse's
+  backend other than the Studio's and a binary missing on PATH (the backend's, or treehouse's
   for `worktree_provider treehouse`: `DS_TREEHOUSE_BIN`, else on PATH); a refused spawn writes no wish and never falls back to `orca`.
 - **Written once.** The squad's row keeps `backend`, `backend_host` (`local`; the machine it runs on) and
   `worktree_provider` (migration 0054; every existing squad reads `orca`/`local`/`orca`). Once the loop
   has started the squad the columns cannot change (a table trigger), and `spawn-squad` refuses a different
-  `--backend` for it; a later change of `default_backend` touches only new squads. A closed squad started
+  `--backend` for it; a later move of the project touches only new squads. A closed squad started
   again under its topic may pick again.
 - **Not `squads.host`.** That column is spawn-squad's dev-env host (`--host`), unchanged; the backend's
   machine is `backend_host`.

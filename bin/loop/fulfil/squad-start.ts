@@ -114,7 +114,7 @@ const squadStart: Fulfiller = {
     }
     const framing = readFileSync(framingFile, "utf8");
     const roster = effectiveRoster(x.store, project), disp = readDisp(x.store.root, project), from = studioHandle(x.store, project);
-    const def = word(x.store, project, "default_backend"), prov = word(x.store, project, "worktree_provider");
+    const prov = word(x.store, project, "worktree_provider");
     let refused: string | null = null;
     const out = x.store.tx(() => {
       // Checked again inside the write: a squad or another start may have taken the name during the model call.
@@ -122,7 +122,7 @@ const squadStart: Fulfiller = {
       if (namedBy === "operator" && taken.has(base)) { refused = `squad ${base} already exists in ${project}`; return null; }
       const topic = namedBy === "operator" ? base : freeName(base, taken);
       const w = squadWish({ label: project, topic, repo: project, type: p.type, autonomy: p.autonomy, backend: p.backend, framing, start: p.start,
-        from, disp, roster, placed: placedBackend(x.store, project, topic), defaultBackend: def, worktreeProvider: prov });
+        from, disp, roster, placed: placedBackend(x.store, project, topic), worktreeProvider: prov });
       if ("error" in w) { refused = w.error; return null; }
       x.store.want("squad", `${w.label}/${w.topic}`, "running", { payload: w.payload, fill: w.fill, by: "board", why: "board start" });
       const result = { ok: true, topic: w.topic, named_by: namedBy, agent, ...(nameWhy && nameWhy !== "ok" ? { name_why: nameWhy } : {}), framing_file: framingFile };

@@ -47,7 +47,6 @@ import { LOGGED_IN } from "../capacity/login-card.ts";
 import { clearLogin } from "../capacity/login.ts";
 import { BACKEND_WANTED, MOVE, openSquads, RESTART_APPROVED, RESTART_STUDIO, START_WANTED, STUDIO_SQUAD, studioBackend, studioCandidates, studioMember, studioPrompt, studioReady, studioTerms,
   studioRestartCmd, studioView } from "../squad/studio.ts";
-import { setBackendRow } from "../settings/settings.ts";
 import { defaultProvider, isBackend } from "../../backend/registry.ts";
 import { localPath } from "../drivers/contract.ts";
 import type { ContractSeat, Member, Seat } from "../drivers/types.ts";
@@ -222,7 +221,7 @@ type BackendPlan = { to: string; provider: string; wt: string; from: string; fro
 // while any squad of the project is open (a paused one too) or when the Studio already runs there. Steps, each kept
 // on the episode: planned (the plan written), starting (the new Studio in the new worktree, through the target's seat),
 // begun (its terminal recorded), closing / closed (the old Studio's terminal, through the old backend), then the
-// switch: dispatcher.json's studio_backend and studio_wt, the project's default_backend row and the projects row, the
+// switch: dispatcher.json's studio_backend and studio_wt, the projects row, the
 // `_studio` member row carried to the new worktree (its id, account history and limit stamp kept), one studio_moved
 // event, started. The old worktree is left for cleanup. A start that fails closes nothing and cards it; a close that
 // fails still switches (the new Studio is the project's) and cards the old terminal for the operator to close.
@@ -317,7 +316,6 @@ async function moveBackend(a: Action, x: Exec): Promise<Result> {
   writeFileSync(`${disp}.tmp`, JSON.stringify(doc, null, 2) + "\n");
   renameSync(`${disp}.tmp`, disp);
   store.upsert("projects", { label: P }, { studio_wt: plan.wt, doc: JSON.stringify(doc), observed_at: at });
-  setBackendRow(store, P, plan.to, "ds up (Studio moved)", at);
   const m = studioMember(store, P, plan.fromWt);
   const set: Row = { wt: plan.wt, handle: plan.newHandle, agent: p.agent, account: p.account === "-" ? null : p.account, gen: plan.newGen ?? null, status: "running", observed_at: at, updated_at: at };
   if (p.model && p.model !== "-") set.model = p.model;

@@ -60,15 +60,15 @@ async function rig() {
   importJson(s);
   for (const [role, value] of [["lead", "claude sonnet always"], ["thinker", "claude opus ondemand"], ["builder", "claude opus ondemand"]] as const)
     s.upsert("config", { project: "fx", file: "roles.conf", key: role }, { value, observed_at: T });
-  s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "orca-lite", observed_at: T });   // U30: the project's backend
+  s.upsert("projects", { label: "fx" }, { doc: JSON.stringify({ ...JSON.parse(String(s.get("projects", { label: "fx" })?.doc ?? "{}")), studio_backend: "orca-lite" }), observed_at: T });   // U57: the Studio's backend
   studioOn(s, "fx", "orca-lite", T);   // U54: one backend per project
   const act = new LoopActuator({ orca, pick: system, fulfillers: fulfillers.filter((f) => f.kinds) });
   const loop = new Loop(s, { observers: [], reconcilers: [decider, ...reconcilers, ...fulfillers] }, act, { projects: () => ["fx"] });
   loop.boot(T);
   let at = T;
   const tick = async (n = 1) => { for (let i = 0; i < n; i++) { at += 5; await loop.tick(at); await act.drain(); } };
-  // What spawn-squad writes for a project whose default_backend is orca-lite (registry.ts).
-  const c = chooseSquadBackend({ projectBackend: "orca-lite", which: () => "/usr/bin/orca" });
+  // What spawn-squad writes for a project whose Studio runs on orca-lite (registry.ts).
+  const c = chooseSquadBackend({ studioBackend: "orca-lite", which: () => "/usr/bin/orca" });
   if (!c.ok) throw new Error(c.error);
   s.want("squad", `fx/${SQ}`, "running", { payload: { repo: `path:${repo}`, type: "feature" },
     fill: { repo: `path:${repo}`, type: "feature", backend: c.backend, worktree_provider: c.provider }, by: "test" });

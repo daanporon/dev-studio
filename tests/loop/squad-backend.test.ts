@@ -30,10 +30,21 @@ function rig() {
   const row = (topic: string) => store.db.query("SELECT * FROM squads WHERE project = 'p' AND topic = ?").get(topic) as Row | null;
   // A row written straight: these tests are about what spawn refuses; the check at set time (U32) has its own tests.
   const limit = (key: string, value: string) => store.upsert("config", { project: "p", file: "limits.conf", key }, { value, observed_at: 1 });
+  // The project's Studio runs on `backend` (U57: its squads start there): dispatcher.json and the projects row, as `ds up` leaves them.
+  const studio = (backend: string) => {
+    mkdirSync(join(root, "p"), { recursive: true });
+    const doc = { home_repo: "path:/fake", studio_wt: "/fake/studio", ...(backend === "orca" ? {} : { studio_backend: backend }) };
+    writeFileSync(join(root, "p", "dispatcher.json"), JSON.stringify(doc));
+    store.upsert("projects", { label: "p" }, { studio_wt: "/fake/studio", doc: JSON.stringify(doc), observed_at: 1 });
+  };
   // The loop has started the squad: its doc is written and it runs.
   const started = (topic: string) => store.db.run("UPDATE squads SET doc = '{}', status = 'running' WHERE project = 'p' AND topic = ?", [topic]);
-  return { store, spawn, spawnWith, row, limit, started, root };
+  return { store, spawn, spawnWith, row, limit, studio, started, root };
 }
+
+// U57: the refusal for a squad on `backend` in a project whose Studio runs on `studio`.
+const refusal = (backend: string, studio: string, project = "<project>"): string =>
+  `backend ${backend} is refused: this project's Studio runs on ${studio}, and a project keeps one backend for its Studio and squads; to move the whole project: ds up ${project} --backend ${backend}`;
 
 // Every backend built and every binary present, so the provider rules can be checked on their own.
 const built: Record<string, BackendEntry> = Object.fromEntries(Object.entries(BACKENDS).map(([k, e]) => [k, { ...e, adapter: e.adapter ?? `bin/backend/${k}.sh` }]));
@@ -45,7 +56,7 @@ test("every existing squad reads orca on Orca's own worktrees", () => {
   expect(row("old")).toMatchObject({ backend: "orca", backend_host: "local", worktree_provider: "orca", host: null });
 });
 
-test("no flag: the squad gets the project's default_backend", async () => {
+test("no flag: the squad gets the Studio's backend (orca)", async () => {
   const { spawn, row } = rig();
   const a = await spawn("--topic", "plain");
   expect(a.code).toBe(0);
@@ -53,33 +64,33 @@ test("no flag: the squad gets the project's default_backend", async () => {
   expect(JSON.parse(String(row("plain")!.want_payload))).toMatchObject({ backend: "orca", worktree_provider: "orca" });
   // Every shipped backend has an adapter now: an entry with none is refused, naming where it came from.
   const unbuilt = { x: { ...BACKENDS.tmux, name: "x", adapter: null } };
-  const b = chooseSquadBackend({ projectBackend: "x", registry: unbuilt, which: (n: string) => `/usr/bin/${n}` });
-  expect(b.ok ? "" : b.error).toContain("backend x (the project's default_backend) is not built yet");
+  const b = chooseSquadBackend({ studioBackend: "x", registry: unbuilt, which: (n: string) => `/usr/bin/${n}` });
+  expect(b.ok ? "" : b.error).toContain("backend x (the Studio's backend) is not built yet");
 });
 
-test("U30: tmux starts squads only in a project whose default_backend is tmux", async () => {
+test("U30: tmux starts squads only in a project whose Studio runs on tmux", async () => {
   const which = (b: string) => `/usr/bin/${b}`;
   expect(BACKENDS.tmux).toMatchObject({ adapter: "bin/backend/tmux.ts" });
-  expect(chooseSquadBackend({ flag: "tmux", which })).toEqual({ ok: false, error: `backend tmux is refused: this project's squads start on orca (its default_backend); to change it set the project's default_backend (ds config set <project> limits.conf default_backend <name>) (asked for by --backend)` });
-  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "orca", which }).ok).toBe(false);
-  expect(chooseSquadBackend({ projectBackend: "tmux", which })).toMatchObject({ ok: true, backend: "tmux", provider: "git", providerDefault: true });
-  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", which })).toMatchObject({ ok: true, backend: "tmux" });
+  expect(chooseSquadBackend({ flag: "tmux", which })).toEqual({ ok: false, error: `${refusal("tmux", "orca")} (asked for by --backend)` });
+  expect(chooseSquadBackend({ flag: "tmux", studioBackend: "orca", which }).ok).toBe(false);
+  expect(chooseSquadBackend({ studioBackend: "tmux", which })).toMatchObject({ ok: true, backend: "tmux", provider: "git", providerDefault: true });
+  expect(chooseSquadBackend({ flag: "tmux", studioBackend: "tmux", which })).toMatchObject({ ok: true, backend: "tmux" });
   // One rule: the tmux project cannot start an orca or herdr squad either.
   for (const other of ["orca", "herdr"]) {
-    const c = chooseSquadBackend({ flag: other, projectBackend: "tmux", which });
+    const c = chooseSquadBackend({ flag: other, studioBackend: "tmux", which });
     expect(c.ok).toBe(false);
-    expect(c.ok ? "" : c.error).toContain(`backend ${other} is refused: this project's squads start on tmux (its default_backend)`);
+    expect(c.ok ? "" : c.error).toContain(refusal(other, "tmux"));
   }
-  expect(squadBackendRule({ backend: "tmux", projectBackend: "tmux" })).toBeNull();
+  expect(squadBackendRule({ backend: "tmux", studioBackend: "tmux" })).toBeNull();
   expect(squadBackendRule({ backend: "orca" })).toBeNull();
   expect(squadBackendRule({ backend: "orca", host: "far" })).toContain("host 'far' is not supported yet");
-  const { store, spawn, row, limit } = rig();
+  const { store, spawn, row, studio } = rig();
   const a = await spawn("--topic", "flagonly", "--backend", "tmux");
   expect(a.code).toBe(1);
-  expect(a.err).toContain("backend tmux is refused: this project's squads start on orca (its default_backend)");
+  expect(a.err).toContain(refusal("tmux", "orca", "p"));
   expect(row("flagonly")).toBeNull();
   if (!Bun.which("tmux")) { console.log("skip: no tmux on PATH, the tmux project's spawn is not run"); return; }
-  limit("default_backend", "tmux");
+  studio("tmux");
   // The shipped builder row falls back to muse, which has no launch line off Orca: the tmux project's
   // roster drops it (docs/backends/trial-tmux.md, "Before the run").
   const b0 = await spawn("--topic", "ontmux");
@@ -92,40 +103,40 @@ test("U30: tmux starts squads only in a project whose default_backend is tmux", 
   expect(row("ontmux")).toMatchObject({ backend: "tmux", backend_host: "local", worktree_provider: "git", want: "running" });
 });
 
-test("U30: --backend naming another backend than the project's default_backend is refused", async () => {
-  const { spawn, row, limit } = rig();
-  limit("default_backend", "herdr");
+test("U30: --backend naming another backend than the Studio's is refused", async () => {
+  const { spawn, row, studio } = rig();
+  studio("herdr");
   const a = await spawn("--topic", "flagged", "--backend", "orca");
   expect(a.code).toBe(1);
-  expect(a.err).toContain("backend orca is refused: this project's squads start on herdr (its default_backend)");
-  expect(a.err).toContain("ds config set <project> limits.conf default_backend");
+  expect(a.err).toContain(refusal("orca", "herdr", "p"));
+  expect(a.err).toContain("ds up p --backend orca");
   expect(row("flagged")).toBeNull();
 });
 
 test("a backend on trial elsewhere, missing on the host or unknown is refused, never replaced by orca", async () => {
   const { spawn, row } = rig();
-  for (const [b, says] of [["tmux", "backend tmux is refused: this project's squads start on orca (its default_backend)"], ["herdr", "backend herdr is refused: this project's squads start on orca (its default_backend)"], ["orca-lite", "backend orca-lite is refused: this project's squads start on orca (its default_backend)"], ["screen", "backend 'screen' (--backend) is not one of orca, orca-lite, tmux, herdr"]]) {
+  for (const [b, says] of [["tmux", refusal("tmux", "orca", "p")], ["herdr", refusal("herdr", "orca", "p")], ["orca-lite", refusal("orca-lite", "orca", "p")], ["screen", "backend 'screen' (--backend) is not one of orca, orca-lite, tmux, herdr"]]) {
     const r = await spawn("--topic", `t-${b}`, "--backend", b);
     expect(r.code).toBe(1);
     expect(r.err).toContain(says);
     expect(row(`t-${b}`)).toBeNull();
   }
-  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", registry: built, which: () => null }))
+  expect(chooseSquadBackend({ flag: "tmux", studioBackend: "tmux", registry: built, which: () => null }))
     .toEqual({ ok: false, error: "backend tmux (--backend) needs 'tmux', which is not on PATH on this host" });
-  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", ...all })).toMatchObject({ ok: true, backend: "tmux" });
+  expect(chooseSquadBackend({ flag: "tmux", studioBackend: "tmux", ...all })).toMatchObject({ ok: true, backend: "tmux" });
 });
 
 test("herdr: refused outside its project; found by DS_HERDR_BIN or the pinned install, else refused with how to install", async () => {
-  const rigged = rig(), { spawnWith, row, limit } = rigged;
-  expect(chooseSquadBackend({ flag: "herdr", projectBackend: "orca", ...all })).toEqual({ ok: false, error: `backend herdr is refused: this project's squads start on orca (its default_backend); to change it set the project's default_backend (ds config set <project> limits.conf default_backend <name>) (asked for by --backend)` });
+  const rigged = rig(), { spawnWith, row, studio } = rigged;
+  expect(chooseSquadBackend({ flag: "herdr", studioBackend: "orca", ...all })).toEqual({ ok: false, error: `${refusal("herdr", "orca")} (asked for by --backend)` });
   const herdr = BACKENDS.herdr;
-  expect(chooseSquadBackend({ projectBackend: "herdr", registry: { herdr: { ...herdr, find: () => null } } })).toEqual({ ok: false,
-    error: "backend herdr (the project's default_backend) needs 'herdr', which is not on PATH on this host; install it with: bun bin/backend/herdr.ts install" });
-  expect(chooseSquadBackend({ projectBackend: "herdr", registry: { herdr: { ...herdr, find: () => "/opt/herdr" } } })).toMatchObject({ ok: true, backend: "herdr", provider: "git" });
-  // spawn-squad end to end: the project's default_backend is herdr, the binary named by DS_HERDR_BIN,
+  expect(chooseSquadBackend({ studioBackend: "herdr", registry: { herdr: { ...herdr, find: () => null } } })).toEqual({ ok: false,
+    error: "backend herdr (the Studio's backend) needs 'herdr', which is not on PATH on this host; install it with: bun bin/backend/herdr.ts install" });
+  expect(chooseSquadBackend({ studioBackend: "herdr", registry: { herdr: { ...herdr, find: () => "/opt/herdr" } } })).toMatchObject({ ok: true, backend: "herdr", provider: "git" });
+  // spawn-squad end to end: the project's Studio runs on herdr, the binary named by DS_HERDR_BIN,
   // and a roster with Claude alone (off Orca only Claude starts).
   const { store } = rigged;
-  limit("default_backend", "herdr");
+  studio("herdr");
   for (const role of ["builder", "builder-review", "builder-review-standard"])
     set(store, "p", "roles.conf", role, "claude opus ondemand - claude:sonnet", "test");
   const fake = join(tempRoot("squad-backend-herdr-"), "herdr");
@@ -136,29 +147,29 @@ test("herdr: refused outside its project; found by DS_HERDR_BIN or the pinned in
   expect(row("onherdr")).toMatchObject({ backend: "herdr", worktree_provider: "git" });
 });
 
-test("U30: orca-lite starts squads only on a project whose default_backend names it", async () => {
+test("U30: orca-lite starts squads only on a project whose Studio runs on it", async () => {
   const which = (b: string) => `/usr/bin/${b}`;
   expect(BACKENDS["orca-lite"]).toMatchObject({ adapter: "bin/backend/orca-lite.ts" });
   // The trial project: no flag, or the flag naming the same backend.
-  expect(chooseSquadBackend({ projectBackend: "orca-lite", which })).toMatchObject({ ok: true, backend: "orca-lite", provider: "orca", providerDefault: true });
-  expect(chooseSquadBackend({ flag: "orca-lite", projectBackend: "orca-lite", which })).toMatchObject({ ok: true, backend: "orca-lite" });
+  expect(chooseSquadBackend({ studioBackend: "orca-lite", which })).toMatchObject({ ok: true, backend: "orca-lite", provider: "orca", providerDefault: true });
+  expect(chooseSquadBackend({ flag: "orca-lite", studioBackend: "orca-lite", which })).toMatchObject({ ok: true, backend: "orca-lite" });
   // Any other project, even through --backend, is refused; so is orca on the orca-lite project.
-  for (const projectBackend of [undefined, "orca", "tmux"])
-    expect(chooseSquadBackend({ flag: "orca-lite", projectBackend, which })).toEqual({ ok: false,
-      error: `backend orca-lite is refused: this project's squads start on ${projectBackend ?? "orca"} (its default_backend); to change it set the project's default_backend (ds config set <project> limits.conf default_backend <name>) (asked for by --backend)` });
-  expect(chooseSquadBackend({ flag: "orca", projectBackend: "orca-lite", which }).ok).toBe(false);
+  for (const studioBackend of [undefined, "orca", "tmux"])
+    expect(chooseSquadBackend({ flag: "orca-lite", studioBackend, which })).toEqual({ ok: false,
+      error: `${refusal("orca-lite", studioBackend ?? "orca")} (asked for by --backend)` });
+  expect(chooseSquadBackend({ flag: "orca", studioBackend: "orca-lite", which }).ok).toBe(false);
   // Through spawn-squad, with a stub `orca` first on PATH (the host's own is never reached): the project's
-  // default_backend set to orca-lite writes the wish; --backend orca-lite on another project writes none.
-  const { store, spawn, spawnWith, row, limit, root } = rig();
+  // A Studio on orca-lite writes the wish; --backend orca-lite on another project writes none.
+  const { store, spawn, spawnWith, row, studio, root } = rig();
   const bin = join(root, "stub-bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "orca"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const PATH = `${bin}:${process.env.PATH ?? ""}`;
   const no = await spawnWith({ PATH }, "--topic", "elsewhere", "--backend", "orca-lite");
   expect(no.code).toBe(1);
-  expect(no.err).toContain("backend orca-lite is refused: this project's squads start on orca (its default_backend)");
+  expect(no.err).toContain(refusal("orca-lite", "orca", "p"));
   expect(row("elsewhere")).toBeNull();
-  limit("default_backend", "orca-lite");
+  studio("orca-lite");
   // The default builder row falls back to muse, which has no launch line off Orca: refused until the
   // trial project's own row drops it (docs/backends/trial-orca-lite.md, step 1).
   expect((await spawnWith({ PATH }, "--topic", "trial")).err).toContain("backend orca-lite can start only claude; the roster names builder: muse");
@@ -169,14 +180,14 @@ test("U30: orca-lite starts squads only on a project whose default_backend names
   expect(row("trial")).toMatchObject({ backend: "orca-lite", worktree_provider: "orca" });
   const orcaOn = await spawn("--topic", "plain", "--backend", "orca");
   expect(orcaOn.code).toBe(1);
-  expect(orcaOn.err).toContain("start on orca-lite (its default_backend)");
+  expect(orcaOn.err).toContain(refusal("orca", "orca-lite", "p"));
 });
 
-test("changing default_backend leaves a running squad alone; its backend is written once", async () => {
-  const { store, spawn, row, limit, started } = rig();
+test("moving the Studio's backend leaves a running squad alone; its backend is written once", async () => {
+  const { store, spawn, row, limit, studio, started } = rig();
   expect((await spawn("--topic", "live")).code).toBe(0);
   started("live");
-  limit("default_backend", "tmux");
+  studio("tmux");
   limit("worktree_provider", "git");
   const again = await spawn("--topic", "live", "--start", "plan");
   expect(again.code).toBe(0);
@@ -195,16 +206,16 @@ test("changing default_backend leaves a running squad alone; its backend is writ
 
 test("auto gives the backend's default worktree tool", () => {
   expect(chooseSquadBackend({ flag: "orca", providerSetting: "auto", ...all })).toMatchObject({ ok: true, provider: "orca", providerDefault: true });
-  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "auto", ...all })).toMatchObject({ ok: true, provider: "git", providerDefault: true });
-  expect(chooseSquadBackend({ projectBackend: "herdr", ...all })).toMatchObject({ ok: true, backend: "herdr", provider: "git" });
-  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "treehouse", ...all })).toMatchObject({ ok: true, provider: "treehouse", providerDefault: false });
+  expect(chooseSquadBackend({ flag: "tmux", studioBackend: "tmux", providerSetting: "auto", ...all })).toMatchObject({ ok: true, provider: "git", providerDefault: true });
+  expect(chooseSquadBackend({ studioBackend: "herdr", ...all })).toMatchObject({ ok: true, backend: "herdr", provider: "git" });
+  expect(chooseSquadBackend({ flag: "tmux", studioBackend: "tmux", providerSetting: "treehouse", ...all })).toMatchObject({ ok: true, provider: "treehouse", providerDefault: false });
 });
 
 test("treehouse needs its binary at spawn: DS_TREEHOUSE_BIN, else on PATH", () => {
   const none = { registry: built, which: (b: string) => (b === "treehouse" ? null : `/usr/bin/${b}`) };
-  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "treehouse", ...none })).toEqual({ ok: false,
+  expect(chooseSquadBackend({ flag: "tmux", studioBackend: "tmux", providerSetting: "treehouse", ...none })).toEqual({ ok: false,
     error: "worktree_provider treehouse needs 'treehouse' (DS_TREEHOUSE_BIN, else on PATH), which this host lacks; install treehouse (github.com/kunchenguid/treehouse) or set worktree_provider auto" });
-  expect(chooseSquadBackend({ flag: "tmux", projectBackend: "tmux", providerSetting: "git", ...none })).toMatchObject({ ok: true, provider: "git" });
+  expect(chooseSquadBackend({ flag: "tmux", studioBackend: "tmux", providerSetting: "git", ...none })).toMatchObject({ ok: true, provider: "git" });
 });
 
 test("a worktree tool the backend cannot use is refused, naming both", async () => {
@@ -234,20 +245,20 @@ test("the board: each squad's backend and tool, the text line only off orca, and
     store.db.run("UPDATE squads SET status = ? WHERE topic = ?", [st, t]);
   };
   put("ontmux", "tmux", "git"); put("ontree", "tmux", "treehouse");
-  store.upsert("config", { project: "p", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: 1 });
+  store.upsert("projects", { label: "p" }, { studio_wt: "/fake/studio", doc: JSON.stringify({ studio_backend: "tmux" }), observed_at: 1 });
   const b = buildBoard("p", "", root) as any;
   const sq = (t: string) => b.squads.find((s: any) => s.topic === t);
   expect(sq("plain")).toMatchObject({ backend: "orca", worktree_provider: "orca", provider_default: true });
   expect(sq("ontmux")).toMatchObject({ backend: "tmux", worktree_provider: "git", provider_default: true });
   expect(sq("ontree")).toMatchObject({ backend: "tmux", worktree_provider: "treehouse", provider_default: false });
-  expect(b.projects.find((p: any) => p.label === "p").default_backend).toBe("tmux");
+  expect(b.projects.find((p: any) => p.label === "p").studio_backend).toBe("tmux");
   const line = (t: string) => renderText(b).split("\n").find((l: string) => l.startsWith("▣") && l.includes(` ${t} `)) ?? "";
   expect(line("plain")).not.toContain("on:");
   expect(line("ontmux")).toContain("· on:tmux");
   expect(line("ontmux")).not.toContain("on:tmux/");
   expect(line("ontree")).toContain("· on:tmux/treehouse");
   const lim = limitsJson("p", root).limits;
-  expect(lim.find((l: any) => l.key === "default_backend")).toMatchObject({ value: "tmux", allowed: ["orca", "orca-lite", "tmux", "herdr"] });
+  expect(lim.find((l: any) => l.key === "default_backend")).toBeUndefined();
   expect(lim.find((l: any) => l.key === "worktree_provider")).toMatchObject({ value: "auto", allowed: ["auto", "git", "treehouse"] });
 });
 
@@ -314,21 +325,36 @@ describe("the Studio's seat", () => {
   });
 });
 
-// U54 (project-start): one backend per project. A squad on a backend other than the Studio's is refused with the
-// reason and the command that moves the whole project, whatever default_backend says.
+// U54, U57 (project-start): one backend per project. A squad on a backend other than the Studio's is refused with the
+// reason and the command that moves the whole project, whatever an old `default_backend` row says.
 test("U54: on a project whose Studio runs on tmux, an Orca squad wish is refused, naming ds up --backend", async () => {
   const which = (b: string) => `/usr/bin/${b}`;
-  const why = "backend orca is refused: this project's Studio runs on tmux, and a project keeps one backend for its Studio and squads; to move the whole project: ds up realp --backend orca";
-  expect(squadBackendRule({ backend: "orca", projectBackend: "orca", studioBackend: "tmux", project: "realp" })).toBe(why);
-  expect(chooseSquadBackend({ projectBackend: "orca", studioBackend: "tmux", project: "realp", which })).toEqual({ ok: false, error: `${why} (asked for by the project's default_backend)` });
-  expect(squadBackendRule({ backend: "tmux", projectBackend: "tmux", studioBackend: "tmux" })).toBeNull();
-  expect(squadBackendRule({ backend: "orca", projectBackend: "orca", studioBackend: null })).toBeNull();
-  const { spawn, row, root } = rig();
-  mkdirSync(join(root, "p"), { recursive: true });
-  writeFileSync(join(root, "p", "dispatcher.json"), JSON.stringify({ home_repo: "path:/fake", studio_wt: "local::/fake/studio", studio_backend: "tmux" }));
-  const a = await spawn("--topic", "orcawish");
+  const why = refusal("orca", "tmux", "realp");
+  expect(squadBackendRule({ backend: "orca", studioBackend: "tmux", project: "realp" })).toBe(why);
+  expect(chooseSquadBackend({ flag: "orca", studioBackend: "tmux", project: "realp", which })).toEqual({ ok: false, error: `${why} (asked for by --backend)` });
+  expect(squadBackendRule({ backend: "tmux", studioBackend: "tmux" })).toBeNull();
+  expect(squadBackendRule({ backend: "orca", studioBackend: null })).toBeNull();
+  const { spawn, row, studio } = rig();
+  studio("tmux");
+  const a = await spawn("--topic", "orcawish", "--backend", "orca");
   expect(a.code).toBe(1);
-  expect(a.err).toContain("backend orca is refused: this project's Studio runs on tmux");
-  expect(a.err).toContain("ds up p --backend orca");
+  expect(a.err).toContain(refusal("orca", "tmux", "p"));
   expect(row("orcawish")).toBeNull();
+});
+
+// U57: `default_backend` is no setting. A row an old project still holds is never read: the squad starts on the
+// Studio's backend, and a flag naming the stale row's backend is refused with the `ds up` line.
+test("U57: a stale default_backend row is ignored; the squad starts on the Studio's backend", async () => {
+  const { spawn, row, limit, studio } = rig();
+  studio("orca");
+  limit("default_backend", "orca-lite");
+  const a = await spawn("--topic", "stale");
+  expect(a.err).toBe("");
+  expect(a.code).toBe(0);
+  expect(row("stale")).toMatchObject({ backend: "orca", worktree_provider: "orca" });
+  const b = await spawn("--topic", "stale2", "--backend", "orca-lite");
+  expect(b.code).toBe(1);
+  expect(b.err).toContain(refusal("orca-lite", "orca", "p"));
+  expect(b.err).toContain("ds up p --backend orca-lite");
+  expect(row("stale2")).toBeNull();
 });

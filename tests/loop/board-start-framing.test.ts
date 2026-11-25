@@ -222,12 +222,13 @@ test("a start's images: nine, a bad name or a missing one is refused and files n
 });
 
 // orca-backend-alternatives U33: the project's backend is not a choice; another one is refused with U30's reason.
-test("a start naming another backend than the project's default_backend is refused with the reason", async () => {
+test("a start naming another backend than the Studio's is refused with the reason", async () => {
   const f = await rig();
-  f.store.upsert("config", { project: "p", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: 1 });
+  f.store.upsert("projects", { label: "p" }, { studio_wt: "local::/fake/studio", doc: JSON.stringify({ studio_backend: "tmux" }), observed_at: 1 });
+  f.store.upsert("config", { project: "p", file: "limits.conf", key: "default_backend" }, { value: "herdr", observed_at: 1 });   // stale: never read
   const bad = await f.post({ project: "p", action: "start", text: "go", backend: "herdr" });
   expect(bad.status).toBe(409);
-  expect(bad.body.error).toContain("backend herdr is refused: this project's squads start on tmux (its default_backend)");
+  expect(bad.body.error).toContain("backend herdr is refused: this project's Studio runs on tmux, and a project keeps one backend for its Studio and squads; to move the whole project: ds up p --backend herdr");
   expect(f.store.db.query("SELECT COUNT(*) AS n FROM requests").get()).toEqual({ n: 0 });
   const ok = await f.post({ project: "p", action: "start", text: "go", backend: "tmux" });
   expect(ok.status).toBe(202);

@@ -18,7 +18,7 @@ export type SquadWishIn = {
   disp?: Record<string, unknown> | null;   // the project's dispatcher.json
   roster: Map<string, string>;        // the effective roster (role -> roles.conf value)
   placed: string | null;              // the backend of a started, not closed squad of that topic
-  defaultBackend?: string; worktreeProvider?: string;   // the first word of those limits
+  worktreeProvider?: string;   // the first word of that limit
 };
 export type SquadWish = { label: string; topic: string; payload: Record<string, string>; fill: Record<string, string> };
 
@@ -31,7 +31,8 @@ export function squadWish(i: SquadWishIn): SquadWish | { error: string } {
   const home = i.disp?.home_repo;
   const repo = typeof home === "string" && home !== "" ? home : i.repo;
   // U54: the project's Studio backend (dispatcher.json studio_backend, empty meaning orca), once it has a Studio.
-  const studioBackend = i.disp?.studio_wt ? String(i.disp.studio_backend ?? "").trim() || "orca" : null;
+  // U57: a squad starts on the Studio's backend (dispatcher.json studio_backend, empty meaning orca), the one backend of the project.
+  const studioBackend = String(i.disp?.studio_backend ?? "").trim() || "orca";
   if (i.roster.size > 0 && !i.roster.has("lead")) return { error: "roster (conventions/roles.conf) has no 'lead' role" };
   // The backend and worktree tool (U9, bin/backend/registry.ts): written once, with the first wish. A squad
   // that has started and is not closed keeps its own; asking it for another one is refused.
@@ -40,7 +41,7 @@ export function squadWish(i: SquadWishIn): SquadWish | { error: string } {
   if (i.placed) {
     if (backend !== "" && backend !== i.placed) return { error: `squad ${i.topic} runs on ${i.placed}; a squad's backend is written once at spawn` };
   } else {
-    const c = chooseSquadBackend({ flag: backend, projectBackend: i.defaultBackend ?? "", providerSetting: i.worktreeProvider ?? "", studioBackend, project: i.label });
+    const c = chooseSquadBackend({ flag: backend, providerSetting: i.worktreeProvider ?? "", studioBackend, project: i.label });
     if (!c.ok) return { error: c.error };
     on = { backend: c.backend, backend_host: c.host, worktree_provider: c.provider };
     // U11: on a contract backend only an agent with a driver launch line can start (bin/loop/drivers/contract.ts).

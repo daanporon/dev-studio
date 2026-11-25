@@ -640,15 +640,15 @@ test("chat-with-studio U1: a non-adopted Studio's button is disabled with its re
   } finally { await r2.window.happyDOM.close(); }
 });
 
-// ---- orca-backend-alternatives U9: the dialog presets the project's default_backend and sends the backend picked.
+// ---- orca-backend-alternatives U9: the dialog shows the Studio's backend and sends the backend picked.
 test("Start squad: Backend is a line showing the project's backend, follows the project, offers no choice, and is sent", async () => {
-  const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", default_backend: "tmux" }, { label: "other", default_backend: "orca" }] };
+  const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", studio_backend: "tmux" }, { label: "other", studio_backend: "orca" }] };
   const d = await startDialog(() => ({ status: 202, body: { ok: true, id: 3 } }), b);
   try {
-    expect(d.doc.querySelector(".start-backend").textContent).toBe("tmux");
+    expect(d.doc.querySelector(".start-backend").textContent).toBe("tmux (the Studio's)");
     expect(d.doc.querySelector("select.start-backend")).toBeNull();
     await d.set(".start-project", "other", "change");
-    expect(d.doc.querySelector(".start-backend").textContent).toBe("orca");
+    expect(d.doc.querySelector(".start-backend").textContent).toBe("orca (the Studio's)");
     await d.set(".start-project", "fixture", "change");
     await d.set(".start-text", "go");
     await d.click(d.btn(/^Send$/));
@@ -658,14 +658,14 @@ test("Start squad: Backend is a line showing the project's backend, follows the 
 });
 
 test("Settings shows the project's backend with one line on what changing it does", async () => {
-  const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", default_backend: "tmux" }] };
+  const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", studio_backend: "tmux" }] };
   const r = await mount(b, false, { "api/limits": { limits: [], groups: [] }, "api/roles": { roles: [] }, "api/skills": { roles: [] } });
   try {
     r.window.location.hash = "#settings";
     for (let k = 0; k < 40 && !r.window.document.querySelector(".set-backend"); k++) await new Promise((res) => setTimeout(res, 25));
     const t = r.window.document.querySelector(".set-backend").textContent;
     expect(t).toContain("Backend: tmux");
-    expect(t).toContain("default_backend");
+    expect(t).toContain("ds up fixture --backend");
     expect(t).toContain("already running keep theirs");
   } finally { await r.window.happyDOM.close(); }
 });

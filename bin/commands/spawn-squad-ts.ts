@@ -45,7 +45,7 @@ export async function run(raw: string[]): Promise<number> {
     disp: readJson(join(stateRoot(), label, "dispatcher.json")),
     // The effective roster (U267, settings.ts readRoster): the project's rows override their roles, the default fills the rest.
     roster: readRoster(label, settingsAt()),
-    placed: squadBackend(label, topic), defaultBackend: word("default_backend"), worktreeProvider: word("worktree_provider"),
+    placed: squadBackend(label, topic), worktreeProvider: word("worktree_provider"),
   });
   if ("error" in w) { writeErr(`spawn-squad: ${w.error}\n`); return 1; }
   return dsExec(["want", "squad", `${w.label}/${w.topic}`, "running", "--payload", JSON.stringify(w.payload), "--fill", JSON.stringify(w.fill), "--by", "spawn-squad", ...waitArgs(la.wait)]);

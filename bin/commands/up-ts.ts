@@ -4,8 +4,8 @@
 //   2. start the loop unless it runs (`loop --ensure`);
 //   3. add or reconcile the project: `--label` names it (else the repo's name) and clones into repos/<label>; a label
 //      already up with another repo is refused (`--force-new` no longer overrides that); `--backend` is checked with
-//      the squads' rule (chooseSquadBackend) and on first bring-up written as the project's `default_backend`
-//      (limits.conf) and `studio_backend` (dispatcher.json); a different `--backend` on a reconcile moves the whole
+//      the squads' rule (chooseSquadBackend) and on first bring-up written as the project's `studio_backend`
+//      (dispatcher.json, the one backend of its Studio and squads, U57); a different `--backend` on a reconcile moves the whole
 //      project (U54, moveProject below); `--worktree` writes `worktree_provider`. Off Orca the Studio's worktree comes from the
 //      project's provider (bin/loop/io/worktrees.ts) as `local::<path>`;
 //   4. file the Studio's first start for the loop (squad/studio.ts wantStudioStart; reconcilers/studio.ts startStudio
@@ -27,7 +27,7 @@ import { parseMember, whoAmI } from "../loop/core/whoami.ts";
 import { chooseSquadBackend, type BackendName } from "../backend/registry.ts";
 import { herdrBin } from "../backend/herdr-bin.ts";
 import { herdrPlace } from "../backend/herdr.ts";
-import { readGet } from "../loop/settings/settings";
+import { readGet, readRoster } from "../loop/settings/settings";
 
 export const help = `[<git-url> | <label> | --home <selector>] [--label <name>] [--backend <orca|orca-lite|tmux|herdr>] [--worktree <auto|git|treehouse>] [--account <id>] [--skills] — install if needed, start the loop, add or reconcile a project, have the loop start its Studio, start the board (up.sh)`;
 
@@ -163,22 +163,25 @@ export async function run(argv: string[]): Promise<number> {
   const provider = worktree || (reconcile ? String(readGet(label, "limits.conf", "worktree_provider", settingsAt()).value ?? "").trim().split(/\s+/)[0] : "");
   if (reconcile && backendFlag && backendFlag !== current)
     return moveProject({ label, from: current, to: backendFlag, provider, worktree, home: existingHome, loopUp, wtName: `${prefix}${label}-studio-${backendFlag}` });
-  const chosen = chooseSquadBackend({ flag: reconcile ? current : backendFlag || "orca", projectBackend: reconcile ? current : backendFlag || "orca", providerSetting: provider });
+  const chosen = chooseSquadBackend({ flag: reconcile ? current : backendFlag || "orca", studioBackend: reconcile ? current : backendFlag || "orca", providerSetting: provider });
   if (!chosen.ok) { writeErr(`up: ${chosen.error}\n`); return 2; }
   const b = chosen.backend, offOrca = b !== "orca";
   if (offOrca && !(reconcile ? existingHome.startsWith("path:") : isUrl(arg) || arg.startsWith("path:"))) {
     writeErr(`up: a project on ${b} needs a local repo (a git URL or path:<dir>), not '${reconcile ? existingHome : arg}'\n`);
     return 2;
   }
-  // The project's backend and worktree tool, before anything is made: settings.ts refuses a pair that does not fit
-  // the host or the roster (a role whose agent the backend cannot start), and a refusal writes nothing.
-  const writes: [string, string][] = [];
-  if (!reconcile && offOrca) writes.push(["default_backend", b]);
-  if (worktree) writes.push(["worktree_provider", worktree]);
-  if (writes.length) {
+  // The project's backend and worktree tool, before anything is made: a pair that does not fit the host or the roster
+  // (a role whose agent the backend cannot start) is refused, and a refusal writes nothing. The backend itself is the
+  // Studio's (dispatcher.json studio_backend, written below), no setting (U57).
+  if (!reconcile && offOrca) {
+    const { backendChangeProblem } = await import("../backend/backend-change.ts");
+    const why = backendChangeProblem({ project: label, backend: b, provider: provider || "auto", roster: readRoster(label, settingsAt()) });
+    if (why) { writeErr(`up: ${why}\n`); return 2; }
+  }
+  if (worktree) {
     const { changeSettings } = await import("../loop/settings/settings-migrate.ts");
     const { set } = await import("../loop/settings/settings.ts");
-    if (changeSettings("up", (st) => { for (const [k, v] of writes) set(st, label, "limits.conf", k, v, "ds up"); return true; }) === null) return 2;
+    if (changeSettings("up", (st) => { set(st, label, "limits.conf", "worktree_provider", worktree, "ds up", { backend: b }); return true; }) === null) return 2;
   }
   let repo: string, repoPath = "";
   if (reconcile) {
@@ -325,7 +328,7 @@ export async function run(argv: string[]): Promise<number> {
  *  switches the project) and waited for. `--worktree` is written once the project is on its new backend. */
 async function moveProject(o: { label: string; from: string; to: string; provider: string; worktree: string; home: string; loopUp: boolean; wtName: string }): Promise<number> {
   const { label, from, to } = o;
-  const chosen = chooseSquadBackend({ flag: to, projectBackend: to, providerSetting: o.provider });
+  const chosen = chooseSquadBackend({ flag: to, studioBackend: to, providerSetting: o.provider });
   if (!chosen.ok) { writeErr(`up: ${chosen.error}\n`); return 2; }
   const repoPath = o.home.startsWith("path:") ? o.home.slice(5) : "";
   if (to !== "orca" && repoPath === "") { writeErr(`up: a project on ${to} needs a local repo (path:<dir>), not '${o.home}'. Nothing changed.\n`); return 2; }

@@ -13,8 +13,7 @@ Record is thin. The run is in the "Record" section below.
 - herdr's pinned release is installed: `bun bin/backend/herdr.ts install` (it downloads herdr 0.9.5 into
   `~/.local/share/dev-studio/herdr/0.9.5/`, checks its sha256 and touches nothing else). `DS_HERDR_BIN` may name
   another binary; its protocol is still checked on the first call.
-- The trial project's backend is set to herdr (`ds config set <trial> limits.conf default_backend herdr`,
-  or Settings → Agents & nudges; the change is checked when set). Every other project stays on `orca`: a
+- The trial project's backend is set to herdr (`ds up <trial> --backend herdr`; the move is checked first). Every other project stays on `orca`: a
   `--backend herdr` spawn anywhere else is refused.
 - The trial project's roster names Claude only (no Codex or Muse, and no fallbacks to them): `spawn-squad` refuses
   a squad off Orca whose roster names another agent (`/ds-roles`).

@@ -204,14 +204,14 @@ already running in the worktree is left alone. With the loop down, an Orca proje
 The project's name is the repo's, or `--label <name>`; a second project from the same repo takes its own
 label (its own clone in `repos/<label>/`, state and Studio). A label already up with another repo is refused.
 `--backend <orca|orca-lite|tmux|herdr>` picks where the project runs, checked as a squad's backend is: on
-first bring-up it becomes the project's `default_backend`, and a roster role the backend cannot start (only
+first bring-up it becomes the project's backend, the Studio's (squads start on it), and a roster role the backend cannot start (only
 claude starts off Orca today) is refused before anything is made. Off Orca the Studio's worktree comes from
 the project's worktree tool (`--worktree <auto|git|treehouse>` writes `worktree_provider`), and the loop
 alone starts it, so `up` stops when the loop is not running. A project keeps one backend for its Studio and
 squads: `bin/ds up <label> --backend <x>` on a project already up moves it (the loop starts the Studio on
 `<x>` in a new worktree, closes the old one and switches the project, keeping the Studio's account history). It
-is refused while any squad of the project is open, a paused one included, and `ds config set … default_backend`
-is refused while the Studio runs elsewhere, naming that command.
+is refused while any squad of the project is open, a paused one included. There is no `default_backend` setting:
+`ds config set … default_backend` is refused, naming that command.
 
 ```sh
 bin/ds up https://github.com/you/your-app --backend tmux --label your-app-tmux
@@ -235,7 +235,7 @@ bin/ds up <git-url|name:<repo>|<label>> [--label <name>] [--backend <orca|orca-l
 - **`--label <name>`** names the project (default: the repo's name); its clone is `repos/<label>/`, its state
   `state/<label>/`. A second project on the same repo needs its own label; a label already up with another repo is refused.
 - **`--backend <x>`** says where the project's Studio and squads run (default `orca`). It is written once, as
-  `default_backend`, on the first bring-up. Off Orca the loop starts the Studio, so `up` stops when the loop is not running.
+  the Studio's `studio_backend`, on the first bring-up. Off Orca the loop starts the Studio, so `up` stops when the loop is not running.
 - **`--worktree <auto|git|treehouse>`** picks the worktree tool (`worktree_provider`); `auto` is the backend's own.
 - **`--account <id>`** starts the Studio on that Claude login; **`--skills`** also installs the role skills.
 
@@ -713,8 +713,8 @@ here; see `conventions/learnings.md`.
 ## Which backend to pick
 
 A project runs on one backend: its squads' terminals, and the Studio's, follow the project's
-`default_backend`. Use `orca` (Orca with Runs, the default) for real work. The other three are
-alternatives you can set on a project, and each has a runbook with what its trial recorded.
+backend, the one its Studio runs on. Use `orca` (Orca with Runs, the default) for real work. The other three are
+alternatives a project can start on, and each has a runbook with what its trial recorded.
 
 | Backend | What it is | Worktree tools (first is the default) | The host needs |
 |---|---|---|---|
@@ -723,21 +723,20 @@ alternatives you can set on a project, and each has a runbook with what its tria
 | `tmux` | One tmux server per project, one session per squad | `git`, `treehouse` | `tmux` on `PATH` |
 | `herdr` | herdr's pinned release: one workspace per squad | `git`, `treehouse` | its release, installed with `bun bin/backend/herdr.ts install` |
 
-- **One setting per project.** The project's `default_backend` (default `orca`) says where its squads
-  start. A squad takes no other backend: `spawn-squad --backend <name>` and the board's Start squad
-  dialog name the project's backend or are refused, with a message that says how to change the
-  project's setting. The dialog shows the backend as a line, not a choice.
-- **Set or change it.** `bin/ds config set <project> limits.conf default_backend <name>`, or the
-  project's Settings → Agents & nudges. The change is checked when you set it and refused, with the
+- **The Studio's backend is the project's.** New squads start on the backend the project's Studio runs on
+  (default `orca`). A squad takes no other backend: `spawn-squad --backend <name>` and the board's Start
+  squad dialog name the Studio's backend or are refused, with the `ds up <project> --backend <name>` line
+  that moves the project. The dialog shows `<backend> (the Studio's)` as a line, not a choice.
+- **Set or change it.** The first `bin/ds up <url> --backend <name>` sets it; `bin/ds up <project> --backend <name>`
+  on a project already up moves the Studio and the project's squads together. It is checked and refused, with the
   reason and the fix, when it does not fit: a `worktree_provider` the backend cannot use, a missing
   binary, or a roster row naming an agent the backend cannot launch (only Claude has a launch line off
   Orca, so a project on `tmux`, `herdr` or `orca-lite` needs a roster that names Claude only, fallbacks
   included: `bin/commands/roles.sh <project> set builder claude opus ondemand - claude:sonnet`).
-  A settings import never copies `default_backend` or `worktree_provider` to another project.
-- **Running squads.** A change touches new squads only. Each running squad keeps its backend and
-  worktree tool for life, and the command prints `new squads start on <x>; N running squads stay on
-  <old>`. To move a topic, close its squad and start it again. If the environment variable
-  `DS_LIMIT_DEFAULT_BACKEND` is set it overrides every project, and the command warns about it.
+  `default_backend` is no setting any more: setting it is refused with that `ds up` line, and a row an old
+  project still holds is ignored. A settings import never copies `worktree_provider` to another project.
+- **Running squads.** A move touches new squads only, and is refused while any squad is open. Each running
+  squad keeps its backend and worktree tool for life. To move a topic, close its squad and start it again.
 - **What still needs Orca.** The Studio and the account list (logins, limits) are Orca's until
   `plan-project-start` and `plan-accounts` land, so keep Orca installed and signed in on the host
   even when a project's squads run elsewhere.
@@ -755,7 +754,7 @@ alternatives you can set on a project, and each has a runbook with what its tria
 
 All terminal access is behind the backend contract (`bin/backend/contract.ts`). To add a backend,
 write its adapter and register it in `bin/backend/registry.ts`, as `conventions/backend.md`
-describes. A project then picks it with `default_backend`, as above.
+describes. A project then starts on it with `ds up <project> --backend <name>`, as above.
 
 ## Commands and skills
 

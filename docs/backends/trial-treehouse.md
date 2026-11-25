@@ -96,7 +96,7 @@ measure against.
    - Install treehouse v3.1.8 (github.com/kunchenguid/treehouse) on PATH, or set `DS_TREEHOUSE_BIN` in the
      loop's environment.
    - Pick a throwaway trial project whose repo folder does not start with `ds-` (see the tidy note above).
-     Set its backend: `bin/ds config set <trial> limits.conf default_backend tmux`.
+     Set its backend: `bin/ds up <trial> --backend tmux`.
    - Give the trial project a Claude-only roster, as in the tmux runbook:
      `bin/commands/roles.sh <trial> set builder claude opus ondemand - claude:sonnet`.
    - Run the drill on the trial repo and keep its output:
