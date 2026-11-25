@@ -12,6 +12,7 @@ const sentSrc = cut("const sentQ = new Map();", "closingQ.delete(k);\n};");
 const ak = page.indexOf("const akey = (n) =>");
 const keysSrc = page.slice(page.indexOf("const nkey = (n) =>"), page.indexOf("\n", ak));
 const cardActions = new Function("docLabel", cut("function cardActions(", "\n}\n") + " return cardActions;")(() => "doc");
+const qoptions = cut("function QOptions(", "\n}\n");
 const overlay = cut("function AskOverlay(", "\n}\n");
 
 function rig() {
@@ -23,7 +24,7 @@ function rig() {
     return o + t + (k < v.length ? str(v[k]) : "");
   }, "");
   const make = new Function("useState", "useRef", "useEffect", "html", "sendAnswer", "sqName", "fmtAge", "linkedQ", "docLabel", "copy", "QPr", "ActBtn", "ChatPanel", "hhmmss", "post",
-    `${sentSrc}\n${keysSrc}\nconst sendAnswer2 = async (label, topic, id, answer, since) => { sentQ.set(askingKey(label + "/" + topic + "/" + id, since), "10:00"); };\n${overlay.replace("sendAnswer(", "sendAnswer2(")}\nreturn { AskOverlay, sentQ, pruneSent, akey };`);
+    `${qoptions}\n${sentSrc}\n${keysSrc}\nconst sendAnswer2 = async (label, topic, id, answer, since) => { sentQ.set(askingKey(label + "/" + topic + "/" + id, since), "10:00"); };\n${overlay.replace("sendAnswer(", "sendAnswer2(")}\nreturn { AskOverlay, sentQ, pruneSent, akey };`);
   const api = make(useState, useRef, () => {}, html, null, () => "sq", () => "1m", (t: string) => t, () => "doc", () => {}, null, null, null, (d: Date) => d.toISOString().slice(11, 19), null);
   const q = (id: string, since: string | null, label = "p", squad = "one") => ({ squad, label, kind: "question", id, since, title: id, titled: true, text: id, options: [], choices: [], age_min: 1 });
   const render = (items: any[], atKey: string) => { at = 0; fns.length = 0;
