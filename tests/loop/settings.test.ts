@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { confRows } from "../../bin/loop/db/import-config.ts";
 import { configObserver } from "../../bin/loop/observers/config.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
-import { exportFiles, exportSections, exportText, get, historyOf, readGet, readProjectRosterLines, readRoster, readRows, reset, rm, set, SettingsError, type SettingsFile } from "../../bin/loop/settings/settings.ts";
+import { backendChangeNote, exportFiles, exportSections, exportText, get, historyOf, readGet, readProjectRosterLines, readRoster, readRows, reset, rm, set, SettingsError, type SettingsFile } from "../../bin/loop/settings/settings.ts";
 import { open, type Store } from "../../bin/loop/core/store.ts";
 import { resolveBackUp } from "../../bin/loop/settings/roster.ts";
 
@@ -312,5 +312,61 @@ describe("config observer (KTD5)", () => {
     tick(T + 5);
     expect(row(s, "skills.conf", "builder lavish")).toBe("off");
     expect(row(s, "limits.conf", "limit_pct")).toBe("80");
+  });
+});
+
+describe("U32: a backend change is checked when it is set", () => {
+  const has = (...bins: string[]) => (b: string) => (bins.includes(b) ? `/usr/bin/${b}` : null);
+  const squad = (s: Store, topic: string, backend: string, status = "running") =>
+    s.upsert("squads", { project: P, topic }, { repo: "path:/x", status, want: "running", observed_at: 1, updated_at: 1, backend });
+
+  // The shipped roster names muse, which a contract backend cannot launch: the other tests run on a claude-only one.
+  const claudeOnly = (o: { conventions: string; now: number }) => { writeFileSync(join(o.conventions, "roles.conf"), "lead claude sonnet always\nbuilder claude sonnet always\n"); return o; };
+
+  test("a missing binary, a tool the backend cannot use and a roster row it cannot launch are each refused with the fix", () => {
+    const { s, o } = fixture();
+    const oo = { ...o, which: has("orca") };
+    refused(() => set(s, P, "limits.conf", "default_backend", "tmux", "ds", oo), /needs 'tmux', which is not on PATH.*install it, or pick another backend/);
+    const tm = { ...o, which: has("tmux") };
+    // the shipped roster names muse for a role: a contract backend can start claude only
+    refused(() => set(s, P, "limits.conf", "default_backend", "tmux", "ds", tm), /can start only claude.*roles\.conf/);
+    expect(row(s, "limits.conf", "default_backend")).toBeNull();
+    // the same change fits once the roster is claude only
+    claudeOnly(o);
+    expect(set(s, P, "limits.conf", "default_backend", "tmux", "ds", tm)).toHaveLength(1);
+  });
+
+  test("worktree_provider: an explicit git or treehouse with orca is refused; so is a backend change under it", () => {
+    const { s, o } = fixture();
+    claudeOnly(o);
+    refused(() => set(s, P, "limits.conf", "worktree_provider", "git", "ds", o), /cannot use worktree_provider git.*set worktree_provider auto, or pick another backend/);
+    refused(() => set(s, P, "limits.conf", "worktree_provider", "treehouse", "ds", o), /cannot use worktree_provider treehouse/);
+    expect(set(s, P, "limits.conf", "worktree_provider", "auto", "ds", o)).toHaveLength(1);
+    // orca-lite also uses Orca's worktrees: a row of git is refused there too
+    s.upsert("config", { project: P, file: "limits.conf", key: "worktree_provider" }, { value: "git", observed_at: 1 });
+    refused(() => set(s, P, "limits.conf", "default_backend", "orca-lite", "ds", { ...o, which: has("orca") }), /orca-lite cannot use worktree_provider git/);
+  });
+
+  test("a valid change is written, and the note says where new squads start and how many stay", () => {
+    const { s, o } = fixture();
+    claudeOnly(o);
+    squad(s, "a", "orca"); squad(s, "b", "orca"); squad(s, "c", "orca", "closed"); squad(s, "d", "tmux");
+    const oo = { ...o, which: has("orca") };
+    const cs = set(s, P, "limits.conf", "default_backend", "orca-lite", "ds", oo);
+    expect(cs).toHaveLength(1);
+    expect(backendChangeNote(s, P, cs, oo)).toBe("new squads start on orca-lite; 2 running squads stay on orca");
+    squad(s, "b", "orca", "closed");
+    const back = set(s, P, "limits.conf", "default_backend", "orca", "ds", oo);
+    expect(backendChangeNote(s, P, back, oo)).toBe("new squads start on orca; 0 running squads stay on orca-lite");
+    expect(backendChangeNote(s, P, [], oo)).toBe("");
+  });
+
+  test("a DS_LIMIT_DEFAULT_BACKEND env var is warned about", () => {
+    const { s, o } = fixture();
+    claudeOnly(o);
+    const oo = { ...o, which: has("orca") };
+    const cs = set(s, P, "limits.conf", "default_backend", "orca-lite", "ds", oo);
+    const note = withEnv("DS_LIMIT_DEFAULT_BACKEND", "tmux", () => backendChangeNote(s, P, cs, oo));
+    expect(note).toMatch(/^warning: DS_LIMIT_DEFAULT_BACKEND=tmux is set and overrides every project's default_backend/);
   });
 });

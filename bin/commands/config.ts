@@ -22,7 +22,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { parse, print, shape } from "../loop/core/cli.ts";
 import {
-  applyImport, EXPORT_SECTION, exportSections, exportTransfer, get, historyOf, IMPORT_FILES, importActor, importText, planImport, previewText, prune, reset, rm, set,
+  applyImport, backendChangeNote, EXPORT_SECTION, exportSections, exportTransfer, get, historyOf, IMPORT_FILES, importActor, importText, planImport, previewText, prune, reset, rm, set,
   SETTINGS_FILES, SettingsError, staleRows, type Change, type ImportPick, type ImportSource, type PlanRow,
 } from "../loop/settings/settings.ts";
 import { openSettings } from "../loop/settings/settings-migrate.ts";
@@ -126,7 +126,7 @@ export async function run(args: string[]): Promise<number> {
           return 0;
         case "set":
           if (pos.length < 4) break;
-          return changed(set(s, pos[0], pos[1], pos[2], pos.slice(3).join(" "), by));
+        { const cs = set(s, pos[0], pos[1], pos[2], pos.slice(3).join(" "), by), r = changed(cs), note = backendChangeNote(s, pos[0], cs); if (note) process.stderr.write(note + "\n"); return r; }
         case "rm":
           if (pos.length !== 3) break;
           return changed(rm(s, pos[0], pos[1], pos[2], by));

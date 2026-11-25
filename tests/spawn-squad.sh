@@ -63,8 +63,9 @@ ck "spawn framing-file: missing names the path" "$(run bin/commands/spawn-squad.
 # name it; any other backend (orca and herdr included) is refused naming default_backend.
 mkdir -p "$S/tx/squads"; echo '{"home_repo":"tx"}' > "$S/tx/dispatcher.json"
 "$TMP/bin/ds" import >/dev/null 2>&1 || true
-"$TMP/bin/ds" config set tx limits.conf default_backend tmux >/dev/null
 for r in builder builder-review builder-review-standard; do "$TMP/bin/ds" config set tx roles.conf "$r" "claude opus ondemand - claude:sonnet" >/dev/null; done
+mkdir -p "$TMP/fakebin"; printf '#!/bin/sh\n' >"$TMP/fakebin/tmux"; chmod +x "$TMP/fakebin/tmux"
+PATH="$TMP/fakebin:$PATH" "$TMP/bin/ds" config set tx limits.conf default_backend tmux >/dev/null
 if command -v tmux >/dev/null 2>&1; then
   run bin/commands/spawn-squad.sh --repo tx --topic b1 >/dev/null 2>"$TMP/err" || cat "$TMP/err" >&2
   ck "tmux project, no flag: starts on tmux" "$(sql "SELECT backend FROM squads WHERE topic = 'b1'")" "tmux"
