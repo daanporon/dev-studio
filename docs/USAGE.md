@@ -653,9 +653,9 @@ here; see `conventions/learnings.md`.
 
 ## Which backend to pick
 
-A squad's terminals run on one backend, and its working folders come from one worktree tool. Use
-`orca` (Orca with Runs, the default) for real work: it is the only backend that is not on trial.
-The other three are for a trial project.
+A project runs on one backend: its squads' terminals, and the Studio's, follow the project's
+`default_backend`. Use `orca` (Orca with Runs, the default) for real work. The other three are
+alternatives you can set on a project, and each has a runbook with what its trial recorded.
 
 | Backend | What it is | Worktree tools (first is the default) | The host needs |
 |---|---|---|---|
@@ -664,13 +664,24 @@ The other three are for a trial project.
 | `tmux` | One tmux server per project, one session per squad | `git`, `treehouse` | `tmux` on `PATH` |
 | `herdr` | herdr's pinned release: one workspace per squad | `git`, `treehouse` | its release, installed with `bun bin/backend/herdr.ts install` |
 
-- **The trial gate.** A backend on trial starts squads only in a project whose `default_backend` names
-  it. `--backend` anywhere else is refused with a message and never falls back to `orca`. The trial
-  project can still start an `orca` squad.
-- **Choosing.** For a project: `bin/commands/limits.sh set <project> default_backend <name>` (default
-  `orca`). For one squad: `spawn-squad --backend <name>`, or the Backend pick in the board's Start
-  squad dialog; it wins over the project key. The choice is written once, at spawn. A squad keeps its
-  backend and worktree tool for life, and a later change of `default_backend` touches only new squads.
+- **One setting per project.** The project's `default_backend` (default `orca`) says where its squads
+  start. A squad takes no other backend: `spawn-squad --backend <name>` and the board's Start squad
+  dialog name the project's backend or are refused, with a message that says how to change the
+  project's setting. The dialog shows the backend as a line, not a choice.
+- **Set or change it.** `bin/ds config set <project> limits.conf default_backend <name>`, or the
+  project's Settings → Agents & nudges. The change is checked when you set it and refused, with the
+  reason and the fix, when it does not fit: a `worktree_provider` the backend cannot use, a missing
+  binary, or a roster row naming an agent the backend cannot launch (only Claude has a launch line off
+  Orca, so a project on `tmux`, `herdr` or `orca-lite` needs a roster that names Claude only, fallbacks
+  included: `bin/commands/roles.sh <project> set builder claude opus ondemand - claude:sonnet`).
+  A settings import never copies `default_backend` or `worktree_provider` to another project.
+- **Running squads.** A change touches new squads only. Each running squad keeps its backend and
+  worktree tool for life, and the command prints `new squads start on <x>; N running squads stay on
+  <old>`. To move a topic, close its squad and start it again. If the environment variable
+  `DS_LIMIT_DEFAULT_BACKEND` is set it overrides every project, and the command warns about it.
+- **What still needs Orca.** The Studio and the account list (logins, limits) are Orca's until
+  `plan-project-start` and `plan-accounts` land, so keep Orca installed and signed in on the host
+  even when a project's squads run elsewhere.
 - **Worktree tool.** `worktree_provider` is `auto` (the default: Orca's own for `orca` and
   `orca-lite`, `git` for `tmux` and `herdr`), `git`, or `treehouse` (a warm pool of leased worktrees,
   only on `tmux` and `herdr`; the binary comes from `DS_TREEHOUSE_BIN` or `PATH`). A tool the backend
@@ -681,11 +692,11 @@ The other three are for a trial project.
   Each backend's runbook is in [orca-lite](backends/trial-orca-lite.md), [tmux](backends/trial-tmux.md)
   and [herdr](backends/trial-herdr.md).
 
-## Swap the backend
+## Add a backend
 
-All `orca` access is behind `bin/backend/orca.sh`. To run on another backend,
-write `bin/backend/<name>.sh` implementing the ops in `conventions/backend.md`
-and run with `BACKEND=bin/backend/<name>.sh`.
+All terminal access is behind the backend contract (`bin/backend/contract.ts`). To add a backend,
+write its adapter and register it in `bin/backend/registry.ts`, as `conventions/backend.md`
+describes. A project then picks it with `default_backend`, as above.
 
 ## Commands and skills
 

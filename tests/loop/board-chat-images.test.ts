@@ -95,7 +95,9 @@ test("the panel offers 📎, and attaching by picker, paste and drop shows four 
   const t = await open();
   try {
     const btn = t.doc.querySelector(".chat-attach");
-    expect(btn.textContent).toContain("📎");
+    expect(btn.getAttribute("aria-label")).toBe("Attach images");
+    expect(btn.querySelector("svg").getAttribute("aria-hidden")).toBe("true");
+    expect(btn.textContent).not.toContain("📎");
     expect(btn.getAttribute("title")).toContain("not checked for secrets");
     expect(t.doc.querySelector('.chat-modal input[type="file"]').getAttribute("accept")).toBe("image/*");
     await t.pick(t.file("a.png"), t.file("b.png"));

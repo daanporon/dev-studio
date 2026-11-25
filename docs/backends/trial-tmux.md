@@ -7,9 +7,9 @@ retired after the merge. See "Record" below.
 
 What this unit shipped so the trial can run:
 
-- `tmux` is pickable at spawn, on trial (`bin/backend/registry.ts`, `conventions/backend.md`, "On trial").
-  A squad starts on it only in a project whose `default_backend` is `tmux`. A `--backend tmux` anywhere
-  else is refused.
+- `tmux` is pickable for a project (`bin/backend/registry.ts`, `conventions/backend.md`, "A backend per
+  squad"). A squad starts on it only in a project whose `default_backend` is `tmux`. A `--backend tmux`
+  anywhere else is refused.
 - `ds tmux-drill` (`bin/commands/tmux-drill.ts`):
   - `version` runs the version-change drill on a private socket.
   - `snapshot <project>` is the read-only before/after capture each step below asks for.
@@ -76,8 +76,8 @@ The same trial as orca-lite (U16a), on plain git worktrees.
 1. **Before the run.**
    - Get the operator's go on `trial-live-go`.
    - Update the host (`/ds-update`).
-   - Pick a throwaway trial project and run `bin/ds config set <trial> limits.conf default_backend tmux`.
-     Leave `worktree_provider` at `auto`, which is git. Treehouse is U16e.
+   - Pick a throwaway trial project and set its backend: `bin/ds config set <trial> limits.conf default_backend tmux`
+     (checked when set; running squads stay where they are). Leave `worktree_provider` at `auto`, which is git. Treehouse is U16e.
    - Give the trial project a roster that names only `claude`, fallbacks included. The shipped `builder` row
      falls back to `muse:muse-spark-1.3`, and off Orca only Claude has a launch line, so spawn-squad refuses
      it. Run `bin/commands/roles.sh <trial> set builder claude opus ondemand - claude:sonnet`.
