@@ -132,6 +132,7 @@ describe("squad create (U158)", () => {
 
   test("U11: a squad on another backend gets no Run, task or coordinator; its roles are wished", async () => {
     const { s, orca, tick } = await rig();
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });   // U30: the project's backend
     s.want("squad", "fx/ontmux", "running", { payload: { repo: "path:/nonexistent/fixture-repo", type: "feature" },
       fill: { repo: "path:/nonexistent/fixture-repo", type: "feature", backend: "tmux", worktree_provider: "git" }, by: "test" });
     await tick(3);

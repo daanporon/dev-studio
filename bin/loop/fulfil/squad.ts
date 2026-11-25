@@ -25,7 +25,8 @@ import { ensureTransition, intents, type Target } from "../pause/pause.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
 import { spawn } from "../io/orca.ts";
 import { effectiveRoster } from "../settings/roster.ts";
-import { limitInt } from "../settings/limits.ts";
+import { limit, limitInt } from "../settings/limits.ts";
+import { squadBackendRule } from "../../backend/registry.ts";
 import { endSquad, stopsPending } from "../squad/exposed.ts";
 import { debriefOn, finalDebrief, stepOf, unitsOf } from "../squad/archive-debrief.ts";
 import * as questions from "../messages/questions.ts";
@@ -119,6 +120,10 @@ async function create(a: Action, x: Exec, r: Row): Promise<Result> {
   // U11: a squad on a contract backend (not `orca`) has no Run, task or coordinator pane: create writes its
   // doc and wishes its always-on roles, which start through the contract (core/actuator.ts contractSeat).
   const contract = String(r.backend ?? "orca") !== "orca";
+  // U30: one rule for which backend a project's squads use. A wish asking for another is refused (a card and the
+  // wish_given_up event, through giveUp), never started.
+  const ruled = squadBackendRule({ backend: String(r.backend ?? "orca"), host: String(r.backend_host ?? ""), projectBackend: limit(store, project, "default_backend") ?? "" });
+  if (ruled) return { failed: ruled };
   // Re-spawning an archived topic: the closed row starts over — a new Run, task, doc and
   // coordinator, and create keys scoped to this wish so no old call replays.
   if (["closed", "gone"].includes(String(r.status ?? ""))) {

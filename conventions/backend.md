@@ -261,15 +261,18 @@ runs a squad on it through `projectHerdr` (U16c, below), on a trial project only
 Each squad runs on one terminal backend for life (orca-backend-alternatives U9). `bin/backend/registry.ts`
 lists them: `orca` (Orca with Runs, today's path), `orca-lite` (Orca terminals, no Runs), `tmux` and
 `herdr`, each with the worktree tools it can use (`orca` for the Orca ones; `git` or `treehouse` for the
-others, the first being its default). A spawn can pick `orca` anywhere, and `tmux` (U16b, below),
-`herdr` (U16c) or `orca-lite` (U16a) on their trial project. The loop itself can run a squad on any
+others, the first being its default). A spawn starts on the project's `default_backend` (U30, below): `orca`, `tmux` (U16b),
+`herdr` (U16c) or `orca-lite` (U16a). The loop itself can run a squad on any
 contract backend (U11, "Started" below).
 
-- **On trial (U16).** A backend whose registry entry has `trial: true` (every one but `orca`) starts
-  squads only in a project whose `default_backend` names it: `--backend tmux` (or the board's pick) on a
-  project that defaults to anything else is refused with `backend tmux (--backend) is on trial: only a
-  project whose default_backend is tmux starts squads on it`, so a trial never leaks onto another
-  project. The trial project may still start an `orca` squad. An entry's `find` looks for its binary where
+- **One rule (U30).** A project's squads start on its `default_backend` and nothing else
+  (`squadBackendRule`, `bin/backend/registry.ts`): `--backend` (or the board's pick) naming another
+  backend, `orca` included, is refused with `backend tmux is refused: this project's squads start on orca
+  (its default_backend); to change it set the project's default_backend …`, and a squad wish
+  (`ds want squad … --fill '{"backend":…}'`) asking for another is refused by `bin/loop/fulfil/squad.ts`
+  with a `wish_given_up` event and a card, so a trial never leaks onto another project. The flag and the
+  wish's `backend` stay for squads on other hosts later (the rule takes the squad's backend and
+  `backend_host`; today only `local`). An entry's `find` looks for its binary where
   PATH would not (herdr: `herdrBin()`), and `install` is named when it is missing. The tmux trial's
   runbook and record are `docs/backends/trial-tmux.md`; `ds tmux-drill` is its helper (the
   version-change drill and the before/after snapshot). The treehouse trial (U16e: a tmux squad with `worktree_provider
@@ -277,11 +280,11 @@ contract backend (U11, "Started" below).
   against fresh, and the lease check). The comparison of the three backends, Treehouse's measured gain and
   the recommendation for what new squads try next are `docs/backends/trial.md` (U16d).
 
-- **Chosen at spawn.** `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend
-  pick) wins; else the project's limits key `default_backend` (default `orca`). The worktree tool is the
+- **Chosen at spawn.** the project's limits key `default_backend` (default `orca`) says it;
+  `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend pick) may only name that backend. The worktree tool is the
   project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
   refuses, naming why, an unknown backend, a tool the backend cannot use, a backend not built yet, a
-  backend on trial outside its trial project and a binary missing on PATH (the backend's, or treehouse's
+  backend other than the project's `default_backend` and a binary missing on PATH (the backend's, or treehouse's
   for `worktree_provider treehouse`: `DS_TREEHOUSE_BIN`, else on PATH); a refused spawn writes no wish and never falls back to `orca`.
 - **Written once.** The squad's row keeps `backend`, `backend_host` (`local`; the machine it runs on) and
   `worktree_provider` (migration 0054; every existing squad reads `orca`/`local`/`orca`). Once the loop
@@ -394,6 +397,16 @@ picks. In the Studio's own shell (`DS_MEMBER` `<project>/_studio/studio`) `contr
 `preflight`, …) goes to `hostBackendPath()`. A `local::<path>` worktree is its own path (`worktreePath` in
 `bin/lib/lib.ts`), so the role file and the rewake hook need no `ps`. `contractProjects` and
 `projectContracts` count a project whose only contract member is its Studio.
+**Seeing that Studio (project-start U51).** `observers/contract.ts` reads a Studio off Orca in a
+`local::` folder whether or not the project has a squad off Orca (`studioGroup`, squad `_studio`), writes
+its `observed_terminals` and `observed_workers` rows as for a contract member (its walk counts only the
+Studio's agent), and calls `adoptStudio` after a `terminal.list` that succeeded. A contract terminal has
+no agent identity, so the Studio is found by its `DS_GEN` (`contractCandidates` in `squad/studio.ts`: a
+terminal of the member's own generation, else every terminal with one; a shell beside it has none), and
+the member row keeps the held terminal's `gen`. `offOrca` counts the Studio's worktree and folder, so the
+Orca observer never walks, adopts or reads it (an orca-lite Studio is read by one observer), and the poke
+checks treat it as off Orca. The Studio card names the Studio's backend instead of Orca.
+`tests/loop/studio.test.ts` ("a Studio off Orca (U51)") covers it.
 A Lead off Orca has no Run. Its address is its worktree (`send-worker`), its watch tick reads only its
 loop.db rows (header `no Run: the squad runs on <backend>`), and ask-operator takes a state file with no
 `run_id` when the squad's row names a contract backend. `tests/loop/role-scripts-contract.test.ts`

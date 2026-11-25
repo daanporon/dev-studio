@@ -6,7 +6,8 @@
 // terminal whose agent is the Studio's (the projects doc's `studio_agent`, default claude) and whose
 // title is not a `ds-loop …` pane. None or several: nothing is adopted and reconcilers/studio.ts shows
 // one `studio.adopt` card naming the terminals. A handle Orca no longer lists is cleared, and the
-// next tick searches again.
+// next tick searches again. U51: a Studio off Orca (studio_backend) is read and adopted by the contract
+// observer instead (observers/contract.ts), its terminal found by DS_GEN (contractCandidates).
 //
 // The recorded handle is the only Studio terminal the loop may read or type into (R14): no other
 // terminal in that worktree, and never by worktree id (agent_terminal would pick any of them).
@@ -24,8 +25,9 @@ export const RESTART_STUDIO = "Restart Studio";
 export const STUDIO_FINE = "It's fine";
 export const RESTART_APPROVED = "studio:restart-approved";
 
-export type StudioTerm = { handle: string; title: string | null; identity: string | null };
-export type StudioView = { wt: string; agent: string; member: Row | null; terms: StudioTerm[]; candidates: StudioTerm[]; recorded: string | null };
+export type StudioTerm = { handle: string; title: string | null; identity: string | null; gen?: string | null };
+// `contract`: the Studio runs off Orca (U51), so its candidates come from contractCandidates.
+export type StudioView = { wt: string; agent: string; member: Row | null; terms: StudioTerm[]; candidates: StudioTerm[]; recorded: string | null; contract: boolean };
 
 const parse = (s: unknown): Row => { try { const o = JSON.parse(String(s ?? "")); return o && typeof o === "object" ? o : {}; } catch { return {}; } };
 
@@ -46,6 +48,15 @@ export function studioCandidates(terms: StudioTerm[], agent: string): StudioTerm
   return terms.filter((t) => t.identity === agent && !/^ds-loop\b/.test(t.title ?? ""));
 }
 
+// U51: a Studio off Orca. A contract terminal carries no agent identity (bin/backend/contract.ts), so the
+// Studio is told apart by its DS_GEN: a terminal the loop started has one, a shell the operator opened
+// beside it has none. The one of the member's own generation wins; otherwise every started one is a candidate.
+export function contractCandidates(terms: StudioTerm[], gen: unknown): StudioTerm[] {
+  const started = terms.filter((t) => t.gen != null && t.gen !== "");
+  const own = gen != null && gen !== "" ? started.filter((t) => t.gen === String(gen)) : [];
+  return own.length ? own : started;
+}
+
 export function studioMember(store: Store, project: string, wt: string): Row | null {
   return store.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? ORDER BY id DESC").get(project, STUDIO_SQUAD, wt) as Row | null;
 }
@@ -58,11 +69,15 @@ export function studioView(store: Store, project: string): StudioView | null {
   if (!wt) return null;
   const agent = studioAgent(proj);
   const terms = (store.db.query("SELECT handle, title, doc FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL ORDER BY handle")
-    .all(project, wt) as Row[]).map((r) => ({ handle: String(r.handle), title: (r.title as string | null) ?? null, identity: (parse(r.doc).identity as string | null) ?? null }));
+    .all(project, wt) as Row[]).map((r) => {
+      const d = parse(r.doc);
+      return { handle: String(r.handle), title: (r.title as string | null) ?? null, identity: (d.identity as string | null) ?? null, gen: d.gen == null ? null : String(d.gen) };
+    });
   const member = studioMember(store, project, wt);
   // /ds-up may hand over the handle it started (dispatcher.json studio_handle, U262).
   const recorded = (member?.handle as string | null) || (parse(proj?.doc).studio_handle as string | null) || null;
-  return { wt, agent, member, terms, candidates: studioCandidates(terms, agent), recorded };
+  const contract = studioBackend(proj) !== "orca";
+  return { wt, agent, member, terms, candidates: contract ? contractCandidates(terms, member?.gen) : studioCandidates(terms, agent), recorded, contract };
 }
 
 // The handle to hold this tick: the recorded one while it is still a candidate (listed, running the
@@ -86,8 +101,10 @@ export function adoptStudio(store: Store, project: string, now: number): string 
   const ran = ow?.walk === "running" && ow.agent === v.agent;
   const want: Row = { agent: v.agent, handle, status: ow && ow.gone_at == null ? "running" : "gone",
     account: (ran && ow!.account) || m?.account || null, model: (ran && ow!.live_model) || m?.model || null };
-  // U4: another terminal than the recorded one is not the start whose generation the row holds.
-  if (m && handle !== ((m.handle as string | null) ?? null)) want.gen = null;
+  // U4: another terminal than the recorded one is not the start whose generation the row holds. U51: off
+  // Orca the generation is how the Studio is found, so the row keeps the held terminal's (none held: as it was).
+  if (v.contract) { const g = handle ? v.terms.find((t) => t.handle === handle)?.gen ?? null : undefined; if (g !== undefined) want.gen = g; }
+  else if (m && handle !== ((m.handle as string | null) ?? null)) want.gen = null;
   const ctx = { project, squad: STUDIO_SQUAD, member: v.wt };
   if (!m) {
     store.fact("studio_adopted", [{ table: "members", key: { project, squad: STUDIO_SQUAD, wt: v.wt },
