@@ -478,8 +478,10 @@ function awaitDone(id, ms = 60000) {
 }
 // A filed write's outcome: null once the loop did it (or nothing came in time), else why it failed.
 // A settings draft stays until then, so a refused value is still there to fix.
+let lastNote = "";   // the loop's note on the last accepted change (U32: where new squads start)
 async function refusal(b) {
   const r = b && b.id != null ? await awaitDone(b.id) : {};
+  lastNote = r && r.ok !== false && r.note ? String(r.note) : "";
   return r && r.ok === false ? r.error || "the loop refused it" : null;
 }
 // The toast for an events row, or null: requests this page filed (and every failed one), a member
@@ -2867,9 +2869,8 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, card })
 // StartSquad: the Start squad dialog (board-start-squad-box U1). One press files one `start` request whose
 // text keeps every newline; the checks below are the server's contract, in its words.
 const BRIEF_MAX = 32 * 1024;
-// U9: the backends a squad can start on (bin/backend/registry.ts BACKEND_NAMES); the Start dialog presets the project's default_backend.
+// U33: the Start dialog shows the project's default_backend as a line; it is not a choice (the server refuses another, bin/backend/registry.ts squadBackendRule).
 const START_IMAGES = 8;
-const START_BACKENDS = ["orca", "orca-lite", "tmux", "herdr"];
 // The squad's backend chip, only off orca; the worktree tool joins it when it is not the backend's default.
 function backendChip(s) {
   if (!s.backend || s.backend === "orca") return null;
@@ -2920,7 +2921,7 @@ function StartSquad({ project, projects, toast, onClose }) {
   };
   const changeProject = (l) => {
     if (l !== proj && (held.current.length || ups.length)) { gen.current++; slots.current = 0; putHeld([]); setUps([]); setNote("images belong to one project — attach them again"); }
-    setProj(l); setBackend(backendOf(l));
+    setProj(l);
   };
   const dropFile = (id) => { putHeld(held.current.filter((x) => x.id !== id)); setNote(""); };
   const onPaste = (e) => {
@@ -2929,7 +2930,7 @@ function StartSquad({ project, projects, toast, onClose }) {
   };
   const dragHas = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files");
   const backendOf = (l) => ((projects || []).find((p) => p.label === l) || {}).default_backend || "orca";
-  const [backend, setBackend] = useState(() => backendOf(project));
+  const backend = backendOf(proj);
   const labels = (projects || []).map((p) => p.label);
   if (!labels.includes(project)) labels.unshift(project);
   const lines = text ? text.replace(/\r\n?/g, "\n").split("\n").length : 0, bytes = new TextEncoder().encode(text).length;
@@ -2986,7 +2987,7 @@ function StartSquad({ project, projects, toast, onClose }) {
           <label>Type<br/><select class="start-type" value=${type} onChange=${(e) => { setType(e.target.value); if (e.target.value === "testing") setStart("auto"); }}><option value="feature">feature</option><option value="testing">testing</option></select></label>
           <label>Autonomy<br/><select class="start-autonomy" value=${autonomy} onChange=${(e) => setAutonomy(e.target.value)}><option value="checkpoints">checkpoints</option><option value="lfg">lfg</option></select></label>
           <label>Start<br/><select class="start-start" value=${start} disabled=${type === "testing"} onChange=${(e) => setStart(e.target.value)}>${["auto", "plan", "brainstorm", "ask", "investigate", "fix"].map((v) => html`<option key=${v} value=${v}>${v}</option>`)}</select></label>
-          <label title="the backend the squad runs on for life; preset to the project's default_backend">Backend<br/><select class="start-backend" value=${backend} onChange=${(e) => setBackend(e.target.value)}>${START_BACKENDS.map((v) => html`<option key=${v} value=${v}>${v}</option>`)}</select></label>
+          <label title=${"The project's backend: its squads start on " + backend + " and keep it for life. Change it in Settings → Limits (default_backend)."}>Backend<br/><span class="mono start-backend">${backend}</span></label>
         </div>
         ${discard && html`<div class="start-discard bad" style=${{ marginTop: "10px" }}>Discard this brief? <button class="btn sm start-discard-yes" onClick=${onClose}>Discard</button> <button class="btn sm" onClick=${() => setDiscard(false)}>Keep editing</button></div>`}
       </div>
@@ -3488,7 +3489,8 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
 // Settings: the project's limits (GET/POST api/limits -> limits.sh). Changes apply on the next
 // sweep minute / board refresh; auto_compact_* apply when an agent is next (re)started.
 const SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"]];
-function Settings({ project, toast, onClose }) {
+function Settings({ project, projects, toast, onClose }) {
+  const backend = ((projects || []).find((p) => p.label === project) || {}).default_backend || "orca";
   const [tab, setTab] = useState(SETTINGS_TABS[0][0]);
   const [importing, setImporting] = useState(false);
   const [rev, setRev] = useState(0);   // bumped by an applied import: the tabs read their rows again
@@ -3497,6 +3499,7 @@ function Settings({ project, toast, onClose }) {
       <a class="btn sm" id="settings-export" href=${"api/settings-export?project=" + encodeURIComponent(project)} download=${project + "-settings.txt"} title="Download this project's settings as a text file another project (or host) can import">Export</a>
       <button class="btn sm" id="settings-import" style=${{ marginLeft: 6 }} title="Copy settings in from a file or another project, choosing row by row" onClick=${() => setImporting(!importing)}>Import</button>
       <button class="btn sm mclose" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
+      <div class="set-note set-backend" style=${{ margin: "8px 16px 0" }}>Backend: <b class="mono">${backend}</b> — new squads start on it. To change it set <code>default_backend</code> in Limits → Agents &amp; nudges; squads already running keep theirs.</div>
       ${importing ? html`<div class="set-body"><${ImportPane} project=${project} toast=${toast} onBack=${() => setImporting(false)} onApplied=${() => setRev((n) => n + 1)} /></div>` : html`<div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
       <div class="set-body" key=${rev}>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}</div>`}</div></div>`;
 }
@@ -3605,7 +3608,7 @@ function LimitsPane({ project, toast }) {
       const why = await refusal(await saveOne(key, value));
       if (why) { setMsg((m) => ({ ...m, [key]: why })); return; }
       setDraft(({ [key]: _, ...d }) => d); setMsg(({ [key]: _, ...m }) => m);
-      say(value === null ? key + ": reset to default" : key + " = " + value);
+      say((value === null ? key + ": reset to default" : key + " = " + value) + (lastNote ? " · " + lastNote.replace(/\n/g, " · ") : ""));
       load();
     } catch (e) { setMsg((m) => ({ ...m, [key]: String(e.message || e) })); }
   };
@@ -4307,7 +4310,7 @@ function App() {
 
     ${studioChat && html`<${ChatPanel} ...${studioChat} onSeen=${() => bumpSeen((n) => n + 1)} onClose=${() => { setStudioChat(null); bumpSeen((n) => n + 1); }} />`}
     ${feedbackOpen && html`<${FeedbackPanel} summary=${data.feedback} project=${data.project} toast=${setToast} onClose=${() => setFeedbackOpen(false)} />`}
-    ${settingsOpen && data.project && html`<${Settings} project=${data.project} toast=${setToast} onClose=${() => setSettings(false)} />`}
+    ${settingsOpen && data.project && html`<${Settings} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setSettings(false)} />`}
 
     ${ask && html`<${AskOverlay} cardActions=${cardActions} data=${data} onDebrief=${openDebriefOf} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}
     ${plan && html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) setPlan(null); }}>

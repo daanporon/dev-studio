@@ -359,7 +359,7 @@ After that the rows are the only copy:
   export file from another host. It prints one line per row (`[x]` picked, action `add|change|same|remove|skip`,
   file, key, current → new, why) and writes nothing; `--apply` writes the picked rows, each with a history row
   by `import:<from>`. Unknown keys (`hooks_ts`) and rows the target refuses are skipped with their reason;
-  project-specific keys (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`,
+  project-specific keys (`default_backend`, `worktree_provider`, `auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`,
   `cleanup_tmp_globs`, `cleanup_trim_globs`, `cleanup_on_close`, `disk_watch_paths`, `ship-mode`) are not picked unless named with `--include <key>`.
   `--only <file>` limits it to a file, `--skip <key>` unpicks a key, `--replace` also drops target rows the
   source lacks, `--json` prints the plan as JSON. The three options may repeat or take a comma list.
@@ -375,7 +375,7 @@ The Settings window has **Export** and **Import** (settings-export-import U3).
 - **Import** takes a file, pasted text or another project on this host. **Preview** (`POST
   /api/settings-import/preview {project, text|from}`) shows one row per setting: action (`add`, `change`,
   `same`, `skip`), file, key, now → new, and why. Each row has a tick box. Settings that fit one project only
-  (`auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`, ship mode) start unticked and can be
+  (`default_backend`, `worktree_provider`, `auto_merge`, `expected_checks`, `focus_squad`, `review_risk_paths`, ship mode) start unticked and can be
   ticked; a key this dev-studio doesn't know, a value it would refuse, and the shell-only keys
   (`cleanup_on_close`, `cleanup_tmp_globs`, `cleanup_trim_globs`, `disk_watch_paths`, shown `shell only`) are greyed and can't be ticked.
 - **Apply** (`POST /api/settings-import {project, text|from, picks: [{file, key, expect}]}`) files one

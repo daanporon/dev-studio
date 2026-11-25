@@ -234,8 +234,17 @@ for kv in "default_backend screen" "worktree_provider orca"; do
   # shellcheck disable=SC2086
   if "$L" set proj $kv >/dev/null 2>"$TMP/err"; then fail=$((fail+1)); echo "  FAIL: $kv accepted" >&2; else pass=$((pass+1)); has "$kv message names key" "$(cat "$TMP/err")" "${kv%% *} must be"; fi
 done
-"$L" set proj default_backend tmux >/dev/null; eq "default_backend tmux accepted" "$(ds_limit proj default_backend)" "tmux"
-"$L" set proj worktree_provider treehouse >/dev/null; eq "worktree_provider treehouse accepted" "$(ds_limit proj worktree_provider)" "treehouse"
+# U32: a backend that does not fit is refused when set: no binary, a roster row it cannot launch, a tool it cannot use.
+mkdir -p "$TMP/fakebin"; printf '#!/bin/sh\n' >"$TMP/fakebin/tmux"; cp "$TMP/fakebin/tmux" "$TMP/fakebin/treehouse"; chmod +x "$TMP/fakebin/tmux" "$TMP/fakebin/treehouse"
+if PATH="$TMP/fakebin:$PATH" "$L" set proj default_backend tmux >/dev/null 2>"$TMP/err"; then fail=$((fail+1)); echo "  FAIL: tmux accepted with a muse roster" >&2; else pass=$((pass+1)); has "default_backend tmux refused on a roster it cannot launch" "$(cat "$TMP/err")" "can start only claude"; fi
+if PATH="$TMP/fakebin:$PATH" "$L" set proj worktree_provider treehouse >/dev/null 2>"$TMP/err"; then fail=$((fail+1)); echo "  FAIL: treehouse accepted on orca" >&2; else pass=$((pass+1)); has "worktree_provider treehouse refused on orca" "$(cat "$TMP/err")" "cannot use worktree_provider treehouse"; fi
+for r in "builder claude opus ondemand - claude:sonnet" "builder-review claude opus elevate" "builder-review-standard claude sonnet elevate medium"; do
+  # shellcheck disable=SC2086
+  "$ROOT/bin/ds" --state "$DS_STATE_ROOT" config set proj roles.conf $r >/dev/null
+done
+PATH="$TMP/fakebin:$PATH" "$L" set proj default_backend tmux >"$TMP/out"; eq "default_backend tmux accepted" "$(ds_limit proj default_backend)" "tmux"
+has "a backend change says where new squads start" "$(cat "$TMP/out")" "new squads start on tmux; 0 running squads stay on orca"
+PATH="$TMP/fakebin:$PATH" "$L" set proj worktree_provider treehouse >/dev/null; eq "worktree_provider treehouse accepted" "$(ds_limit proj worktree_provider)" "treehouse"
 # expose-hosted-services U1: minutes an exposed URL may stay down; a whole number of minutes
 eq "expose_down_min default" "$(ds_limit proj expose_down_min)" "15"
 if "$L" set proj expose_down_min soon >/dev/null 2>"$TMP/err"; then fail=$((fail+1)); echo "  FAIL: expose_down_min soon accepted" >&2; else pass=$((pass+1)); has "expose_down_min message names key" "$(cat "$TMP/err")" "expose_down_min must be"; fi

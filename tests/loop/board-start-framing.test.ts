@@ -207,3 +207,17 @@ test("a start's images: nine, a bad name or a missing one is refused and files n
   expect(readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8")).toBe("do it");
   expect(existsSync(join(f.root, "p", "framings", `board-start-${r.body.id}`))).toBe(false);
 });
+
+// orca-backend-alternatives U33: the project's backend is not a choice; another one is refused with U30's reason.
+test("a start naming another backend than the project's default_backend is refused with the reason", async () => {
+  const f = await rig();
+  f.store.upsert("config", { project: "p", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: 1 });
+  const bad = await f.post({ project: "p", action: "start", text: "go", backend: "herdr" });
+  expect(bad.status).toBe(409);
+  expect(bad.body.error).toContain("backend herdr is refused: this project's squads start on tmux (its default_backend)");
+  expect(f.store.db.query("SELECT COUNT(*) AS n FROM requests").get()).toEqual({ n: 0 });
+  const ok = await f.post({ project: "p", action: "start", text: "go", backend: "tmux" });
+  expect(ok.status).toBe(202);
+  const none = await f.post({ project: "p", action: "start", text: "go again" });
+  expect(none.status).toBe(202);
+});

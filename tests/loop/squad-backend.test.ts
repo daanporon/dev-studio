@@ -28,7 +28,8 @@ function rig() {
   };
   const spawn = (...args: string[]) => spawnWith({}, ...args);
   const row = (topic: string) => store.db.query("SELECT * FROM squads WHERE project = 'p' AND topic = ?").get(topic) as Row | null;
-  const limit = (key: string, value: string) => set(store, "p", "limits.conf", key, value, "test");
+  // A row written straight: these tests are about what spawn refuses; the check at set time (U32) has its own tests.
+  const limit = (key: string, value: string) => store.upsert("config", { project: "p", file: "limits.conf", key }, { value, observed_at: 1 });
   // The loop has started the squad: its doc is written and it runs.
   const started = (topic: string) => store.db.run("UPDATE squads SET doc = '{}', status = 'running' WHERE project = 'p' AND topic = ?", [topic]);
   return { store, spawn, spawnWith, row, limit, started, root };
@@ -233,7 +234,7 @@ test("the board: each squad's backend and tool, the text line only off orca, and
     store.db.run("UPDATE squads SET status = ? WHERE topic = ?", [st, t]);
   };
   put("ontmux", "tmux", "git"); put("ontree", "tmux", "treehouse");
-  set(store, "p", "limits.conf", "default_backend", "tmux", "test");
+  store.upsert("config", { project: "p", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: 1 });
   const b = buildBoard("p", "", root) as any;
   const sq = (t: string) => b.squads.find((s: any) => s.topic === t);
   expect(sq("plain")).toMatchObject({ backend: "orca", worktree_provider: "orca", provider_default: true });
