@@ -23,6 +23,6 @@ export function oneShotArgv(agent: string, o: { model: string; effort?: string |
   }
   if (agent === "muse")
     return { out: null, argv: ["muse", "exec", "--model", o.model, "--workspace", o.cwd, ...(effort ? ["--reasoning-effort", effort] : []),
-      "--max-model-steps", "1", "--disable-web-tools", "--disable-request-user-input", o.prompt] };
+      "--max-model-steps", "1", "--disable-shell", "--disable-write", "--disable-web-tools", "--disable-request-user-input", o.prompt] };
   return null;
 }

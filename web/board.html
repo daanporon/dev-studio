@@ -4268,7 +4268,7 @@ function App() {
     <${LoopNotes} notes=${data.loop_notes || []} open=${notesOpen} setOpen=${(o) => { setNotesOpen(o); lstore.set("b:notes", o); }} sq=${notesSq} setSq=${(v) => { setNotesSq(v); lstore.set("b:notes-sq", v); }} toast=${setToast} onShow=${show} />
     ${startOpen && data.project && html`<${StartSquad} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setStartOpen(false)} />`}
 
-    ${(data.requests || []).length > 0 && html`<h2>Waiting for the Studio<small>it runs these on its next tick, then they disappear; the loop starts squads itself</small></h2>
+    ${(data.requests || []).length > 0 && html`<h2>Waiting<small>the Studio runs its requests on its next tick and the loop starts squads itself; then they disappear</small></h2>
       <div class="live-list">${data.requests.map((r) => html`<div key=${r.label + "/" + r.file}>${r.text.replace(/^board: the operator asks you to run: /, "")} <span class="mut">· ${fmtAge(r.age_min)} ago${data.project ? "" : " · " + r.label}</span></div>`)}</div>`}
 
     <details class="sq-sec" id="squads" open=${sqOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== sqOpen) { setSqOpen(o); lstore.set("b:squads", o); } }}>

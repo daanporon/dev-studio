@@ -124,7 +124,7 @@ test("codex and muse picks build their one-shot argv; codex's answer is read fro
     "--model", "m", "--config", "model_reasoning_effort=low", "--output-last-message", `${cwd}/.answer`, "P"] });
   const muse = oneShotArgv("muse", { model: "m", effort: "low", prompt: "P", cwd })!;
   expect(muse).toEqual({ out: null, argv: ["muse", "exec", "--model", "m", "--workspace", cwd, "--reasoning-effort", "low",
-    "--max-model-steps", "1", "--disable-web-tools", "--disable-request-user-input", "P"] });
+    "--max-model-steps", "1", "--disable-shell", "--disable-write", "--disable-web-tools", "--disable-request-user-input", "P"] });
   const claude = oneShotArgv("claude", { model: "m", prompt: "P", cwd })!;
   expect(claude.argv).toEqual(["claude", "-p", "--model", "m", "--setting-sources", "user", "--tools", "", "--strict-mcp-config",
     "--disable-slash-commands", "--no-session-persistence", "--output-format", "text", "P"]);
