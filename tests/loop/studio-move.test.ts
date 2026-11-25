@@ -17,7 +17,7 @@ import { makeLimits, type Pick, type PickArgs } from "../../bin/loop/reconcilers
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import studio, { claudePrompt } from "../../bin/loop/fulfil/studio.ts";
 import { fakeContract, type FakeContract } from "../../bin/loop/fakes/contract.ts";
-import { MOVE, RESTART_APPROVED, studioReady } from "../../bin/loop/squad/studio.ts";
+import { MOVE, RESTART_APPROVED, START_WANTED, studioReady, wantStudioStart } from "../../bin/loop/squad/studio.ts";
 import studioRec from "../../bin/loop/reconcilers/studio.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
 
@@ -763,11 +763,113 @@ describe("U52a: start and restart a Studio off Orca", () => {
     expect(studioMember(r.s).handle).toBeNull();
   });
 
+  test("U53: a first start (why start) closes nothing and starts one Studio with the launch line; the shell stays", async () => {
+    const r = await offRig();
+    await r.fake.call("terminal.close", { cwd: r.path, id: r.old });
+    r.s.db.run("UPDATE members SET handle = NULL, gen = NULL WHERE project = 'fx' AND squad = '_studio'");
+    r.s.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = 'fx' AND handle = ?", [T, r.old]);
+    const closes = ops(r.fake, "terminal.close").length;
+    const res = await studio.exec({ project: "fx", squad: null, member: null, subject: MOVE, kind: "studio-move", episode: "s1",
+      payload: { agent: "claude", account: "acct-a", model: "opus", effort: "-", from: "claude:acct-a", why: "start" } },
+    { store: r.s, project: "fx", tick: 1, now: T + 10, fired: [], poked: new Set<string>(), act: r.act });
+    const m = studioMember(r.s), handle = String(m.handle);
+    expect(res).toEqual({ done: true, result: `moved to claude:acct-a: ${handle}` });
+    expect(ops(r.fake, "terminal.close")).toHaveLength(closes);
+    expect([...r.fake.terms.keys()].sort()).toEqual([r.shell, handle].sort());
+    const made = r.fake.terms.get(handle)!;
+    expect(made.env).toMatchObject({ DS_BACKEND: "tmux", DS_WT: r.path, DS_MEMBER: "fx/_studio/studio" });
+    expect(m).toMatchObject({ gen: made.env.DS_GEN, account: "acct-a", model: "opus" });
+    const file = /^exec bash '(.*)'$/.exec(String(ops(r.fake, "terminal.send").at(-1)!.text))![1]!;
+    expect(readFileSync(file, "utf8").replace(/\\/g, "")).toContain("the operator started the project with `ds up`");
+    expect(payloads(r.s, "studio_moved")).toEqual([{ handle, previous: null, from: "claude:acct-a", to: "claude:acct-a", model: "opus", why: "start" }]);
+  });
+
   test("claudePrompt: Claude's input row, boxed or not; a shell's `> ` continuation is not one", () => {
     expect(claudePrompt("╭──╮\n│ ❯ │\n╰──╯")).toBe(true);
     expect(claudePrompt("❯ ")).toBe(true);
     expect(claudePrompt("│ > hello │")).toBe(true);
     expect(claudePrompt("$ exec bash '/x'\n> ")).toBe(false);
     expect(claudePrompt("user@host:~$ ")).toBe(false);
+  });
+});
+
+describe("U53: ds up's first start of the Studio (why start)", () => {
+  // The Studio reconciler with the real actuator and fulfillers over a fake Orca, as restarter() above.
+  function starter(s: Store) {
+    const orca = new FakeBackend();
+    orca.agents = [{ wt: STUDIO, handle: "term_l", title: "ds-loop briefing" }];
+    const act = new LoopActuator({ orca });
+    const loop = new Loop(s, { observers: [], reconcilers: [studioRec] }, act, { projects: () => ["fx"] });
+    return { orca, tick: async (at: number) => { await loop.tick(at); await act.drain(); } };
+  }
+  // The fixture project whose Studio is not running: no handle, its tab gone, only the ds-loop pane left.
+  function fresh(): Store {
+    const s = rig({ handle: null });
+    s.db.run("UPDATE observed_terminals SET gone_at = ? WHERE project = 'fx' AND handle = 'term_s'", [T]);
+    return s;
+  }
+  const wish = (s: Store) => s.get("episodes", { project: "fx", subject: MOVE, kind: START_WANTED });
+
+  test("one studio-move on the wish's pick: studio-start once, briefed as started by ds up, nothing closed, the wish ended", async () => {
+    const s = fresh(), r = starter(s);
+    expect(wantStudioStart(s, "fx", { account: "acct-b", model: "sonnet", effort: "high" }, T)).toBe(`start@${T}`);
+    await r.tick(T + 10);
+    expect(r.orca.of("terminal-close")).toEqual([]);
+    const start = r.orca.of("studio-start");
+    expect(start).toHaveLength(1);
+    expect(start[0]!.args.slice(0, 4)).toEqual([STUDIO, "acct-b", "sonnet", "high"]);
+    expect(start[0]!.args[5]).toContain("the operator started the project with `ds up`");
+    const handle = String(studioMember(s).handle);
+    expect(handle).toMatch(/^term_\d+$/);
+    expect(payloads(s, "studio_moved")).toEqual([{ handle, previous: null, from: "claude:acct-b", to: "claude:acct-b", model: "sonnet", why: "start" }]);
+    expect(wish(s)).toMatchObject({ state: "ended", ended_at: T + 10 });
+    await r.tick(T + 400);
+    expect(r.orca.of("studio-start")).toHaveLength(1);
+  });
+
+  test("no pick in the wish: the default account and the roster's model, as studio-start's dashes", async () => {
+    const s = fresh(), r = starter(s);
+    wantStudioStart(s, "fx", {}, T);
+    await r.tick(T + 10);
+    expect(r.orca.of("studio-start")[0]!.args.slice(0, 4)).toEqual([STUDIO, "-", "-", "-"]);
+    expect(studioMember(s)).toMatchObject({ account: null });
+  });
+
+  test("a Studio already running in the worktree: the wish ends with no start and no close", async () => {
+    const s = rig(), r = starter(s);
+    wantStudioStart(s, "fx", { account: "acct-a" }, T);
+    await r.tick(T + 10);
+    expect(r.orca.of("studio-start")).toEqual([]);
+    expect(r.orca.of("terminal-close")).toEqual([]);
+    expect(wish(s)).toMatchObject({ state: "running", ended_at: T + 10 });
+  });
+
+  test("a project whose Studio worktree the loop does not know yet: it waits, then starts once it is known", async () => {
+    const s = fresh(), r = starter(s);
+    s.upsert("projects", { label: "fx" }, { studio_wt: null, observed_at: T });
+    wantStudioStart(s, "fx", { account: "acct-a" }, T);
+    await r.tick(T + 10);
+    expect(r.orca.of("studio-start")).toEqual([]);
+    expect(wish(s)).toMatchObject({ ended_at: null });
+    s.upsert("projects", { label: "fx" }, { studio_wt: STUDIO, observed_at: T });
+    await r.tick(T + 20);
+    expect(r.orca.of("studio-start")).toHaveLength(1);
+  });
+
+  test("a start that fails: one Studio start failed card with the manual command, the wish ended, never tried again", async () => {
+    const s = fresh(), r = starter(s);
+    r.orca.fail("studio-start", { code: 1, out: "", err: "studio-start: the TUI never came up" });
+    wantStudioStart(s, "fx", { account: "acct-a", model: "opus" }, T);
+    await r.tick(T + 10);
+    expect(payloads(s, "studio_move_failed")).toMatchObject([{ handle: null, to: "claude:acct-a", step: "start" }]);
+    const cards = cardsIn(s, `loop-${MOVE}-`);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ title: "Studio start failed" });
+    expect(String(cards[0]!.question)).toContain("claude --model opus");
+    expect(wish(s)).toMatchObject({ state: "ended" });
+    await r.tick(T + 60);
+    await r.tick(T + 600);
+    expect(r.orca.of("studio-start")).toHaveLength(1);
+    expect(r.orca.of("terminal-close")).toEqual([]);
   });
 });

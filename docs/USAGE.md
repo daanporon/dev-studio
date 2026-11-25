@@ -185,23 +185,43 @@ Either form creates one worktree **under that project**:
 
 - **`ds-<project>-studio`** — your thinking home + the board + where you spawn squads.
 
-It then starts the Studio in that worktree the way the loop starts every role: claude
-with the `studio` row's model and effort (the project's `studio` row, else
-`conventions/roles.conf`'s), the Studio's auto-compact window (`auto_compact_studio`) and its skill list,
-on the default login, or on `--account <id>` (`ds account list`) when you pass one:
+`up` is the whole start in one command (U53), each step skipped when it is already done: it installs
+dev-studio when `install --check` fails (`--skills` adds the role skills), starts the loop unless it runs,
+adds or reconciles the project, has the loop start the Studio, and starts the board. A fresh clone of this
+repo is enough: `bin/ds up <git-url>` ends with the loop running, the Studio up and the board's address printed,
+and a second run changes nothing.
+
+The loop starts the Studio the way it starts every role: claude with the `studio` row's model and effort (the
+project's `studio` row, else `conventions/roles.conf`'s), the Studio's auto-compact window
+(`auto_compact_studio`) and its skill list, on the default login, or on `--account <id>` (`ds account list`)
+when you pass one:
 
 ```sh
 bin/host/up.sh name:your-app --account acctB
 ```
 
-The Studio's terminal handle goes into `state/<project>/dispatcher.json`
-(`studio_handle`), so the loop knows it from the start. A Studio already running in
-the worktree is left alone; if claude never comes up, `up` says so, closes that tab
-and exits non-zero.
+`up` waits until the loop has adopted the Studio's terminal (`DS_UP_START_WAIT_S`, default 180 s); if claude
+never comes up, the board shows a "Studio start failed" card with the command to start it by hand. A Studio
+already running in the worktree is left alone. With the loop down, an Orca project's Studio is started directly
+(the loop adopts it once it runs, from `studio_handle` in `state/<project>/dispatcher.json`).
+
+The project's name is the repo's, or `--label <name>`; a second project from the same repo takes its own
+label (its own clone in `repos/<label>/`, state and Studio). A label already up with another repo is refused.
+`--backend <orca|orca-lite|tmux|herdr>` picks where the project runs, checked as a squad's backend is: on
+first bring-up it becomes the project's `default_backend`, and a roster role the backend cannot start (only
+claude starts off Orca today) is refused before anything is made. Off Orca the Studio's worktree comes from
+the project's worktree tool (`--worktree <auto|git|treehouse>` writes `worktree_provider`), and the loop
+alone starts it, so `up` stops when the loop is not running. Moving a project that is already up to another
+backend is not built yet (U54).
+
+```sh
+bin/host/up.sh https://github.com/you/your-app --backend tmux --label your-app-tmux
+```
 
 State lives under `state/<project>/`. It's idempotent — re-run to reconcile after
-a worktree is killed. Then open the `ds-<project>-studio` worktree in the Orca UI
-and work there. Run it once per project you want to orchestrate.
+a worktree is killed. Then work in the Studio: `up` ends with how to reach it (the
+`ds-<project>-studio` worktree in the Orca UI, `tmux -L ds-<project> attach -t _studio`,
+or herdr's command). Run it once per project you want to orchestrate.
 
 ## Start a feature squad
 
@@ -693,7 +713,7 @@ Convenience slash-commands live in `.claude/commands/` (all `ds-` prefixed to
 avoid collisions; installed into `~/.claude/commands/` by `bin/host/install.sh` so
 they work in every worktree):
 
-- `/ds-up <git-url-or-selector>` — bring up / reconcile a project's Studio worktree (idempotent).
+- `/ds-up <git-url-or-selector>` — install if needed, start the loop, bring up / reconcile a project, its Studio and board (idempotent; `--label`, `--backend`, `--worktree`).
 - `/ds-update [<project>]` — bring everything to the latest dev-studio: pull, relink, then (`update-squads.sh <project> --auto`) restart, reload or leave the squads alone, by what the new commits touch (skills / instructions / code). Each project records the commit its squads run (`state/<project>/squads-rev.json`), so a project the shared checkout moved ahead of is refreshed by its next `/ds-update` even when the checkout is current.
 - `/ds-board [<project>]` — run `bin/board/board.sh` and show the overview (one project, or all).
 - `/ds-start-squad <plain topic>` — spawn a squad (derives slug/framing/repo); explicit `--repo`/`--topic` also work.
