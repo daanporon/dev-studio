@@ -18,6 +18,11 @@ import { decide } from "../../bin/loop/core/decide.ts";
 import { pause } from "../../bin/loop/pause/pause.ts";
 import { exportJson } from "../../bin/loop/db/export-json.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
+import { contractObserver } from "../../bin/loop/observers/contract.ts";
+import { fakeContract, type FakeContract } from "../../bin/loop/fakes/contract.ts";
+import { offOrca } from "../../bin/loop/squad/backend.ts";
+import { contractCandidates, STUDIO_CARD_TITLE } from "../../bin/loop/squad/studio.ts";
+import { liveness } from "../../bin/loop/reconcilers/liveness.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
@@ -260,5 +265,129 @@ describe("squad paths leave the Studio alone", () => {
     const r = exportJson(s);
     expect([...r.written, ...r.unchanged].filter((p) => p.includes("_studio"))).toEqual([]);
     expect(existsSync(join(s.root, "fx", "squads", "_studio.json"))).toBe(false);
+  });
+});
+
+// U51 (project-start): a Studio off Orca (dispatcher.json studio_backend, a `local::` studio_wt) is read and
+// adopted by the contract observer, found by its DS_GEN; the Orca observer leaves it alone.
+describe("a Studio off Orca (U51)", () => {
+  const P = STUDIO.slice(STUDIO.indexOf("::") + 2), LOCAL = `local::${P}`;
+  function offStudio(s: Store, backend: string): void {
+    const doc = JSON.parse(String(s.get("projects", { label: "fx" })?.doc ?? "{}"));
+    s.upsert("projects", { label: "fx" }, { studio_wt: LOCAL, doc: JSON.stringify({ ...doc, studio_backend: backend }), observed_at: T });
+  }
+  function both(s: Store, o: FakeOrca, fake: FakeContract, procs: () => Row[]) {
+    const backends = () => ({ backend: fake, caps: fake.caps });
+    const l = new Loop(s, { observers: [contractObserver({ backends, walk: async () => procs() as never }), orcaObserver(o)], reconcilers: [] }, { act() {} }, { projects: () => ["fx"] });
+    l.boot(T);
+    return l;
+  }
+  const claude = (start = T - 100) => [{ cwd: P, agent: "claude", account: "acct-studio", kind: "main", model: "claude-opus-5-5", pid: 7, start }];
+  const create = async (fake: FakeContract, gen: string | null, label = "studio") => {
+    const r = await fake.call("terminal.create", { cwd: P, label, env: gen ? { DS_GEN: gen } : {} });
+    if (!r.ok) throw new Error(r.error.message);
+    return r.terminal.id;
+  };
+
+  test("contractCandidates: the member's generation first, else every started terminal; a shell never", () => {
+    const t = (handle: string, gen: string | null) => ({ handle, title: null, identity: null, gen });
+    const ts = [t("a", "g1"), t("b", "g2"), t("sh", null)];
+    expect(contractCandidates(ts, "g2").map((x) => x.handle)).toEqual(["b"]);
+    expect(contractCandidates(ts, "gone").map((x) => x.handle)).toEqual(["a", "b"]);
+    expect(contractCandidates(ts, null).map((x) => x.handle)).toEqual(["a", "b"]);
+  });
+
+  test("a tmux Studio on a project with no squad off Orca is adopted by its DS_GEN, a shell beside it is not, and it reads working then idle", async () => {
+    const s = imported(), o = FakeOrca.recorded(RECORDED), fake = fakeContract({ state: "none" }, { name: "tmux", now: () => at });
+    let at = T;
+    offStudio(s, "tmux");
+    o.tabs = AE1();                                    // what Orca still lists in that folder: never the Studio now
+    const shell = await create(fake, null, "bash"), studio = await create(fake, "g1");
+    fake.terms.get(studio)!.lines.push("✻ Thinking… (esc to interrupt)");
+    fake.terms.get(studio)!.last = T;
+    const l = both(s, o, fake, () => claude());
+    await l.tick(T);
+    const m = member(s);
+    expect(m).toHaveLength(1);
+    expect(m[0]).toMatchObject({ role: "studio", wt: LOCAL, handle: studio, gen: "g1", status: "running", account: "acct-studio" });
+    expect(s.get("observed_workers", { project: "fx", wt: LOCAL })).toMatchObject({ state: "working", presence: "running", walk: "running" });
+    const terms = s.db.query("SELECT handle FROM observed_terminals WHERE project = 'fx' AND wt = ? AND gone_at IS NULL ORDER BY handle").all(LOCAL) as Row[];
+    expect(terms.map((r) => r.handle).sort()).toEqual([shell, studio].sort());
+    // Orca's tabs in the old worktree are not the Studio's: nothing adopted from them, and no Orca screen read of the handle.
+    expect(facts(s, "studio_adopted").map((e) => JSON.parse(String(e.payload)).handle)).toEqual([studio]);
+    expect(offOrca(s, "fx").wts.has(LOCAL)).toBe(true);
+    // Its turn ends: quiet, an empty prompt, the agent alive.
+    fake.terms.get(studio)!.lines.splice(0, Infinity, "Done.", "❯ ");
+    at = T + 60;
+    await l.tick(T + 60);
+    expect(s.get("observed_workers", { project: "fx", wt: LOCAL })?.state).toBe("idle");
+    expect(member(s)[0]).toMatchObject({ handle: studio, gen: "g1" });
+    // Its terminal closes: the handle is let go, the row and its generation stay for the next start.
+    fake.exit(studio);
+    await l.tick(T + 90);
+    expect(member(s)[0]).toMatchObject({ handle: null, gen: "g1" });
+    expect(facts(s, "studio_released")).toHaveLength(1);
+  });
+
+  test("a tmux Studio that shows no output while it reads working gets the Studio card, naming tmux, not Orca", async () => {
+    const s = imported(), o = FakeOrca.recorded(RECORDED), fake = fakeContract({ state: "none" }, { name: "tmux", now: () => T });
+    offStudio(s, "tmux");
+    o.tabs = [];
+    const studio = await create(fake, "g1");
+    fake.terms.get(studio)!.lines.push("✻ Thinking… (esc to interrupt)");
+    fake.terms.get(studio)!.last = T - 40 * 60;
+    const now = T + 5;
+    await both(s, o, fake, () => claude(T - 3 * 3600)).tick(now);
+    expect(member(s)[0]?.handle).toBe(studio);
+    const cards = liveness({ store: s, project: "fx", tick: 1, now, fired: [], poked: new Set() }).filter((a) => a.kind === "alert");
+    expect(cards).toHaveLength(1);
+    const p = cards[0]!.payload as Row;
+    expect(p.title).toBe(STUDIO_CARD_TITLE);
+    expect(String(p.text)).toMatch(/has shown no output for 40 min while tmux reads it as working$/);
+    expect(String(p.text)).not.toContain("Orca");
+  });
+
+  test("two started terminals and none held: nothing adopted; the member's own generation picks one", async () => {
+    const s = imported(), o = FakeOrca.recorded(RECORDED), fake = fakeContract({ state: "none" }, { name: "tmux", now: () => T });
+    offStudio(s, "tmux");
+    o.tabs = [];
+    await create(fake, "g1");
+    const second = await create(fake, "g2");
+    const l = both(s, o, fake, () => claude());
+    await l.tick(T);
+    expect(member(s)).toEqual([]);
+    s.upsert("members", { project: "fx", squad: "_studio", wt: LOCAL }, { role: "studio", suffix: "", gen: "g2", observed_at: T, updated_at: T });
+    await l.tick(T + 30);
+    expect(member(s)[0]).toMatchObject({ handle: second, gen: "g2" });
+  });
+
+  test("an orca-lite Studio is read by the contract observer only: Orca's listing of the same folder writes nothing", async () => {
+    const s = imported(), o = FakeOrca.recorded(RECORDED), fake = fakeContract({}, { name: "orca-lite", now: () => T });
+    offStudio(s, "orca-lite");
+    o.tabs = AE1();                                    // orca-lite's terminals are Orca's: Orca lists them under its own worktree id
+    o.procs = claude() as never;
+    const studio = await create(fake, "g1");
+    await both(s, o, fake, () => claude()).tick(T);
+    expect(member(s)[0]).toMatchObject({ wt: LOCAL, handle: studio });
+    expect(s.db.query("SELECT COUNT(*) AS n FROM observed_terminals WHERE project = 'fx' AND wt = ? AND gone_at IS NULL").get(STUDIO)).toEqual({ n: 0 });
+    expect(s.db.query("SELECT COUNT(*) AS n FROM observed_workers WHERE project = 'fx' AND wt = ? AND gone_at IS NULL").get(STUDIO)).toEqual({ n: 0 });
+    expect(offOrca(s, "fx").paths.has(P)).toBe(true);
+  });
+
+  test("an Orca Studio: the contract observer beside the Orca one changes no observed row", async () => {
+    const rows = async (withContract: boolean) => {
+      const s = imported(), o = FakeOrca.recorded(RECORDED);
+      o.tabs = AE1();
+      o.procs = [{ cwd: P, agent: "claude", account: "acct-studio", kind: "main", model: "claude-opus-5-5", pid: 2, start: T - 3600 }];
+      const fake = fakeContract({}, { name: "tmux", now: () => T });
+      const backends = () => ({ backend: fake, caps: fake.caps });
+      const obs = withContract ? [contractObserver({ backends, walk: async () => [] }), orcaObserver(o)] : [orcaObserver(o)];
+      const l = new Loop(s, { observers: obs, reconcilers: [] }, { act() {} }, { projects: () => ["fx"] });
+      l.boot(T);
+      await l.tick(T);
+      expect(fake.calls).toEqual([]);
+      return ["observed_terminals", "observed_workers", "members"].map((t) => s.db.query(`SELECT * FROM ${t} WHERE project = 'fx' ORDER BY 1, 2, 3`).all());
+    };
+    expect(await rows(true)).toEqual(await rows(false));
   });
 });

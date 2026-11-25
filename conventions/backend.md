@@ -394,6 +394,16 @@ picks. In the Studio's own shell (`DS_MEMBER` `<project>/_studio/studio`) `contr
 `preflight`, …) goes to `hostBackendPath()`. A `local::<path>` worktree is its own path (`worktreePath` in
 `bin/lib/lib.ts`), so the role file and the rewake hook need no `ps`. `contractProjects` and
 `projectContracts` count a project whose only contract member is its Studio.
+**Seeing that Studio (project-start U51).** `observers/contract.ts` reads a Studio off Orca in a
+`local::` folder whether or not the project has a squad off Orca (`studioGroup`, squad `_studio`), writes
+its `observed_terminals` and `observed_workers` rows as for a contract member (its walk counts only the
+Studio's agent), and calls `adoptStudio` after a `terminal.list` that succeeded. A contract terminal has
+no agent identity, so the Studio is found by its `DS_GEN` (`contractCandidates` in `squad/studio.ts`: a
+terminal of the member's own generation, else every terminal with one; a shell beside it has none), and
+the member row keeps the held terminal's `gen`. `offOrca` counts the Studio's worktree and folder, so the
+Orca observer never walks, adopts or reads it (an orca-lite Studio is read by one observer), and the poke
+checks treat it as off Orca. The Studio card names the Studio's backend instead of Orca.
+`tests/loop/studio.test.ts` ("a Studio off Orca (U51)") covers it.
 A Lead off Orca has no Run. Its address is its worktree (`send-worker`), its watch tick reads only its
 loop.db rows (header `no Run: the squad runs on <backend>`), and ask-operator takes a state file with no
 `run_id` when the squad's row names a contract backend. `tests/loop/role-scripts-contract.test.ts`
