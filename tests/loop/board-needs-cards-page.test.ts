@@ -9,17 +9,29 @@ const page = readFileSync(join(import.meta.dir, "../../web/board.html"), "utf8")
 const i = page.indexOf("function AskOverlay(");
 const src = page.slice(i, page.indexOf("\n}\n", i) + 2);
 
+const qi = page.indexOf("function QOptions(");
+const qsrc = page.slice(qi, page.indexOf("\n}\n", qi) + 2);
+
 const cardActions = new Function("docLabel", page.slice(page.indexOf("function cardActions("), page.indexOf("\n}\n", page.indexOf("function cardActions(")) + 2) + " return cardActions;")(() => "doc");
 
 function render(n: any) {
   const fns: any[] = [], sent: any[] = [];
-  const html = (s: TemplateStringsArray, ...v: any[]): string => s.reduce((o, t, k) => {
+  // A self-closing component tag (`<${QOptions} n=${n} />`) renders by calling it with its attributes as props.
+  const html = (s: TemplateStringsArray, ...v: any[]): string => {
+    if (/^\s*<$/.test(s[0]) && typeof v[0] === "function" && /\/>\s*$/.test(s[s.length - 1])) {
+      const props: any = {};
+      for (let k = 1; k < v.length; k++) props[/(\w+)=$/.exec(s[k])![1]] = v[k];
+      return v[0](props);
+    }
+    return plain(s, ...v);
+  };
+  const plain = (s: TemplateStringsArray, ...v: any[]): string => s.reduce((o, t, k) => {
     const x = k < v.length ? v[k] : "";
     const str = (y: any): string => Array.isArray(y) ? y.map(str).join("") : typeof y === "function" ? `[fn:${fns.push(y) - 1}]` : y === false || y == null ? "" : String(y);
     return o + t + str(x);
   }, "");
   const make = new Function("useState", "useEffect", "html", "nkey", "sentQ", "sendAnswer", "sqName", "fmtAge", "linkedQ", "docLabel", "copy", "QPr", "ActBtn", "ChatPanel", "useRef", "akey", "hhmmss",
-    `${src} return AskOverlay;`);
+    `${qsrc}\n${src} return AskOverlay;`);
   const Ask = make((init: any) => [init, () => {}], () => {}, html, (m: any) => `${m.label}/${m.id}`, new Map(),
     async (...a: any[]) => { sent.push(a); }, () => "sq", () => "1m", (t: string) => t, () => "doc", () => {}, null, null, null, (v: any) => ({ current: v }), (m: any) => `${m.label}/${m.id}`, () => "00:00:00");
   const out = Ask({ items: [n], at: `${n.label}/${n.id}`, setAt() {}, onClose() {}, onShow() {}, toast() {}, onPlan() {}, planOpen: false, cardActions, data: { squads: [] } });
