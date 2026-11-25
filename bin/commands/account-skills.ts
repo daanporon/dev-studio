@@ -4,6 +4,7 @@ import { accountOwner } from "../lib/install";
 import { accountPlan, accountSkillsCheck, accountSkillsScan, accountSkillsVerdict,
   ROLE_CE_SKILLS, ROLE_OPTIONAL_USER_SKILLS, ROLE_USER_SKILLS } from "../lib/account-skills";
 import { hostBackendPath, writeErr, writeOut } from "../lib/shared";
+import { ACCOUNTS_SKIP, orcaMissing } from "../lib/orca-missing";
 
 export const help = `check [<backend>] [--tsv] | scan <config-dir> | verdict <config-dir> | owner <config-dir> | plan <backend> <agent> <account> | role-skills [ce|user|optional] — can each Claude account load the role skills (bin/lib/account-skills.ts)`;
 
@@ -15,7 +16,10 @@ export async function run(argv: string[]): Promise<number> {
     case "check": {
       const tsv = a.includes("--tsv");
       const rest = a.filter((x) => x !== "--tsv");
-      return accountSkillsCheck(rest[0] || hostBackendPath(), tsv);
+      const adapter = rest[0] || hostBackendPath();
+      // U58: Orca missing, no accounts to check (they move off Orca in #125): one line, exit 0.
+      if (await orcaMissing(adapter)) { writeErr(ACCOUNTS_SKIP("account-skills") + "\n"); return 0; }
+      return accountSkillsCheck(adapter, tsv);
     }
     case "scan": if (!a[0]) return usage(); for (const l of accountSkillsScan(a[0])) writeOut(l + "\n"); return 0;
     case "verdict": if (!a[0]) return usage(); writeOut(accountSkillsVerdict(a[0]) + "\n"); return 0;

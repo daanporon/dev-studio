@@ -3,10 +3,12 @@
 // service around it, and confirms first unless --yes is given.
 import { existsSync, readFileSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, hostBackendPath, run as runCmd, writeErr, writeOut } from "../lib/shared";
+import { ROOT, dsLabel, hostBackendPath, run as runCmd, stateRoot, writeErr, writeOut } from "../lib/shared";
+import { projectOffOrca } from "../lib/contract-here.ts";
+import { parseMember } from "../loop/core/whoami.ts";
 import { inherit } from "../lib/install";
 
-export const help = `[<n>=5] [--auto [--yes]] — set Orca's "Nested worker depth" to >= n (set-orca-depth.sh)`;
+export const help = `[<n>=5] [--auto [--yes]] [--project <label>] — set Orca's "Nested worker depth" to >= n; nothing to do for a project off Orca (set-orca-depth.sh)`;
 
 /** The first `"nestedWorkerMaxDepth": N` found in the files, in order, or "" (grep -o | grep -oE [0-9]+ | head -1). */
 function depthIn(files: string[]): string {
@@ -34,13 +36,18 @@ function readLine(): string {
 
 export async function run(argv: string[]): Promise<number> {
   const script = join(ROOT, "bin", "host", "set-orca-depth.sh");
-  let want = "5", auto = false, yes = false;
-  for (const a of argv) {
+  let want = "5", auto = false, yes = false, project = parseMember(process.env.DS_MEMBER)?.project ?? "";
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
     if (a === "--auto") auto = true;
     else if (a === "--yes") yes = true;
-    else if (a === "" || /[^0-9]/.test(a)) { writeErr("usage: set-orca-depth.sh [<n>=5] [--auto [--yes]]\n"); return 2; }
+    else if (a === "--project" && argv[i + 1]) project = dsLabel(argv[++i]);
+    else if (a === "" || /[^0-9]/.test(a)) { writeErr("usage: set-orca-depth.sh [<n>=5] [--auto [--yes]] [--project <label>]\n"); return 2; }
     else want = a;
   }
+  // U58: the depth is Orca's own setting; a project with no part on Orca (its Studio off Orca, no open Orca squad) has none.
+  const off = project ? projectOffOrca(stateRoot(), project) : null;
+  if (off) { writeOut(`set-orca-depth: Orca only, nothing to do for ${project} on ${off}\n`); return 0; }
   if (!auto) return inherit([hostBackendPath(), "set-nested-depth", want]);
 
   const cfg = join(process.env.XDG_CONFIG_HOME || join(process.env.HOME ?? "", ".config"), "orca");

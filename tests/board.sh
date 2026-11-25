@@ -1287,13 +1287,23 @@ CL="zztmux_$$"; CR="$TMP/contract-root"; mkdir -p "$CR/$CL/squads"
 cwt(){ printf 'local::/tmp/zz-%s-%s' "$CL" "$1"; }
 printf '{"topic":"ontmux","status":"running","type":"feature","members":[{"role":"lead","wt":"%s"},{"role":"builder","suffix":"u1","wt":"%s"},{"role":"thinker","wt":"%s"}],"units":[{"slug":"u1","status":"dispatched","builder_wt":"%s"}],"worktrees":["%s","%s","%s"]}\n' \
   "$(cwt lead)" "$(cwt builder-u1)" "$(cwt thinker)" "$(cwt builder-u1)" "$(cwt lead)" "$(cwt builder-u1)" "$(cwt thinker)" > "$CR/$CL/squads/ontmux.json"
-DS_STATE_ROOT="$CR" bun "$ROOT/tests/board-contract-db.ts" "$CL"
+# U58: its Studio is on tmux too, and beside it project ${CL}o has an Orca squad whose Orca rows are an hour old.
+mkdir -p "$CR/${CL}o/squads"
+printf '{"topic":"onorca","status":"running","type":"feature","members":[{"role":"lead","wt":"wt_orca_lead"},{"role":"builder","suffix":"u1","wt":"wt_orca_b"}],"worktrees":["wt_orca_lead","wt_orca_b"]}\n' > "$CR/${CL}o/squads/onorca.json"
+DS_STATE_ROOT="$CR" bun "$ROOT/tests/board-contract-db.ts" "$CL" --side
 DS_STATE_ROOT="$CR" PATH="$NP" "$ROOT/bin/board/board.sh" "$CL" --json > "$TMP/contract.json"
 jt "tmux squad: on the tmux backend" "$TMP/contract.json" '.squads[] | select(.topic=="ontmux") | .backend == "tmux"'
 jt "tmux squad: each member's state from the contract observer" "$TMP/contract.json" \
   '[.squads[] | select(.topic=="ontmux") | .members[] | {label, state}] == [{"label":"lead","state":"idle"},{"label":"builder-u1","state":"working"},{"label":"thinker","state":"gone"}]'
 ct="$(DS_STATE_ROOT="$CR" PATH="$NP" "$ROOT/bin/board/board.sh" "$CL" 2>&1)"
 has "tmux squad: the text board names the backend" "$ct" "on:tmux"
+# U58: Orca not answering is no warning for a project with no part on Orca; its members keep their driver state
+# (above). The Orca project on the same host still gets the warning, and its unseen member reads unknown.
+jt "off Orca: backend_ok false without the Orca warning" "$TMP/contract.json" '.backend_ok == false and .orca_warning == false'
+DS_STATE_ROOT="$CR" PATH="$NP" "$ROOT/bin/board/board.sh" "${CL}o" --json > "$TMP/contract-orca.json"
+jt "Orca project beside it: stale Orca rows warn" "$TMP/contract-orca.json" '.backend_ok == false and .orca_warning == true'
+jt "Orca project beside it: an unseen member is unknown" "$TMP/contract-orca.json" \
+  '.squads[] | select(.topic=="onorca") | .members[] | select(.label=="builder-u1") | .state == "unknown"'
 # U12b: with no dispatch, the Builder's no-PR report is found by its generation, and the Builder still reads working.
 jt "tmux squad: a Builder that ended with no PR waits on its Lead (no dispatch)" "$TMP/contract.json" \
   '.squads[] | select(.topic=="ontmux") | .units[] | select(.slug=="u1") | .wait_label == "waiting · Lead · ended with no PR"'

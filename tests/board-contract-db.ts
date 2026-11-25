@@ -5,6 +5,8 @@
 // printed just now (working), the Thinker has no terminal (gone). U12b: unit u1's Builder ended with no PR.
 // The squad file is
 // <root>/<label>/squads/ontmux.json, members at /tmp/zz-<label>-{lead,builder-u1,thinker}.
+// U58 `--side`: the project's Studio is on tmux too (no part on Orca), and beside it project `<label>o` runs an
+// Orca squad `onorca` whose Orca observer row is an hour old (Orca stopped answering).
 import { open } from "../bin/loop/core/store.ts";
 import { Loop } from "../bin/loop/core/tick.ts";
 import { importJson } from "../bin/loop/db/import-json.ts";
@@ -32,4 +34,9 @@ await loop.tick(now);
 s.db.run("UPDATE members SET gen = 'g1' WHERE project = ? AND wt = ?", [label, `local::${at("builder-u1")}`]);
 s.db.run(`INSERT INTO episodes (project, subject, kind, squad, started_at, episode_key, state, source, observed_at)
   VALUES (?, 'frep.builder.idle', 'idle', 'ontmux', ?, 'failed|u1|gen:g1', 'failed_report', 'test', ?)`, [label, now, now]);
+if (process.argv[3] === "--side") {
+  s.db.run("INSERT OR REPLACE INTO projects (label, doc, observed_at) VALUES (?, ?, ?)", [label, JSON.stringify({ studio_backend: "tmux" }), now]);
+  s.db.run("INSERT OR REPLACE INTO projects (label, doc, observed_at) VALUES (?, ?, ?)", [`${label}o`, JSON.stringify({ studio_backend: "orca" }), now]);
+  s.db.run("INSERT INTO observed_workers (project, wt, state, doc, observed_at) VALUES (?, 'wt_orca_lead', 'idle', '{}', ?)", [`${label}o`, now - 3600]);
+}
 s.close();

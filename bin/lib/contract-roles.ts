@@ -30,7 +30,7 @@ export const makeBackend = (root: string): MakeBackend => (name, project) => {
   return null;
 };
 
-export { contractHere, contractProjects, projectContracts, squadContract } from "./contract-here.ts";
+export { contractHere, contractProjects, projectContracts, projectOffOrca, squadContract } from "./contract-here.ts";
 
 export type LiveTerm = { wt: string; id: string; backend: string; label: string; created_at: number };
 export type Live = { terms: LiveTerm[]; blind: string[] };   // blind: why a backend could not be read

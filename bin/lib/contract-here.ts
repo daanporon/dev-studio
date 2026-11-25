@@ -52,6 +52,15 @@ export function projectContracts(root: string, project: string): string[] {
   return merged(squads, studioContract(root, project));
 }
 
+/** The backend a project runs on when no part of it is on Orca (U58): its Studio runs off Orca and none of its
+ *  open squads is on Orca. null when the project uses Orca, or when loop.db can't say (read as Orca, as today). */
+export function projectOffOrca(root: string, project: string): string | null {
+  const studio = studioContract(root, project);
+  if (!studio) return null;
+  const orcaSquad = db(root, (d) => !!d.query("SELECT 1 FROM squads WHERE project = ? AND COALESCE(backend, 'orca') = 'orca' AND COALESCE(status, '') NOT IN ('closed', 'gone') LIMIT 1").get(project));
+  return orcaSquad === false ? studio : null;
+}
+
 /** The contract backend this process belongs to, else null: DS_BACKEND (on every terminal the loop starts
  *  on a contract, core/actuator.ts contractSeat), else the squad of DS_MEMBER as loop.db has it (the
  *  Studio, squad `_studio`: its project's studio_backend). */

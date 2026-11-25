@@ -18,7 +18,7 @@
 // DS_UP_START_WAIT_S (default 180) is how long it waits for the loop to start the Studio.
 import { existsSync, mkdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, stateRoot, dsLabel, dsPrefix, backend, chomp, readJson, run as sh, settingsAt, writeOut, writeErr } from "../lib/shared";
+import { ROOT, stateRoot, dsLabel, dsPrefix, hostBackendPath, chomp, readJson, run as sh, settingsAt, writeOut, writeErr } from "../lib/shared";
 import { inherit, isUrl } from "../lib/upkeep";
 import { compactWindowOf, roleRow, writeRoleFile } from "../lib/lib";
 import { BACKEND_WANTED, MOVE, openSquads, START_WANTED, STUDIO_SQUAD, studioCandidates, studioMember, studioPrompt, wantStudioBackend, wantStudioStart } from "../loop/squad/studio.ts";
@@ -33,11 +33,14 @@ export const help = `[<git-url> | <label> | --home <selector>] [--label <name>] 
 
 const isDir = (p: string) => { try { return statSync(p).isDirectory(); } catch { return false; } };
 const DS = () => join(ROOT, "bin", "ds");
+/** The Orca steps (repo, worktree, Studio start, its terminals) run only for a project on Orca, so they go to the
+ *  host's adapter itself: a Studio off Orca moving its project to Orca would be refused them (shared.ts studioRefusal, U58). */
+const orcaBackend = (args: string[]) => sh([hostBackendPath(), ...args]);
 
 /** The handles of the Studio's terminals in <wt>: live ones (connected, writable, not orphaned) the loop
  *  would adopt (studioCandidates: the Studio's agent, no `ds-loop …` pane). null when the list can't be read. */
 async function studioTerminals(wt: string, agent: string): Promise<string[] | null> {
-  const r = await backend(["loop-terminals"]);
+  const r = await orcaBackend(["loop-terminals"]);
   if (r.rc !== 0) return null;
   let terms: LiveTerminal[] | undefined;
   try { const d = JSON.parse(r.out); terms = d?.ok === false ? undefined : d?.result?.terminals; } catch { return null; }
@@ -210,9 +213,9 @@ export async function run(argv: string[]): Promise<number> {
   const wtName = `${prefix}${label}-studio`;
   let studioWt = "";
   if (!offOrca) {
-    if (repoPath !== "") fwd(await backend(["repo-ensure", repoPath]));
+    if (repoPath !== "") fwd(await orcaBackend(["repo-ensure", repoPath]));
     // The worktree only: the Studio itself starts below, never by worktree create.
-    const ensure = await backend(["worktree-ensure", repo, wtName, "", ""]);
+    const ensure = await orcaBackend(["worktree-ensure", repo, wtName, "", ""]);
     if (ensure.err) writeErr(ensure.err);
     if (ensure.rc !== 0) return ensure.rc;
     studioWt = chomp(ensure.out);
@@ -287,7 +290,7 @@ export async function run(argv: string[]): Promise<number> {
     writeErr("up: NOTE — the loop is not running, so the Studio is started directly (the loop adopts it once it runs)\n");
     delete next.studio_handle;
     const window = compactWindowOf(label, "studio");
-    const s = await backend(["studio-start", studioWt, account || "-", studioModel || "-", studioEffort || "-", window,
+    const s = await orcaBackend(["studio-start", studioWt, account || "-", studioModel || "-", studioEffort || "-", window,
       studioPrompt(ROOT, label, repo, stateDir)]);
     if (s.err) writeErr(s.err);
     started = chomp(s.out);
@@ -343,8 +346,8 @@ async function moveProject(o: { label: string; from: string; to: string; provide
     if (!o.loopUp) { writeErr(`up: only the loop moves a project's Studio, and it is not running (see above). Nothing changed.\n`); return 1; }
     let wt = "";
     if (to === "orca") {
-      if (repoPath !== "") { const r = await backend(["repo-ensure", repoPath]); if (r.err) writeErr(r.err); }
-      const ensure = await backend(["worktree-ensure", o.home, o.wtName, "", ""]);
+      if (repoPath !== "") { const r = await orcaBackend(["repo-ensure", repoPath]); if (r.err) writeErr(r.err); }
+      const ensure = await orcaBackend(["worktree-ensure", o.home, o.wtName, "", ""]);
       if (ensure.err) writeErr(ensure.err);
       if (ensure.rc !== 0) return ensure.rc;
       wt = chomp(ensure.out);
