@@ -93,6 +93,7 @@ export async function rig(caps: Partial<Capabilities> = {}, o: { extra?: Reconci
   loop.boot(T);
   let at = T;
   const tick = async (n = 1, step = 5) => { for (let i = 0; i < n; i++) { at += step; await loop.tick(at); await act.drain(); } };
+  s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });   // U30: the project's backend
   s.want("squad", `fx/${SQ}`, "running", { payload: { repo: `path:${repo}`, type: "feature" },
     fill: { repo: `path:${repo}`, type: "feature", backend: "tmux", worktree_provider: "git" }, by: "test" });
   return { s, orca, fake, act, loop, tick, now: () => at, d, repo, killed, acted, walks: () => walks, orcaReads: () => reads };
