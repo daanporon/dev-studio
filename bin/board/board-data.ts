@@ -2316,6 +2316,24 @@ function liveResult(last: any, head: any, now: number) {
   if (!ref) return age <= UPDATE_OLD_S ? last : null;
   return head && String(head) !== ref ? null : last;
 }
+// board-actions-as-wishes U2: this project's `update` request, open or finished within the hour, as the banner
+// shows it. The fulfiller (bin/loop/fulfil/update.ts) keeps the job's fields in the request's `result`.
+const UPDATE_RUN_S = 3600;
+function updateRun(db: any, label: string, now: number) {
+  let q: any = null;
+  try { q = db.one("SELECT id, created_at, done_at, result FROM requests WHERE kind = 'update' AND project = ? AND (done_at IS NULL OR done_at > ?) ORDER BY id DESC LIMIT 1", label, now - UPDATE_RUN_S); } catch { return null; }
+  if (!q) return null;
+  const res = parse(q.result) ?? {};
+  const open = q.done_at == null;
+  const state = open ? String(res.state ?? "queued") : res.ok === false || res.state === "failed" ? "failed" : "done";
+  const since = Number(res.started_at ?? 0) || Number(q.created_at ?? 0) || now;
+  const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+  return {
+    id: q.id, state, why: text(res.why), line: (state === "done" ? text(res.line)?.replace(/^DS-UPDATE: /, "") : text(res.line)) ?? (state === "failed" ? text(res.error) : null),
+    error: text(res.error), warnings: arr(res.warnings).filter((w: unknown) => typeof w === "string"), squads_line: text(res.squads_line),
+    log: text(res.log), age_min: Math.max(0, Math.floor(((open ? now : Number(q.done_at)) - since) / 60)),
+  };
+}
 function updateSummary(db: any, label: string) {
   if (!db || !label) return null;
   let r: any = null;
@@ -2332,19 +2350,21 @@ function updateSummary(db: any, label: string) {
     .map((x) => String(x.project)).filter((p) => p && p !== label && !isTestProject(p)).sort();
   const mine = parse(r.squads)?.[label] ?? null;
   const squadsBehind = mine && workers > 0 && mine.need && mine.need !== "none" ? mine : null;
+  // An update filed before the deploy as a Studio request still shows until it is done.
   const pending = db.one(`SELECT id, created_at FROM requests WHERE kind = 'studio' AND project = ? AND done_at IS NULL AND squad IS NULL AND json_extract(payload, '$.action') = 'update'
     UNION ALL SELECT id, created_at FROM requests WHERE project = ? AND done_at IS NULL AND key GLOB ? LIMIT 1`, label, label, `file:${label}/_studio/board-update-[0-9]*.txt`);
+  const run = updateRun(db, label, now);
   const last = liveResult(parse(r.last_update), r.head, now);
   const behind = Number(r.behind ?? 0);
   const state = String(r.state ?? "ok");
-  const quiet = behind === 0 && state === "ok" && !stale && !squadsBehind && !pending && !last;
+  const quiet = behind === 0 && state === "ok" && !stale && !squadsBehind && !pending && !run && !last;
   if (quiet) return null;
   return {
     behind, branch: r.branch ?? null, commits: arr(parse(r.commits)), classes: arr(parse(r.classes)), need: r.need ?? "none",
     state, error: r.error ?? null, error_at: r.error_at ?? null, checked_at: r.checked_at ?? null, stale,
     ahead: Number(r.ahead ?? 0), dirty: Number(r.dirty ?? 0) > 0, last_update: last, squads_behind: squadsBehind,
     pending: pending ? { id: pending.id, age_min: Math.max(0, Math.floor((now - (Number(pending.created_at) || now)) / 60)) } : null,
-    others, workers, project: label,
+    run, others, workers, project: label,
   };
 }
 
@@ -2371,9 +2391,19 @@ function machineLine(m: NonNullable<Board["machine"]>): string {
   return `MACHINE  ${parts.join(" · ")}${m.stale ? `  (as of ${clock(m.observed_at)})` : ""}`;
 }
 
+// The text board's line for an `update` request (board-actions-as-wishes U2): running, waiting, done or failed.
+function runLine(r: NonNullable<NonNullable<Board["update"]>["run"]>): string {
+  const warn = r.warnings.map((w) => `\n  ${w}`).join("");
+  if (r.state === "done") return `UPDATE ${r.line ?? "done"}${r.squads_line ? ` — ${r.squads_line.replace(/^update-squads: \[[^\]]*\] /, "")}` : ""}${warn}`;
+  if (r.state === "failed") return `UPDATE failed: ${r.line ?? r.error ?? "see the log"}${r.log ? ` — log ${r.log}` : ""}${warn}`;
+  if (r.state === "waiting") return `UPDATE waiting — ${r.why ?? "another update is running"} (${r.age_min} min)${warn}`;
+  const what = r.state === "refreshing" ? "refreshing squads…" : r.state === "pulling" ? "pulling…" : "starting…";
+  return `UPDATE running — ${what} (${r.age_min} min)${warn}`;
+}
 const NEED_TEXT: Record<string, string> = { none: "no restarts", reload: "reload, no restarts", restart: "workers restart once idle" };
 function updateLine(u: NonNullable<Board["update"]>): string {
   const hm = (t: number | null) => (t ? clock(t) : "never");
+  if (u.run) return runLine(u.run);
   if (u.pending) return `UPDATE asked — waiting for the Studio to run /ds-update (${u.pending.age_min} min)`;
   if (u.state === "detached") return "UPDATE can't check: the checkout is detached — check out its branch";
   if (u.state === "no_upstream" || u.state === "fetch_failed") return `UPDATE can't check: ${u.error ?? u.state} (last checked ${hm(u.checked_at)})`;

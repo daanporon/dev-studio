@@ -4,7 +4,7 @@ argument-hint: [<project>]   (run in the Studio)
 allowed-tools: Read, Bash
 ---
 The one command to bring this project fully up to date with the latest dev-studio — **code,
-commands, instructions, AND skills**. Run it in the Studio. Do the steps in order:
+commands, instructions, AND skills**. Run it in the Studio. (The board's Update button and `ds update <project>` run the same update in the loop with no Studio turn; `/ds-update` stays the way when the loop is down.) Do the steps in order:
 
 1. **Pull + relink** the dev-studio checkout, and learn whether its branch actually moved —
    a restart only earns its keep when code or skills changed. If the branch is unchanged, a

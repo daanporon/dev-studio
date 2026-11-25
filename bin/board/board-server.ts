@@ -259,6 +259,12 @@ async function request(req: Request) {
       if (refused) no(409, refused);
     }
     if (a.topic) squadRow(s, project, topic);
+    // board-actions-as-wishes U2: an update is the loop's own request (bin/loop/fulfil/update.ts), no Studio line.
+    if (action === "update") {
+      if (one(s, "SELECT id FROM requests WHERE kind = 'update' AND project = ? AND done_at IS NULL", project)
+        || pendingReq(s, "studio", project, null, "action", "update")) no(409, "already requested — an update is running");
+      return board(s, "update", { by: "board" }, { project });
+    }
     if (action === "restart") {
       const targets = s.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND COALESCE(want,'') != 'gone' AND COALESCE(status,'') != 'gone'").all(project, topic) as Row[];
       if (paused(s, { project, squad: topic }) || targets.some((m) => (!role || role === m.role || role === `${m.role}${m.suffix ? "-" + m.suffix : ""}`) && paused(s, m as { project: string })))
