@@ -1901,10 +1901,19 @@ async function studio(body, toast, ask) {
 }
 
 // The dev-studio update banner (board-update-button U3): reads `data.update` (the observed_update row),
-// and its press files the `update` request the Studio runs as /ds-update.
+// and its press files the `update` request the loop runs (`u.run` is its progress).
 const NEED_LINE = (n, w) => n === "restart" ? w + " worker" + (w === 1 ? "" : "s") + " restart once idle" : n === "reload" ? w + " worker" + (w === 1 ? "" : "s") + " re-read their instructions, no restarts" : "no worker restarts";
 const CLASS_WORD = { skills: "skills", instructions: "instructions", code: "code" };
 const classText = (cs) => { const w = (cs || []).map((c) => CLASS_WORD[c] || c); return w.length > 1 ? w.slice(0, -1).join(", ") + " and " + w[w.length - 1] : w[0] || "code"; };
+// The commits button: the new commits with their class tags in a dialog (board-actions-as-wishes U2), so the banner does not grow.
+function UpdateCommits({ u, onClose }) {
+  useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k); }, []);
+  return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="mbox" style=${{ width: "min(560px,100%)" }} role="dialog" aria-label="New dev-studio commits">
+      <div class="mhd">${u.behind} new commit${u.behind === 1 ? "" : "s"}<span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
+      <div class="md"><ul class="ucommits">${(u.commits || []).map((c) => html`<li key=${c.sha}>${c.title}${(c.classes || []).map((k) => html`<span class="utag">${k}</span>`)}</li>`)}${u.behind > (u.commits || []).length && html`<li class="muted">and ${u.behind - u.commits.length} more</li>`}</ul></div>
+    </div></div>`;
+}
 function UpdateBanner({ data, toast }) {
   const u = data.update, [show, setShow] = useState(false);
   if (!u) return null;
@@ -1916,7 +1925,16 @@ function UpdateBanner({ data, toast }) {
   let cls = "info", body = null, btn = null;
   const lu = u.last_update, badTry = lu && lu.outcome !== "advanced" ? lu : null;
   const tried = badTry ? html` · <span class="mono">last try ${badTry.outcome}: ${badTry.line || badTry.outcome}</span>` : null;
-  if (u.pending) {
+  const run = u.run, runWarn = run && (run.warnings || []).map((x, i) => html`<div class="mono" key=${i}>${x}</div>`);
+  if (run) {
+    const sq = run.squads_line ? " — " + run.squads_line.replace(/^update-squads: \[[^\]]*\] /, "") : "";
+    if (run.state === "failed") {
+      cls = "err"; body = html`<b>Dev-studio update failed:</b> <span class="mono">${run.line || run.error || "see the log"}</span>${run.log && html` · log <span class="mono">${run.log}</span>`}${runWarn}`;
+      btn = html`<button class="btn blue sm" onClick=${() => press(u, null, "Runs the update again. Fix the reason: " + (run.line || run.error || "see the log") + ".")}>${"Retry"}</button>`;
+    } else if (run.state === "done") body = html`<b>Dev-studio update:</b> <span class="mono">${(run.line || "done") + sq}</span>${runWarn}`;
+    else if (run.state === "waiting") body = html`<b>Dev-studio update waiting</b> — ${run.why || "another update is running"} (${run.age_min} min)${runWarn}`;
+    else body = html`<b>Dev-studio update running</b> — ${run.state === "refreshing" ? "refreshing squads…" : run.state === "pulling" ? "pulling…" : "starting…"} (${run.age_min} min)${runWarn}`;
+  } else if (u.pending) {
     cls = "info";
     body = html`<b>Dev-studio update asked</b> — ${u.pending.age_min >= 10 ? html`is the Studio running? You can also run <span class="mono">/ds-update ${project}</span> there yourself.` : "waiting for the Studio."}`;
   } else if (u.state === "detached") {
@@ -1931,8 +1949,7 @@ function UpdateBanner({ data, toast }) {
     if (badTry) cls = "err";
     body = html`<b>Dev-studio update: ${u.behind} new commit${u.behind === 1 ? "" : "s"} on ${branch}</b> — ${classText(u.classes)} · ${NEED_LINE(u.need, w)}${tried}
       ${u.ahead > 0 && html` · <span class="muted">${u.ahead} local commit${u.ahead === 1 ? "" : "s"} not on origin</span>`}
-      ${u.dirty && html` · <b>local changes in the checkout will be discarded</b>`}
-      ${show && html`<ul class="ucommits">${(u.commits || []).map((c) => html`<li key=${c.sha}>${c.title}${(c.classes || []).map((k) => html`<span class="utag">${k}</span>`)}</li>`)}${u.behind > (u.commits || []).length && html`<li class="muted">and ${u.behind - u.commits.length} more</li>`}</ul>`}`;
+      ${u.dirty && html` · <b>local changes in the checkout will be discarded</b>`}`;
     btn = html`<button class="btn blue sm" onClick=${() => press(u, null, "Pulls dev-studio to " + branch + " (" + u.behind + " commit" + (u.behind === 1 ? "" : "s") + ") and restarts the loop for every project. In " + project + ": " + NEED_LINE(u.need, w) + "." + others + skillsHint(u.classes))}>Update</button>`;
   } else if (u.squads_behind) {
     const sb = u.squads_behind;
@@ -1948,7 +1965,8 @@ function UpdateBanner({ data, toast }) {
     } else body = html`<b>Dev-studio update:</b> <span class="mono">${l.line || l.outcome}</span>`;
   } else return null;
   return html`<div class=${"banner " + cls} id="ds-update" role="status"><span>${cls === "err" ? "⚠" : "↻"}</span><div class="t">${body}</div>
-    <div class="ubtns">${u.behind > 0 && !u.pending && u.state === "ok" && !u.stale && html`<button class="btn sm" onClick=${() => setShow(!show)}>${show ? "Hide commits" : "Show commits"}</button>`}${btn}</div></div>`;
+    <div class="ubtns">${u.behind > 0 && !run && !u.pending && u.state === "ok" && !u.stale && html`<button class="btn sm" onClick=${() => setShow(true)}>Show commits</button>`}${btn}</div>
+    ${show && html`<${UpdateCommits} u=${u} onClose=${() => setShow(false)} />`}</div>`;
 }
 
 // Answers already sent, by the asking: "<label>/<topic>/<id>@<since>" -> "HH:MM" (`akey`; an item with no

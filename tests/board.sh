@@ -1509,6 +1509,22 @@ dbw "INSERT INTO requests (kind, project, squad, key, payload, created_at, reque
 render "$LBL" --json > "$TMP/upd.json"
 jt "U3 update: a pending request shows"      "$TMP/upd.json" '.update.pending != null'
 has "U3 update: pending text" "$(render "$LBL")" "UPDATE asked — waiting for the Studio"
+dbw "DELETE FROM requests WHERE key = 'k-upd'"
+# board-actions-as-wishes U2: the banner follows the loop's `update` request: running, done with a warning, failed.
+upreq(){ dbw "DELETE FROM requests WHERE kind = 'update'"; dbw "INSERT INTO requests (kind, project, squad, key, payload, created_at, done_at, result, requested_by) VALUES ('update', '$LBL', NULL, 'k-run', '{\"by\":\"board\"}', $((UNOW-120)), $1, '$2', 'board')"; render "$LBL" --json > "$TMP/upd.json"; }
+upreq NULL '{"state":"pulling","log":"/x/1.log","started_at":'"$((UNOW-120))"'}'
+jt "U2 update: a running request shows run.state" "$TMP/upd.json" '.update.run | .state=="pulling" and .age_min==2'
+has "U2 update: running text" "$(render "$LBL")" "UPDATE running — pulling… (2 min)"
+upreq NULL '{"state":"refreshing","started_at":'"$((UNOW-60))"'}'
+has "U2 update: refreshing text" "$(render "$LBL")" "UPDATE running — refreshing squads… (1 min)"
+upreq "$UNOW" '{"ok":true,"state":"done","line":"DS-UPDATE: advanced a -> b","squads_line":"update-squads: [p] reload — instructions — 7 wishes","warnings":["update: WARNING one"]}'
+jt "U2 update: a done request shows its warnings" "$TMP/upd.json" '.update.run | .state=="done" and .warnings==["update: WARNING one"]'
+has "U2 update: done text" "$(render "$LBL")" "UPDATE advanced a -> b — reload — instructions — 7 wishes"
+has "U2 update: warning on its own line" "$(render "$LBL")" "  update: WARNING one"
+upreq "$UNOW" '{"ok":false,"state":"failed","error":"boom","line":"DS-UPDATE: failed: boom","log":"/x/2.log"}'
+jt "U2 update: a failed request shows state failed" "$TMP/upd.json" '.update.run | .state=="failed" and .log=="/x/2.log"'
+has "U2 update: failed text names line and log" "$(render "$LBL")" "UPDATE failed: DS-UPDATE: failed: boom — log /x/2.log"
+dbw "DELETE FROM requests WHERE kind = 'update'"
 dbw "DELETE FROM observed_update"
 
 # investigate-disk-cleanup U1: the Host tidy card on the board shows a size the measuring pass took

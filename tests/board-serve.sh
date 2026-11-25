@@ -930,7 +930,12 @@ has "request: restart command"       "$(cat "$RD"/board-restart-ans-*.txt 2>/dev
 has "request: restore suspended command" "$(cat "$RD"/board-resume-ans-*.txt 2>/dev/null)" "/ds-resume --suspended $LBL ans"
 has "request: suspend command"       "$(cat "$RD"/board-suspend-ans-*.txt 2>/dev/null)" "/ds-suspend ans"
 has "request: reload command"        "$(cat "$RD"/board-reload-*.txt 2>/dev/null)" "/ds-reload $LBL"
-has "request: update command"        "$(cat "$RD"/board-update-*.txt 2>/dev/null)" "/ds-update $LBL"
+# board-actions-as-wishes U2: the update is the loop's own `update` request, not a line for the Studio.
+UPQ="$(bun -e 'const {Database}=require("bun:sqlite");const d=new Database(process.argv[1],{readonly:true});const r=d.query("SELECT kind, done_at, result FROM requests WHERE kind = ? AND project = ?").all("update",process.argv[2]);console.log(r.length+"|"+r.map((x)=>(x.done_at?"done":"open")+" "+x.result).join("|"))' "$DBR/loop.db" "$LBL")"
+has "request: one update request, failed off the live root" "$UPQ" "1|done"
+has "request: update fails with the live-root reason"        "$UPQ" "not the live state root"
+eq "request: update leaves no Studio file"  "$(ls "$RD"/board-update-*.txt 2>/dev/null | wc -l | tr -d ' ')" "0"
+eq "request: update starts no job log"      "$(ls "$DBR"/loop/update/*.log 2>/dev/null | wc -l | tr -d ' ')" "0"
 has "request: start command"         "$(cat "$RD"/board-start-*.txt 2>/dev/null)" "/ds-start-squad --repo $LBL --framing-file $DBR/$LBL/framings/board-start-"
 eq "request: the brief is in its file, newlines kept" "$(for f in "$DBR/$LBL"/framings/board-start-*.md; do cat "$f"; echo '#'; done | tr '\n' '|' | sed 's/#|/#\n/g' | sort | tr -d '\n')" "another#fix the|login bug#"
 eq "request: two starts, two files"  "$(find "$RD" -name 'board-start-*.txt' | wc -l | tr -d ' ')" "2"
