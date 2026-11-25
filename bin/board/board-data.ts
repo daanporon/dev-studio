@@ -2319,7 +2319,8 @@ function liveResult(last: any, head: any, now: number) {
 }
 // board-actions-as-wishes U2: this project's `update` request, open or finished within the hour, as the banner
 // shows it. The fulfiller (bin/loop/fulfil/update.ts) keeps the job's fields in the request's `result`.
-const UPDATE_RUN_S = 3600;
+const UPDATE_RUN_S = 3600; // an open or failed request shows this long
+const UPDATE_DONE_S = 300; // a request that worked leaves after this, like update-host's "advanced"
 function updateRun(db: any, label: string, now: number) {
   let q: any = null;
   try { q = db.one("SELECT id, created_at, done_at, result FROM requests WHERE kind = 'update' AND project = ? AND (done_at IS NULL OR done_at > ?) ORDER BY id DESC LIMIT 1", label, now - UPDATE_RUN_S); } catch { return null; }
@@ -2327,6 +2328,7 @@ function updateRun(db: any, label: string, now: number) {
   const res = parse(q.result) ?? {};
   const open = q.done_at == null;
   const state = open ? String(res.state ?? "queued") : res.ok === false || res.state === "failed" ? "failed" : "done";
+  if (state === "done" && now - Number(q.done_at) > UPDATE_DONE_S) return null;
   const since = Number(res.started_at ?? 0) || Number(q.created_at ?? 0) || now;
   const text = (v: unknown) => (typeof v === "string" && v ? v : null);
   return {

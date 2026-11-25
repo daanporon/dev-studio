@@ -194,6 +194,26 @@ test("Start squad: a multi-line brief and the fields are one POST that keeps eve
     expect(d.r.errors).toEqual([]);
   } finally { await d.w.happyDOM.close(); }
 });
+test("Reload instructions: the loop's answer is the toast, not a Studio request id", async () => {
+  const r = await mount(board, false);
+  const w = r.window, doc = w.document, posts: any[] = [];
+  w.confirm = () => true;
+  w.fetch = async (url: string, init?: any) => {
+    if (String(url) !== "api/request") return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    posts.push(JSON.parse(init.body));
+    const b = { ok: true, action: "reload", wishes: 3 };
+    return { ok: true, status: 202, json: async () => b, text: async () => JSON.stringify(b) };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    const find = () => [...doc.querySelectorAll("button")].find((b: any) => /Reload dev-studio instructions/.test(b.getAttribute("title") || "")) as any;
+    for (let k = 0; k < 80 && !find(); k++) await wait(25);
+    find().dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await wait(100);
+    expect(posts).toEqual([{ project: "fixture", action: "reload" }]);
+    expect(doc.body.textContent).toContain("asked the loop: 3 members re-read their instructions");
+    expect(doc.body.textContent).not.toContain("asked the Studio");
+  } finally { await w.happyDOM.close(); }
+});
 test("Start squad: empty, oversized and bad-slug texts say what is wrong and post nothing", async () => {
   const d = await startDialog(() => ({ status: 202, body: { id: 1 } }));
   try {
@@ -768,7 +788,11 @@ test("update banner: running, done with warnings, and failed with its log path",
   const a = await mountPage(upBoard({ run: run({}) }), false);
   try { expect(bannerText(a)).toContain("Dev-studio update running — pulling… (2 min)"); expect(banner(a).textContent).not.toContain("waiting for the Studio"); } finally { await a.window.happyDOM.close(); }
   const b = await mountPage(upBoard({ run: run({ state: "done", line: "advanced a -> b", squads_line: "update-squads: [fixture] reload — instructions — 7 wishes", warnings: ["update: WARNING disk low"] }) }), false);
-  try { expect(bannerText(b)).toContain("advanced a -> b — reload — instructions — 7 wishes"); expect(bannerText(b)).toContain("update: WARNING disk low"); } finally { await b.window.happyDOM.close(); }
+  try { expect(bannerText(b)).toContain("advanced a -> b — 7 workers on older code reload"); expect(bannerText(b)).toContain("update: WARNING disk low"); } finally { await b.window.happyDOM.close(); }
+  const d = await mountPage(upBoard({ run: run({ state: "done", line: "already current (fe92a557…)", squads_line: "update-squads: [fixture] restart — code, instructions, skills — 25 wish(es) (one a reload of the Studio)" }) }), false);
+  try { expect(bannerText(d)).toContain("already current (fe92a55) — 25 workers on older code restart once idle; the Studio reloads"); } finally { await d.window.happyDOM.close(); }
+  const e = await mountPage(upBoard({ run: run({ state: "done", line: "already current (fe92a557…)" }) }), false);
+  try { expect(bannerText(e)).toContain("already current (fe92a55)"); expect(bannerText(e)).not.toContain("workers"); } finally { await e.window.happyDOM.close(); }
   const c = await mountPage(upBoard({ run: run({ state: "failed", line: "DS-UPDATE: refused: dirty", log: "/x/state/loop/update/3.log" }) }), false);
   try { expect(bannerText(c)).toContain("Dev-studio update failed: DS-UPDATE: refused: dirty"); expect(bannerText(c)).toContain("/x/state/loop/update/3.log"); expect(banner(c).className).toContain("err"); } finally { await c.window.happyDOM.close(); }
 });

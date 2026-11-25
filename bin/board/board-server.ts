@@ -185,13 +185,67 @@ const board = (s: Store, kind: string, payload: unknown, o: { project: string; s
 // The Studio command each board action asks for; topic/role are NAME-checked before they get here.
 const ACTIONS: Record<string, { topic: boolean; cmd: (p: string, t: string, role: string, brief: string) => string }> = {
   close:   { topic: true,  cmd: (_, t) => `/ds-close-squad ${t}` },
-  restart: { topic: true,  cmd: (p, t, r) => `/ds-restart ${p} --topic ${t}${r ? ` --role ${r}` : ""}` },
-  suspend: { topic: true,  cmd: (_, t) => `/ds-suspend ${t}` },
-  resume:  { topic: true,  cmd: (p, t) => `/ds-resume --suspended ${p} ${t}` },
-  reload:  { topic: false, cmd: (p) => `/ds-reload ${p}` },
   update:  { topic: false, cmd: (p) => `/ds-update ${p}` },
   start:   { topic: false, cmd: (_, __, ___, brief) => `/ds-start-squad ${brief}` }, // the dialog's start builds its own line (startRequest)
 };
+
+// restart, suspend, resume and reload are the loop's own wishes: the board writes them in the request's
+// transaction (`by: "board"`, as the per-member Restart does), nothing goes through the Studio.
+const WISH_ACTIONS: Record<string, { topic: boolean }> = { restart: { topic: true }, suspend: { topic: true }, resume: { topic: true }, reload: { topic: false } };
+const LOOP_WAIT = "already requested — waiting for the loop";
+const pendingMember = (m: Row, kind: "restart" | "reload") => kind === "restart"
+  ? Number(m.restart_at ?? 0) > Number(m.placed_at ?? 0)
+  : m.reload_at != null && Number(m.reload_at) > Number(m.reloaded_at ?? 0);
+// Newest row per (squad, role, suffix), as a Restart / Reload of the squad picks it.
+const newestPerRole = (rows: Row[]) => {
+  const seen = new Map<string, Row>();
+  for (const m of rows) { const k = `${m.squad}/${m.role}/${m.suffix ?? ""}`; if (!seen.has(k) || Number(m.id) > Number(seen.get(k)!.id)) seen.set(k, m); }
+  return [...seen.values()];
+};
+function wishAction(s: Store, project: string, action: string, topic: string, role: string): Response {
+  const why = `board ${action}`;
+  if (pendingReq(s, "studio", project, topic || null, "action", action)) no(409, "already requested — waiting for the Studio");
+  const ok = (wishes: number) => json(202, { ok: true, action, wishes });
+  const live = "COALESCE(want,'') != 'gone' AND COALESCE(status,'') != 'gone'";
+  if (action === "reload") {
+    const rows = s.db.query(`SELECT m.* FROM members m JOIN squads q ON q.project = m.project AND q.topic = m.squad
+      WHERE m.project = ? AND m.squad != '_studio' AND COALESCE(m.want,'') != 'gone' AND COALESCE(m.status,'') != 'gone'
+        AND COALESCE(q.status,'') != 'suspended' AND COALESCE(q.run_id,'') != ''`).all(project) as Row[];
+    const studio = one(s, `SELECT * FROM members WHERE project = ? AND squad = '_studio' AND role = 'studio' AND suffix = '' AND ${live} ORDER BY id DESC LIMIT 1`, project);
+    const targets = [...newestPerRole(rows), ...(studio ? [studio] : [])];
+    if (!targets.length) no(409, "nothing to reload");
+    const todo = targets.filter((m) => !pendingMember(m, "reload"));
+    if (!todo.length) no(409, LOOP_WAIT);
+    for (const m of todo) s.wishOnce(String(m.id), "reload", { by: "board", why });
+    return ok(todo.length);
+  }
+  const q = squadRow(s, project, topic);
+  const st = String(q.status ?? "running");
+  if (action === "restart") {
+    if (["suspended", "on-hold", "closed", "gone"].includes(st)) no(409, `this squad is ${st}`);
+    const all = s.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND ${live}`).all(project, topic) as Row[];
+    if (paused(s, { project, squad: topic }) || all.some((m) => (!role || role === m.role || role === `${m.role}${m.suffix ? "-" + m.suffix : ""}`) && paused(s, m as { project: string })))
+      no(409, "work is paused or resuming; use Resume before restarting");
+    const targets = newestPerRole(all).filter((m) => canRestartRole(String(m.role))
+      && (!role || role === m.role || role === `${m.role}${m.suffix ? "-" + m.suffix : ""}`));
+    if (!targets.length) no(409, "no member of this squad can be restarted here");
+    const todo = targets.filter((m) => !pendingMember(m, "restart"));
+    if (!todo.length) no(409, LOOP_WAIT);
+    for (const m of todo) s.wishOnce(String(m.id), "restart", { by: "board", mode: "now", why });
+    return ok(todo.length);
+  }
+  if (action === "suspend") {
+    if (["closed", "gone"].includes(st)) no(409, `this squad is ${st}`);
+    if (st === "suspended") no(409, "this squad is already suspended");
+    if (q.want === "suspended") no(409, "already suspending");
+    s.want("squad", `${project}/${topic}`, "suspended", { by: "board", why });
+    return ok(1);
+  }
+  if (st !== "suspended") no(409, "this squad is not suspended");
+  if (q.want === "running") no(409, "already resuming");
+  s.want("squad", `${project}/${topic}`, "running", { by: "board", why });
+  return ok(1);
+}
 
 // The start dialog's fields (contract of board-start-squad-box U1). An error string, or the clean fields.
 const START_ENUMS = { type: ["feature", "testing"], autonomy: ["checkpoints", "lfg"], start: ["plan", "brainstorm", "ask", "investigate", "fix", "auto"], backend: BACKEND_NAMES } as const;
@@ -235,7 +289,7 @@ async function request(req: Request) {
   const isStart = action === "start" && Object.hasOwn(ACTIONS, action);
   const brief = isStart ? "" : oneLine(pr.b.text);
   if (!NAME.test(project ?? "")) return json(400, { error: "need project" });
-  const a = Object.hasOwn(ACTIONS, action) ? ACTIONS[action] : undefined; // not "constructor" etc.
+  const a = Object.hasOwn(ACTIONS, action) ? ACTIONS[action] : Object.hasOwn(WISH_ACTIONS, action) ? { ...WISH_ACTIONS[action], cmd: () => "" } : undefined; // not "constructor" etc.
   if (!a) return json(400, { error: `unknown action ${action}` });
   if (a.topic ? !NAME.test(topic) : topic !== "") return json(400, { error: a.topic ? "need a topic" : "no topic for this action" });
   if (role !== "" && (action !== "restart" || !NAME.test(role))) return json(400, { error: "bad role" });
@@ -249,6 +303,7 @@ async function request(req: Request) {
   const line = sf
     ? `board: the operator asks you to run: /ds-start-squad --repo ${project}${sf.slug ? ` --topic ${sf.slug}` : ""}${sf.type ? ` --type ${sf.type}` : ""}${sf.autonomy ? ` --autonomy ${sf.autonomy}` : ""}${sf.start ? ` --start ${sf.start}` : ""}${sf.backend ? ` --backend ${sf.backend}` : ""}`
     : `board: the operator asks you to run: ${a.cmd(project, topic, role, brief)}`;
+  if (Object.hasOwn(WISH_ACTIONS, action)) return write((s) => wishAction(s, project, action, topic, role));
   return write((s) => {
     if (sf && !one(s, "SELECT 1 AS x FROM projects WHERE label = ?", project)) no(409, `no project ${project} on this board`);
     // U33, U57: the Studio's backend is not a choice; another one is refused with the `ds up --backend` line.
