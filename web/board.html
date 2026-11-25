@@ -274,11 +274,14 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-turn.screen .txt{font:12px var(--mono);background:#0f1218;border:1px solid var(--line);border-radius:6px;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere}
 .chat-day{align-self:center;font:11px var(--mono);color:var(--dim);padding:2px 10px;border:1px solid var(--line);border-radius:10px}
 .chat-down{position:absolute;right:18px;bottom:10px;border-radius:50%;width:32px;height:32px;padding:0}
-.chat-card{flex:1 1 100%;min-width:0;display:flex;flex-direction:column;gap:6px;padding:8px 8px 8px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:18px}
+.chat-card{flex:1 1 100%;min-width:0;display:flex;flex-direction:column;gap:6px;padding:6px 8px 6px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:18px}
 .chat-in{flex:none;width:100%;box-sizing:border-box;min-width:0;resize:none;font:13px/1.45 var(--sans);padding:4px 0;background:transparent;color:var(--fg);border:0;outline:0;max-height:calc(6 * 1.45em + 16px);overflow-y:auto}
 .chat-row{display:flex;align-items:center;gap:8px} .chat-row .sp{flex:1}
-.chat-round{flex:none;width:40px;height:40px;min-width:40px;min-height:40px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:18px;line-height:1}
-.chat-stop{background:var(--red-bg);border:2px solid var(--red);color:var(--red)} .chat-send{font-size:20px}
+.chat-round{position:relative;flex:none;width:32px;height:32px;min-width:32px;min-height:32px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:14px;line-height:1}
+.chat-round::after{content:"";position:absolute;inset:-6px} /* a 44px hit area round the 32px circle */
+.chat-stop{background:var(--red-bg);border:2px solid var(--red);color:var(--red)} .chat-send{font-size:16px}
+.chat-row .chat-attach{background:transparent;border:0;border-radius:50%;color:var(--mut)} .chat-row .chat-attach:hover,.chat-row .chat-attach:focus-visible{color:var(--fg);background:transparent;border:0} .chat-row .chat-attach:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+.chat-attach svg{width:16px;height:16px;display:block}
 .chat-banner{display:block;width:100%;margin-top:8px;text-align:left;white-space:normal;font:12px var(--mono);color:var(--amber);background:var(--amber-bg);border-color:var(--amber)}
 .chat-left{font:11px var(--mono);color:var(--dim)} .chat-left.low{color:var(--amber)}
 .chat-keys{flex:1 1 100%;display:flex;gap:4px;overflow-x:auto;min-width:0;scrollbar-width:none} .chat-key{flex:0 0 auto;min-width:34px;min-height:32px;font:12px var(--mono)}
@@ -346,6 +349,7 @@ html:has(.modal) .modal,html:has(.modal) .toast{visibility:visible}
 .roles-tab select,.steps select,.model-free input,.sk-table select{min-height:44px}
 .rt-save{bottom:0;margin:12px -12px 0;padding:10px 12px max(10px,env(safe-area-inset-bottom));flex-wrap:wrap}
 .mbox .btn,.mbox button:not(.mclose),.mbox .opt,.mbox a.btn,.set-tab,.role-name{min-height:44px;min-width:44px}
+.chat-row{gap:10px} .chat-round{font-size:15px} .chat-round::after{inset:-5px} .chat-send{font-size:17px} .chat-attach svg{width:18px;height:18px} .mbox .chat-card .chat-round{width:34px;height:34px;min-width:34px;min-height:34px} /* the 44px tap target is the ::after, not the drawn circle */
 .mbox .opt{width:100%} .mbox .link-chip,.mbox .chip-btn{min-height:44px;display:inline-flex;align-items:center}
 .mbox .ud dl{grid-template-columns:minmax(0,1fr)} .ud dl,.fcd dl{grid-template-columns:minmax(0,1fr);gap:2px 0} .ud dd{margin-bottom:8px}
 .mbox>.md{padding-left:12px;padding-right:12px;overflow-wrap:anywhere} .mbox>.md pre,.mbox>.md table,.mbox pre{max-width:100%;overflow-x:auto} .mbox .ev-data,.mbox .evdata{white-space:pre-wrap;overflow-wrap:anywhere}
@@ -2602,7 +2606,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
           onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing && !e.shiftKey && !chatTouch()) { e.preventDefault(); send(); } }} onPaste=${onPaste}></textarea>
           <div class="chat-row">
           <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
-            <button type="button" class="btn chat-round chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}>📎</button><span class="sp"></span>
+            <button type="button" class="btn chat-round chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg></button><span class="sp"></span>
             <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left < 0 ? `${-left} over` : `${left} left`}</span>
             ${data && data.working && html`<button type="button" class="btn chat-round chat-stop" title="Press Esc: stops a working agent, closes a menu" aria-label="Stop" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc")}>■</button>`}
             <button class="btn pri chat-round chat-send" aria-label="Send" title=${busy === shown.wt ? "Sending…" : uploading ? "Uploading…" : "Send"} disabled=${busy === shown.wt || uploading || (!chatText(text) && !files.length)} onClick=${send}>${busy === shown.wt || uploading ? "…" : "↑"}</button>
