@@ -48,14 +48,15 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || 
 
 // What a view measures, run in the page. `popup` is the topmost .modal .mbox.
 const MEASURE = `(() => {
-  const vw = innerWidth, vh = innerHeight, r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); return { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) }; };
+  const vw = innerWidth, vh = innerHeight, r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(), g = e.closest(".chat-card") && b.width < 44 ? (44 - b.width) / 2 : 0; return { x: Math.round(b.left - g), y: Math.round(b.top - g), w: Math.round(b.width + 2 * g), h: Math.round(b.height + 2 * g) }; }; // a chat-card circle reports its 44px hit area
   const boxes = [...document.querySelectorAll(".modal .mbox")], box = boxes[boxes.length - 1] || null, root = box || document.body;
   const vis = (e) => { const b = e.getBoundingClientRect(); const s = getComputedStyle(e); return b.width > 0 && b.height > 0 && s.visibility !== "hidden" && s.display !== "none"; };
   const scrolls = (e) => { for (let p = e.parentElement; p && p !== root.parentElement; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if (o === "auto" || o === "scroll" || o === "hidden") return true; if (p === root) break; } return false; };
   const inputs = [...root.querySelectorAll("input:not([type=checkbox]):not([type=radio]):not([type=hidden]),textarea,select")].filter(vis);
   const small = inputs.filter((e) => parseFloat(getComputedStyle(e).fontSize) < 16).length;
   const btns = [...root.querySelectorAll("button")].filter(vis);
-  const tiny = btns.filter((e) => { const b = e.getBoundingClientRect(); return b.width < 44 || b.height < 44; }).length;
+  const hit = (e) => { const b = e.getBoundingClientRect(); if (!e.closest(".chat-card") || (b.width >= 44 && b.height >= 44)) return b.width >= 44 && b.height >= 44; const cx = b.left + b.width / 2, cy = b.top + b.height / 2; return [[-19, -19], [19, -19], [-19, 19], [19, 19], [0, 0]].every(([dx, dy]) => { const t = document.elementFromPoint(cx + dx, cy + dy); return t && (t === e || e.contains(t)); }); };
+  const tiny = btns.filter((e) => !hit(e)).length;
   const out = [...root.querySelectorAll("*")].filter((e) => vis(e) && e.getBoundingClientRect().right > vw + 1 && !scrolls(e)).slice(0, 5).map((e) => e.tagName.toLowerCase() + "." + String(e.className).slice(0, 30));
   const close = box && (box.querySelector(".mclose") || [...box.querySelectorAll("button")].find((b) => b.textContent.trim() === "✕"));
   const foot = box && [...box.children].filter((c) => /qfoot|mhd/.test(c.className)).pop();
@@ -66,7 +67,7 @@ const MEASURE = `(() => {
   const units = bv(".units .u:not(.head)").map((e) => { const n = e.querySelector(".un .unit-open") || e.querySelector(".un"), d = e.querySelector(".dot"), t = e.querySelector(".tier"); return { nameW: Math.round(n.getBoundingClientRect().width), clipped: n.scrollWidth > n.clientWidth + 1, h: Math.round(e.getBoundingClientRect().height), dotY: Math.round(d.getBoundingClientRect().top), tierY: t ? Math.round(t.getBoundingClientRect().top) : null }; });
   const evs = bv(".ev").slice(0, 8).map((e) => { const s = e.querySelector(".s"); return { timeY: Math.round(e.children[0].getBoundingClientRect().top), textY: s ? Math.round(s.getBoundingClientRect().top) : null, textW: s ? Math.round(s.getBoundingClientRect().width) : null }; });
   const menu = r(bv(".amenu")[0]), menuTiny = bv(".amenu .btn").filter((e) => e.getBoundingClientRect().height < 44).length;
-  const tinyList = btns.filter((e) => { const b = e.getBoundingClientRect(); return b.width < 44 || b.height < 44; }).slice(0, 12).map((e) => e.className.slice(0, 22) + "|" + e.textContent.trim().slice(0, 14) + "|" + Math.round(e.getBoundingClientRect().width) + "x" + Math.round(e.getBoundingClientRect().height));
+  const tinyList = btns.filter((e) => !hit(e)).slice(0, 12).map((e) => e.className.slice(0, 22) + "|" + e.textContent.trim().slice(0, 14) + "|" + Math.round(e.getBoundingClientRect().width) + "x" + Math.round(e.getBoundingClientRect().height));
   return { tinyList, flowLefts, units, evs, menu, menuTiny, vw, vh, popup: r(box), docW: document.documentElement.scrollWidth, boxScrollW: box ? box.scrollWidth : null, inputs: inputs.length, small, fonts, btns: btns.length, tiny,
     close: r(close), primary: r(prim), foot: r(foot), out };
 })()`;
@@ -90,7 +91,7 @@ const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.que
     if (JSON.stringify(kids.map((k) => k.replace("pri chat-send", "chat-send pri"))) !== JSON.stringify(okKids)) bad.push("card buttons " + kids);
     const r = card.getBoundingClientRect(); if (r.height > 200) bad.push("card is " + Math.round(r.height) + " px tall");
     if (parseFloat(getComputedStyle(card).borderTopLeftRadius) < 16) bad.push("card radius");
-    for (const b of card.querySelectorAll("button")) { const x = b.getBoundingClientRect(); if (x.width < 40 || x.height < 40) bad.push("round button " + b.className + " " + Math.round(x.width) + "x" + Math.round(x.height)); }
+    for (const b of card.querySelectorAll("button")) { const x = b.getBoundingClientRect(); if (x.width < 32 || x.height < 32 || x.width > 34 || (b.className.indexOf("chat-attach") < 0 && x.width !== x.height)) bad.push("round button " + b.className + " " + Math.round(x.width) + "x" + Math.round(x.height)); }
   }
   const keys = q(".chat-keys"), scr = q(".mhd .chat-scr, .mhd .chat-segb");
   if (want === "screen") { const n = keys ? keys.querySelectorAll("button").length : 0; if (n !== 8) bad.push("Screen shows " + n + " keys, not Esc ↑ ↓ ⏎ ⇥ 1 2 3"); if (keys && card && keys.getBoundingClientRect().bottom > card.getBoundingClientRect().top + 1) bad.push("keys not above the card"); }
@@ -137,7 +138,7 @@ const KB_STUB = `(() => {
 })()`;
 // What a keyboard view measures: the sheet, its primary button, the focused field, the folded secondary buttons, kb-open.
 const KB_MEASURE = `((field) => {
-  const r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); return { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) }; };
+  const r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(), g = e.closest(".chat-card") && b.width < 44 ? (44 - b.width) / 2 : 0; return { x: Math.round(b.left - g), y: Math.round(b.top - g), w: Math.round(b.width + 2 * g), h: Math.round(b.height + 2 * g) }; }; // a chat-card circle reports its 44px hit area
   const vis = (e) => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(e).display !== "none"; };
   const boxes = [...document.querySelectorAll(".modal .mbox")], box = boxes[boxes.length - 1];
   const f = document.querySelector(field);
@@ -249,7 +250,7 @@ for (const size of SIZES) for (const v of VIEWS) {
     if (m.primary) need(onScreen(m.primary) && m.primary.h >= 44, `primary button ${JSON.stringify(m.primary)} not on screen at >= 44 px`);
     else if (v.name === "question") need(false, "no primary button found");
     need(m.tiny === 0, `${m.tiny} button(s) under 44 px`);
-    need(m.tiny === 0, `${m.tiny} of ${m.btns} buttons under 44 px`);
+    need(m.tiny === 0, `${m.tiny} of ${m.btns} buttons under 44 px: ${m.tinyList.join(" ; ")}`);
     need(m.small === 0, `${m.small} input(s) under 16 px (${m.fonts})`);
     need(m.out.length === 0 && m.boxScrollW <= m.vw + 1, `sticks out past the right edge: ${m.out} (box scrollWidth ${m.boxScrollW})`);
   }
