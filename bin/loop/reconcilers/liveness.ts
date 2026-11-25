@@ -89,7 +89,7 @@ import { redact } from "../core/redact.ts";
 import { INTERRUPTED } from "../chat/turns.ts";
 import { wake } from "../pause/wake.ts";
 import { settledDispatch } from "./members.ts";
-import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioView } from "../squad/studio.ts";
+import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioBackend, studioView } from "../squad/studio.ts";
 import { memo } from "../capacity/walk-memo.ts";
 import { onContract } from "../squad/backend.ts";
 import { finishOf } from "../squad/finish-read.ts";
@@ -549,8 +549,11 @@ class Pass {
     const v = studioView(this.store, this.project), handle = (v?.member?.handle as string | null) || null;
     const term = handle ? v!.terms.find((t) => t.handle === handle) : undefined;
     const where = handle ? `your cockpit terminal ${term?.title || "untitled"}, ${handle}` : "your cockpit terminal; the loop has adopted none";
-    const state = b.cause === "hung" ? `has shown no output for ${Math.max(0, Math.round((this.now - b.since) / 60))} min while Orca reads it as working`
-      : b.cause === "exited" ? "has no agent running in its worktree" : b.cause === "dead" ? "is no longer listed by Orca" : `is ${b.cause}`;
+    // U51: a Studio off Orca names its own backend.
+    const on = studioBackend(this.store.get("projects", { label: this.project }));
+    const reader = on === "orca" ? "while Orca reads it as working" : `while ${on} reads it as working`;
+    const state = b.cause === "hung" ? `has shown no output for ${Math.max(0, Math.round((this.now - b.since) / 60))} min ${reader}`
+      : b.cause === "exited" ? "has no agent running in its worktree" : b.cause === "dead" ? `is no longer listed by ${on === "orca" ? "Orca" : on}` : `is ${b.cause}`;
     const text = `${what} — the ${this.project} Studio (${where}) ${state}`;
     const why = "The loop never restarts the Studio on its own.";
     // No handle, nothing to restart through: the one acknowledgement, as before.

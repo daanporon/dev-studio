@@ -24,7 +24,7 @@ import { backendOp, backendPath, inProcess } from "../io/orca.ts";
 import { redact } from "../core/redact.ts";
 import { adoptStudio, STUDIO_SQUAD, studioAgent } from "../squad/studio.ts";
 import { loopProjects } from "../settings/projects.ts";
-import { offOrca } from "../squad/backend.ts";
+import { offOrca, studioContract } from "../squad/backend.ts";
 import { KEYS_STALE_S } from "../chat/keys.ts";
 
 export type PsAgent = { state?: string; stateStartedAt?: number; lastAssistantMessage?: string };
@@ -383,7 +383,9 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
       const tokensOf = store.db.query("SELECT SUM(output) AS n FROM observed_tokens WHERE worker = ?");
       const read = Array.isArray(procs) ? procs : null;
       const proj = store.get("projects", { label: project });
-      const studioWt = (proj?.studio_wt as string | null) || "";
+      // U51: a Studio off Orca is the contract observer's: not walked, adopted or read here.
+      const studioOff = !!studioContract(store, project);
+      const studioWt = studioOff ? "" : (proj?.studio_wt as string | null) || "";
       const walks = read ? mainAgents(ps, read, new Map(studioWt ? [[studioWt, studioAgent(proj)]] : [])) : null;
       const subs = read ? subAgents(ps, read) : null;
 
@@ -467,7 +469,7 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
             AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?))`,
           [now, project, JSON.stringify([...ids]), theirs]);
         // U261: only a listing that succeeded can adopt, keep or release the Studio's terminal.
-        if (terminals) adoptStudio(store, project, now);
+        if (terminals && !studioOff) adoptStudio(store, project, now);
       });
 
       // A standing member's dispatch status and when it was seen to change (U64). worker-list has no
