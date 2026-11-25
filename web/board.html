@@ -2579,7 +2579,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
           : html`<h3>${qCur.title}</h3>${qCur.question && qCur.question !== qCur.title && html`<div class="chat-qprompt">${qCur.question}</div>`}
             ${qCur.answerable
               ? html`<${QOptions} n=${qCur} onPick=${(l) => answerQ(qCur, l)} />
-                ${qCur.choices.length === 0 && html`<textarea class="chat-qtext" ref=${qText} placeholder="Type your answer"></textarea><button type="button" class="btn pri" onClick=${() => { const v = qText.current && qText.current.value.trim(); if (v) answerQ(qCur, v); }}>Send</button>`}`
+                ${qCur.choices.length === 0 && html`<textarea key=${qCur.key} class="chat-qtext" ref=${qText} placeholder="Type your answer"></textarea><button type="button" class="btn pri" onClick=${() => { const v = qText.current && qText.current.value.trim(); if (v) answerQ(qCur, v); }}>Send</button>`}`
               : html`<${QOptions} n=${qCur} termOnly=${true} /><button type="button" class="btn chat-qopt" onClick=${() => goView("screen")}>Open Screen to answer</button>`}`}</div>`
         : showScreen
         ? html`<pre class="chat-screen" aria-label="Live screen">${scr.tail || "(blank screen)"}</pre><span class="chat-time chat-screen-at">${scr.age_s == null ? "not read yet" : "read " + chatAge(scr.age_s) + " ago"}</span>`

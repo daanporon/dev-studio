@@ -695,3 +695,19 @@ test("U2: a member with an open question carries a ? in the switcher and tabs", 
   const marks = nodes(p.render()).filter((n) => n.strings.includes("chat-ask"));
   expect(marks.length).toBeGreaterThan(0);
 });
+
+test("U4: the free-text answer box is keyed by question id + since, so paging remounts it empty", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q1", { choices: [] }), bq("q2", { choices: [], since: "2026-11-25T11:00:00Z" })] });
+  let root = p.render();
+  const boxKey = () => nodes(questionView(root)).find((n) => n.strings.includes("chat-qtext")).values[0];
+  const first = boxKey();
+  expect(first).toContain("q1");
+  nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Next question"')).values.filter((v: any) => typeof v === "function")[1]();
+  root = p.render();
+  const second = boxKey();
+  expect(second).toContain("q2");
+  expect(second).toContain("2026-11-25T11:00:00Z");
+  expect(second).not.toBe(first);
+});
