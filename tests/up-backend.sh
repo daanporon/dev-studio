@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# up-backend.sh — `ds up` from a fresh clone to a running project, on Orca and off it (orca-backend-alternatives U53).
+# up-backend.sh — `ds up` from a fresh clone to a running project, on Orca and off it (orca-backend-alternatives U53),
+# and `ds up <label> --backend <x>` moving a project's Studio to another backend (U54).
 # A temp state root, a stub Orca for `ds up`'s own calls, and tests/lib/up-loop.ts beside it: real loop ticks
 # (observers, the Studio reconciler, the actuator and fulfillers) on the same state root over the fake Orca or
 # the fake tmux. The install check, the install and `loop --ensure` are stood in for (DS_UP_INSTALL_CHECK,
@@ -82,10 +83,6 @@ other="$tmp/src/other.git"; git clone -q --bare "$tmp/seed" "$other"
 out="$(up "$other" --label zzup --force-new)"; rc=$?
 check "another repo on zzup: refused" "2" "$rc"
 has "another repo on zzup: says why" "already up with" "$out"
-# A different backend on a reconcile points at U54.
-out="$(up zzup --backend tmux)"; rc=$?
-check "zzup --backend tmux: refused" "2" "$rc"
-has "zzup --backend tmux: U54" "U54" "$out"
 
 # 4. Orca with the loop stopped: the Studio is started directly, with a note.
 rm -f "$DS_STATE_ROOT/zzup/dispatcher.json"
@@ -125,6 +122,38 @@ check "tmux again: exit 0" "0" "$rc"
 sleep 1
 has "tmux again: still one Studio" "starts=1 live=1 " "$(summary zzup-tmux)"
 check "tmux again: the same worktree" "$wt" "$(jq -r .studio_wt "$disp")"
+
+# 7b. U54: `ds up zzup-tmux --backend herdr` moves the project. A paused squad refuses it, naming the squad, and
+# nothing changes; with no open squad the Studio moves to herdr in its own worktree, keeping its member row
+# (account history). herdr is a stub binary: the loop's fake herdr runs the terminals.
+printf '#!/bin/sh\nexit 0\n' > "$tmp/herdr"; chmod +x "$tmp/herdr"; export DS_HERDR_BIN="$tmp/herdr"
+sql() { "$(command -v bun)" -e 'import { open } from "'"$ROOT"'/bin/loop/core/store.ts"; const s = open(); const r = s.db.query(process.argv[1]).all(); s.close(); for (const x of r) console.log(Object.values(x as object).join("|"));' "$1"; }
+sql "INSERT INTO squads (project, topic, status, observed_at, updated_at) VALUES ('zzup-tmux', 'zzparked', 'suspended', 1, 1)" >/dev/null
+member="$(sql "SELECT id FROM members WHERE project = 'zzup-tmux' AND squad = '_studio'")"
+out="$(up zzup-tmux --backend herdr)"; rc=$?
+check "move, a paused squad: refused" "2" "$rc"
+has "move, a paused squad: names it" "open squad on tmux: zzparked (a paused squad counts)" "$out"
+check "move, a paused squad: still on tmux" "tmux" "$(jq -r .studio_backend "$disp")"
+check "move, a paused squad: the same worktree" "$wt" "$(jq -r .studio_wt "$disp")"
+has "move, a paused squad: still one Studio on tmux" "live=1 handle=" "$(summary zzup-tmux)"
+sql "UPDATE squads SET status = 'closed' WHERE project = 'zzup-tmux' AND topic = 'zzparked'" >/dev/null
+out="$(up zzup-tmux --backend herdr)"; rc=$?
+check "move: exit 0" "0" "$rc"
+has "move: says it moved" "moved 'zzup-tmux' from tmux to herdr" "$out"
+check "move: studio_backend herdr" "herdr" "$(jq -r .studio_backend "$disp")"
+wt2="$(jq -r .studio_wt "$disp")"
+check "move: a new local:: worktree" "yes" "$(case "$wt2" in local::"$DS_WORKTREE_ROOT"/*-studio-herdr) [ -d "${wt2#local::}" ] && echo yes ;; *) echo "no ($wt2)" ;; esac)"
+check "move: default_backend herdr" "herdr" "$("$ROOT/bin/ds" config get zzup-tmux limits.conf default_backend 2>/dev/null | jq -r .value)"
+sleep 1
+sum="$(summary zzup-tmux)"
+has "move: none left on tmux" "live=0 " "$sum"
+has "move: one Studio on herdr" "herdr=1" "$sum"
+check "move: the same member row, now in the new worktree" "$member|$wt2" "$(sql "SELECT id, wt FROM members WHERE project = 'zzup-tmux' AND squad = '_studio'")"
+check "move: the old worktree left for cleanup" "yes" "$([ -d "${wt#local::}" ] && echo yes || echo no)"
+out="$("$ROOT/bin/ds" config set zzup-tmux limits.conf default_backend tmux 2>&1)"; rc=$?
+check "default_backend tmux after the move: refused" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+has "default_backend tmux after the move: names ds up" "ds up zzup-tmux --backend tmux" "$out"
+wt="$wt2"
 stop_loop
 # A reconcile with no --worktree keeps the project's stored worktree_provider (here treehouse, which this host
 # lacks), not the backend's default: refused, the Studio's worktree unchanged.

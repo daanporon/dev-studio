@@ -37,7 +37,9 @@ export function recordRepair(store: Store, project: string, wt: string, at: numb
 const nesting: Reconciler = {
   name: "nesting",
   run({ store, project, now }) {
-    const studio = (store.get("projects", { label: project })?.studio_wt as string | null | undefined) || null;
+    // U54 (project-start): a Studio off Orca (a `local::` folder) has no Orca worktree to nest a Lead under.
+    const sw = (store.get("projects", { label: project })?.studio_wt as string | null | undefined) || null;
+    const studio = sw?.startsWith("local::") ? null : sw;
     const seen = (wt: string): Row | null => store.db.query("SELECT parent FROM observed_worktrees WHERE project = ? AND wt = ? AND gone_at IS NULL").get(project, wt) as Row | null;
     const out: Action[] = [];
     for (const sq of liveSquads(store, project)) {

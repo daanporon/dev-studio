@@ -336,6 +336,19 @@ describe("U32: a backend change is checked when it is set", () => {
     expect(set(s, P, "limits.conf", "default_backend", "tmux", "ds", tm)).toHaveLength(1);
   });
 
+  test("U54: default_backend is refused while the Studio runs on another backend, naming ds up --backend; its own fits", () => {
+    const { s, o } = fixture();
+    claudeOnly(o);
+    const tm = { ...o, which: has("tmux", "orca") };
+    s.upsert("projects", { label: P }, { studio_wt: "local::/x/studio", doc: JSON.stringify({ studio_backend: "tmux" }), observed_at: 1 });
+    refused(() => set(s, P, "limits.conf", "default_backend", "orca", "board", tm), new RegExp(`Studio runs on tmux.*ds up ${P} --backend orca`));
+    expect(row(s, "limits.conf", "default_backend")).toBeNull();
+    expect(set(s, P, "limits.conf", "default_backend", "tmux", "ds", tm)).toHaveLength(1);
+    // A project with no Studio yet (a first ds up writes its backend before it exists): no such check.
+    s.upsert("projects", { label: P }, { studio_wt: null, observed_at: 2 });
+    expect(set(s, P, "limits.conf", "default_backend", "orca", "ds", tm)).toHaveLength(1);
+  });
+
   test("worktree_provider: an explicit git or treehouse with orca is refused; so is a backend change under it", () => {
     const { s, o } = fixture();
     claudeOnly(o);

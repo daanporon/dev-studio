@@ -17,7 +17,7 @@ import { makeLimits, type Pick, type PickArgs } from "../../bin/loop/reconcilers
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import studio, { claudePrompt } from "../../bin/loop/fulfil/studio.ts";
 import { fakeContract, type FakeContract } from "../../bin/loop/fakes/contract.ts";
-import { MOVE, RESTART_APPROVED, START_WANTED, studioReady, wantStudioStart } from "../../bin/loop/squad/studio.ts";
+import { BACKEND_WANTED, MOVE, RESTART_APPROVED, START_WANTED, studioReady, wantStudioBackend, wantStudioStart } from "../../bin/loop/squad/studio.ts";
 import studioRec from "../../bin/loop/reconcilers/studio.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
 
@@ -790,6 +790,133 @@ describe("U52a: start and restart a Studio off Orca", () => {
     expect(claudePrompt("│ > hello │")).toBe(true);
     expect(claudePrompt("$ exec bash '/x'\n> ")).toBe(false);
     expect(claudePrompt("user@host:~$ ")).toBe(false);
+  });
+});
+
+// U54 (project-start): `ds up fx --backend herdr` on a project whose Studio runs on tmux. The new Studio starts on the
+// fake herdr in the new folder, the old one is closed on the fake tmux, and the project switches: dispatcher.json,
+// default_backend, the `_studio` row carried with its account history.
+describe("U54: moving a project's Studio to another backend (why backend)", () => {
+  const env = ["DS_ORCA_DATA", "DS_CLAUDE_SYSTEM_JSON_DIR"] as const;
+  const saved = Object.fromEntries(env.map((k) => [k, process.env[k]]));
+  afterEach(() => { for (const k of env) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; });
+
+  function fake(name: string, crash: { close: number }) {
+    const f = fakeContract({}, { name, now: () => T });
+    const backend = { caps: f.caps, call: (async (op: string, req: { id?: string; text?: string }) => {
+      if (op === "terminal.close" && crash.close > 0) { crash.close--; throw new Error("the loop died mid-close"); }
+      const r = await f.call(op as never, req as never);
+      if (op === "terminal.send" && String(req.text ?? "").startsWith("exec bash")) f.terms.get(req.id!)!.lines.push("╭───╮", "│ ❯ │", "╰───╯");
+      return r;
+    }) as FakeContract["call"] };
+    return { f, backend };
+  }
+
+  async function rigMove(o: { crash?: number } = {}) {
+    const s = rig(), dir = mkdtempSync(join(tmpdir(), "zzstudiobackend-")); temps.push(dir);
+    mkdirSync(join(dir, "orca", "claude-profiles", "acct-a", "home"), { recursive: true });
+    process.env.DS_ORCA_DATA = join(dir, "orca");
+    process.env.DS_CLAUDE_SYSTEM_JSON_DIR = join(dir, "orca");
+    const oldPath = join(dir, "studio"), newPath = join(dir, "studio-herdr"); mkdirSync(oldPath); mkdirSync(newPath);
+    const wt = `local::${oldPath}`, newWt = `local::${newPath}`, proj = s.get("projects", { label: "fx" })!;
+    s.upsert("projects", { label: "fx" }, { studio_wt: wt, doc: JSON.stringify({ ...JSON.parse(String(proj.doc ?? "{}")), studio_backend: "tmux" }), observed_at: T });
+    s.db.run("UPDATE squads SET status = 'closed' WHERE project = 'fx'");
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "tmux", observed_at: T });
+    const crash = { close: o.crash ?? 0 }, tm = fake("tmux", crash), hd = fake("herdr", crash);
+    const act = new LoopActuator({ orca: new FakeBackend(), fulfillers: [], backends: (name) => name === "herdr" ? { backend: hd.backend, caps: hd.f.caps } : { backend: tm.backend, caps: tm.f.caps } });
+    const old = await tm.f.call("terminal.create", { cwd: oldPath, env: { DS_GEN: "g0" }, label: "studio", group: "_studio" });
+    if (!old.ok) throw new Error("fake create");
+    s.db.run("DELETE FROM members WHERE project = 'fx' AND squad = '_studio'");
+    s.upsert("members", { project: "fx", squad: "_studio", wt }, { role: "studio", suffix: "", agent: "claude", model: "opus", account: "acct-a", limited_until: T + 3600,
+      handle: old.terminal.id, gen: "g0", status: "running", observed_at: T, updated_at: T });
+    s.upsert("observed_terminals", { project: "fx", handle: old.terminal.id }, { wt, title: "_studio/studio", tail: "│ ❯  │\n", tail_at: T,
+      doc: JSON.stringify({ identity: null, gen: "g0", last_output_at: T - 900, unread: 0 }), gone_at: null, observed_at: T });
+    const id = studioMember(s).id;
+    const episode = wantStudioBackend(s, "fx", { backend: "herdr", provider: "git", wt: newWt }, T);
+    return { s, act, tmux: tm.f, herdr: hd.f, wt, newWt, newPath, old: old.terminal.id, id, episode };
+  }
+  type R = Awaited<ReturnType<typeof rigMove>>;
+  const actions = (r: R) => studioRec.run({ store: r.s, project: "fx", tick: 1, now: T + 5, fired: [], poked: new Set<string>() } as never)
+    .filter((a) => a.kind === "studio-move");
+  const go = (r: R, a: Action) => studio.exec(a, { store: r.s, project: "fx", tick: 1, now: T + 10, fired: [], poked: new Set<string>(), act: r.act });
+  const ops = (f: FakeContract, op: string) => f.calls.filter((c) => c.op === op).map((c) => c.req as Row);
+  const disp = (r: R) => JSON.parse(readFileSync(join(r.s.root, "fx", "dispatcher.json"), "utf8"));
+  const wish = (r: R) => r.s.get("episodes", { project: "fx", subject: MOVE, kind: BACKEND_WANTED });
+
+  test("the wish becomes one studio-move, why backend, on the Studio's own pick and handle", async () => {
+    const r = await rigMove(), a = actions(r);
+    expect(a).toHaveLength(1);
+    expect(a[0]).toMatchObject({ episode: r.episode, member: r.wt, payload: { handle: r.old, agent: "claude", account: "acct-a", model: "opus", why: "backend", backend: "herdr", provider: "git", wt: r.newWt } });
+  });
+
+  test("tmux to herdr: one new Studio on herdr in the new folder, the old one closed on tmux, the project switched, account history kept", async () => {
+    const r = await rigMove();
+    const res = await go(r, actions(r)[0]!) as { result: string };
+    const m = studioMember(r.s), handle = String(m.handle);
+    expect(res.result).toBe(`moved to herdr: ${handle}`);
+    expect([...r.herdr.terms.keys()]).toEqual([handle]);
+    expect(r.herdr.terms.get(handle)!.env).toMatchObject({ DS_BACKEND: "herdr", DS_WT: r.newPath, DS_MEMBER: "fx/_studio/studio" });
+    expect(ops(r.tmux, "terminal.close").map((c) => c.id)).toEqual([r.old]);
+    expect([...r.tmux.terms.keys()]).toEqual([]);
+    expect(m).toMatchObject({ id: r.id, wt: r.newWt, account: "acct-a", limited_until: T + 3600, model: "opus", gen: r.herdr.terms.get(handle)!.env.DS_GEN });
+    expect(disp(r)).toMatchObject({ studio_backend: "herdr", studio_wt: r.newWt });
+    expect(r.s.get("projects", { label: "fx" })).toMatchObject({ studio_wt: r.newWt });
+    expect(r.s.get("config", { project: "fx", file: "limits.conf", key: "default_backend" })).toMatchObject({ value: "herdr" });
+    expect(payloads(r.s, "studio_moved")).toEqual([expect.objectContaining({ handle, previous: r.old, why: "backend", backend: "herdr", was: "tmux", wt: r.newWt, old_wt: r.wt })]);
+    expect(wish(r)).toMatchObject({ state: "ended" });
+    expect(await go(r, actions(r)[0] ?? { project: "fx", squad: null, member: null, subject: MOVE, kind: "studio-move", episode: r.episode,
+      payload: { agent: "claude", account: "acct-a", why: "backend", backend: "herdr", wt: r.newWt } })).toMatchObject({ done: true, result: "already started" });
+    expect(ops(r.herdr, "terminal.create")).toHaveLength(1);
+  });
+
+  test("a crash between the start and the close: the replay starts nothing more and closes the old one: exactly one Studio", async () => {
+    const r = await rigMove(), a = actions(r)[0]!, upsert = r.s.upsert.bind(r.s);
+    // The loop dies as it records the close step: the new Studio runs, the old one too.
+    r.s.upsert = ((t: string, k: Row, set: Row) => { if (set.state === "closing") throw new Error("the loop died"); return upsert(t, k, set); }) as Store["upsert"];
+    await expect(go(r, a)).rejects.toThrow("the loop died");
+    r.s.upsert = upsert;
+    expect(r.s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:move" })).toMatchObject({ state: "begun" });
+    expect(r.herdr.terms.size + r.tmux.terms.size).toBe(2);
+    expect(existsSync(join(r.s.root, "fx", "dispatcher.json")) ? disp(r).studio_backend : undefined).not.toBe("herdr");
+    expect(await go(r, a)).toMatchObject({ done: true });
+    expect(ops(r.tmux, "terminal.close").map((c) => c.id)).toEqual([r.old]);
+    expect(ops(r.herdr, "terminal.create")).toHaveLength(1);
+    expect(r.herdr.terms.size + r.tmux.terms.size).toBe(1);
+    expect(studioMember(r.s)).toMatchObject({ id: r.id, wt: r.newWt, handle: [...r.herdr.terms.keys()][0] });
+  });
+
+  test("a close that fails: the project still switches to the new Studio, and one card names the old terminal to close", async () => {
+    const r = await rigMove({ crash: 1 });
+    expect(await go(r, actions(r)[0]!)).toMatchObject({ done: true });
+    expect(disp(r)).toMatchObject({ studio_backend: "herdr", studio_wt: r.newWt });
+    const cards = cardsIn(r.s, "loop-studio.move-");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ title: "Old Studio still open" });
+    expect(JSON.stringify(cards[0])).toContain(r.old);
+  });
+
+  test("a crash right after the start: the replay gets that terminal back from the ledger, no second Studio", async () => {
+    const r = await rigMove(), a = actions(r)[0]!;
+    await go(r, a);
+    const first = String(studioMember(r.s).handle), row = r.s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:move" })!;
+    const plan = JSON.parse(String(row.result)); delete plan.newHandle;
+    r.s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:move" }, { state: "starting", result: JSON.stringify(plan), observed_at: T });
+    expect(await go(r, a)).toEqual({ done: true, result: `moved to herdr: ${first}` });
+    expect(ops(r.herdr, "terminal.create")).toHaveLength(1);
+  });
+
+  test("a paused squad: not moved, naming it; nothing started, closed or switched", async () => {
+    const r = await rigMove();
+    const topic = String((r.s.db.query("SELECT topic FROM squads WHERE project = 'fx' ORDER BY topic LIMIT 1").get() as Row).topic);
+    r.s.db.run("UPDATE squads SET status = 'suspended' WHERE project = 'fx' AND topic = ?", [topic]);
+    const res = await go(r, actions(r)[0]!) as { result: string };
+    expect(res.result).toContain(`squad ${topic} is still open on tmux (a paused squad counts)`);
+    expect(ops(r.herdr, "terminal.create")).toEqual([]);
+    expect(ops(r.tmux, "terminal.close")).toEqual([]);
+    expect(studioMember(r.s)).toMatchObject({ wt: r.wt, handle: r.old });
+    expect(r.s.get("config", { project: "fx", file: "limits.conf", key: "default_backend" })).toMatchObject({ value: "tmux" });
+    expect(wish(r)).toMatchObject({ state: "ended" });
+    expect(actions(r)).toEqual([]);
   });
 });
 
