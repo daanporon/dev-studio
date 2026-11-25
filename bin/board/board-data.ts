@@ -2235,6 +2235,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
   const sargs = label ? [label] : [];
   const terminals = db ? Number(db.one(`SELECT COUNT(*) AS n FROM observed_terminals WHERE gone_at IS NULL ${scope}`, ...sargs)?.n ?? 0) : 0;
   const at = (table: string) => (db ? asOf(db, table, label) : null);
+  // A current observer, Orca's or a contract's (U58): the host-wide worktree and terminal counts are read.
+  const seen = live.backendOk || (live.contractOk?.size ?? 0) > 0;
   const out = {
     generated_at: new Date(NOW() * 1000).toISOString().replace(/\.\d+Z$/, "Z"),
     backend_ok: live.backendOk,
@@ -2253,8 +2255,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
         label: String(p.ref), state: p.state, url: p.repo && p.pr ? `https://github.com/${p.repo}/pull/${p.pr}` : null })),
     ]) : [],
     project_url: label && projSlug ? "https://github.com/" + projSlug : null,
-    live_worktrees: db && live.backendOk ? Number(db.one("SELECT COUNT(DISTINCT wt) AS n FROM observed_worktrees WHERE gone_at IS NULL")?.n ?? 0) : null,
-    capacity: db && live.backendOk ? { label: "terminals", count: terminals } : null,
+    live_worktrees: db && seen ? Number(db.one("SELECT COUNT(DISTINCT wt) AS n FROM observed_worktrees WHERE gone_at IS NULL")?.n ?? 0) : null,
+    capacity: db && seen ? { label: "terminals", count: terminals } : null,
     gh: { ok: !!db && (at("observed_prs") ?? 0) > 0, cmd: "loop" },
     github: ghView ? { ...ghView, waiting: waitingPrs.map((p) => ({ project: p.project, num: p.num })) } : null,
     accounts: accts,
@@ -2304,7 +2306,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     briefing_schedule: db ? briefingSchedule(db, label, labels) : { time: BRIEFING_DEFAULTS.briefing_time, days: BRIEFING_DEFAULTS.briefing_days, on: false, next: null },
   };
   decorateResources(db, label, squads);
-  const machine = machineSummary(db, label, out.live_worktrees, db && live.backendOk ? terminals : null, squads);
+  const machine = machineSummary(db, label, out.live_worktrees, db && seen ? terminals : null, squads);
   const update = updateSummary(db, label);
   const disk = diskSummary(db, label);
   const header = headerSummary(db, label, squads, out.needs_you, loop);

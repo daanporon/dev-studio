@@ -101,7 +101,9 @@ async function main(argv: string[]): Promise<number> {
       const topic = basename(f, ".json");
       const d = readJson(f);
       const runId = d && typeof d === "object" ? str(d.run_id) : "";
-      if (!runId || squadContract(stateRoot(), LABEL, topic)) return;   // off Orca the loop closes a squad's terminals
+      const off = squadContract(stateRoot(), LABEL, topic);
+      if (off) { out(`team: ${topic} — on ${off}: the loop closes its stray and duplicate terminals; nothing reaped here\n`); return; }
+      if (!runId) return;
       const r = await be(["terminal-reap", runId]);
       let c = r.rc === 0 ? chomp(r.out) : chomp(r.out + "0\n");
       if (!/^[0-9]+$/.test(c)) c = "0";
@@ -147,7 +149,7 @@ async function main(argv: string[]): Promise<number> {
       const nm = nameOf(wid) || "(worktree gone)";
       const dets = details.filter((x) => x.wt === wid).map((x) => x.tok).filter((t) => t !== "");
       let tcol = "";
-      if (dets.length > 1) tcol = `  [⚠ ${dets.length} live terminals — duplicate; --reap keeps the owner]`;
+      if (dets.length > 1) tcol = `  [⚠ ${dets.length} live terminals — duplicate; ${isLocalWt(wid) ? "the loop closes the extra" : "--reap keeps the owner"}]`;
       else if (dets.length === 1) tcol = `  [term ${dets[0]}]`;
       const who = role + (suffix ? "-" + suffix : "");
       out(`  ${who.padEnd(22)} ${st.padEnd(8)} ${nm.padEnd(42)}${forv ? ` for:${forv}` : ""}${owns ? `  owns: ${owns}` : ""}${tcol}\n`);

@@ -194,7 +194,7 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
       for (const f of globJson(DIR)) {
         const doc = readJson(f);
         const reason = notRunningReason(doc);
-        if (!reason) { await liveLoad(membersOf(doc).map((m) => m.wt)); await detailLoad(runIdOf(doc)); }
+        if (!reason) { await liveLoad(membersOf(doc).map((m) => m.wt)); if (membersOf(doc).some((m) => onOrca(m.wt))) await detailLoad(runIdOf(doc)); }   // U58: Orca's handles, Orca members only
         const frun = runIdOf(doc);
         for (const m of membersOf(doc)) {
           if (!m.role) continue;

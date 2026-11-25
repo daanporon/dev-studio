@@ -28,7 +28,7 @@ echo '{"home_repo":"zznoorca","studio_backend":"tmux"}' > "$SD/dispatcher.json"
 "$ROOT/bin/ds" import >/dev/null 2>&1 || true
 # The squad's backend is written once, at spawn: the row first, then its file imported over it.
 q "INSERT INTO squads (project, topic, observed_at, updated_at, backend, worktree_provider) VALUES ('$LBL', 'sq', 1, 1, 'tmux', 'git')" >/dev/null
-printf '{"topic":"sq","status":"running","type":"feature","members":[
+printf '{"topic":"sq","status":"running","type":"feature","run_id":"r-sq","members":[
   {"role":"lead","wt":"local::%s/lead","owns":[],"for":""},
   {"role":"builder","suffix":"u1","wt":"local::%s/b1","owns":["u1"],"for":""}]}\n' "$TMP" "$TMP" > "$SD/squads/sq.json"
 "$ROOT/bin/ds" import >/dev/null 2>&1 || true
@@ -58,8 +58,9 @@ rc=0; out="$(BACKEND="$TMP/orca-stub" "$ROOT/bin/ds" team "$LBL" --topic sq --sw
 check "team --switch: exits 0" "0" "$rc"
 has "team --switch: prints the tmux attach line" "$out" "tmux -L ds-$LBL attach"
 check "team --switch: never calls the Orca stub" "" "$(cat "$LOG")"
-rc=0; BACKEND="$TMP/orca-stub" "$ROOT/bin/ds" team "$LBL" --topic sq --reap >/dev/null 2>&1 || rc=$?
+rc=0; out="$(BACKEND="$TMP/orca-stub" "$ROOT/bin/ds" team "$LBL" --topic sq --reap 2>&1)" || rc=$?
 check "team --reap: exits 0" "0" "$rc"
+has "team --reap: leaves the terminals to the loop" "$out" "on tmux: the loop closes its stray and duplicate terminals"
 check "team --reap: never calls the Orca stub" "" "$(cat "$LOG")"
 
 # directory.sh list|reach: the phone book, with no Orca call.
