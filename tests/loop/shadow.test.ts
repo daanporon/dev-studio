@@ -46,8 +46,8 @@ const finish = (mm: Row, outcome: string, gen = String(mm.gen)) =>
   recordFinish(s, { member: { project: P, squad: SQ, role: String(mm.role), suffix: String(mm.suffix ?? "") }, unit: mm.role === "builder" ? String(mm.suffix) : null,
     outcome: outcome as never, body: outcome, gen, wt: String(mm.wt) }, now);
 let relays = 0;
-const workerDone = (mm: Row, outcome: string) => s.upsert("relayed", { msg_id: `msg_${++relays}` }, { project: P, squad: SQ, run_id: "run_x", type: "worker_done",
-  subject: "done", body: "", payload: JSON.stringify({ dispatchId: s.get("observed_workers", { project: P, wt: mm.wt })!.dispatch_id, outcome }), seen_at: now, tries: 0 });
+const workerDone = (mm: Row, outcome: string, age = 0) => s.upsert("relayed", { msg_id: `msg_${++relays}` }, { project: P, squad: SQ, run_id: "run_x", type: "worker_done",
+  subject: "done", body: "", payload: JSON.stringify({ dispatchId: s.get("observed_workers", { project: P, wt: mm.wt })!.dispatch_id, outcome }), seen_at: now - age, tries: 0 });
 function transcript(wt: string, ended: boolean) {
   const f = join(dir, `t-${wt.replace(/\W/g, "_")}.jsonl`);
   writeFileSync(f, `${JSON.stringify({ type: "assistant", message: { content: [] } })}\n${ended ? `${JSON.stringify({ type: "system", subtype: "stop_hook_summary" })}\n` : ""}`);
@@ -172,7 +172,7 @@ describe("disagreements", () => {
   test("a disagreement that agrees again within two ticks is logged transient", () => {
     const b = member("builder", "u8-h");
     step(live(b));
-    workerDone(b, "ok");
+    workerDone(b, "ok", 200);   // past the grace the loop gives a Builder's report
     step(live(b));            // the worker_done is here, the finish row not yet
     finish(b, "ok");
     step(live(b));
@@ -302,6 +302,32 @@ describe("U21a patterns agree", () => {
     const st = pairs(s, P, tick, now).find((p) => p.point === "start")!;
     expect([st.old, st.new]).toEqual(["running", "running"]);
     expect(disagreements()).toEqual([]);
+  });
+
+  test("G (U21d): a Builder's worker_done younger than DONE_GRACE_S, with no finish row, makes no pair; an old one still compares", () => {
+    const b = member("builder", "pg");
+    step(live(b));
+    workerDone(b, "ok");                                            // the PR follows 22 s later; the loop would ignore this report
+    for (let i = 0; i < 3; i++) {
+      step(live(b));
+      expect(pairs(s, P, tick, now).find((p) => p.point === "finished")).toBeUndefined();
+    }
+    expect(disagreements()).toEqual([]);
+    now += 200;                                                     // past the grace, still no PR: as today
+    step(live(b));
+    expect(pairs(s, P, tick, now).find((p) => p.point === "finished")).toMatchObject({ old: "ok", new: "no" });
+  });
+
+  test("H (U21d): an observed_prs row for the member's branch is a PR the unit has not recorded yet", () => {
+    const b = member("builder", "ph");
+    s.upsert("squads", { project: P, topic: SQ }, { repo: "r" });
+    s.upsert("config", { project: P, file: "github", key: "repo:r" }, { value: "o/r", observed_at: now });
+    s.upsert("observed_worktrees", { project: P, wt: String(b.wt) }, { branch: "feat/ph", observed_at: now });
+    step(live(b));
+    workerDone(b, "ok", 200);
+    expect(pairs(s, P, tick, now).find((p) => p.point === "finished")).toMatchObject({ old: "ok", new: "no" });
+    s.upsert("observed_prs", { project: P, ref: "o/r#9" }, { repo: "o/r", pr: 9, head: "feat/ph", state: "OPEN", observed_at: now });
+    expect(pairs(s, P, tick, now).find((p) => p.point === "finished")).toBeUndefined();
   });
 
   test("a Builder killed mid-work under a stale Orca view: both sides read it gone past GONE_MIN, and its restart is a crash", () => {
