@@ -74,9 +74,40 @@ const MEASURE = `(() => {
 type Open = (p: any) => Promise<boolean>;
 const click = async (p: any, sel: string, text?: RegExp) => { const l = text ? p.locator(sel).filter({ hasText: text }).first() : p.locator(sel).first(); if (!(await l.count())) return false; await l.click(); await p.waitForTimeout(500); return true; };
 const openSettings: Open = async (p) => { await p.evaluate(() => { location.hash = "#settings"; }); await p.waitForTimeout(800); return (await p.locator("#settings").count()) > 0; };
-const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; open: Open }[] = [
+// The chat of another squad member: open the Lead's chat from the question card, then switch (the tab at 1280, the member list on a phone).
+const openChat: Open = async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn"));
+const openChatOf = (label: string): Open => async (p) => {
+  if (!(await openChat(p))) return false;
+  if (await p.locator(".chat-swbtn").count()) { await click(p, ".chat-swbtn"); return click(p, ".chat-mi", new RegExp("^" + label)); }
+  return click(p, ".chat-tab", new RegExp("^" + label.slice(0, 12)))   // a long tab label is cut at 14;
+};
+// chat-key-buttons U1: what each chat view must show, run in the page; returns the list of problems.
+const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.querySelector(".chat " + s), all = (s) => [...document.querySelectorAll(".chat " + s)], bad = [];
+  const card = q(".chat-card"), vis = (e) => e && e.getBoundingClientRect().width > 0;
+  if (!card) bad.push("no .chat-card"); else {
+    const kids = [...card.querySelectorAll("button")].map((b) => b.className.replace(/btn |chat-round /g, "").trim());
+    const okKids = want === "working" || want === "menu" || want === "screen" ? ["chat-attach", "chat-stop", "chat-send pri"] : ["chat-attach", "chat-send pri"];
+    if (JSON.stringify(kids.map((k) => k.replace("pri chat-send", "chat-send pri"))) !== JSON.stringify(okKids)) bad.push("card buttons " + kids);
+    const r = card.getBoundingClientRect(); if (r.height > 200) bad.push("card is " + Math.round(r.height) + " px tall");
+    if (parseFloat(getComputedStyle(card).borderTopLeftRadius) < 16) bad.push("card radius");
+    for (const b of card.querySelectorAll("button")) { const x = b.getBoundingClientRect(); if (x.width < 40 || x.height < 40) bad.push("round button " + b.className + " " + Math.round(x.width) + "x" + Math.round(x.height)); }
+  }
+  const keys = q(".chat-keys"), scr = q(".mhd .chat-scr");
+  if (want === "screen") { const n = keys ? keys.querySelectorAll("button").length : 0; if (n !== 8) bad.push("Screen shows " + n + " keys, not Esc ↑ ↓ ⏎ ⇥ 1 2 3"); if (keys && card && keys.getBoundingClientRect().bottom > card.getBoundingClientRect().top + 1) bad.push("keys not above the card"); }
+  else if (keys) bad.push("Chat shows a key row");
+  if (want === "idle") { if (q(".chat-stop")) bad.push("idle shows ■"); if (q(".chat-banner")) bad.push("idle shows a menu banner"); }
+  if (want === "working" && !(q(".chat-stop") && q(".chat-stop").closest(".chat-card"))) bad.push("working has no ■ in the card");
+  if (want === "menu") { const b = q(".chat-banner"); if (!b || !/shows a menu/.test(b.textContent)) bad.push("no menu banner"); }
+  if (want !== "working" && !scr) bad.push("Screen toggle is not in the header");
+  if (scr && q(".qfoot .chat-scr")) bad.push("Screen toggle still in the footer");
+  return bad; })(${JSON.stringify(want)})`;
+const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; chat?: string; open: Open }[] = [
   { name: "question", strict: true, open: (p) => click(p, ".qrow, .qnote") },
   { name: "chat", strict: true, open: async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) },
+  { name: "chat-working", strict: true, chat: "working", open: openChat },
+  { name: "chat-idle", strict: true, chat: "idle", open: openChatOf("tester") },
+  { name: "chat-menu", strict: true, chat: "menu", open: openChatOf("builder-platform") },
+  { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".mhd .chat-scr")) },
   { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
   { name: "page", strict: true, kind: "page", open: async () => true },
   { name: "squad", strict: true, kind: "page", open: (p) => click(p, ".row.squad") },
@@ -90,6 +121,7 @@ const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; ope
   { name: "plan-viewer", strict: true, open: async (p) => (await click(p, ".row.squad")) && (await click(p, '.docbox .plan, .docbox button, [data-ev="open-doc"]')) },
   { name: "kb-question", strict: true, kind: "keyboard", field: ".modal .qbody textarea", open: (p) => click(p, ".qrow, .qnote") },
   { name: "kb-chat", strict: true, kind: "keyboard", field: ".chat-modal .chat-in", open: async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) },
+  { name: "kb-chat-idle", strict: true, kind: "keyboard", field: ".chat-modal .chat-in", chat: "idle", open: openChatOf("tester") },
   { name: "event-data", strict: true, open: async (p) => { await p.evaluate(() => { const d = document.querySelector("#events") as any; if (d) d.open = true; }); await p.waitForTimeout(500); return click(p, '#events .ev[role="button"], #events .evmore'); } },
 ];
 
@@ -132,6 +164,7 @@ const shoot = async (size: any, view: string, base: boolean) => {
     await p.locator(v.field!).first().focus();
     await p.evaluate((h: number) => (window as any).__kb(h), size.h - 300); await p.waitForTimeout(400);
     const kb = await p.evaluate(`${KB_MEASURE}(${JSON.stringify(v.field)})`);
+    if (v.chat) kb.chat = await p.evaluate(CHAT_CHECK(v.chat));
     await p.screenshot({ path: join(OUT, `${size.w}-${view}.png`) });
     // The band between the sheet's bottom and the window's bottom (the stub shrinks only visualViewport): iOS 26's see-through chrome
     // shows what is under it, so the sheet must paint and own it. Three points, and the pixel at each is read back from a screenshot.
@@ -161,6 +194,7 @@ const shoot = async (size: any, view: string, base: boolean) => {
     return { opened, m: null, kb, back, cover, stays, hide, after, y0 };
   }
   const m = opened ? await p.evaluate(MEASURE) : null;
+  if (m && v.chat) m.chat = await p.evaluate(CHAT_CHECK(v.chat));
   if (opened && !base) await p.screenshot({ path: join(OUT, `${size.w}-${view}.png`) });
   await ctx.close();
   return { opened, m } as any;
@@ -187,6 +221,7 @@ for (const size of SIZES) for (const v of VIEWS) {
     need(after.tiles === "visible" && after.y === y0, `sheet closed: tiles ${after.tiles}, scrollY ${after.y} (was ${y0})`);
     need(stays, "keyboard open: a tap on the strip under the sheet closed it");
     need(kb.kb, "keyboard open: no kb-open on the root");
+    if (v.chat) need(kb.chat.length === 0, `keyboard open: ${kb.chat}`);
     need(kb.secondary === 0, `keyboard open: ${kb.secondary} secondary footer button(s) still shown`);
     need(!!back.popup && back.popup.y === 0 && Math.abs(back.popup.h - back.vh) <= 1 && !back.kb, `keyboard closed: sheet ${JSON.stringify(back.popup)} kb-open ${back.kb} is not the full ${back.vh} px sheet`);
     continue;
@@ -202,6 +237,7 @@ for (const size of SIZES) for (const v of VIEWS) {
     if (v.name === "evlog") for (const e of m.evs) need(e.textY === null || e.textY > e.timeY, `event text not under time ${JSON.stringify(e)}`);
     if (v.name === "menu") { need(!!m.menu && m.menu.x >= 0 && m.menu.x + m.menu.w <= m.vw && m.menu.y >= 0 && m.menu.y + m.menu.h <= m.vh, `menu ${JSON.stringify(m.menu)} not inside the screen`); need(m.menuTiny === 0, `${m.menuTiny} menu items under 44 px`); }
   }
+  if (v.chat && m) { if (m.chat.length) breaks.push(`${key}: ${m.chat}`); }
   if (size.phone && v.kind !== "page" && m) {
     const need = (ok: boolean, why: string) => { if (!ok && v.strict) breaks.push(`${key}: ${why}`); };
     const pp = m.popup;
@@ -215,7 +251,7 @@ for (const size of SIZES) for (const v of VIEWS) {
     need(m.small === 0, `${m.small} input(s) under 16 px (${m.fonts})`);
     need(m.out.length === 0 && m.boxScrollW <= m.vw + 1, `sticks out past the right edge: ${m.out} (box scrollWidth ${m.boxScrollW})`);
   }
-  if (!size.phone) {
+  if (!size.phone && !/^chat/.test(v.name)) {   // the chat views changed on purpose at every width (chat-key-buttons U1)
     const b = await shoot(size, v.name, true); report[`${key}@base`] = b;
     const pick = (x: any) => x.m && { popup: x.m.popup, fonts: x.m.fonts, btns: x.m.btns, flowLefts: x.m.flowLefts, units: x.m.units, evs: x.m.evs, menu: x.m.menu, close: x.m.close && { w: x.m.close.w, h: x.m.close.h }, foot: x.m.foot && { h: x.m.foot.h }, docW: x.m.docW };
     const a = JSON.stringify(pick({ m })), c = JSON.stringify(pick(b));
@@ -229,14 +265,15 @@ const TITLE = `(() => { const lead = document.querySelector(".chat .mhd .chat-le
   const probe = document.createElement("span"); probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;font:" + cs.font; probe.textContent = lead.textContent.replace(/\\s+$/, ""); hd.appendChild(probe);
   const alone = r(probe).width, aloneH = r(probe).height; probe.remove();
   const sub = hd.querySelector(".chat-sub"), close = hd.querySelector(".mclose");
-  return { text: lead.textContent, h: r(lead).height, lh: aloneH, w: r(lead).width, alone, closeMid: r(close).top + r(close).height / 2, leadMid: r(lead).top + r(lead).height / 2, subEllipsis: !sub || getComputedStyle(sub).textOverflow === "ellipsis" || sub.scrollWidth <= sub.clientWidth + 1, hdH: r(hd).height }; })()`;
+  return { text: lead.textContent, h: r(lead).height, lh: aloneH, w: r(lead).width, alone, closeMid: r(close).top + r(close).height / 2, leadMid: r(lead).top + r(lead).height / 2, subEllipsis: !sub || getComputedStyle(sub).textOverflow === "ellipsis" || sub.scrollWidth <= sub.clientWidth + 1, hdH: r(hd).height,
+    scr: (() => { const b = hd.querySelector(".chat-scr"); return b ? { w: r(b).width, h: r(b).height, mid: r(b).top + r(b).height / 2, right: r(b).right, closeLeft: r(close).left, vw: innerWidth } : null; })() }; })()`;
 for (const w of [390, 320]) for (const who of ["member", "studio"]) {
   const key = `${w}/chat-title-${who}`;
   const ctx = await browser.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
   const p = await ctx.newPage();
   await p.route("**/api/**", (r: any) => (r.request().method() === "GET" ? r.continue() : r.abort()));
   await p.goto(url!, { waitUntil: "networkidle" }); await p.waitForTimeout(1200);
-  const opened = who === "member" ? (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) : (await click(p, "button", /Studio/)) && (await p.locator(".chat").count()) > 0;
+  const opened = who === "member" ? await openChatOf("builder-platform")(p) : (await click(p, "button", /Studio/)) && (await p.locator(".chat").count()) > 0;
   const t = opened ? await p.evaluate(TITLE) : null;
   await ctx.close();
   if (!t) { if (who === "member") breaks.push(`${key}: the chat did not open`); else console.log(`skip ${key}: no Studio chat in this fixture`); continue; }
@@ -245,6 +282,10 @@ for (const w of [390, 320]) for (const who of ["member", "studio"]) {
   need(Math.abs(t.h - t.lh) <= 1, "the Chat · title is not one line");
   need(t.w >= t.alone - 1, "the Chat · title is narrower than its own text");
   need(Math.abs(t.closeMid - t.leadMid) <= 4, "the ✕ is not on the title's row");
+  if (who === "member") {   // the Screen toggle (this member has a screen read) sits in the header, before ✕, on the title's row, 44 px to tap
+    need(!!t.scr, "the Screen toggle is not in the header");
+    if (t.scr) { need(t.scr.h >= 44 && t.scr.w >= 44, "the Screen toggle is under 44 px"); need(Math.abs(t.scr.mid - t.leadMid) <= 4, "the Screen toggle is not on the title's row"); need(t.scr.right <= t.scr.closeLeft + 1, "the Screen toggle is not before ✕"); }
+  }
   need(t.subEllipsis, "the .chat-sub neither fits nor ends in an ellipsis");
   console.log(`ok   ${key}: title ${Math.round(t.w)}x${Math.round(t.h)}`);
 }

@@ -784,7 +784,7 @@ eq "U19 page: the key strip posts api/keys, Esc first; a screen toggle reads dat
 chat_row_fn=$(sed -n '/^function chatTurn(/,/^}/p' "$BP")
 eq "U5 page: only a reply is HTML, and only through mdToHtml (it escapes first)" "$(printf '%s%s' "$chat_fn" "$chat_row_fn" | grep -ci 'innerHTML')$(printf '%s' "$chat_row_fn" | grep -cF 'dangerouslySetInnerHTML=${{ __html: mdToHtml(text) }}')" "11"
 eq "U5 page: at phone width the panel fills the screen" "$(grep -cF '@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none' "$BP")" "1"
-eq "U5 page: a counter, Working…, the ↓ button, no send strip" "$(printf '%s' "$chat_fn" | grep -c '} left`}</span>')$(printf '%s' "$chat_fn" | grep -c 'data.working && html')$(printf '%s' "$chat_fn" | grep -c 'class="btn chat-down"')$(grep -c 'chat-sends\|chat-send ' "$BP")" "1110"
+eq "U5 page: a counter, Working…, the ↓ button, no send strip (the second data.working line is the card's ■ Stop)" "$(printf '%s' "$chat_fn" | grep -c '} left`}</span>')$(printf '%s' "$chat_fn" | grep -c 'data.working && html')$(printf '%s' "$chat_fn" | grep -c 'class="btn chat-down"')$(grep -c 'chat-sends\|chat-send ' "$BP")" "1210"
 # crew-terminal-access U4: the Flow card opens the unit details window, which names the Builder and offers Chat / Show in squad / Answer.
 ud_fn=$(sed -n '/^function UnitDetails(/,/^}/p' "$BP")
 eq "U4 page: the window's Builder row names the member and its state, or says why it is gone" "$(printf '%s' "$ud_fn" | grep -cF '<b>${bm.label}</b> <span class="mut">· ${bm.state')$(printf '%s' "$ud_fn" | grep -cF 'gone — its worktree')" "11"

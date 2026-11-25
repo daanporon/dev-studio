@@ -274,17 +274,22 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-turn.screen .txt{font:12px var(--mono);background:#0f1218;border:1px solid var(--line);border-radius:6px;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere}
 .chat-day{align-self:center;font:11px var(--mono);color:var(--dim);padding:2px 10px;border:1px solid var(--line);border-radius:10px}
 .chat-down{position:absolute;right:18px;bottom:10px;border-radius:50%;width:32px;height:32px;padding:0}
-.chat-in{flex:1 1 100%;min-width:0;resize:none;font:13px/1.45 var(--sans);padding:7px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;max-height:calc(6 * 1.45em + 16px);overflow-y:auto}
+.chat-card{flex:1 1 100%;min-width:0;display:flex;flex-direction:column;gap:6px;padding:8px 8px 8px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:18px}
+.chat-in{flex:none;width:100%;box-sizing:border-box;min-width:0;resize:none;font:13px/1.45 var(--sans);padding:4px 0;background:transparent;color:var(--fg);border:0;outline:0;max-height:calc(6 * 1.45em + 16px);overflow-y:auto}
+.chat-row{display:flex;align-items:center;gap:8px} .chat-row .sp{flex:1}
+.chat-round{flex:none;width:40px;height:40px;min-width:40px;min-height:40px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:18px;line-height:1}
+.chat-stop{background:var(--red-bg);border:2px solid var(--red);color:var(--red)} .chat-send{font-size:20px}
+.chat-banner{display:block;width:100%;margin-top:8px;text-align:left;white-space:normal;font:12px var(--mono);color:var(--amber);background:var(--amber-bg);border-color:var(--amber)}
 .chat-left{font:11px var(--mono);color:var(--dim)} .chat-left.low{color:var(--amber)}
 .chat-keys{flex:1 1 100%;display:flex;gap:4px;overflow-x:auto;min-width:0;scrollbar-width:none} .chat-key{flex:0 0 auto;min-width:34px;min-height:32px;font:12px var(--mono)}
-.chat-key.stop{color:var(--red);border-color:var(--red)} .chat-scr{flex:0 0 auto;margin-left:auto;min-height:32px}
+.chat-scr{flex:none;min-height:32px;margin-left:8px} .mbox.chat>.mhd{flex-wrap:nowrap}
 .chat-screen{margin:0;padding:8px;font:11px/1.35 var(--mono);white-space:pre;overflow-x:auto;background:var(--bg);border:1px solid var(--line);border-radius:6px} .chat-screen-at{display:block;margin-top:4px}
 .chat-note{flex:1 1 100%;font:11px var(--mono);color:var(--dim)} .chat-strip{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:6px;min-width:0}
 .chat-th{position:relative;flex:none;width:56px;height:56px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel2);display:flex;align-items:center;justify-content:center}
 .chat-th img{width:100%;height:100%;object-fit:cover;display:block} .chat-th.bad{border-color:var(--red);color:var(--red);font:9px/1.2 var(--mono);padding:2px;text-align:center;overflow-wrap:anywhere}
 .chat-rm{position:absolute;top:1px;right:1px;width:20px;height:20px;padding:0;border:0;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:11px;line-height:20px;cursor:pointer}
 .start-imgs{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px} .mbox.drop{outline:2px dashed var(--blue);outline-offset:-6px}
-.chat-th .dot.spin{margin:0} .chat-attach{padding:0 8px} .mbox.chat.drop{outline:2px dashed var(--blue);outline-offset:-6px}
+.chat-th .dot.spin{margin:0} .mbox.chat.drop{outline:2px dashed var(--blue);outline-offset:-6px}
 .chat-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px} .chat-img{display:block;max-width:160px;max-height:160px;border-radius:8px;border:1px solid var(--line)}
 .chat-imgchip{font:11px var(--mono);color:var(--dim);border:1px dashed var(--line);border-radius:8px;padding:2px 8px}
 .chat-tabs{flex:none;display:flex;gap:4px;padding:6px 12px 0;overflow-x:auto;white-space:nowrap;border-bottom:1px solid var(--line)} .chat-tab{flex:none;display:inline-flex;align-items:center;gap:2px;max-width:200px;padding:5px 10px;border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;background:transparent;color:var(--mut);font:600 12px var(--mono);cursor:pointer} .chat-tab.on{background:var(--panel2);color:var(--fg);border-color:var(--line)} .chat-tab:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
@@ -306,7 +311,6 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .mbox>.mhd[style*="border-top"],.mbox>.qfoot{flex:none;flex-wrap:wrap;gap:8px;padding:10px 12px max(10px,env(safe-area-inset-bottom))}
 .mbox>.mhd[style*="border-top"]>.btn,.mbox>.qfoot>.btn{min-height:44px}
 .mbox>.mhd[style*="border-top"]>.btn.pri,.mbox>.qfoot>.btn.pri{flex:1 1 100%;order:99}
-.qfoot .chat-in{flex:1 1 100%}
 .qbody .top{flex-wrap:wrap}
 .qbody{padding:12px 14px}
 input,textarea,select{font-size:16px!important}
@@ -325,9 +329,8 @@ html:has(.modal){background:var(--panel)}
 html:has(.modal) #root{visibility:hidden}
 html:has(.modal) .modal,html:has(.modal) .toast{visibility:visible}
 .kb-open .mbox>.qfoot>.qsec,.kb-open .mbox>.qfoot>.chat-btn{display:none}
-.kb-open .mbox.chat>.qfoot>.chat-in{flex:1 1 0}
-.kb-open .mbox.chat>.qfoot>.btn.pri{flex:none;order:0}
-.kb-open .mbox.chat>.qfoot>.chat-left:not(.low),.kb-open .mbox.chat>.qfoot>.sp{display:none}
+.kb-open .mbox.chat>.qfoot>.chat-note{display:none}
+.kb-open .mbox.chat .chat-left:not(.low){display:none}
 }
 /* Phone, inside the sheets: Settings tabs scroll in one row, the Limits table stacks, footers wrap, every tap target is 44px. */
 @media (max-width:600px){
@@ -2172,11 +2175,12 @@ const chatCount = (s) => Array.from(chatText(s)).length;
 // On a touch screen Enter is a new line and Send sends; with a keyboard Enter sends and Shift+Enter is a new line.
 const chatAge = (s) => (s < 60 ? Math.max(0, Math.round(s)) + " s" : s < 3600 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h");
 const chatTouch = () => typeof matchMedia === "function" && matchMedia("(pointer:coarse)").matches;
-// The key strip (U19): each button is one api/keys press, typed with no Enter even while the member works:
-// Esc stops a turn, the arrows, Enter and a digit pick in a menu.
+// The key row (U19), shown only under Screen: each button is one api/keys press, typed with no Enter even while the member works:
+// Esc closes a menu, the arrows, Enter and a digit pick in it. Chat has no key row: its ■ Stop (Esc) sits in the compose card, and a menu
+// on the member's screen shows as a banner that opens Screen.
 const CHAT_KEYS = [["Escape", "Esc", "Press Esc: stops a working agent, closes a menu"], ["Up", "↑", "Up arrow"], ["Down", "↓", "Down arrow"],
   ["Enter", "⏎", "Enter: picks the marked option"], ["Tab", "⇥", "Tab"], ];
-// U19b: the digits show only while the screen read shows a numbered menu, 1 up to its option count (at most 5).
+// U19b: the digits follow the screen read's numbered menu, 1 up to its option count (at most 5), in the Screen key row.
 const chatDigits = (n) => ["1", "2", "3", "4", "5"].slice(0, Math.max(0, Math.min(5, Number(n) || 0))).map((d) => [d, d, "Press " + d + ": picks option " + d]);
 // ---- images in the chat (chat-image-upload U3) ----
 // An image is shrunk in the page when it is big (over 3.5 MiB, a long side over 2000 px) or of a type the server refuses
@@ -2514,7 +2518,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
             onClick=${() => setMenu(!menu)}><span class="chat-swlabel">${shown.label}</span> ▾${badge(othersMail, "mail for the other members")}${othersNew && html`<span class="chat-new" title="New reply elsewhere" aria-hidden="true"></span>`}</button>
           ${menu && html`<div class="chat-menu" role="menu">${members.map((m) => html`<button key=${m.wt} class="btn chat-mi" role="menuitemradio" aria-checked=${m.wt === shown.wt ? "true" : "false"}
             aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))} onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label}</span>${badge(mail(m), chatMailTip(m))}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}</span>`
-        : shown.label}`}<span class="mut chat-sub">${topic === "_studio" ? "" : " · " + topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
+        : shown.label}`}<span class="mut chat-sub">${topic === "_studio" ? "" : " · " + topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span>${scr && html`<button type="button" class="btn sm chat-scr" aria-pressed=${showScreen ? "true" : "false"} title="Show the member's live screen" onClick=${() => setScreenOn(!showScreen)}>${showScreen ? "Chat" : "Screen"}</button>`}<button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       ${multi && !phone && html`<div class="chat-tabs" role="tablist" aria-label="Members of this squad" ref=${tabs} onKeyDown=${tabKey}>${members.map((m, i) => html`<button key=${m.wt} id=${tabId(i)} class=${"chat-tab" + (m.wt === shown.wt ? " on" : "")} role="tab"
         aria-selected=${m.wt === shown.wt ? "true" : "false"} tabindex=${m.wt === shown.wt ? 0 : -1} title=${m.label} aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))}
         onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label.length > 14 ? m.label.slice(0, 13) + "…" : m.label}</span>${badge(mail(m), chatMailTip(m))}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}
@@ -2522,26 +2526,31 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
         ? html`<pre class="chat-screen" aria-label="Live screen">${scr.tail || "(blank screen)"}</pre><span class="chat-time chat-screen-at">${scr.age_s == null ? "not read yet" : "read " + chatAge(scr.age_s) + " ago"}</span>`
         : rows.length ? rows.map((r, i) => chatTurn(r, data.source, i, (n) => chatImgUrl(project, topic, n), { project, reload: load, edit: editSend }))
         : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
-        ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
+        ${data && data.working && html`<div class="chat-work">Working…</div>`}
+        ${scr && scr.menu > 0 && !showScreen && html`<button type="button" class="btn sm chat-banner" onClick=${() => setScreenOn(true)}>${shown.label}'s screen shows a menu — Open ›</button>`}</div>
         ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
       <div class="qfoot">
-        <div class="chat-keys" role="toolbar" aria-label=${"Keys for " + shown.label}>${CHAT_KEYS.concat(chatDigits(scr && scr.menu)).map(([k, l, tip]) => html`<button key=${k} type="button"
-          class=${"btn sm chat-key" + (k === "Escape" && data && data.working ? " stop" : "")} title=${tip} aria-label=${tip} disabled=${pressing === shown.wt}
-          onClick=${() => press([k], l)}>${k === "Escape" && data && data.working ? "■ Stop" : l}</button>`)}
-          ${scr && html`<button type="button" class="btn sm chat-scr" aria-pressed=${showScreen ? "true" : "false"} title="Show the member's live screen" onClick=${() => setScreenOn(!showScreen)}>${showScreen ? "Chat" : "Screen"}</button>`}</div>
+        ${showScreen && html`<div class="chat-keys" role="toolbar" aria-label=${"Keys for " + shown.label}>${CHAT_KEYS.concat(chatDigits(scr.menu)).map(([k, l, tip]) => html`<button key=${k} type="button"
+          class="btn sm chat-key" title=${tip} aria-label=${tip} disabled=${pressing === shown.wt}
+          onClick=${() => press([k], l)}>${l}</button>`)}</div>`}
         ${data && (data.agent === "muse" || data.source === "screen") && html`<span class="chat-note">this member may not see images</span>`}
         ${(files.length > 0 || ups.some((u) => u.wt === shown.wt)) && html`<div class="chat-strip">${files.map((f) => html`<div key=${f.id} class="chat-th" title=${f.name}><img src=${f.url} alt=${f.name} />
             <button type="button" class="chat-rm" aria-label=${"Remove " + f.name} onClick=${() => dropFile(f.id)}>✕</button></div>`)}
           ${ups.filter((u) => u.wt === shown.wt).map((u) => html`<div key=${"u" + u.k} class=${"chat-th" + (u.state === "bad" ? " bad" : "")} title=${u.msg || "uploading"}>${u.state === "bad"
             ? html`<span>${u.msg.length > 40 ? u.msg.slice(0, 39) + "…" : u.msg}</span><button type="button" class="chat-rm" aria-label="Dismiss" onClick=${() => setUps((l) => l.filter((x) => x.k !== u.k))}>✕</button>`
             : html`<span class="dot spin" role="status" aria-label="Uploading"></span>`}</div>`)}</div>`}
-        <textarea class="chat-in" rows="1" ref=${input} enterkeyhint=${chatTouch() ? "enter" : "send"} value=${text} placeholder=${"Message " + shown.label + " (typed into its terminal when it is idle; " + (chatTouch() ? "Send sends" : "Enter sends, Shift+Enter a new line") + ")"}
+        <div class="chat-card">
+          <textarea class="chat-in" rows="1" ref=${input} enterkeyhint=${chatTouch() ? "enter" : "send"} value=${text} placeholder=${"Message " + shown.label} title=${"Typed into its terminal when it is idle; " + (chatTouch() ? "Send sends" : "Enter sends, Shift+Enter a new line")}
           onInput=${(e) => { setText(e.target.value); grow(e.target); chatDraftSet(project, topic, shown.wt, e.target.value); }}
           onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing && !e.shiftKey && !chatTouch()) { e.preventDefault(); send(); } }} onPaste=${onPaste}></textarea>
-        <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
-        <button type="button" class="btn sm chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}>📎</button>
-        <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left < 0 ? `${-left} over` : `${left} left`}</span><span class="sp"></span>
-        <button class="btn pri" disabled=${busy === shown.wt || uploading || (!chatText(text) && !files.length)} onClick=${send}>${busy === shown.wt ? "Sending…" : uploading ? "Uploading…" : "Send"}</button>
+          <div class="chat-row">
+          <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
+            <button type="button" class="btn chat-round chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}>📎</button><span class="sp"></span>
+            <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left < 0 ? `${-left} over` : `${left} left`}</span>
+            ${data && data.working && html`<button type="button" class="btn chat-round chat-stop" title="Press Esc: stops a working agent, closes a menu" aria-label="Stop" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc")}>■</button>`}
+            <button class="btn pri chat-round chat-send" aria-label="Send" title=${busy === shown.wt ? "Sending…" : uploading ? "Uploading…" : "Send"} disabled=${busy === shown.wt || uploading || (!chatText(text) && !files.length)} onClick=${send}>${busy === shown.wt || uploading ? "…" : "↑"}</button>
+          </div>
+        </div>
         ${err && html`<span class="err">${err}</span>`}${note && html`<span class="err">${note}</span>`}
       </div>
     </div></div>`;

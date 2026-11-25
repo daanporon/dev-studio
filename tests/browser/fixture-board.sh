@@ -12,6 +12,11 @@ BASH_ARGV0="$ROOT/tests/fixture-board.sh"   # board-setup.sh finds ROOT from $0 
 python3 - "$SEED" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
+# Screen tails (chat-key-buttons U1): the tester is idle with an ordinary screen, the platform builder works with a numbered menu on its screen.
+w = {x[0]: x for x in d["workers"]}
+w["wtTe"] = ["wtTe", "waiting", "ds-tester", None, None, None, None, None, None, "● Done.\n\n> "]
+w["wtBp"] = ["wtBp", "working", "ds-bp", None, None, None, None, None, None, " Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again\n   3. No, and tell Claude what to do differently (esc)\n"]
+d["workers"] = list(w.values())
 d["events"] = [{"ago": 60 * i, "squad": "manual-testing", "kind": k} for i, k in enumerate(["unit_dispatched", "pr_opened", "merge_waiting_on_a_long_named_reconciler_check", "member_started"])]
 json.dump(d, open(sys.argv[1], "w"))
 PY
