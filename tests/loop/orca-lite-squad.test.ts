@@ -59,6 +59,7 @@ async function rig() {
   importJson(s);
   for (const [role, value] of [["lead", "claude sonnet always"], ["thinker", "claude opus ondemand"], ["builder", "claude opus ondemand"]] as const)
     s.upsert("config", { project: "fx", file: "roles.conf", key: role }, { value, observed_at: T });
+  s.upsert("config", { project: "fx", file: "limits.conf", key: "default_backend" }, { value: "orca-lite", observed_at: T });   // U30: the project's backend
   const act = new LoopActuator({ orca, pick: system, fulfillers: fulfillers.filter((f) => f.kinds) });
   const loop = new Loop(s, { observers: [], reconcilers: [decider, ...reconcilers, ...fulfillers] }, act, { projects: () => ["fx"] });
   loop.boot(T);
