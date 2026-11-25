@@ -567,6 +567,16 @@ proc90 210 claude 206 /w/y2 '' 'claude\0--model\0opus\0--effort\0xhigh\0-p\0'
 proc90 211 muse 1 /w/y2 '' 'muse\0worker\0'
 check "agent-accounts: a sub's --effort is a sixth field (U105), left off when it has none" "$(printf '/w/y2\tsub\tclaude\topus\tsystem\txhigh')" \
   "$(DS_PROC="$fp90" DS_ORCA_DATA="$od" DS_CLAUDE_HOME="$tmp/home/.claude" "$ROOT/bin/backend/orca.sh" agent-accounts | grep '^/w/y2' | grep sub)"
+# U21e: `muse <subcommand>` (usage, skills, ...) is a helper: a sub line beside the member's own muse; a muse
+# with a prompt (or a second muse main) stays a main.
+proc90 220 muse 1 /w/u21 '' 'muse\0'
+proc90 221 muse 220 /w/u21 '' 'muse\0usage\0--json\0'
+proc90 222 muse 1 /w/u21 '' 'muse\0skills\0list\0'
+proc90 223 muse 1 /w/u21z '' 'muse\0fix the bug\0'
+proc90 224 muse 1 /w/u21z '' 'muse\0'
+check "agent-accounts: muse <subcommand> is a sub line, a muse with a prompt is a main (U21e)" \
+  "$(printf '/w/u21\tmain\tmuse\t-\tdefault\t-\t220\t-\t-\n/w/u21\tsub\tmuse\t-\tdefault\n/w/u21\tsub\tmuse\t-\tdefault\n/w/u21z\tmain\tmuse\t-\tdefault\t-\t223\t-\t-\n/w/u21z\tmain\tmuse\t-\tdefault\t-\t224\t-\t-')" \
+  "$(DS_PROC="$fp90" DS_ORCA_DATA="$od" DS_CLAUDE_HOME="$tmp/home/.claude" "$ROOT/bin/backend/orca.sh" agent-accounts | grep '^/w/u21' | sort)"
 # U149: a main line carries its --model and --effort flags, pid, start (boot time + stat field 22 in
 # clock ticks) and RSS (stat field 24 in pages, as kB); a stat without those fields, or a process
 # table without btime, reads "-" (the lines above).
