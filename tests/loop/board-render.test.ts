@@ -758,3 +758,38 @@ test("an archived squad's box shows the Leftovers block", async () => {
     expect(r.errors).toEqual([]);
   } finally { await w.happyDOM.close(); }
 });
+
+// ---- board-actions-as-wishes U2: the update banner follows the loop's `update` request; Show commits is a dialog.
+const upBoard = (u: any) => ({ ...board, project: "fixture", update: { behind: 0, branch: "main", commits: [], classes: [], need: "none", state: "ok", stale: false, ahead: 0, dirty: false, last_update: null, squads_behind: null, pending: null, others: [], workers: 0, project: "fixture", run: null, ...u } });
+const banner = (r: any) => r.root.querySelector("#ds-update");
+const bannerText = (r: any) => (banner(r)?.textContent ?? "").replace(/\s+/g, " ").trim();
+test("update banner: running, done with warnings, and failed with its log path", async () => {
+  const run = (o: any) => ({ id: 1, state: "pulling", why: null, line: null, error: null, warnings: [], squads_line: null, log: null, age_min: 2, ...o });
+  const a = await mountPage(upBoard({ run: run({}) }), false);
+  try { expect(bannerText(a)).toContain("Dev-studio update running — pulling… (2 min)"); expect(banner(a).textContent).not.toContain("waiting for the Studio"); } finally { await a.window.happyDOM.close(); }
+  const b = await mountPage(upBoard({ run: run({ state: "done", line: "advanced a -> b", squads_line: "update-squads: [fixture] reload — instructions — 7 wishes", warnings: ["update: WARNING disk low"] }) }), false);
+  try { expect(bannerText(b)).toContain("advanced a -> b — reload — instructions — 7 wishes"); expect(bannerText(b)).toContain("update: WARNING disk low"); } finally { await b.window.happyDOM.close(); }
+  const c = await mountPage(upBoard({ run: run({ state: "failed", line: "DS-UPDATE: refused: dirty", log: "/x/state/loop/update/3.log" }) }), false);
+  try { expect(bannerText(c)).toContain("Dev-studio update failed: DS-UPDATE: refused: dirty"); expect(bannerText(c)).toContain("/x/state/loop/update/3.log"); expect(banner(c).className).toContain("err"); } finally { await c.window.happyDOM.close(); }
+});
+test("update banner: Show commits opens a dialog with each commit and Esc closes it; the banner itself stays short", async () => {
+  const commits = [{ sha: "a1", title: "feat: first thing", classes: ["code"] }, { sha: "b2", title: "fix: second thing", classes: ["skills"] }];
+  const r = await mountPage(upBoard({ behind: 3, commits, classes: ["code", "skills"], need: "restart" }), false);
+  try {
+    const before = bannerText(r);
+    expect(before).not.toContain("feat: first thing");
+    expect(r.root.querySelector('[role="dialog"]')).toBeNull();
+    const btn = [...banner(r).querySelectorAll("button")].find((x: any) => x.textContent.trim() === "Show commits") as any;
+    btn.click();
+    await new Promise((x) => setTimeout(x, 20));
+    const dlg = r.root.querySelector('[role="dialog"]') as any;
+    expect(dlg).not.toBeNull();
+    expect(dlg.textContent).toContain("feat: first thing");
+    expect(dlg.textContent).toContain("fix: second thing");
+    expect(dlg.textContent).toContain("and 1 more");
+    expect(dlg.querySelectorAll(".utag").length).toBe(2);
+    r.window.document.dispatchEvent(new r.window.KeyboardEvent("keydown", { key: "Escape" }));
+    await new Promise((x) => setTimeout(x, 20));
+    expect(r.root.querySelector('[role="dialog"]')).toBeNull();
+  } finally { await r.window.happyDOM.close(); }
+});
