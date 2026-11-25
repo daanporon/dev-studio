@@ -17,6 +17,24 @@ sentences="$(bun -e 'const fs = require("fs"), h = fs.readFileSync(process.argv[
 mkdir -p "$TMP/tsbin"
 # shellcheck disable=SC2016  # $1/$2 belong to the fake script, not this one.
 printf '#!/usr/bin/env bash\n[ "$1 $2" = "ip -4" ] && echo ::1\n' > "$TMP/tsbin/tailscale"; chmod +x "$TMP/tsbin/tailscale"
+# U11: the feedback the board posts never reaches a real repo. DS_FEEDBACK_ORIGIN names a made-up one and a fake
+# `gh` (first on PATH, and DS_GH) logs each call to $GHLOG and answers like the stub in tests/loop/fulfil-feedback-post.test.ts.
+GHLOG="$TMP/gh.calls"; GHPOST="$TMP/gh.posted"; mkdir -p "$TMP/ghbin" "$GHPOST"; : > "$GHLOG"
+cat > "$TMP/ghbin/gh" <<'GH'
+#!/usr/bin/env bash
+set -u
+echo "$*" >> "$GHLOG"
+[ "$1" = api ] || exit 9; shift
+if [ "$1" = rate_limit ]; then printf '{"limit":5000,"remaining":4000,"reset":%s}' "$(( $(date +%s) + 3600 ))"; exit 0; fi
+if [ "$1" = -X ]; then
+  input=""; while [ $# -gt 0 ]; do [ "$1" = --input ] && input="$2"; shift; done
+  n=$(( $(ls "$GHPOST" | wc -l) + 1 )); cp "$input" "$GHPOST/$n.json"
+  printf '{"number":%s,"html_url":"https://github.com/example-org/dev-studio/issues/%s"}' "$((40+n))" "$((40+n))"; exit 0
+fi
+exit 0
+GH
+chmod +x "$TMP/ghbin/gh"
+export GHLOG GHPOST DS_GH="$TMP/ghbin/gh" DS_FEEDBACK_ORIGIN="https://github.com/example-org/dev-studio.git" PATH="$TMP/ghbin:$PATH"
 # A squad with questions for the answer endpoint: q7 was asked from a card (the Thinker's), q8 has
 # no card so it goes to the Lead.
 printf '{"run_id":"r9","status":"waiting-on-you","lead_wt":"wLd","members":[{"role":"lead","wt":"wLd","owns":[],"for":""},{"role":"thinker","wt":"wTh"},{"role":"tester","wt":"wTester"},{"role":"reviewer","wt":"wReviewer"},{"role":"researcher","wt":"wResearcher"}],"units":[],"waiting_on_you":[{"id":"q7","asker":"thinker","blocking":true,"question":"which?","since":"2026-10-08T09:00:00Z","card_wt":"wTh"},{"id":"q8","asker":"lead","blocking":true,"question":"go?","since":"2026-10-08T09:00:00Z"},{"id":"q9","asker":"lead","blocking":false,"question":"notes?","since":"2026-10-08T09:00:00Z"},{"id":"qp1","asker":"thinker","blocking":true,"question":"Which color?","title":"Style: Which color?","since":"2026-10-08T09:00:00Z","card_wt":"wTh","suggestion":"Blue","why":"raised from thinker'\''s terminal picker","choices":[{"label":"Blue","does":"calm look"},{"label":"Red (warm)","does":"bold look"}],"source":"picker","tool_use_id":"toolu_1","transcript_path":"/tmp/t.jsonl","picker_answerable":true}]}' > "$SD/ans.json"
@@ -1455,6 +1473,9 @@ touch "$TMP/srvcopy/bin/loop/core/store.ts"
 for _ in $(seq 1 600); do [ "$(grep -c 'listening on' "$TMP/serve5.log")" -gt "$((n0 + 1))" ] && break; sleep 0.1; done
 eq  "code change: a loop module restarts"      "$(grep -c 'listening on' "$TMP/serve5.log")" "$((n0 + 2))"
 stop_own "$SPID"; SPID=""
+
+# U11: the gh log never names the real repo (the guard test in fulfil-feedback-post.test.ts covers a post with no origin).
+eq "gh log: no call names the real repo" "$(grep -c "daanporon/dev-studio" "$GHLOG" || true)" "0"
 
 echo "board-serve: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -86,18 +86,19 @@ const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.que
   const card = q(".chat-card"), vis = (e) => e && e.getBoundingClientRect().width > 0;
   if (!card) bad.push("no .chat-card"); else {
     const kids = [...card.querySelectorAll("button")].map((b) => b.className.replace(/btn |chat-round /g, "").trim());
-    const okKids = want === "working" || want === "menu" || want === "screen" ? ["chat-attach", "chat-stop", "chat-send pri"] : ["chat-attach", "chat-send pri"];
+    const okKids = want === "working" || want === "menu" || want === "screen" || want === "question" ? ["chat-attach", "chat-stop", "chat-send pri"] : ["chat-attach", "chat-send pri"];
     if (JSON.stringify(kids.map((k) => k.replace("pri chat-send", "chat-send pri"))) !== JSON.stringify(okKids)) bad.push("card buttons " + kids);
     const r = card.getBoundingClientRect(); if (r.height > 200) bad.push("card is " + Math.round(r.height) + " px tall");
     if (parseFloat(getComputedStyle(card).borderTopLeftRadius) < 16) bad.push("card radius");
     for (const b of card.querySelectorAll("button")) { const x = b.getBoundingClientRect(); if (x.width < 40 || x.height < 40) bad.push("round button " + b.className + " " + Math.round(x.width) + "x" + Math.round(x.height)); }
   }
-  const keys = q(".chat-keys"), scr = q(".mhd .chat-scr");
+  const keys = q(".chat-keys"), scr = q(".mhd .chat-scr, .mhd .chat-segb");
   if (want === "screen") { const n = keys ? keys.querySelectorAll("button").length : 0; if (n !== 8) bad.push("Screen shows " + n + " keys, not Esc ↑ ↓ ⏎ ⇥ 1 2 3"); if (keys && card && keys.getBoundingClientRect().bottom > card.getBoundingClientRect().top + 1) bad.push("keys not above the card"); }
   else if (keys) bad.push("Chat shows a key row");
   if (want === "idle") { if (q(".chat-stop")) bad.push("idle shows ■"); if (q(".chat-banner")) bad.push("idle shows a menu banner"); }
   if (want === "working" && !(q(".chat-stop") && q(".chat-stop").closest(".chat-card"))) bad.push("working has no ■ in the card");
-  if (want === "menu") { const b = q(".chat-banner"); if (!b || !/shows a menu/.test(b.textContent)) bad.push("no menu banner"); }
+  if (want === "question") { const qv = q(".chat-q"); if (!qv) bad.push("no Question view"); else { for (const b of qv.querySelectorAll(".chat-qopt")) { const x = b.getBoundingClientRect(); if (x.height < 44) bad.push("choice " + Math.round(x.height) + " px tall"); } if (!qv.querySelector(".chat-qopt")) bad.push("no choices"); } if (keys) bad.push("Question shows a key row"); }
+  if (want === "menu") { const b = q(".chat-banner"); if (!b || !/Open ›/.test(b.textContent)) bad.push("no menu banner"); }
   if (want !== "working" && !scr) bad.push("Screen toggle is not in the header");
   if (scr && q(".qfoot .chat-scr")) bad.push("Screen toggle still in the footer");
   return bad; })(${JSON.stringify(want)})`;
@@ -106,8 +107,9 @@ const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; cha
   { name: "chat", strict: true, open: async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) },
   { name: "chat-working", strict: true, chat: "working", open: openChat },
   { name: "chat-idle", strict: true, chat: "idle", open: openChatOf("tester") },
-  { name: "chat-menu", strict: true, chat: "menu", open: openChatOf("builder-platform") },
-  { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".mhd .chat-scr")) },
+  { name: "chat-menu", strict: true, chat: "menu", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-segb", /^Chat/)) },
+  { name: "chat-question", strict: true, chat: "question", open: openChatOf("builder-platform") },
+  { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-segb", /^Screen/)) },
   { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
   { name: "page", strict: true, kind: "page", open: async () => true },
   { name: "squad", strict: true, kind: "page", open: (p) => click(p, ".row.squad") },
@@ -266,6 +268,7 @@ const TITLE = `(() => { const lead = document.querySelector(".chat .mhd .chat-le
   const alone = r(probe).width, aloneH = r(probe).height; probe.remove();
   const sub = hd.querySelector(".chat-sub"), close = hd.querySelector(".mclose");
   return { text: lead.textContent, h: r(lead).height, lh: aloneH, w: r(lead).width, alone, closeMid: r(close).top + r(close).height / 2, leadMid: r(lead).top + r(lead).height / 2, subEllipsis: !sub || getComputedStyle(sub).textOverflow === "ellipsis" || sub.scrollWidth <= sub.clientWidth + 1, hdH: r(hd).height,
+    seg: !!hd.querySelector(".chat-seg"),   // a member with a question or menu has the three-way control (on its own row on a phone), not the lone toggle
     scr: (() => { const b = hd.querySelector(".chat-scr"); return b ? { w: r(b).width, h: r(b).height, mid: r(b).top + r(b).height / 2, right: r(b).right, closeLeft: r(close).left, vw: innerWidth } : null; })() }; })()`;
 for (const w of [390, 320]) for (const who of ["member", "studio"]) {
   const key = `${w}/chat-title-${who}`;
@@ -283,7 +286,7 @@ for (const w of [390, 320]) for (const who of ["member", "studio"]) {
   need(t.w >= t.alone - 1, "the Chat · title is narrower than its own text");
   need(Math.abs(t.closeMid - t.leadMid) <= 4, "the ✕ is not on the title's row");
   if (who === "member") {   // the Screen toggle (this member has a screen read) sits in the header, before ✕, on the title's row, 44 px to tap
-    need(!!t.scr, "the Screen toggle is not in the header");
+    need(!!t.scr || t.seg, "the Screen toggle is not in the header");
     if (t.scr) { need(t.scr.h >= 44 && t.scr.w >= 44, "the Screen toggle is under 44 px"); need(Math.abs(t.scr.mid - t.leadMid) <= 4, "the Screen toggle is not on the title's row"); need(t.scr.right <= t.scr.closeLeft + 1, "the Screen toggle is not before ✕"); }
   }
   need(t.subEllipsis, "the .chat-sub neither fits nor ends in an ellipsis");
