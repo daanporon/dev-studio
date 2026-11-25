@@ -156,10 +156,10 @@ test("Send posts one chat request with the trimmed line and clears the input; an
   const p = panel();
   p.render();
   const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
-  await attrAfter(p.render(), 'class="btn pri"', "onClick")();
+  await attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
   expect(p.posts).toEqual([]);
   at("onInput")({ target: { value: "  check the flaky test  " } });
-  expect(attrAfter(p.render(), 'class="btn pri"', "disabled")).toBe(false);
+  expect(attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "disabled")).toBe(false);
   let prevented = 0;
   await at("onKeyDown")({ key: "Enter", preventDefault: () => prevented++ });
   expect(prevented).toBe(1);
@@ -223,7 +223,7 @@ test("crew-terminal-access U5, U19: the input wraps, a multi-line message keeps 
   p.render();
   const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
   expect(nodes(p.render()).some((n) => n.strings.includes('<textarea class="chat-in" rows="1"'))).toBe(true);
-  expect(String(at("placeholder"))).toContain("Enter sends, Shift+Enter a new line");
+  expect(String(at("title"))).toContain("Enter sends, Shift+Enter a new line");
   at("onInput")({ target: { value: "a\nb\r\n\tc\u0085d\re\u0007f\n" } });
   let prevented = 0;
   // Shift+Enter is left to the browser, which puts the line break in.
@@ -256,13 +256,13 @@ test("crew-terminal-access U5, U19: the input wraps, a multi-line message keeps 
   // Over the limit Send posts nothing and keeps the text.
   at("onInput")({ target: { value: "y".repeat(2013) } });
   const before = p.posts.length;
-  await attrAfter(p.render(), 'class="btn pri"', "onClick")();
+  await attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
   expect(p.posts.length).toBe(before);
   expect(p.h.states).toContain("not sent: 2013 characters, the limit is 2000");
   expect(p.h.states).toContain("y".repeat(2013));
   // Only line breaks: nothing to send.
   at("onInput")({ target: { value: "\n\n" } });
-  expect(attrAfter(p.render(), 'class="btn pri"', "disabled")).toBe(true);
+  expect(attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "disabled")).toBe(true);
 });
 
 test("U19: on a touch screen Enter is a new line and only Send sends", async () => {
@@ -272,43 +272,87 @@ test("U19: on a touch screen Enter is a new line and only Send sends", async () 
     const p = panel();
     p.render();
     const at = (attr: string) => attrAfter(p.render(), 'class="chat-in"', attr);
-    expect(String(at("placeholder"))).toContain("Send sends");
+    expect(String(at("title"))).toContain("Send sends");
     expect(at("enterkeyhint")).toBe("enter");
     at("onInput")({ target: { value: "line one" } });
     let prevented = 0;
     await at("onKeyDown")({ key: "Enter", preventDefault: () => prevented++ });
     expect([prevented, p.posts]).toEqual([0, []]);
     at("onInput")({ target: { value: "line one\nline two" } });
-    await attrAfter(p.render(), 'class="btn pri"', "onClick")();
+    await attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
     expect(p.posts).toEqual([["api/chat", { project: "p", topic: "one", wt: "/w/b 1", text: "line one\nline two" }]]);
   } finally { (globalThis as any).matchMedia = had; }
 });
 
-// The key strip's buttons: [key, label, node] in order.
-const keyButtons = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && String(n.values[1]).includes("chat-key"))
+// The key row's buttons: [key, label, node] in order. Chat has none; Screen shows them all.
+const keyButtons = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("chat-key"))
   .map((n) => [n.values[0], n.values[n.values.length - 1], n]);
+const stopBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-stop"));
+const bannerBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-banner"));
+const hasKeyRow = (root: any) => nodes(root).some((n) => n.strings.includes('class="chat-keys"'));
+const menuTail = "❯ 1. Yes\n  2. No\n  3. Other";
+const idle = { agent: "claude", source: "transcript", sends: [], turns: [], working: false };
 
-test("U19: the key strip posts one api/keys press per button, Esc reads Stop while the member works", async () => {
+test("U19: Chat never shows a key row; idle has no Stop; working has a round ■ Stop in the card before Send that posts Escape", async () => {
   const p = panel();
   p.render();
-  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: false });
-  const keys = keyButtons(p.render());
+  p.setData(idle);
+  let root = p.render();
+  expect(hasKeyRow(root)).toBe(false);
+  expect(keyButtons(root)).toEqual([]);
+  expect(stopBtn(root)).toBeUndefined();
+  p.setData({ ...idle, working: true });
+  root = p.render();
+  expect(hasKeyRow(root)).toBe(false);
+  const stop = stopBtn(root);
+  expect(stop.strings).toContain('aria-label="Stop"');
+  expect(stop.strings).toContain("■");
+  // It sits inside the card, in the row before Send.
+  const card = nodes(root).find((n) => n.strings.includes('class="chat-card"'));
+  expect(JSON.stringify(card)).toContain("chat-stop");
+  const row = nodes(card).find((n) => n.strings.includes('class="chat-row"'));
+  const k = row.values.indexOf(stop);
+  expect(k).toBeGreaterThan(-1);
+  expect(row.strings.split("\u0000")[k + 1]).toContain("chat-send");   // Stop is the value right before the Send button
+  await fnIn(stop)();
+  expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
+  expect(p.h.states).toContain("pressed Esc");
+});
+
+test("U19: a menu on the member's screen shows a banner in Chat, no key row; tapping it shows Screen", () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, screen: { tail: menuTail, menu: 3, at: T, age_s: 1 } });
+  let root = p.render();
+  expect(hasKeyRow(root)).toBe(false);
+  expect(bannerBtn(root).strings).toContain("screen shows a menu — Open ›");
+  fnIn(bannerBtn(root))();
+  root = p.render();
+  expect(bannerBtn(root)).toBeUndefined();
+  expect(hasKeyRow(root)).toBe(true);
+  // No menu on screen: no banner.
+  p.setData({ ...idle, screen: { tail: "> ", menu: 0, at: T, age_s: 1 } });
+  p.h.states.forEach((v: any, i: number) => { if (v === true) p.h.states[i] = null; });
+  expect(bannerBtn(p.render())).toBeUndefined();
+});
+
+test("U19: under Screen every key shows, with the menu digits, in every state; its Esc stays Esc and each press posts api/keys", async () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
+  fnIn(nodes(p.render()).find((n) => n.strings.includes('class="btn sm chat-scr"')))();
+  let keys = keyButtons(p.render());
   expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab"]);
   expect(keys[0][1]).toBe("Esc");
   await fnIn(keys[0][2])();
   expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
-  expect(p.h.states).toContain("pressed Esc");
-  await fnIn(keyButtons(p.render())[2][2])();
-  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: false, screen: { tail: "❯ 1. Yes\n  2. No\n  3. Other", menu: 3, at: T, age_s: 1 } });
-  await fnIn(keyButtons(p.render())[6][2])();
-  expect(p.posts.slice(1)).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Down"] }], ["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]]);
-  // Mid-turn the Esc button is the red Stop.
-  p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], working: true });
-  const stop = keyButtons(p.render())[0];
-  expect(stop[1]).toBe("■ Stop");
-  expect(String(stop[2].values[1])).toContain("stop");
-  await fnIn(stop[2])();
-  expect(p.posts.at(-1)).toEqual(["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]);
+  p.setData({ ...idle, working: true, screen: { tail: menuTail, menu: 3, at: T, age_s: 1 } });
+  keys = keyButtons(p.render());
+  expect(keys.map((k) => k[0])).toEqual(["Escape", "Up", "Down", "Enter", "Tab", "1", "2", "3"]);
+  expect(keys[0][1]).toBe("Esc");   // working: Stop is in the card, not here
+  expect(stopBtn(p.render())).toBeDefined();
+  await fnIn(keys[6][2])();
+  expect(p.posts.at(-1)).toEqual(["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]);
 });
 
 test("U19: a member with no transcript shows its live screen; a toggle switches between screen and chat", () => {
@@ -322,6 +366,9 @@ test("U19: a member with no transcript shows its live screen; a toggle switches 
   expect(screenOf(root).values).toContain("Pick one:\n❯ 1. Yes\n  2. No");
   expect(screenOf(root).values).toContain("read 4 s ago");
   expect(toggle(root).values).toContain("Chat");
+  // The toggle sits in the header, just before ✕.
+  const head = nodes(root).find((n) => n.strings.includes('class="mhd"'));
+  expect(JSON.stringify(head)).toContain("chat-scr");
   fnIn(toggle(root))();
   root = p.render();
   expect(screenOf(root)).toBeUndefined();
@@ -467,18 +514,19 @@ test("studio-chat-queued-busy U4: a press posts once, disables both buttons and 
   }
 });
 
-// Board chat U19b: the digit keys show only while the screen read shows a numbered menu.
+// Board chat U19b: the digit keys (under Screen) show only while the screen read shows a numbered menu.
 test("U19b: digits 1 to N show only for a numbered menu on screen", async () => {
   const { menuOptions } = await import("../../bin/board/board-data.ts");
   const keysFor = (tail: string | null) => {
     const p = panel();
     p.render();
     p.setData({ agent: "claude", source: "transcript", sends: [], turns: [], screen: tail === null ? null : { tail, menu: menuOptions(tail), at: T, age_s: 1 } });
+    if (tail !== null) fnIn(nodes(p.render()).find((n) => n.strings.includes('class="btn sm chat-scr"')))();
     return keyButtons(p.render()).map((k) => k[0]);
   };
   const base = ["Escape", "Up", "Down", "Enter", "Tab"];
   expect(keysFor("● Working on it…\n\n> \n")).toEqual(base);
-  expect(keysFor(null)).toEqual(base);
+  expect(keysFor(null)).toEqual([]);   // no screen read: no Screen, no keys
   const perm = " Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again\n   3. No, and tell Claude what to do differently (esc)\n";
   expect(keysFor(perm)).toEqual([...base, "1", "2", "3"]);
   // A numbered list in ordinary output has no selection marker.

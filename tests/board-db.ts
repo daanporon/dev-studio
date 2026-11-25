@@ -5,7 +5,8 @@
 //
 // It runs the state-file observer once over <root> (Lavish sessions from LAVISH_AXI_STATE_DIR, the
 // Leads' beats, usage limits, accounts, tokens), then writes the seed's rows for each label:
-//   workers    [[wt, state|null, displayName?, account?, outputAge?, subs?, dispatch?, seenAge?, dispId?]]  observed_workers (null state = gone_at set;
+//   workers    [[wt, state|null, displayName?, account?, outputAge?, subs?, dispatch?, seenAge?, dispId?, tail?]]  observed_workers (null state = gone_at set;
+//              tail = the member's screen tail, read just now (the chat panel's Screen view and menu banner);
 //              outputAge = seconds since the worktree's last output, null = unknown;
 //              subs = [[agent, model, account]] live sub-agents beside its own agent (U90);
 //              dispatch = the worktree's newest dispatch status (U96, read through the U100 verdict);
@@ -60,11 +61,11 @@ await stateObserver({ tokenDir: empty, lavishDir: process.env.LAVISH_AXI_STATE_D
 const orcaAt = at - (seed.orca_age ?? 0);
 s.tx(() => {
   for (const project of labels) {
-    for (const [wt, state, name, account, outputAge, subs, dispatch, seenAge, dispId] of seed.workers ?? []) {
+    for (const [wt, state, name, account, outputAge, subs, dispatch, seenAge, dispId, tail] of seed.workers ?? []) {
       s.upsert("observed_workers", { project, wt }, { state: state ?? "idle", name: name ?? null, account: account ?? null, unread: 0, observed_at: orcaAt, gone_at: state == null ? orcaAt : null,
         dispatch: dispatch ?? null, dispatch_id: dispId ?? null,
         dispatch_seen_at: seenAge === undefined ? (dispatch != null ? orcaAt : null) : (seenAge == null ? null : at - seenAge),
-        last_output_at: outputAge == null ? null : at - outputAge,
+        last_output_at: outputAge == null ? null : at - outputAge, tail: tail ?? null, tail_at: tail == null ? null : at,
         sub_agents: subs ? JSON.stringify(subs.map(([agent, model, subAccount, effort]: [string, string, string, string?]) => ({ agent, model, account: subAccount, ...(effort ? { effort } : {}) }))) : null });
     }
     for (const [wt, count, epAge] of seed.unread ?? []) {
