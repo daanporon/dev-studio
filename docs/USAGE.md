@@ -151,14 +151,11 @@ when the CLI is present. Existing operator-owned skill folders are preserved.
 
 Two different contexts, and mixing them up is the most common first stumble:
 
-- **`up` runs from a plain host shell — or as `/ds-up` in any Claude session.**
-  `up.sh` only touches worktrees, repos and the Studio's own tab (no orchestration), so run
-  `~/.dev-studio/bin/host/up.sh <git-url>` from a normal SSH/terminal session on the
-  Orca host — the shell creates the `ds-<project>-studio` worktree for you.
-  `/ds-up` is the same script wrapped as a slash command, so it only works
-  **inside a Claude session** (a bare shell can't run a slash command). **Don't**
-  run it from inside an Orca agent terminal bound to another project (it warns
-  if you do); a plain host shell is correct.
+- **`ds up` runs from a plain host shell.** It only touches worktrees, repos and the
+  Studio's own tab (no orchestration), so run `bin/ds up <git-url>` from a normal
+  SSH/terminal session on the host — it creates the `ds-<project>-studio` worktree for you.
+  It is a plain command, not a slash command. **Don't** run it from inside an Orca agent
+  terminal bound to another project (it warns if you do).
 - **Everything orchestration runs from the Studio terminal.** `spawn-squad` (creating
   Runs, starting workers), escalations, restarts — each needs a **sender terminal**: it
   only works where `ORCA_TERMINAL_HANDLE` is set, i.e. **inside a live Orca terminal**. A
@@ -174,12 +171,11 @@ host shell in this repo, the easiest form is a git URL — it clones the repo fo
 that local path:
 
 ```sh
-bin/host/up.sh https://github.com/you/your-app    # in a shell; /ds-up <url> is the same inside a Claude session
+bin/ds up https://github.com/you/your-app
 ```
 
 If the project is already a registered Orca repo, pass a selector instead (no
-clone): `bin/host/up.sh name:your-app` (or `/ds-up name:your-app` in a Claude
-session). Confirm registered repos with `orca repo list`.
+clone): `bin/ds up name:your-app`. Confirm registered repos with `orca repo list`.
 
 Either form creates one worktree **under that project**:
 
@@ -197,7 +193,7 @@ project's `studio` row, else `conventions/roles.conf`'s), the Studio's auto-comp
 when you pass one:
 
 ```sh
-bin/host/up.sh name:your-app --account acctB
+bin/ds up name:your-app --account acctB
 ```
 
 `up` waits until the loop has adopted the Studio's terminal (`DS_UP_START_WAIT_S`, default 180 s); if claude
@@ -212,19 +208,48 @@ first bring-up it becomes the project's `default_backend`, and a roster role the
 claude starts off Orca today) is refused before anything is made. Off Orca the Studio's worktree comes from
 the project's worktree tool (`--worktree <auto|git|treehouse>` writes `worktree_provider`), and the loop
 alone starts it, so `up` stops when the loop is not running. A project keeps one backend for its Studio and
-squads: `bin/host/up.sh <label> --backend <x>` on a project already up moves it (the loop starts the Studio on
+squads: `bin/ds up <label> --backend <x>` on a project already up moves it (the loop starts the Studio on
 `<x>` in a new worktree, closes the old one and switches the project, keeping the Studio's account history). It
 is refused while any squad of the project is open, a paused one included, and `ds config set … default_backend`
 is refused while the Studio runs elsewhere, naming that command.
 
 ```sh
-bin/host/up.sh https://github.com/you/your-app --backend tmux --label your-app-tmux
+bin/ds up https://github.com/you/your-app --backend tmux --label your-app-tmux
 ```
 
 State lives under `state/<project>/`. It's idempotent — re-run to reconcile after
 a worktree is killed. Then work in the Studio: `up` ends with how to reach it (the
 `ds-<project>-studio` worktree in the Orca UI, `tmux -L ds-<project> attach -t _studio`,
 or herdr's command). Run it once per project you want to orchestrate.
+
+## Start a project on a backend
+
+`bin/ds up` is the one command that starts a project; run it from a plain host shell in the dev-studio clone. Every
+flag is optional:
+
+```sh
+bin/ds up <git-url|name:<repo>|<label>> [--label <name>] [--backend <orca|orca-lite|tmux|herdr>] \
+          [--worktree <auto|git|treehouse>] [--account <id>] [--skills]
+```
+
+- **`--label <name>`** names the project (default: the repo's name); its clone is `repos/<label>/`, its state
+  `state/<label>/`. A second project on the same repo needs its own label; a label already up with another repo is refused.
+- **`--backend <x>`** says where the project's Studio and squads run (default `orca`). It is written once, as
+  `default_backend`, on the first bring-up. Off Orca the loop starts the Studio, so `up` stops when the loop is not running.
+- **`--worktree <auto|git|treehouse>`** picks the worktree tool (`worktree_provider`); `auto` is the backend's own.
+- **`--account <id>`** starts the Studio on that Claude login; **`--skills`** also installs the role skills.
+
+`bin/ds up --help` lists the same flags. A second run changes nothing.
+
+**Moving it later.** `bin/ds up <label> --backend <x>` on a project that is already up moves it: the loop starts the
+Studio on `<x>` in a new worktree, closes the old one and switches the project. It is refused while any squad of the project
+is open (a paused one too), so close them first. The squads you start afterwards run on `<x>`; the Studio always follows
+the project's backend (`conventions/backend.md`).
+
+**What still needs Orca.** The Claude account list and login (until `plan-accounts` lands) and the skills install
+(`bin/host/install-skills.sh`) still go through Orca, and Muse runs only there. A project on another backend
+launches Claude only; a roster row naming another agent is refused when you pick the backend. To try two backends
+on one repo, follow [backends/side-by-side.md](backends/side-by-side.md).
 
 ## Start a feature squad
 
@@ -727,7 +752,6 @@ Convenience slash-commands live in `.claude/commands/` (all `ds-` prefixed to
 avoid collisions; installed into `~/.claude/commands/` by `bin/host/install.sh` so
 they work in every worktree):
 
-- `/ds-up <git-url-or-selector>` — install if needed, start the loop, bring up / reconcile a project, its Studio and board (idempotent; `--label`, `--backend`, `--worktree`).
 - `/ds-update [<project>]` — bring everything to the latest dev-studio: pull, relink, then (`update-squads.sh <project> --auto`) restart, reload or leave the squads alone, by what the new commits touch (skills / instructions / code). Each project records the commit its squads run (`state/<project>/squads-rev.json`), so a project the shared checkout moved ahead of is refreshed by its next `/ds-update` even when the checkout is current.
 - `/ds-board [<project>]` — run `bin/board/board.sh` and show the overview (one project, or all).
 - `/ds-start-squad <plain topic>` — spawn a squad (derives slug/framing/repo); explicit `--repo`/`--topic` also work.

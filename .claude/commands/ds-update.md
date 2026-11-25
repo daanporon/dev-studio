@@ -56,6 +56,6 @@ commands, instructions, AND skills**. Run it in the Studio. Do the steps in orde
 
 Report what refreshed. **When to use the others instead:** `/ds-reload` = re-read instructions
 only, no new sessions (quick, but won't pick up new skills); `/ds-restart` = restart workers
-without pulling (recover a wedged agent); `/ds-up` = create/reconcile the Studio for a project.
+without pulling (recover a wedged agent); `ds up <project>` (a shell command) = create/reconcile the Studio for a project.
 `/ds-update` is the "I just pulled, bring everyone fully current" button — and now a no-op when
 there's nothing new, so running it on a hunch won't churn sessions.

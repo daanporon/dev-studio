@@ -5,7 +5,7 @@ thing the board needs that Orca does not already model.
 
 ## Where it lives
 
-`state/<project>/squads/<topic>.json` — per-project (each `/ds-up <project>` is
+`state/<project>/squads/<topic>.json` — per-project (each `ds up <project>` is
 its own instance), one file per live squad. The instance's own state (home repo,
 label, Studio worktree id) is `state/<project>/dispatcher.json` (kept as the
 filename). The schema is `state/SCHEMA.json`.

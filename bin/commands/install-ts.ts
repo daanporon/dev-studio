@@ -317,7 +317,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   await inherit([join(ROOT, "bin", "ds"), "skills", "list", "--refresh"], { env: { DS_STATE_ROOT: join(ROOT, "state") }, out: "ignore", err: "ignore" });
 
-  out(`Done: ${n} command(s). /ds-up, /ds-board, /ds-start-squad now work in any worktree; git pull keeps them current.`);
+  out(`Done: ${n} command(s). /ds-board, /ds-start-squad, /ds-update now work in any worktree; git pull keeps them current.`);
   out("Muse: /ds-* also work in Muse via the 'ds' skill (bin/host/install-skills.sh --muse-only installs/refreshes it).");
   out("Next: ~/.dev-studio/bin/host/up.sh <git-url>  (in this shell)");
   return 0;
