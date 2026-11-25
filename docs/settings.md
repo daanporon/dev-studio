@@ -195,7 +195,9 @@ run. One move at a time: the next waits `DS_LOOP_STUDIO_MOVE_SETTLE_S` (300) aft
 start that fails after the close leaves a `studio.move` card with the command to start it by hand. A
 replay of a start that may still be running (a crash, or the background call timing out) records the
 new Studio tab it finds instead of starting another, or waits `DS_LOOP_STUDIO_MOVE_START_S` (300)
-first. With `ask`, only answering the card with its suggestion "move it" approves the move; Dismiss
+first. A Studio off Orca (`studio_backend`) starts through its backend instead, and its move waits up to
+`DS_LOOP_STUDIO_PROMPT_S` (60) for Claude's prompt on the new terminal, closing it and leaving the same card
+when it never shows (`conventions/backend.md`, project-start U52a). With `ask`, only answering the card with its suggestion "move it" approves the move; Dismiss
 or any other answer (for instance after restarting it yourself) only clears the card.
 
 A Studio whose `studio` row says `up` (column 8, configurable-role-elevation U3) is also moved back
