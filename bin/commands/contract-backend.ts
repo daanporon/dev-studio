@@ -9,9 +9,10 @@
 //   worker-detail    nothing (no Run); terminal-reap: 0 (the loop closes a contract's terminals)
 import { spawnSync } from "node:child_process";
 import { LOCAL, contractLive, contractProjects, contractStates } from "../lib/contract-roles.ts";
+import { MEMBER_VERBS } from "../lib/contract-here.ts";
 import { stateRoot, writeErr, writeOut } from "../lib/shared";
 
-export const VERBS = ["current", "ping", "worker-states", "wt-terminals", "worker-detail", "terminal-reap"] as const;
+export const VERBS = MEMBER_VERBS;
 export const help = `<verb> [args…] — run a contract adapter verb for a squad off Orca (contract.sh execs every one: ${VERBS.join(", ")})`;
 
 function here(): string {

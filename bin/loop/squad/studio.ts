@@ -35,6 +35,11 @@ export function studioAgent(proj: Row | null): string {
   return String(doc.studio_agent || doc.agent || "claude");
 }
 
+// U50 (project-start): the Studio's backend: dispatcher.json's studio_backend, empty meaning orca.
+export function studioBackend(proj: Row | null): string {
+  return String(parse(proj?.doc).studio_backend ?? "").trim() || "orca";
+}
+
 // The Studio's terminals: the agent's own kind, not a `ds-loop …` pane (a codex morning briefing, a
 // loop restart), however many shells sit beside it.
 export function studioCandidates(terms: StudioTerm[], agent: string): StudioTerm[] {

@@ -383,6 +383,17 @@ the `squads.backend` of `DS_MEMBER`'s squad in loop.db, read-only), else `orca.s
 
 The phone book and the team listing read each `local::` member from the contract in process and every
 other member from Orca, so a project with squads on both makes no Orca read for its contract members.
+
+**The Studio's backend (project-start U50).** A project's Studio runs on `studio_backend` in its
+`dispatcher.json` (the loop reads it from `projects.doc`; empty means `orca`, and then everything is as
+before). For a Studio off Orca, `seat()` (`core/actuator.ts`) gives a Studio action (squad `_studio`, or no
+squad with `studio_wt` as the member) a contract seat with the tool the project's `worktree_provider`
+picks. In the Studio's own shell (`DS_MEMBER` `<project>/_studio/studio`) `contractHere` reads
+`studio_backend`, and `backend()` (`backendFor` in `bin/lib/shared.ts`) sends only the six verbs above to
+`contract.sh`; every other verb (`ps`, `worktree-ensure`, `repo-ensure`, `loop-terminals`, `studio-start`,
+`preflight`, …) goes to `hostBackendPath()`. A `local::<path>` worktree is its own path (`worktreePath` in
+`bin/lib/lib.ts`), so the role file and the rewake hook need no `ps`. `contractProjects` and
+`projectContracts` count a project whose only contract member is its Studio.
 A Lead off Orca has no Run. Its address is its worktree (`send-worker`), its watch tick reads only its
 loop.db rows (header `no Run: the squad runs on <backend>`), and ask-operator takes a state file with no
 `run_id` when the squad's row names a contract backend. `tests/loop/role-scripts-contract.test.ts`

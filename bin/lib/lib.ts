@@ -72,8 +72,9 @@ export function psPath(ps: string, wt: string): string {
   return "";
 }
 
-/** `$BACKEND ps` then psPath. */
+/** `$BACKEND ps` then psPath; a `local::<path>` id (a member or Studio off Orca, U50) is its own path. */
 export async function worktreePath(wt: string): Promise<string> {
+  if (wt.startsWith("local::")) return wt.slice("local::".length);
   return psPath((await backend(["ps"])).out, wt);
 }
 
