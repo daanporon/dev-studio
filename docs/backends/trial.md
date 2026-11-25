@@ -1,12 +1,13 @@
 # Trial comparison: orca-lite, tmux, herdr (orca-backend-alternatives U16d)
 
 This page compares the three backends that can run a squad besides `orca` itself, and says which one
-new squads should try next. Each backend has a trial doc with a runbook and an empty record. The page
-reads what those docs have recorded and says which cells are still empty.
+new squads should try next. Each backend has a trial doc with a runbook and a record. The page
+reads what those docs recorded and says which cells are still open.
 
-**State of the evidence (2026-11-24).** No live trial squad has run yet. Every "Record (fill in when
-run)" section is still blank, except the tmux version-change drill, which ran. The table below keeps
-three kinds of cell apart:
+**State of the evidence (2026-11-24).** Each backend has had one live trial squad, and its record is in
+its own doc: [orca-lite](trial-orca-lite.md#record-run-2026-11-24), [tmux](trial-tmux.md) ("Record") and
+[herdr](trial-herdr.md#record-run-2026-11-24). The table below reads those records and keeps three kinds of
+cell apart:
 
 - **measured**: a number or result a drill or test produced, with the doc that holds it;
 - **by design**: what the contract, the registry and the fake-backed tests show; no live squad has proved it;
@@ -29,7 +30,7 @@ disagree with it.
 | Loop restart | open. By design agents are Orca terminals and outlive the loop | open. By design the server runs as its own unit (`server-unit`), so agents outlive the loop; the live check is empty | open. By design its own unit and `resume_agents_on_restore = false`; the live check is empty |
 | Upgrade | open (the Orca upgrade is the trial's step) | measured: a tmux 3.8 client was not refused by a 3.4 server, the agent survived, the old client still answered. A release that changes the protocol version would refuse every call; the drill reports `refused` | open. A herdr upgrade restarts every agent on it; the trial measures how many and how long |
 | State detection | native, from Orca's pane state | none from the backend; the loop's own reader gives state (output, transcript, `esc to interrupt`) | native, but weak without herdr's hooks: the trial's sampling table is empty |
-| Only on trial project | yes (`default_backend orca-lite`) | yes (`default_backend tmux`) | yes (`default_backend herdr`) |
+| Set on a project with | `default_backend orca-lite` | `default_backend tmux` | `default_backend herdr` |
 
 Each backend's own row of tests is green on its fake or real binary (`tests/loop/backend-orca-lite.test.ts`,
 `backend-tmux.test.ts`, `backend-herdr.test.ts`, the conformance suite in `backend-contract.test.ts`), so

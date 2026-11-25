@@ -270,7 +270,7 @@ contract backend (U11, "Started" below).
   backend, `orca` included, is refused with `backend tmux is refused: this project's squads start on orca
   (its default_backend); to change it set the project's default_backend …`, and a squad wish
   (`ds want squad … --fill '{"backend":…}'`) asking for another is refused by `bin/loop/fulfil/squad.ts`
-  with a `wish_given_up` event and a card, so a trial never leaks onto another project. The flag and the
+  with a `wish_given_up` event and a card, so one project's backend never leaks onto another. The flag and the
   wish's `backend` stay for squads on other hosts later (the rule takes the squad's backend and
   `backend_host`; today only `local`). An entry's `find` looks for its binary where
   PATH would not (herdr: `herdrBin()`), and `install` is named when it is missing. The tmux trial's
@@ -280,6 +280,14 @@ contract backend (U11, "Started" below).
   against fresh, and the lease check). The comparison of the three backends, Treehouse's measured gain and
   the recommendation for what new squads try next are `docs/backends/trial.md` (U16d).
 
+- **Set and change (U32, U34).** A project's backend is the one setting `default_backend`, set with
+  `ds config set <project> limits.conf default_backend <x>` or in the project's settings. There is no
+  trial switch to flip and flip back: a project runs on its backend until the operator changes it.
+  The change is checked when set (a `worktree_provider` the backend cannot use, a missing binary, a
+  roster row naming an agent `<x>` cannot launch) and prints `new squads start on <x>; N running squads
+  stay on <old>`. A running squad is never moved: it keeps its backend until it is closed and started
+  again. A settings import leaves `default_backend` and `worktree_provider` alone. Still on Orca: the
+  Studio (until `plan-project-start`) and the account list (until `plan-accounts`).
 - **Chosen at spawn.** the project's limits key `default_backend` (default `orca`) says it;
   `spawn-squad --backend <name>` (the board's Start squad dialog sends its Backend pick) may only name that backend. The worktree tool is the
   project's `worktree_provider` (`auto`, the default, is the backend's own default). `chooseSquadBackend`
@@ -419,6 +427,11 @@ new terminal's screen until Claude's prompt shows (`claudePrompt`, `DS_LOOP_STUD
 never shows it is closed again and the start fails, which posts the `studio.move` card. A replay after the
 start began runs the ledgered start again and gets the same terminal back.
 `tests/loop/studio-move.test.ts` ("U52a") covers it.
+**Waking and chatting with that Studio (project-start U52b).** A board chat, a wake-up poke (the reload line
+too) and a menu key reach a Studio off Orca through `squad/studio-send.ts`: the adopted terminal id gets
+`terminal.send` (text with `submit`, or named keys; a backend whose `keys` capability is `none` fails the press
+with that reason) where Orca's Studio gets `poke-terminal` and `keys`. `ds reload ack` from its pane has no Orca
+handle and is found by `DS_GEN` in `DS_WT`. `tests/loop/studio-off-orca-send.test.ts` covers it.
 A Lead off Orca has no Run. Its address is its worktree (`send-worker`), its watch tick reads only its
 loop.db rows (header `no Run: the squad runs on <backend>`), and ask-operator takes a state file with no
 `run_id` when the squad's row names a contract backend. `tests/loop/role-scripts-contract.test.ts`
