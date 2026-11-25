@@ -137,6 +137,29 @@ describe("pick", () => {
     expect(ok(builder(t)).agent).toBe("muse");
   });
 
+  test("U31: a squad on a contract backend never lands on an agent it has no launch line for", () => {
+    const limitedAll = (s: Store) => {
+      s.upsert("episodes", { project: "", subject: "wt-x|limit", kind: "account" }, { state: "claude/acct-a", ended_at: T + 600, source: "loop", observed_at: T });
+      acct(s, "acct-b", { session_pct: "96" });
+      acct(s, "acct-c", { weekly_pct: "99" });
+    };
+    const s = fixture();
+    limitedAll(s);
+    s.upsert("squads", { project: "fx", topic: "demo" }, { backend: "tmux", observed_at: T, updated_at: T });
+    const w = builder(s, { squad: "demo" }) as Waiting;
+    expect(w.why).toBe("wait");
+    expect(w.reason).toContain("host busy: no account for claude on tmux");
+    expect(w.reason).toContain("muse cannot start on tmux");
+    // A Claude account frees up: it starts on Claude, not a fallback.
+    acct(s, "acct-b", { session_pct: "40" });
+    expect(tuple(ok(builder(s, { squad: "demo" })))).toBe("claude\topus\t-\tacct-b\t0");
+    // An Orca squad still falls back as today.
+    const o = fixture();
+    limitedAll(o);
+    o.upsert("squads", { project: "fx", topic: "demo" }, { backend: "orca", observed_at: T, updated_at: T });
+    expect(ok(builder(o, { squad: "demo" })).agent).toBe("muse");
+  });
+
   test("U267: a project roster that lacks a role runs the default row for it (studio: claude sonnet)", () => {
     const s = fixture();
     s.upsert("config", { project: "fx", file: "roles.conf", key: "builder" }, { value: "claude haiku ondemand", observed_at: T });
