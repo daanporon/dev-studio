@@ -13,7 +13,7 @@ import { failRequest, finishRequest, memberAt, requestActions, type Fulfiller } 
 import { errOf } from "../io/orca.ts";
 import { payloadOf } from "../core/kinds.ts";
 import type { Action } from "../core/plugins.ts";
-import { keyBytes } from "../../backend/contract.ts";
+import { studioKeys } from "../squad/studio-send.ts";
 import { KEYS, KEYS_MAX, KEYS_STALE_S, keyOk } from "../chat/keys.ts";
 import { memberReady } from "../squad/member-ready.ts";
 import { paused } from "../pause/pause.ts";
@@ -35,7 +35,7 @@ async function press(a: Action, x: X, keys: unknown[]) {
   if (!ready.ready) return fail(ready.why);
   const seat = x.act.seat(store, a.project, a.squad ?? null, `${a.subject}:${a.episode}`, wt, now);
   if (handle) {
-    const o = await seat.send("keys", [handle, keys.map(keyBytes).join("")]);
+    const o = await studioKeys(seat, handle, keys as string[]);
     if (o.code !== 0) return fail(errOf(o, "keys"));
   } else {
     const m = memberAt(store, a, wt), r = await x.act.driver(seat, m.agent).keys(m, keys);

@@ -31,6 +31,7 @@ import type { Row, Store } from "../core/store.ts";
 import { STUDIO_SQUAD, studioReady, studioView } from "../squad/studio.ts";
 import { payloadOf } from "../core/kinds.ts";
 import { deliver } from "./poke.ts";
+import { studioType } from "../squad/studio-send.ts";
 import { STUDIO_MEMBER, sendFailed, sendOk } from "../squad/send-fail.ts";
 import { chatLine } from "../chat/turns.ts";
 import { CHAT_FILES_MAX, IMAGES_MARK, chatFilePath } from "../chat/files.ts";
@@ -143,7 +144,7 @@ const chat: Fulfiller = {
       // The Studio's adopted handle only, as poke.ts does: its worktree also holds ds-loop panes and shells.
       const h = studioView(store, a.project)?.member?.handle as string | null;
       if (!h) return { retry: "no Studio terminal adopted" };
-      const r = await seat.send("poke-terminal", [h, line]);
+      const r = await studioType(seat, h, line);
       if (r.code !== 0) {
         const err = (r.err || r.out || "").trim() || `poke-terminal exit ${r.code}`;
         sendFailed(store, a.project, STUDIO_MEMBER, err, now);

@@ -20,6 +20,7 @@ import { envInt } from "../core/tick.ts";
 import { paused } from "../pause/pause.ts";
 import { offOrca } from "../squad/backend.ts";
 import { studioReady, studioView } from "../squad/studio.ts";
+import { studioType } from "../squad/studio-send.ts";
 import { STUDIO_MEMBER, sendFailed, sendOk } from "../squad/send-fail.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
 import { clearSending, markDelivered, markSending } from "../messages/messages.ts";
@@ -113,7 +114,7 @@ const poke: Fulfiller = {
         return { done: true, result: `not sent: ${why}` };
       }
       const seat = x.act.seat(store, a.project, a.squad ?? null, `${a.subject}:${a.episode}`, wt, at);
-      const r = await seat.send("poke-terminal", [p.handle, p.text]);
+      const r = await studioType(seat, p.handle, p.text);
       if (r.code === 0) { sendOk(x.store, a.project, STUDIO_MEMBER, at); return { done: true, result: "sent" }; }
       const err = (r.err || r.out || "").trim();
       sendFailed(x.store, a.project, STUDIO_MEMBER, err || `poke-terminal exit ${r.code}`, at);
