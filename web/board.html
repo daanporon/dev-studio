@@ -1932,11 +1932,19 @@ function UpdateBanner({ data, toast }) {
   const tried = badTry ? html` · <span class="mono">last try ${badTry.outcome}: ${badTry.line || badTry.outcome}</span>` : null;
   const run = u.run, runWarn = run && (run.warnings || []).map((x, i) => html`<div class="mono" key=${i}>${x}</div>`);
   if (run) {
-    const sq = run.squads_line ? " — " + run.squads_line.replace(/^update-squads: \[[^\]]*\] /, "") : "";
+    // Two sentences, not a dash chain: "already current (fe92a55) — 25 workers on older code restart once idle; the Studio reloads".
+    const short = (t) => String(t || "").replace(/\b([0-9a-f]{7})[0-9a-f]+…?/g, "$1");
+    const squadsSentence = (t) => {
+      const c = String(t || "").replace(/^update-squads: \[[^\]]*\] /, "").replace(/^nothing new — /, "");
+      const m = c.match(/^(restart|reload)\b.*?(\d+) wish/), studio = /Studio/.test(c) ? "; the Studio reloads" : "";
+      if (m) return m[2] + " workers on older code " + (m[1] === "restart" ? "restart once idle" : "reload") + studio;
+      return c;
+    };
+    const sq = run.squads_line ? " — " + squadsSentence(run.squads_line) : "";
     if (run.state === "failed") {
       cls = "err"; body = html`<b>Dev-studio update failed:</b> <span class="mono">${run.line || run.error || "see the log"}</span>${run.log && html` · log <span class="mono">${run.log}</span>`}${runWarn}`;
       btn = html`<button class="btn blue sm" onClick=${() => press(u, null, "Runs the update again. Fix the reason: " + (run.line || run.error || "see the log") + ".")}>${"Retry"}</button>`;
-    } else if (run.state === "done") body = html`<b>Dev-studio update:</b> <span class="mono">${(run.line || "done") + sq}</span>${runWarn}`;
+    } else if (run.state === "done") body = html`<b>Dev-studio update:</b> <span class="mono" title=${(run.line || "done") + (run.squads_line ? " — " + run.squads_line : "")}>${short(run.line || "done") + sq}</span>${runWarn}`;
     else if (run.state === "waiting") body = html`<b>Dev-studio update waiting</b> — ${run.why || "another update is running"} (${run.age_min} min)${runWarn}`;
     else body = html`<b>Dev-studio update running</b> — ${run.state === "refreshing" ? "refreshing squads…" : run.state === "pulling" ? "pulling…" : "starting…"} (${run.age_min} min)${runWarn}`;
   } else if (u.pending) {
