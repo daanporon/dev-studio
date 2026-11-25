@@ -896,13 +896,20 @@ describe("U54: moving a project's Studio to another backend (why backend)", () =
   });
 
   test("a crash right after the start: the replay gets that terminal back from the ledger, no second Studio", async () => {
-    const r = await rigMove(), a = actions(r)[0]!;
-    await go(r, a);
-    const first = String(studioMember(r.s).handle), row = r.s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:move" })!;
-    const plan = JSON.parse(String(row.result)); delete plan.newHandle;
-    r.s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:move" }, { state: "starting", result: JSON.stringify(plan), observed_at: T });
+    const r = await rigMove(), a = actions(r)[0]!, upsert = r.s.upsert.bind(r.s);
+    // The loop dies as it records the new terminal: the step stays "starting", nothing closed or switched.
+    r.s.upsert = ((t: string, k: Row, set: Row) => { if (set.state === "begun") throw new Error("the loop died"); return upsert(t, k, set); }) as Store["upsert"];
+    await expect(go(r, a)).rejects.toThrow("the loop died");
+    r.s.upsert = upsert;
+    expect(r.s.get("episodes", { project: "fx", subject: MOVE, kind: "studio:move" })).toMatchObject({ state: "starting" });
+    expect(ops(r.tmux, "terminal.close")).toEqual([]);
+    const first = [...r.herdr.terms.keys()][0]!;
     expect(await go(r, a)).toEqual({ done: true, result: `moved to herdr: ${first}` });
     expect(ops(r.herdr, "terminal.create")).toHaveLength(1);
+    expect(ops(r.tmux, "terminal.close").map((c) => c.id)).toEqual([r.old]);
+    expect(disp(r)).toMatchObject({ studio_backend: "herdr", studio_wt: r.newWt });
+    expect(studioMember(r.s)).toMatchObject({ id: r.id, wt: r.newWt, handle: first });
+    expect(r.s.db.query("SELECT COUNT(*) AS n FROM events WHERE kind = 'studio_moved'").get()).toMatchObject({ n: 1 });
   });
 
   test("a paused squad: not moved, naming it; nothing started, closed or switched", async () => {
