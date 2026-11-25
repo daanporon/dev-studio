@@ -386,7 +386,8 @@ describe("a Studio off Orca (U51)", () => {
       l.boot(T);
       await l.tick(T);
       expect(fake.calls).toEqual([]);
-      return ["observed_terminals", "observed_workers", "members"].map((t) => s.db.query(`SELECT * FROM ${t} WHERE project = 'fx' ORDER BY 1, 2, 3`).all());
+      return ["observed_terminals", "observed_workers", "members"].map((t) => (s.db.query(`SELECT * FROM ${t} WHERE project = 'fx' ORDER BY 1, 2, 3`).all() as Row[])
+        .map(({ observed_at, updated_at, ...r }) => (t === "members" ? r : { observed_at, updated_at, ...r }))); // members' stamps come from a trigger's wall clock (unixepoch()), a second apart between the two runs
     };
     expect(await rows(true)).toEqual(await rows(false));
   });
