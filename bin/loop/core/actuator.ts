@@ -732,7 +732,7 @@ export class LoopActuator implements Actuator {
         const b = blocked();
         if (b) return Promise.resolve({ ok: false, error: b, busy: true });
         return this.contractStart(store, c().backend, { ...req, env: { ...req.env, DS_BACKEND: name, DS_WT: req.cwd, ...(ident ? { DS_MEMBER: ident } : {}) } }, meta,
-          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen, req.cwd);
+          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen, req.cwd, squad.topic !== STUDIO_SQUAD);
       },
       close: (cwd, id) => {
         const b = blocked();
@@ -781,10 +781,12 @@ export class LoopActuator implements Actuator {
   // U11: a start on a contract backend, one orca_calls row (op terminal.create) under the seat's key, its
   // retry id the terminal's DS_GEN. Before the create it lists the folder's terminals: one of this
   // generation is this start's own, made before a crash or a lost answer (no second one is made); any
-  // other is an old agent's, closed first (a crashed member's restart). The launch line is typed once:
+  // other is an old agent's, closed first (a crashed member's restart). U52a (project-start): not for a Studio
+  // start (`sweep` false): its move closed the old Studio by its handle, and a shell the operator opened
+  // in the Studio's folder stays. The launch line is typed once:
   // the row notes `typed` before the send, and a replay that finds it set never types again. A thrown
   // call leaves the row unsettled and out of the member lock (`absent`), so the replay keeps the id.
-  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string): ReturnType<ContractSeat["start"]> {
+  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string, sweep = true): ReturnType<ContractSeat["start"]> {
     const last = this.lastCall(store, o);
     if (last?.op === "terminal.create" && last.state === "completed") {
       setGen(String(last.retry_id));
@@ -804,7 +806,7 @@ export class LoopActuator implements Actuator {
         const l = await b.call("terminal.list", {});
         if (!l.ok) { this.settleCall(store, retry, "absent", JSON.stringify({ error: l.error.message }), o.at); return { ok: false, error: `terminal.list: ${l.error.message}` }; }
         t = l.terminals.find((x) => x.gen === retry) ?? null;
-        for (const old of l.terminals.filter((x) => x.cwd === r0.cwd && x.gen !== retry)) {
+        for (const old of sweep ? l.terminals.filter((x) => x.cwd === r0.cwd && x.gen !== retry) : []) {
           const c = await b.call("terminal.close", { id: old.id });
           if (!c.ok && c.error.code !== "not_found") { this.settleCall(store, retry, "absent", JSON.stringify({ error: c.error.message }), o.at); return { ok: false, error: `terminal.close ${old.id}: ${c.error.message}` }; }
         }

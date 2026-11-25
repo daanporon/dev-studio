@@ -3,7 +3,7 @@
 // `studio-move` fulfiller (fulfil/studio.ts: only the Studio's own tab closed, studio-start on the
 // pick, the new handle recorded, a failed start carded), on a temp copy of tests/fixtures/loop/state.
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
@@ -15,7 +15,8 @@ import { FakeBackend } from "../../bin/loop/fakes/orca.ts";
 import { since } from "../../bin/loop/core/events.ts";
 import { makeLimits, type Pick, type PickArgs } from "../../bin/loop/reconcilers/limits.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
-import studio from "../../bin/loop/fulfil/studio.ts";
+import studio, { claudePrompt } from "../../bin/loop/fulfil/studio.ts";
+import { fakeContract, type FakeContract } from "../../bin/loop/fakes/contract.ts";
 import { MOVE, RESTART_APPROVED, studioReady } from "../../bin/loop/squad/studio.ts";
 import studioRec from "../../bin/loop/reconcilers/studio.ts";
 import { setAccountEnabled } from "../../bin/loop/capacity/accounts.ts";
@@ -657,5 +658,116 @@ describe("studio-hung-agent-broken U2: the operator's Restart Studio", () => {
     u.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:approved" }, { episode_key: "x", state: "approved", started_at: T - 5, ended_at: null, source: "board", observed_at: T - 5 });
     await ru.tick(T + 10);
     expect(ru.orca.of("terminal-close")).toEqual([]);
+  });
+});
+
+// U52a (project-start): a Studio off Orca (dispatcher.json studio_backend tmux, a `local::` studio_wt) is closed
+// by its own terminal id and started through the contract driver on the fake tmux; a shell beside it stays.
+describe("U52a: start and restart a Studio off Orca", () => {
+  const env = ["DS_ORCA_DATA", "DS_CLAUDE_SYSTEM_JSON_DIR", "DS_LOOP_STUDIO_PROMPT_S"] as const;
+  const saved = Object.fromEntries(env.map((k) => [k, process.env[k]]));
+  afterEach(() => { for (const k of env) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; });
+
+  // The fake tmux, its Claude prompt shown once a launch line is typed (prompt: false keeps a bare shell).
+  function tmux(prompt = true) {
+    const fake = fakeContract({}, { name: "tmux", now: () => T });
+    const backend = { caps: fake.caps, call: (async (op: string, req: { id?: string; text?: string }) => {
+      const r = await fake.call(op as never, req as never);
+      if (prompt && op === "terminal.send" && String(req.text ?? "").startsWith("exec bash")) fake.terms.get(req.id!)!.lines.push("╭───╮", "│ ❯ │", "╰───╯");
+      return r;
+    }) as FakeContract["call"] };
+    return { fake, act: new LoopActuator({ orca: new FakeBackend(), fulfillers: [], backends: () => ({ backend, caps: fake.caps }) }) };
+  }
+
+  // The fixture project with its Studio on tmux in a temp folder: the Studio's terminal (DS_GEN g0, adopted,
+  // idle at an empty prompt) and an operator's shell beside it.
+  async function offRig(prompt = true) {
+    const s = rig(), dir = mkdtempSync(join(tmpdir(), "zzstudiooff-")); temps.push(dir);
+    mkdirSync(join(dir, "orca", "claude-profiles", "acct-b", "home"), { recursive: true });
+    mkdirSync(join(dir, "orca", "claude-profiles", "acct-a", "home"), { recursive: true });
+    process.env.DS_ORCA_DATA = join(dir, "orca");
+    process.env.DS_CLAUDE_SYSTEM_JSON_DIR = join(dir, "orca");
+    const path = join(dir, "studio"); mkdirSync(path);
+    const wt = `local::${path}`, proj = s.get("projects", { label: "fx" })!;
+    s.upsert("projects", { label: "fx" }, { studio_wt: wt, doc: JSON.stringify({ ...JSON.parse(String(proj.doc ?? "{}")), studio_backend: "tmux" }), observed_at: T });
+    const t = tmux(prompt);
+    const old = await t.fake.call("terminal.create", { cwd: path, env: { DS_GEN: "g0" }, label: "studio", group: "_studio" });
+    const shell = await t.fake.call("terminal.create", { cwd: path, label: "shell" });
+    if (!old.ok || !shell.ok) throw new Error("fake create");
+    s.db.run("DELETE FROM members WHERE project = 'fx' AND squad = '_studio'");
+    s.upsert("members", { project: "fx", squad: "_studio", wt }, { role: "studio", suffix: "", agent: "claude", model: "opus", account: "acct-a", handle: old.terminal.id, gen: "g0", status: "running", observed_at: T, updated_at: T });
+    s.upsert("observed_terminals", { project: "fx", handle: old.terminal.id }, { wt, title: "_studio/studio", tail: "│ ❯  │\n", tail_at: T,
+      doc: JSON.stringify({ identity: null, gen: "g0", last_output_at: T - 900, unread: 0 }), gone_at: null, observed_at: T });
+    s.upsert("observed_workers", { project: "fx", wt }, { state: "idle", tail: notice, tail_at: T, since: T - 900, last_output_at: T - 900, limited: null, gone_at: null, suspect: 0, observed_at: T });
+    return { s, ...t, wt, path, old: old.terminal.id, shell: shell.terminal.id };
+  }
+  const move = (r: { s: Store; act: LoopActuator; old: string }, p: Row, episode = "e1") => studio.exec({ project: "fx", squad: null, member: null, subject: MOVE, kind: "studio-move", episode,
+    payload: { handle: r.old, agent: "claude", model: "opus", effort: "-", ...p } }, { store: r.s, project: "fx", tick: 1, now: T + 10, fired: [], poked: new Set<string>(), act: r.act });
+  const ops = (f: FakeContract, op: string) => f.calls.filter((c) => c.op === op).map((c) => c.req as Row);
+
+  test("a restart closes only the Studio's terminal, starts one new Studio with the Studio's launch line, and records it", async () => {
+    const r = await offRig();
+    const res = await move(r, { account: "acct-a", from: "claude:acct-a", why: "restart" });
+    const m = studioMember(r.s), handle = String(m.handle);
+    expect(res).toEqual({ done: true, result: `moved to claude:acct-a: ${handle}` });
+    expect(ops(r.fake, "terminal.close").map((c) => c.id)).toEqual([r.old]);
+    expect(ops(r.fake, "terminal.create")).toHaveLength(3);   // the rig's two, then the new Studio's
+    expect([...r.fake.terms.keys()].sort()).toEqual([r.shell, handle].sort());
+    const made = r.fake.terms.get(handle)!;
+    expect(made.t).toMatchObject({ cwd: r.path, label: "studio", group: "_studio" });
+    expect(made.env).toMatchObject({ DS_BACKEND: "tmux", DS_WT: r.path, DS_MEMBER: "fx/_studio/studio" });
+    expect(m).toMatchObject({ gen: made.env.DS_GEN, account: "acct-a", model: "opus" });
+    const typed = String(ops(r.fake, "terminal.send").at(-1)!.text), file = /^exec bash '(.*)'$/.exec(typed)![1]!;
+    const line = readFileSync(file, "utf8");
+    expect(line).toContain("--model opus");
+    expect(line).not.toContain("--effort");
+    expect(line).toContain("--settings");
+    expect(line.replace(/\\/g, "")).toContain("the operator restarted it from the board");
+    expect(payloads(r.s, "studio_moved")).toEqual([{ handle, previous: r.old, from: "claude:acct-a", to: "claude:acct-a", model: "opus", why: "restart" }]);
+    expect(await move(r, { account: "acct-a", from: "claude:acct-a", why: "restart" })).toMatchObject({ done: true, result: "already started" });
+    expect(ops(r.fake, "terminal.create")).toHaveLength(3);
+  });
+
+  test("an account move gives one new Studio on the picked account in the same folder; the shell stays", async () => {
+    const r = await offRig();
+    expect(studioReady(r.s, "fx", T + 10).ready).toBe(true);
+    expect(await move(r, { account: "acct-b", from: "claude:acct-a" })).toMatchObject({ done: true });
+    const m = studioMember(r.s), made = r.fake.terms.get(String(m.handle))!;
+    expect(m).toMatchObject({ account: "acct-b" });
+    expect(made.t.cwd).toBe(r.path);
+    expect(readFileSync(/^exec bash '(.*)'$/.exec(String(ops(r.fake, "terminal.send").at(-1)!.text))![1]!, "utf8")).toContain(join("claude-profiles", "acct-b", "home"));
+    expect(r.fake.terms.has(r.shell)).toBe(true);
+    expect(r.fake.terms.has(r.old)).toBe(false);
+  });
+
+  test("a replay after the start began gets that terminal back: no second Studio", async () => {
+    const r = await offRig();
+    expect(await move(r, { account: "acct-a", from: "claude:acct-a", why: "restart" })).toMatchObject({ done: true });
+    const first = String(studioMember(r.s).handle);
+    r.s.upsert("episodes", { project: "fx", subject: MOVE, kind: "studio:move" }, { episode_key: "e1", state: "starting", observed_at: T });
+    expect(await move(r, { account: "acct-a", from: "claude:acct-a", why: "restart" })).toEqual({ done: true, result: `moved to claude:acct-a: ${first}` });
+    expect(ops(r.fake, "terminal.create")).toHaveLength(3);
+    expect(ops(r.fake, "terminal.close")).toHaveLength(1);
+  });
+
+  test("a Studio whose Claude prompt never shows is closed again and carded; the shell stays", async () => {
+    process.env.DS_LOOP_STUDIO_PROMPT_S = "1";
+    const r = await offRig(false);
+    const res = await move(r, { account: "acct-a", from: "claude:acct-a", why: "restart" }) as { result: string };
+    expect(res.result).toMatch(/^closed, not started: Claude's prompt did not show on its terminal within 1s$/);
+    expect([...r.fake.terms.keys()]).toEqual([r.shell]);
+    expect(ops(r.fake, "terminal.close")).toHaveLength(2);
+    const cards = cardsIn(r.s, "loop-studio.move-");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ title: "Studio move failed" });
+    expect(studioMember(r.s).handle).toBeNull();
+  });
+
+  test("claudePrompt: Claude's input row, boxed or not; a shell's `> ` continuation is not one", () => {
+    expect(claudePrompt("╭──╮\n│ ❯ │\n╰──╯")).toBe(true);
+    expect(claudePrompt("❯ ")).toBe(true);
+    expect(claudePrompt("│ > hello │")).toBe(true);
+    expect(claudePrompt("$ exec bash '/x'\n> ")).toBe(false);
+    expect(claudePrompt("user@host:~$ ")).toBe(false);
   });
 });

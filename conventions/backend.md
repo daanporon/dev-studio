@@ -407,6 +407,18 @@ the member row keeps the held terminal's `gen`. `offOrca` counts the Studio's wo
 Orca observer never walks, adopts or reads it (an orca-lite Studio is read by one observer), and the poke
 checks treat it as off Orca. The Studio card names the Studio's backend instead of Orca.
 `tests/loop/studio.test.ts` ("a Studio off Orca (U51)") covers it.
+**Starting and restarting that Studio (project-start U52a).** A Studio move (`fulfil/studio.ts`: a
+restart, a limit move, a move back up) on a Studio off Orca closes the Studio's own terminal by its id in
+its folder (`seat.contract.close(path, handle)`), never another terminal there, and starts the new one
+through the contract driver (`drivers/contract.ts`: the pick's model and effort, the Studio's `--settings`
+with its compact window and skills, the folder trusted on the account, `DS_MEMBER` `<project>/_studio/studio`)
+and the seat's one ledgered `terminal.create`, whose retry id is the new Studio's `DS_GEN` and so its
+`gen` on the member row. A Studio start skips the sweep a member start does (`contractStart`'s `sweep`):
+a shell the operator opened beside it stays. The contract has no wait for the TUI, so the move reads the
+new terminal's screen until Claude's prompt shows (`claudePrompt`, `DS_LOOP_STUDIO_PROMPT_S`, 60); one that
+never shows it is closed again and the start fails, which posts the `studio.move` card. A replay after the
+start began runs the ledgered start again and gets the same terminal back.
+`tests/loop/studio-move.test.ts` ("U52a") covers it.
 A Lead off Orca has no Run. Its address is its worktree (`send-worker`), its watch tick reads only its
 loop.db rows (header `no Run: the squad runs on <backend>`), and ask-operator takes a state file with no
 `run_id` when the squad's row names a contract backend. `tests/loop/role-scripts-contract.test.ts`
