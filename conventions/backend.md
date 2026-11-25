@@ -419,6 +419,11 @@ new terminal's screen until Claude's prompt shows (`claudePrompt`, `DS_LOOP_STUD
 never shows it is closed again and the start fails, which posts the `studio.move` card. A replay after the
 start began runs the ledgered start again and gets the same terminal back.
 `tests/loop/studio-move.test.ts` ("U52a") covers it.
+**Waking and chatting with that Studio (project-start U52b).** A board chat, a wake-up poke (the reload line
+too) and a menu key reach a Studio off Orca through `squad/studio-send.ts`: the adopted terminal id gets
+`terminal.send` (text with `submit`, or named keys; a backend whose `keys` capability is `none` fails the press
+with that reason) where Orca's Studio gets `poke-terminal` and `keys`. `ds reload ack` from its pane has no Orca
+handle and is found by `DS_GEN` in `DS_WT`. `tests/loop/studio-off-orca-send.test.ts` covers it.
 A Lead off Orca has no Run. Its address is its worktree (`send-worker`), its watch tick reads only its
 loop.db rows (header `no Run: the squad runs on <backend>`), and ask-operator takes a state file with no
 `run_id` when the squad's row names a contract backend. `tests/loop/role-scripts-contract.test.ts`
