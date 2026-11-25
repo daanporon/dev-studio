@@ -134,6 +134,19 @@ describe("feedback-post", () => {
     expect(posts()).toHaveLength(1);
   });
 
+  test("a test state root with no DS_FEEDBACK_ORIGIN refuses to post: no repo, no gh call (U11)", async () => {
+    const { s, tick } = rig();
+    delete process.env.DS_LIMIT_FEEDBACK_REPO;
+    delete process.env.DS_FEEDBACK_ORIGIN;
+    expect(feedbackRepo(s)).toBeNull();
+    const id = draft(s);
+    const req = file(s, "feedback-post", { draft: id });
+    await tick();
+    expect(request(s, req)).toMatchObject({ done: true, ok: false });
+    expect(String(request(s, req).error ?? request(s, req).why ?? JSON.stringify(request(s, req)))).toContain("set DS_FEEDBACK_ORIGIN");
+    expect(calls()).toHaveLength(0);
+  });
+
   test("a post replayed after a crash finds the issue by its key and creates no second one", async () => {
     const { s, tick } = rig();
     const id = draft(s), a = note(s, id);
