@@ -88,9 +88,19 @@ const doneSide = (failed: boolean) => (failed ? "failed" : "ok");
 
 // A Builder whose unit records a PR is left out (U21a pattern B): it sends worker_done when it opens the
 // PR, the loop ignores that report (liveness idleBuilder), and its finish row comes later from the babysit
-// generation the phase restart starts, so the two signals answer different questions there.
-const hasPr = (store: Store, m: Row) => m.role === "builder" && !!memberUnit(store, { project: String(m.project), squad: String(m.squad),
-  role: "builder", suffix: String(m.suffix ?? ""), member: String(m.wt) })?.pr;
+// generation the phase restart starts, so the two signals answer different questions there. The PR counts
+// as seen the way lifecycle.ts finds it (U21d): the unit's pr, or an observed_prs row for the member's
+// branch (open, or merged), so a PR the observer has not yet written to the unit makes no pair either.
+function hasPr(store: Store, m: Row): boolean {
+  if (m.role !== "builder") return false;
+  if (memberUnit(store, { project: String(m.project), squad: String(m.squad), role: "builder", suffix: String(m.suffix ?? ""), member: String(m.wt) })?.pr) return true;
+  const branch = String(store.get("observed_worktrees", { project: m.project, wt: m.wt })?.branch ?? "");
+  const sq = store.get("squads", { project: m.project, topic: m.squad });
+  const nwo = sq?.repo ? (store.get("config", { project: m.project, file: "github", key: `repo:${sq.repo}` })?.value as string | undefined) : undefined;
+  if (!nwo || !branch || branch === "HEAD") return false;
+  return !!store.db.query("SELECT 1 FROM observed_prs WHERE project = ? AND repo = ? AND head = ? AND (state = 'MERGED' OR (state = 'OPEN' AND gone_at IS NULL)) LIMIT 1")
+    .get(String(m.project), nwo, branch);
+}
 
 /** Is a one-shot or Builder finished, and how: "no", "ok" or "failed". Standing roles never finish. */
 export function finishedPair(store: Store, m: Row, now: number): Pair | null {
@@ -98,6 +108,9 @@ export function finishedPair(store: Store, m: Row, now: number): Pair | null {
   const w = worker(store, m);
   // workerDone with no grace: the old signal as soon as the relay has it.
   const done = w?.dispatch_id ? workerDone(store, String(m.project), String(m.squad), w.dispatch_id, Number.MAX_SAFE_INTEGER) : null;
+  // U21d: the loop reads a Builder's worker_done only DONE_GRACE_S after the relay saw it (its PR may follow
+  // within that time and then the report is ignored), so a younger one with no finish row is no pair yet.
+  if (done && m.role === "builder" && !finishOf(store, m) && !workerDone(store, String(m.project), String(m.squad), w!.dispatch_id, now)) return null;
   let old = "no";
   if (done) old = doneSide(done.outcome === "failed");
   else if (w?.dispatch === "completed") old = "ok";
