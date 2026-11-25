@@ -259,6 +259,7 @@ export function herdrBackend(sock: string, opts: { timeoutMs?: number } = {}): B
     switch (op) {
       case "backend.info": return okAnswer("backend.info", { name: "herdr", version, capabilities: HERDR_CAPS });
       case "terminal.create": return okAnswer("terminal.create", { terminal: await create(req as Request<"terminal.create">) });
+      case "worktree.parent": case "worktree.set_parent": return fail("unsupported", "herdr nests no worktrees");
       case "terminal.list": return okAnswer("terminal.list", { terminals: await list() });
       case "terminal.close": return okAnswer("terminal.close", { closed: await close((req as Request<"terminal.close">).id) });
       case "terminal.send": await send(req as Request<"terminal.send">); return okAnswer("terminal.send", { delivery: "accepted" });
