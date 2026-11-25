@@ -621,22 +621,33 @@ test("chat-with-studio U1: a non-adopted Studio's button is disabled with its re
 });
 
 // ---- orca-backend-alternatives U9: the dialog presets the project's default_backend and sends the backend picked.
-test("Start squad: Backend starts on the project's default_backend, follows the project, and is sent", async () => {
+test("Start squad: Backend is a line showing the project's backend, follows the project, offers no choice, and is sent", async () => {
   const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", default_backend: "tmux" }, { label: "other", default_backend: "orca" }] };
   const d = await startDialog(() => ({ status: 202, body: { ok: true, id: 3 } }), b);
   try {
-    expect(d.doc.querySelector(".start-backend").value).toBe("tmux");
-    // The page's list is a copy of the registry's; this keeps the two the same.
-    expect([...d.doc.querySelectorAll(".start-backend option")].map((o: any) => o.value)).toEqual([...BACKEND_NAMES]);
+    expect(d.doc.querySelector(".start-backend").textContent).toBe("tmux");
+    expect(d.doc.querySelector("select.start-backend")).toBeNull();
     await d.set(".start-project", "other", "change");
-    expect(d.doc.querySelector(".start-backend").value).toBe("orca");
+    expect(d.doc.querySelector(".start-backend").textContent).toBe("orca");
     await d.set(".start-project", "fixture", "change");
-    await d.set(".start-backend", "herdr", "change");
     await d.set(".start-text", "go");
     await d.click(d.btn(/^Send$/));
-    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "go", type: "feature", autonomy: "checkpoints", backend: "herdr" }]);
+    expect(d.posts).toEqual([{ project: "fixture", action: "start", text: "go", type: "feature", autonomy: "checkpoints", backend: "tmux" }]);
     expect(d.r.errors).toEqual([]);
   } finally { await d.w.happyDOM.close(); }
+});
+
+test("Settings shows the project's backend with one line on what changing it does", async () => {
+  const b = { ...board, projects: [{ ...(board.projects?.[0] ?? {}), label: "fixture", default_backend: "tmux" }] };
+  const r = await mount(b, false, { "api/limits": { limits: [], groups: [] }, "api/roles": { roles: [] }, "api/skills": { roles: [] } });
+  try {
+    r.window.location.hash = "#settings";
+    for (let k = 0; k < 40 && !r.window.document.querySelector(".set-backend"); k++) await new Promise((res) => setTimeout(res, 25));
+    const t = r.window.document.querySelector(".set-backend").textContent;
+    expect(t).toContain("Backend: tmux");
+    expect(t).toContain("default_backend");
+    expect(t).toContain("already running keep theirs");
+  } finally { await r.window.happyDOM.close(); }
 });
 
 test("a squad off orca shows its backend chip, with the worktree tool only when it is not the backend's default", async () => {

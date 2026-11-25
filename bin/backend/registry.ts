@@ -5,7 +5,7 @@
 // (`chooseSquadBackend`, called by spawn-squad), and written on its `squads` row (`backend`,
 // `backend_host`, `worktree_provider`, migration 0054); a later change is refused. The project picks what
 // its new squads start on with the limits keys `default_backend` and `worktree_provider`;
-// `spawn-squad --backend <name>` (and the board's Start squad dialog) override the backend for one squad.
+// `spawn-squad --backend <name>` may only name that backend; the board's Start squad dialog shows it as a line (U33).
 //
 // An entry with no adapter is not built yet: spawn refuses it with a line that says so, never falls back
 // to `orca`. An entry with a `bin` is refused when that binary is not on PATH (`find`, when set, looks

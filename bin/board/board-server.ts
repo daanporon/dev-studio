@@ -83,7 +83,8 @@ import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSyn
 import { dirname, join } from "node:path";
 import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
-import { BACKEND_NAMES } from "../backend/registry.ts";
+import { BACKEND_NAMES, DEFAULT_BACKEND, isBackend, squadBackendRule } from "../backend/registry.ts";
+import { limit } from "../loop/settings/limits.ts";
 import { chatProblem } from "../loop/chat/limits.ts";
 import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
@@ -250,6 +251,12 @@ async function request(req: Request) {
     : `board: the operator asks you to run: ${a.cmd(project, topic, role, brief)}`;
   return write((s) => {
     if (sf && !one(s, "SELECT 1 AS x FROM projects WHERE label = ?", project)) no(409, `no project ${project} on this board`);
+    // U33: the project's backend is not a choice; another one is refused with U30's reason.
+    if (sf?.backend) {
+      const v = limit(s, project, "default_backend");
+      const refused = squadBackendRule({ backend: sf.backend, projectBackend: isBackend(v) ? v : DEFAULT_BACKEND });
+      if (refused) no(409, refused);
+    }
     if (a.topic) squadRow(s, project, topic);
     if (action === "restart") {
       const targets = s.db.query("SELECT * FROM members WHERE project = ? AND squad = ? AND COALESCE(want,'') != 'gone' AND COALESCE(status,'') != 'gone'").all(project, topic) as Row[];
