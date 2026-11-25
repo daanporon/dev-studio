@@ -28,6 +28,8 @@ import { localPath } from "../drivers/contract.ts";
 import { promptDraft, workingOnScreen } from "../squad/member-ready.ts";
 import { limitInt } from "../settings/limits.ts";
 import { mainAgents, subAgents, liveModel, shellAdapter, type LiveAccount, type SubAgent, type Walk } from "./orca.ts";
+import { studioContract } from "../squad/backend.ts";
+import { adoptStudio, contractCandidates, STUDIO_SQUAD, studioAgent, studioMember } from "../squad/studio.ts";
 
 export type ContractObserverOpts = {
   backends?: MakeContract;                 // a test's fake; the shared resolver by default
@@ -35,6 +37,7 @@ export type ContractObserverOpts = {
 };
 
 type Seen = { m: Row; path: string; t: Terminal | null; others: Terminal[] };
+type Group = { topic: string; backend: string; members: Row[]; studio?: boolean };
 type Walk2 = { main: Map<string, Walk>; subs: Map<string, SubAgent[]> };
 
 const inFolder = (ts: Terminal[], path: string) => ts.filter((t) => t.cwd.replace(/\/+$/, "") === path).sort((a, b) => b.created_at - a.created_at);
@@ -42,6 +45,25 @@ const inFolder = (ts: Terminal[], path: string) => ts.filter((t) => t.cwd.replac
 export function terminalFor(ts: Terminal[], path: string, gen: unknown): Terminal | null {
   const here = inFolder(ts, path);
   return here.find((t) => gen != null && t.gen === String(gen)) ?? here[0] ?? null;
+}
+
+// U51: the project's Studio when it runs off Orca (studio_backend) in a `local::` folder, as one group of
+// squad `_studio`: its member row once adopted, else a stand-in, so its folder is read before the first adoption.
+export function studioGroup(store: Store, project: string): Group | null {
+  const sc = studioContract(store, project);
+  const wt = String(store.get("projects", { label: project })?.studio_wt ?? "");
+  if (!sc || !localPath(wt)) return null;
+  const m = studioMember(store, project, wt) ?? { project, squad: STUDIO_SQUAD, role: "studio", suffix: "", wt, gen: null, handle: null };
+  return { topic: STUDIO_SQUAD, backend: sc.backend, members: [m], studio: true };
+}
+
+// The Studio's terminal: the one adoptStudio holds or would hold (squad/studio.ts contractCandidates, by DS_GEN),
+// else the newest in its folder, so a folder with no single candidate is still read and its terminals listed.
+export function studioTerminal(ts: Terminal[], path: string, m: Row): Terminal | null {
+  const here = inFolder(ts, path);
+  const cands = contractCandidates(here.map((t) => ({ handle: t.id, title: t.label, identity: null, gen: t.gen })), m.gen);
+  const held = cands.find((t) => t.handle === m.handle) ?? (cands.length === 1 ? cands[0] : undefined);
+  return (held && here.find((t) => t.id === held.handle)) || terminalFor(ts, path, m.gen);
 }
 
 // The state the loop reads for a terminal (see the header).
@@ -75,17 +97,19 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
       const { store, project, now } = ctx;
       const squads = store.db.query(`SELECT topic, backend FROM squads WHERE project = ? AND COALESCE(backend, 'orca') != 'orca'
           AND COALESCE(status, '') NOT IN ('closed', 'gone') ORDER BY topic`).all(project) as Row[];
-      if (!squads.length) return;
+      const groups: Group[] = squads.map((sq) => ({ topic: String(sq.topic), backend: String(sq.backend), members: (store.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND wt LIKE 'local::%'
+            AND COALESCE(status, '') != 'gone' ORDER BY id`).all(project, String(sq.topic)) as Row[]).filter((m) => localPath(String(m.wt))) }));
+      // U51: a Studio off Orca, read whether or not the project has a squad off Orca.
+      const studio = studioGroup(store, project);
+      if (studio) groups.push(studio);
+      if (!groups.some((g) => g.members.length)) return;
       const procs = await host(ctx.tick, now);
       const quiet = limitInt(store, project, "chat_quiet_s", 10);
-      for (const sq of squads) {
-        const topic = String(sq.topic);
-        const members = (store.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND wt LIKE 'local::%'
-            AND COALESCE(status, '') != 'gone' ORDER BY id`).all(project, topic) as Row[])
-          .filter((m) => localPath(String(m.wt)));
+      for (const g of groups) {
+        const { topic, members } = g;
         if (!members.length) continue;
         let c: Contracted;
-        try { c = resolve(store, String(sq.backend), project); } catch (e) {
+        try { c = resolve(store, g.backend, project); } catch (e) {
           store.event("plugin_error", { project, squad: topic, payload: { plugin: "observer:contract", error: (e as Error).message } });
           continue;
         }
@@ -93,11 +117,13 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
         if (!l.ok) continue; // no evidence: nothing written, nothing marked gone
         const seen: Seen[] = members.map((m) => {
           const path = localPath(String(m.wt))!.replace(/\/+$/, "");
-          const t = terminalFor(l.terminals, path, m.gen);
+          const t = g.studio ? studioTerminal(l.terminals, path, m) : terminalFor(l.terminals, path, m.gen);
           return { m, path, t, others: t ? inFolder(l.terminals, path).filter((o) => o.id !== t.id) : [] };
         });
         const ps = seen.map((s) => ({ worktreeId: String(s.m.wt), path: s.path }));
-        const walks: Walk2 | null = Array.isArray(procs) ? { main: mainAgents(ps, procs), subs: subAgents(ps, procs) } : null;
+        // The Studio's walk counts only its own agent, as on Orca (its folder may hold other agents).
+        const pin = new Map(g.studio ? [[String(members[0]!.wt), studioAgent(store.get("projects", { label: project }))]] : []);
+        const walks: Walk2 | null = Array.isArray(procs) ? { main: mainAgents(ps, procs, pin), subs: subAgents(ps, procs) } : null;
         // The backend reads per live terminal, outside the write.
         const reads = await Promise.all(seen.map(async (s) => {
           if (!s.t) return null;
@@ -113,6 +139,8 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
         }));
         store.tx(() => {
           seen.forEach((s, i) => write(store, project, topic, s, reads[i], walks, procs === "failed", now, quiet));
+          // U51: after a list that succeeded, as the Orca observer adopts an Orca Studio (observers/orca.ts).
+          if (g.studio) adoptStudio(store, project, now);
         });
       }
     },

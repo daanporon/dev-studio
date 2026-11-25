@@ -21,6 +21,9 @@ export function offOrca(store: Store, project: string): { wts: Set<string>; path
       WHERE m.project = ? AND m.wt IS NOT NULL AND COALESCE(s.backend, 'orca') != 'orca'`).all(project) as { wt: string }[]).map((r) => r.wt);
   const paths = (store.db.query(`SELECT w.path FROM worktrees w JOIN squads s ON s.project = w.project AND s.topic = w.squad
       WHERE w.project = ? AND w.gone_at IS NULL AND COALESCE(s.backend, 'orca') != 'orca'`).all(project) as { path: string }[]).map((r) => r.path.replace(/\/+$/, ""));
+  // U51: a Studio off Orca is the contract observer's too, and off Orca for the poke checks (fulfil/poke.ts).
+  const studioWt = studioContract(store, project) ? String(store.get("projects", { label: project })?.studio_wt ?? "") : "";
+  if (studioWt) wts.push(studioWt);
   for (const wt of wts) if (wt.startsWith("local::")) paths.push(wt.slice(7).replace(/\/+$/, ""));
   return { wts: new Set(wts), paths: new Set(paths) };
 }
