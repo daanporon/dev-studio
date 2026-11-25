@@ -11,6 +11,12 @@
 // adopted handle only, and only while studioReady() holds. A session adopted after reload_at satisfies
 // the wish without an ack, as decide.ts's fresh process start does for a member.
 //
+// board-actions-as-wishes U3: the Studio's skills after an update (reloadStudioSkills below). A Claude Studio is not
+// restarted by an update, so once an `update` request ends done with `skills` among its classes the loop types
+// `/reload-skills` into the adopted handle through wake() once studioReady() holds: one episode per request
+// (`reload-skills:<request id>`, cap 1), never while paused (wake's own rule), nothing for another agent or for a
+// Studio session adopted after the request finished.
+//
 // studio-hung-agent-broken U2: the operator's Restart Studio (restartStudio below). The broken Studio's card
 // (liveness.ts) answered "Restart Studio" leaves an open studio:restart-approved (fulfil/studio.ts dismiss); it
 // becomes exactly one studio-move, why "restart", on the Studio's own agent, account, model and effort, which
@@ -78,6 +84,33 @@ export function reloadStudio(ctx: TickCtx): Action[] {
   if (adopted > at) { store.setIf("members", Number(m.id), "reloaded_at", adopted, m.reloaded_at ?? null); return []; }
   if (!studioReady(store, project, now).ready) return [];
   return wake(ctx, v.wt, studioReloadText(store, project), "reload", `reload:${at}`, { handle }).actions;
+}
+
+const SKILLS_WINDOW_S = 86_400;   // an update older than this is history, not a pending refresh
+
+export function reloadStudioSkills(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx;
+  const v = studioView(store, project), m = v?.member as Row | null | undefined;
+  if (!v || !m || m.status === "gone" || v.agent !== "claude") return [];
+  const handle = (m.handle as string | null) || null;
+  if (!handle) return [];
+  // The newest finished update of this project that carried skills (not the newest update: a later one without
+  // skills has nothing to refresh, but it does not undo an earlier one still pending).
+  const rows = store.db.query("SELECT id, done_at, result FROM requests WHERE kind = 'update' AND project = ? AND done_at IS NOT NULL AND done_at >= ? ORDER BY id DESC")
+    .all(project, now - SKILLS_WINDOW_S) as Row[];
+  for (const r of rows) {
+    let res: { ok?: boolean; classes?: unknown } = {};
+    try { res = JSON.parse(String(r.result ?? "{}")) ?? {}; } catch { continue; }
+    if (res.ok !== true || !Array.isArray(res.classes) || !res.classes.includes("skills")) continue;
+    if (adoptedAt(store, project, handle) > Number(r.done_at)) return [];
+    if (!studioReady(store, project, now).ready) return [];
+    // A slash command has no ack to wait for: once its poke was made the request is served (wake's cap would
+    // otherwise raise an "unanswered" note for it).
+    const ep = store.get("episodes", { project, subject: v.wt, kind: "wake:reload-skills" });
+    if (ep?.episode_key === `reload-skills:${r.id}` && Number(ep.count ?? 0) >= 1) return [];
+    return wake(ctx, v.wt, "/reload-skills", "reload-skills", `reload-skills:${r.id}`, { handle, cap: 1 }).actions;
+  }
+  return [];
 }
 
 export function restartStudio(ctx: TickCtx): Action[] {
@@ -155,4 +188,4 @@ export function backendStudio(ctx: TickCtx): Action[] {
       from: `${agent}:${account}`, why: "backend", backend: t.backend, provider: t.provider ?? "", wt: t.wt } }];
 }
 
-export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx), ...restartStudio(ctx), ...startStudio(ctx), ...backendStudio(ctx)] } satisfies Reconciler;
+export default { name: "studio", run: (ctx: TickCtx) => [...adoptCard(ctx), ...reloadStudio(ctx), ...reloadStudioSkills(ctx), ...restartStudio(ctx), ...startStudio(ctx), ...backendStudio(ctx)] } satisfies Reconciler;
