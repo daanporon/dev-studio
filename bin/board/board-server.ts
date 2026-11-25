@@ -186,8 +186,8 @@ const board = (s: Store, kind: string, payload: unknown, o: { project: string; s
 // The Studio command each board action asks for; topic/role are NAME-checked before they get here.
 const ACTIONS: Record<string, { topic: boolean; cmd: (p: string, t: string, role: string, brief: string) => string }> = {
   close:   { topic: true,  cmd: (_, t) => `/ds-close-squad ${t}` },
-  update:  { topic: false, cmd: (p) => `/ds-update ${p}` },
-  start:   { topic: false, cmd: (_, __, ___, brief) => `/ds-start-squad ${brief}` }, // the dialog's start builds its own line (startRequest)
+  update:  { topic: false, cmd: () => "" },   // the loop's own `update` request (board-actions-as-wishes U2)
+  start:   { topic: false, cmd: () => "" },   // the loop's own `squad-start` request (board-actions-as-wishes U6)
 };
 
 // restart, suspend, resume and reload are the loop's own wishes: the board writes them in the request's
@@ -301,9 +301,7 @@ async function request(req: Request) {
     for (const n of f.files ?? []) if (!chatFileAt(project, START_TOPIC, n)) return json(409, { error: `image ${n} is gone — attach it again` });
     sf = f;
   }
-  const line = sf
-    ? `board: the operator asks you to run: /ds-start-squad --repo ${project}${sf.slug ? ` --topic ${sf.slug}` : ""}${sf.type ? ` --type ${sf.type}` : ""}${sf.autonomy ? ` --autonomy ${sf.autonomy}` : ""}${sf.start ? ` --start ${sf.start}` : ""}${sf.backend ? ` --backend ${sf.backend}` : ""}`
-    : `board: the operator asks you to run: ${a.cmd(project, topic, role, brief)}`;
+  const line = `board: the operator asks you to run: ${a.cmd(project, topic, role, brief)}`;
   if (Object.hasOwn(WISH_ACTIONS, action)) return write((s) => wishAction(s, project, action, topic, role));
   return write((s) => {
     if (sf && !one(s, "SELECT 1 AS x FROM projects WHERE label = ?", project)) no(409, `no project ${project} on this board`);
@@ -314,6 +312,14 @@ async function request(req: Request) {
       if (refused) no(409, refused);
     }
     if (a.topic) squadRow(s, project, topic);
+    // board-actions-as-wishes U6: a Start is the loop's own request (bin/loop/fulfil/squad-start.ts), no Studio line.
+    if (sf) {
+      if (one(s, "SELECT id FROM requests WHERE kind = 'squad-start' AND project = ? AND done_at IS NULL AND json_extract(payload, '$.framing') = ?", project, sf.framing))
+        no(409, "already starting a squad with this brief");
+      if (sf.slug && (one(s, "SELECT 1 AS x FROM squads WHERE project = ? AND topic = ?", project, sf.slug) || pendingReq(s, "squad-start", project, null, "slug", sf.slug)))
+        no(409, `squad ${sf.slug} already exists in ${project}; pick another name, or leave it blank`);
+      return board(s, "squad-start", { ...sf, by: "board" }, { project });
+    }
     // board-actions-as-wishes U2: an update is the loop's own request (bin/loop/fulfil/update.ts), no Studio line.
     if (action === "update") {
       if (one(s, "SELECT id FROM requests WHERE kind = 'update' AND project = ? AND done_at IS NULL", project)
@@ -329,9 +335,9 @@ async function request(req: Request) {
     // One pending request per action+squad, queued or filed. The rest of a filed name must be just
     // "<n>.txt": squad "ans" must not match squad "ans-2"'s file.
     const filed = s.db.query("SELECT key FROM requests WHERE done_at IS NULL AND substr(key, 1, ?) = ?").all(stem.length, stem) as Row[];
-    if (action !== "start" && (pendingReq(s, "studio", project, topic || null, "action", action)
+    if ((pendingReq(s, "studio", project, topic || null, "action", action)
       || filed.some((r) => /^\d+\.txt$/.test(String(r.key).slice(stem.length))))) no(409, "already requested — waiting for the Studio");
-    return board(s, "studio", { action, topic: topic || null, line, ...(sf ? { framing: sf.framing } : {}), ...(sf?.files ? { files: sf.files } : {}) }, { project, squad: topic || null });
+    return board(s, "studio", { action, topic: topic || null, line }, { project, squad: topic || null });
   });
 }
 

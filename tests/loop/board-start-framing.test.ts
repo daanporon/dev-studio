@@ -1,20 +1,27 @@
-// board-start-squad-box U1: a brief pasted into the board's Start squad dialog reaches spawn-squad.sh and the
-// squad's wish byte for byte. Board server (/api/request) -> studio fulfiller (framing file + request line)
-// -> spawn-squad.sh with the line's arguments, the way the Studio runs /ds-start-squad. Temp state root only.
+// board-start-squad-box U1: a brief pasted into the board's Start squad dialog reaches the squad's wish byte for
+// byte. board-actions-as-wishes U6: board server (/api/request) -> the loop's squad-start fulfiller (framing file,
+// name, running wish), no Studio. A `studio` start filed before the deploy still goes through the studio
+// fulfiller. Temp state root only; the name call is a stub that fails, so an unnamed start takes the plain name.
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
+import squadStart from "../../bin/loop/fulfil/squad-start.ts";
 import studio from "../../bin/loop/fulfil/studio.ts";
 import { onTestEnd, tempRoot } from "./temp-roots.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const servers: ReturnType<typeof Bun.spawn>[] = [];
-afterEach(async () => { for (const p of servers.splice(0)) { p.kill(); await p.exited; } });
+const nameCmd = process.env.DS_SQUAD_NAME_CMD;
+afterEach(async () => {
+  for (const p of servers.splice(0)) { p.kill(); await p.exited; }
+  if (nameCmd === undefined) delete process.env.DS_SQUAD_NAME_CMD; else process.env.DS_SQUAD_NAME_CMD = nameCmd;
+});
 
 async function rig() {
   const root = tempRoot("start-framing-");
   const store: Store = open(root); onTestEnd(() => store.close());
+  process.env.DS_SQUAD_NAME_CMD = "false";
   store.upsert("projects", { label: "p" }, { home_repo: "path:/fake", observed_at: 1 });
   const l = Bun.serve({ port: 0, fetch: () => new Response() }); const port = l.port; l.stop(true);
   const url = `http://127.0.0.1:${port}`;
@@ -26,19 +33,22 @@ async function rig() {
     const t = await r.text(); let b: any; try { b = JSON.parse(t); } catch { b = { error: t }; }
     return { status: r.status, body: b };
   };
-  // The loop's studio fulfiller on one request: the request file, and its line.
-  const fulfil = async (id: number) => {
+  const action = (id: number, kind: string): any => {
     const r = store.db.query("SELECT * FROM requests WHERE id = ?").get(id) as Row;
-    const a: any = { project: String(r.project), squad: null, member: null, subject: `req:${id}`, kind: "studio", episode: `req:${id}`, payload: { ...JSON.parse(String(r.payload)), request: id } };
-    const o: any = await studio.exec(a, { store, now: 1_800_000_000 } as any);
+    return { project: String(r.project), squad: null, member: null, subject: `req:${id}`, kind, episode: `req:${id}`, payload: { ...JSON.parse(String(r.payload)), request: id } };
+  };
+  const result = (id: number) => JSON.parse(String((store.db.query("SELECT result FROM requests WHERE id = ?").get(id) as Row).result));
+  // The loop's squad-start fulfiller on one request: the request's result {ok, topic, named_by, …} or {ok:false, error}.
+  const fulfil = async (id: number) => {
+    const o: any = await squadStart.exec(action(id, "squad-start"), { store, now: 1_800_000_000, act: { orca: { run: async () => ({ code: 1, out: "", err: "" }) } } } as any);
+    expect(o.done).toBe(true);
+    return result(id);
+  };
+  // The studio fulfiller (a start filed before the deploy): the request file's line.
+  const fulfilStudio = async (id: number) => {
+    const o: any = await studio.exec(action(id, "studio"), { store, now: 1_800_000_000 } as any);
     expect(o.done).toBe(true);
     return readFileSync(String(o.result), "utf8");
-  };
-  // spawn-squad.sh with the arguments after `/ds-start-squad `, as the Studio would pass them.
-  const spawn = async (args: string[]) => {
-    const p = Bun.spawn([join(ROOT, "bin/commands/spawn-squad.sh"), ...args], { env: { ...process.env, DS_STATE_ROOT: root, DS_NOW: "1800000000" }, stdout: "pipe", stderr: "pipe" });
-    const [out, err] = [await new Response(p.stdout).text(), await new Response(p.stderr).text()];
-    expect({ code: await p.exited, err }).toEqual({ code: 0, err: "" }); void out;
   };
   // chat-image-upload U4: an image for the Start squad dialog (topic _start, no member).
   const upload = async (bytes: Uint8Array) => {
@@ -46,9 +56,8 @@ async function rig() {
     return { status: r.status, body: await r.json() as any };
   };
   const wish = (topic: string) => store.db.query("SELECT want, want_payload FROM squads WHERE project = 'p' AND topic = ?").get(topic) as Row | null;
-  return { root, store, post, fulfil, spawn, wish, upload };
+  return { root, store, post, fulfil, fulfilStudio, wish, upload };
 }
-const argsOf = (line: string) => line.trim().replace(/^board: the operator asks you to run: \/ds-start-squad /, "").split(" ");
 
 // 10 KB of many lines: blank lines, tabs, bullets, paths, shell-special characters and non-ASCII text.
 const LINE = "- fix /home/x/y.ts: 'single' \"double\" `tick` $HOME $(rm) \\n \\\\ é ü 日本語 ✓\n\n\t\tindented\n";
@@ -58,27 +67,21 @@ test("a 10 KB multi-line brief with a slug reaches the squad wish byte for byte"
   const f = await rig();
   const r = await f.post({ project: "p", action: "start", text: BRIEF, slug: "my-topic", type: "feature", autonomy: "lfg", start: "plan" });
   expect(r.status).toBe(202);
-  const line = await f.fulfil(r.body.id);
-  expect(line.trimEnd().split("\n")).toHaveLength(1); // one line for watch.sh
-  expect(line).not.toContain("fix /home"); // the brief itself is not in the line
-  expect(argsOf(line).slice(0, 8)).toEqual(["--repo", "p", "--topic", "my-topic", "--type", "feature", "--autonomy", "lfg"]);
-  await f.spawn(argsOf(line));
+  expect(await f.fulfil(r.body.id)).toMatchObject({ ok: true, topic: "my-topic", named_by: "operator" });
   const w = f.wish("my-topic")!;
   expect(w.want).toBe("running");
-  const framing = JSON.parse(String(w.want_payload)).framing as string;
-  expect(Buffer.from(framing).equals(Buffer.from(BRIEF))).toBe(true);
-  expect(JSON.parse(String(w.want_payload)).start).toBe("plan");
+  const p = JSON.parse(String(w.want_payload));
+  expect(Buffer.from(p.framing as string).equals(Buffer.from(BRIEF))).toBe(true);
+  expect(p).toMatchObject({ type: "feature", autonomy: "lfg", start: "plan" });
 });
 
-test("no slug: the line has no --topic; the Studio's topic gets the same bytes", async () => {
+test("no slug: the squad takes a name from the brief; the wish gets the same bytes", async () => {
   const f = await rig();
   const r = await f.post({ project: "p", action: "start", text: BRIEF });
   expect(r.status).toBe(202);
-  const line = await f.fulfil(r.body.id);
-  expect(line).not.toContain("--topic");
-  const args = argsOf(line);
-  await f.spawn([...args.slice(0, 2), "--topic", "derived-slug", ...args.slice(2)]);
-  const framing = JSON.parse(String(f.wish("derived-slug")!.want_payload)).framing as string;
+  const res = await f.fulfil(r.body.id);
+  expect(res).toMatchObject({ ok: true, topic: "fix-home-x", named_by: "fallback" });
+  const framing = JSON.parse(String(f.wish("fix-home-x")!.want_payload)).framing as string;
   expect(Buffer.from(framing).equals(Buffer.from(BRIEF))).toBe(true);
 });
 
@@ -86,7 +89,7 @@ test("a CRLF brief arrives as LF", async () => {
   const f = await rig();
   const r = await f.post({ project: "p", action: "start", text: "a\r\nb\rc\n", slug: "crlf" });
   expect(r.status).toBe(202);
-  await f.spawn(argsOf(await f.fulfil(r.body.id)));
+  await f.fulfil(r.body.id);
   expect(JSON.parse(String(f.wish("crlf")!.want_payload)).framing).toBe("a\nb\nc\n");
 });
 
@@ -113,11 +116,11 @@ test("every refusal in the contract says why and files nothing", async () => {
     expect({ name, status: r.status }).toEqual({ name, status });
     expect(String(r.body.error)).toContain(msg);
   }
-  expect((f.store.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'").get() as Row).n).toBe(0);
-  // auto and testing without start are fine
+  expect((f.store.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'squad-start'").get() as Row).n).toBe(0);
+  // auto and testing without start are fine (each its own brief: the same brief while one is open is 409)
   expect((await f.post({ ...ok, start: "auto" })).status).toBe(202);
-  expect((await f.post({ ...ok, start: "fix" })).status).toBe(202);
-  expect((await f.post({ ...ok, type: "testing", start: "auto" })).status).toBe(202);
+  expect((await f.post({ ...ok, text: "do it 2", start: "fix" })).status).toBe(202);
+  expect((await f.post({ ...ok, text: "do it 3", type: "testing", start: "auto" })).status).toBe(202);
 });
 
 test("a 32 KiB brief made mostly of newlines is accepted, not 413", async () => {
@@ -125,14 +128,14 @@ test("a 32 KiB brief made mostly of newlines is accepted, not 413", async () => 
   const text = "\n".repeat(32 * 1024 - 1) + "x";
   const r = await f.post({ project: "p", action: "start", text, slug: "newlines" });
   expect(r.status).toBe(202);
-  await f.spawn(argsOf(await f.fulfil(r.body.id)));
+  await f.fulfil(r.body.id);
   expect(JSON.parse(String(f.wish("newlines")!.want_payload)).framing).toBe(text);
 });
 
 test("an old-shape start (no framing) still writes its one line; the other actions are untouched", async () => {
   const f = await rig();
   const row = f.store.requestAny("studio", { action: "start", topic: null, line: "board: the operator asks you to run: /ds-start-squad fix it" }, { project: "p", by: "board" }).row;
-  expect(await f.fulfil(Number(row.id))).toBe("board: the operator asks you to run: /ds-start-squad fix it\n");
+  expect(await f.fulfilStudio(Number(row.id))).toBe("board: the operator asks you to run: /ds-start-squad fix it\n");
   expect(existsSync(join(f.root, "p", "framings"))).toBe(false);
 });
 
@@ -168,16 +171,26 @@ test("a start with two images: the brief ends with their copies' paths, 0600, an
   expect(readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8")).toBe(brief);
 });
 
-test("an image gone before the start ran gets its own line; a brief ending in a newline gets one blank line", async () => {
+test("an image gone before the start ran fails the start, naming it; nothing is wished", async () => {
   const f = await rig();
   const a = await f.upload(png("three")), b = await f.upload(png("four"));
   const [na, nb] = [a.body.id as string, b.body.id as string];
-  const r = await f.post({ project: "p", action: "start", text: "brief\n", files: [na, nb] });
+  const r = await f.post({ project: "p", action: "start", text: "brief\n", files: [na, nb], slug: "gone-img" });
   expect(r.status).toBe(202);
   unlinkSync(join(f.root, "p", "chat-files", "_start", nb));
-  await f.fulfil(r.body.id);
-  const dir = join(f.root, "p", "framings", `board-start-${r.body.id}`);
-  expect(readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8"))
+  expect(await f.fulfil(r.body.id)).toEqual({ ok: false, error: `image ${nb} is gone — attach it again` });
+  expect(f.wish("gone-img")).toBeNull();
+});
+
+test("a studio start filed before the deploy: a gone image gets its own line; a brief ending in a newline gets one blank line", async () => {
+  const f = await rig();
+  const a = await f.upload(png("six")), b = await f.upload(png("seven"));
+  const [na, nb] = [a.body.id as string, b.body.id as string];
+  const row = f.store.requestAny("studio", { action: "start", topic: null, line: "board: the operator asks you to run: /ds-start-squad --repo p", framing: "brief\n", files: [na, nb] }, { project: "p", by: "board" }).row;
+  unlinkSync(join(f.root, "p", "chat-files", "_start", nb));
+  expect(await f.fulfilStudio(Number(row.id))).toContain(`--framing-file ${join(f.root, "p", "framings", `board-start-${row.id}.md`)}`);
+  const dir = join(f.root, "p", "framings", `board-start-${row.id}`);
+  expect(readFileSync(join(f.root, "p", "framings", `board-start-${row.id}.md`), "utf8"))
     .toBe(`brief\n${SECTION}- ${join(dir, na)}\n- ${nb} (removed before the squad started)\n`);
   expect(existsSync(join(dir, nb))).toBe(false);
 });
@@ -199,7 +212,7 @@ test("a start's images: nine, a bad name or a missing one is refused and files n
     expect({ name, status: r.status }).toEqual({ name, status });
     expect(String(r.body.error)).toContain(msg);
   }
-  expect((f.store.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'studio'").get() as Row).n).toBe(0);
+  expect((f.store.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'squad-start'").get() as Row).n).toBe(0);
   const r = await f.post({ ...ok, files: [] });
   expect(r.status).toBe(202);
   expect(JSON.parse(String((f.store.db.query("SELECT payload FROM requests WHERE id = ?").get(r.body.id) as Row).payload))).not.toHaveProperty("files");
@@ -220,4 +233,17 @@ test("a start naming another backend than the project's default_backend is refus
   expect(ok.status).toBe(202);
   const none = await f.post({ project: "p", action: "start", text: "go again" });
   expect(none.status).toBe(202);
+});
+
+// board-actions-as-wishes U6: a second Start with the same brief while one is open, and a taken slug, are 409s.
+test("the same brief twice while the first is open, or a taken slug, is 409 and files nothing", async () => {
+  const f = await rig();
+  expect((await f.post({ project: "p", action: "start", text: "same brief" })).status).toBe(202);
+  const twice = await f.post({ project: "p", action: "start", text: "same brief", slug: "other-name" });
+  expect([twice.status, twice.body.error]).toEqual([409, "already starting a squad with this brief"]);
+  f.store.want("squad", "p/taken", "running", { payload: { repo: "p" }, by: "test" });
+  const taken = await f.post({ project: "p", action: "start", text: "new brief", slug: "taken" });
+  expect(taken.status).toBe(409);
+  expect(taken.body.error).toContain("squad taken already exists in p");
+  expect((f.store.db.query("SELECT COUNT(*) AS n FROM requests WHERE kind = 'squad-start'").get() as Row).n).toBe(1);
 });

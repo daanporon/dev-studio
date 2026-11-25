@@ -5,9 +5,9 @@ import { dsLabel, dsLoopArgs, readJson, settingsAt, stateRoot, writeErr } from "
 import { dsExec, waitArgs } from "../lib/operator";
 import { readGet, readRoster } from "../loop/settings/settings";
 import { openReadOnly, dbPath } from "../loop/core/store";
-import { chooseSquadBackend } from "../backend/registry";
 import { noLaunchLine } from "../backend/launch-lines";
 import { whoAmI } from "../loop/core/whoami.ts";
+import { squadWish } from "../loop/squad/squad-wish.ts";
 
 export const help = `--repo <selector> --topic <slug> [--type t] [--autonomy a] [--host h] [--backend b] [--framing f | --framing-file path] [--start s] — write a squad's running wish (spawn-squad.sh)`;
 
@@ -38,37 +38,17 @@ export async function run(raw: string[]): Promise<number> {
   if (topic.startsWith(".") || /[^A-Za-z0-9._-]/.test(topic)) { writeErr("spawn-squad: --topic must be [A-Za-z0-9._-] and not start with '.'\n"); return 2; }
 
   const label = dsLabel(repo);
-  const disp = readJson(join(stateRoot(), label, "dispatcher.json")), home = disp?.home_repo;
-  // U54: the project's Studio backend (dispatcher.json studio_backend, empty meaning orca), once it has a Studio.
-  const studioBackend = disp?.studio_wt ? String(disp.studio_backend ?? "").trim() || "orca" : null;
-  if (typeof home === "string" && home !== "") repo = home;
-
-  // The effective roster (U267, settings.ts readRoster): the project's rows override their roles, the
-  // default fills the rest.
-  const roster = readRoster(label, settingsAt());
-  if (roster.size > 0 && !roster.has("lead")) {
-    writeErr("spawn-squad: roster (conventions/roles.conf) has no 'lead' role\n"); return 1;
-  }
-  // The backend and worktree tool (U9, bin/backend/registry.ts): written once, with the first wish. A squad
-  // that has started and is not closed keeps its own; asking it for another one is refused.
-  const placed = squadBackend(label, topic);
-  let on: Record<string, string> = {};
-  if (placed) {
-    if (backend !== "" && backend !== placed) { writeErr(`spawn-squad: squad ${topic} runs on ${placed}; a squad's backend is written once at spawn\n`); return 1; }
-  } else {
-    const word = (key: string) => String(readGet(label, "limits.conf", key, settingsAt()).value ?? "").trim().split(/\s+/)[0];
-    const c = chooseSquadBackend({ flag: backend, projectBackend: word("default_backend"), providerSetting: word("worktree_provider"), studioBackend, project: label });
-    if (!c.ok) { writeErr(`spawn-squad: ${c.error}\n`); return 1; }
-    on = { backend: c.backend, backend_host: c.host, worktree_provider: c.provider };
-    // U11: on a contract backend only an agent with a driver launch line can start (bin/loop/drivers/contract.ts).
-    const missing = c.backend === "orca" ? [] : noLaunchLine(roster);
-    if (missing.length) { writeErr(`spawn-squad: backend ${c.backend} can start only claude; the roster names ${missing.join(", ")} (conventions/roles.conf)\n`); return 1; }
-  }
-  const keep = (o: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== ""));
-  const fill = keep({ repo, type, autonomy, host, framing, ...on });
-  const from = whoAmI().handle ?? "";
-  const payload = keep({ repo, type, autonomy, host, framing, start, from, ...on });
-  return dsExec(["want", "squad", `${label}/${topic}`, "running", "--payload", JSON.stringify(payload), "--fill", JSON.stringify(fill), "--by", "spawn-squad", ...waitArgs(la.wait)]);
+  const word = (key: string) => String(readGet(label, "limits.conf", key, settingsAt()).value ?? "").trim().split(/\s+/)[0];
+  // board-actions-as-wishes U6: the wish itself is squad-wish.ts's, shared with the loop's board Start.
+  const w = squadWish({
+    label, topic, repo, type, autonomy, host, backend, framing, start, from: whoAmI().handle ?? "",
+    disp: readJson(join(stateRoot(), label, "dispatcher.json")),
+    // The effective roster (U267, settings.ts readRoster): the project's rows override their roles, the default fills the rest.
+    roster: readRoster(label, settingsAt()),
+    placed: squadBackend(label, topic), defaultBackend: word("default_backend"), worktreeProvider: word("worktree_provider"),
+  });
+  if ("error" in w) { writeErr(`spawn-squad: ${w.error}\n`); return 1; }
+  return dsExec(["want", "squad", `${w.label}/${w.topic}`, "running", "--payload", JSON.stringify(w.payload), "--fill", JSON.stringify(w.fill), "--by", "spawn-squad", ...waitArgs(la.wait)]);
 }
 
 /** The backend of a squad that has started (its doc is written) and is not closed; null for a new one. */
