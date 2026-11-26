@@ -54,13 +54,13 @@ eq "a plan ask prints the five lines"        "$(printf '%s' "$out" | grep -c -E 
 
 # --doc: stored relative to the real state root, also through a symlinked root.
 ln -s "$SR" "$TMP/link"
-"$A" "$S" plan-x thinker true --title "t" --question q --option a b --option c d --recommend 1 --why w --doc "$TMP/link/proj/squads/topic-x-plan.md" >/dev/null 2>&1
+"$A" "$S" plan-x thinker true --title "t" --question q --option alpha b --option gamma d --recommend 1 --why w --doc "$TMP/link/proj/squads/topic-x-plan.md" >/dev/null 2>&1
 eq "--doc through a symlinked root is stored the same" "$(jq -r '.waiting_on_you[0].doc_path' "$S")" "proj/squads/topic-x-plan.md"
-"$A" "$TMP/link/proj/squads/topic.json" plan-x thinker true --title "t" --question q --option a b --option c d --recommend 1 --why w >/dev/null 2>&1
+"$A" "$TMP/link/proj/squads/topic.json" plan-x thinker true --title "t" --question q --option alpha b --option gamma d --recommend 1 --why w >/dev/null 2>&1
 eq "a symlinked state path resolves the same" "$(jq -r '.waiting_on_you[0].doc_path' "$S")" "proj/squads/topic-x-plan.md"
 printf 'x' > "$TMP/outside.md"; printf 'x' > "$SR/proj/archive/old.md"; printf 'x' > "$SQD/notes.txt"
 SB="$SQD/b.json"; printf '{"run_id":"run_1","status":"running","waiting_on_you":[]}' > "$SB"
-bad_doc() { "$A" "$SB" q9 thinker true --title t --question q --option a b --option c d --recommend 1 --why w --doc "$1" >/dev/null 2>&1; echo "$?:$(jq -r '.waiting_on_you | length' "$SB"):$(jq -r .status "$SB")"; }
+bad_doc() { "$A" "$SB" q9 thinker true --title t --question q --option alpha b --option gamma d --recommend 1 --why w --doc "$1" >/dev/null 2>&1; echo "$?:$(jq -r '.waiting_on_you | length' "$SB"):$(jq -r .status "$SB")"; }
 eq "a doc outside squads/ is refused, nothing written" "$(bad_doc "$TMP/outside.md")" "1:0:running"
 eq "a missing doc is refused"                "$(bad_doc "$SQD/none.md")" "1:0:running"
 eq "a non-.md doc is refused"                "$(bad_doc "$SQD/notes.txt")" "1:0:running"
@@ -83,7 +83,7 @@ out="$("$A" "$SC" plan-part thinker true "Approve?" "approve" "why" 2>&1)"; rc=$
 eq "plan missing labels is refused"          "$rc" "1"
 eq "..naming a missing label"                "$(printf '%s' "$out" | grep -c 'Cost and time')" "1"
 # A non-plan question with --doc and no section passes.
-"$A" "$SC" fu-1 thinker false --title t --question q --option a b --option c d --recommend 1 --why w --doc "$SQD/c-bare-plan.md" >/dev/null 2>&1
+"$A" "$SC" fu-1 thinker false --title t --question q --option alpha b --option gamma d --recommend 1 --why w --doc "$SQD/c-bare-plan.md" >/dev/null 2>&1
 eq "a non-plan question with --doc and no section passes" "$(jq -r '.waiting_on_you[0].doc_path' "$SC")" "proj/squads/c-bare-plan.md"
 
 # R5/R6: a plan already approved needs a complete revision note, newer than the saved approved copy's.
@@ -213,20 +213,20 @@ SU="$TMP/unit.json"; printf '{"run_id":"run_1","status":"running","units":[{"slu
 eq "a Lead question can name its blocked unit" "$?" "0"
 eq "the board entry keeps the unit link" "$(jq -r '.waiting_on_you[0].unit' "$SU")" "u29"
 before="$(jq -c . "$SU")"
-"$A" "$SU" typo lead true --unit missing --title T --question Q --option A a --option B b --recommend 1 --why w >/dev/null 2>&1
+"$A" "$SU" typo lead true --unit missing --title T --question Q --option Alpha a --option Beta b --recommend 1 --why w >/dev/null 2>&1
 eq "an unknown unit is refused" "$?" "2"
 eq "an unknown unit changes nothing" "$(jq -c . "$SU")" "$before"
-out="$("$A" "$SU" typo lead true --unit U2 --title T --question Q --option A a --option B b --recommend 1 --why w 2>&1)"
+out="$("$A" "$SU" typo lead true --unit U2 --title T --question Q --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"
 eq "an unknown unit names itself and lists the slugs" "$(printf '%s' "$out" | grep -c "^ask-operator: unknown unit 'U2' in $SU — this squad's units: u29$")" "1"
 eq "... with no usage line" "$(printf '%s' "$out" | grep -c 'usage:')" "0"
 SU2="$TMP/unit2.json"; printf '{"run_id":"run_1","status":"running","units":[{"slug":"u1-a","plan_unit":"U1","status":"dispatched","pr":"31"},{"slug":"u2-b","plan_unit":"U2","status":"planned"}],"waiting_on_you":[]}' > "$SU2"
-out="$("$A" "$SU2" typo lead true --unit nosuch --title "About #31" --question Q --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+out="$("$A" "$SU2" typo lead true --unit nosuch --title "About #31" --question Q --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"; rc=$?
 eq "an unknown unit plus a PR mention reports the unit" "$rc" "2"
 eq "... listing both units with their plan ids" "$(printf '%s' "$out" | grep -c "this squad's units: u1-a (U1), u2-b (U2)$")" "1"
 eq "... and no PR refusal" "$(printf '%s' "$out" | grep -c 'loop asks')" "0"
 eq "... nothing written" "$(jq '.waiting_on_you | length' "$SU2")" "0"
 SU0="$TMP/unit0.json"; printf '{"run_id":"run_1","status":"running","waiting_on_you":[]}' > "$SU0"
-out="$("$A" "$SU0" typo lead true --unit u1 --title T --question Q --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+out="$("$A" "$SU0" typo lead true --unit u1 --title T --question Q --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"; rc=$?
 eq "a squad with no units says so" "$rc" "2"
 eq "... and what to do" "$(printf '%s' "$out" | grep -c 'has no units yet — register the plan first, or leave out --unit$')" "1"
 out="$("$A" "$S6" old lead false "Q?" "a" "b" 2>&1)"
@@ -234,18 +234,18 @@ eq "an old positional call is nudged"        "$(printf '%s' "$out" | grep -c 'ol
 
 S7="$TMP/sq7.json"; printf '%s' "$EMPTY" > "$S7"
 ok() { "$A" "$S7" x lead true "$@" >/dev/null 2>&1; echo $?; }
-O2=(--option A "a" --option B "b")
+O2=(--option Alpha "a" --option Beta "b")
 eq "no title -> 2"          "$(ok --question Q "${O2[@]}" --recommend 1 --why w)" "2"
 eq "long title -> 2"        "$(ok --title "$(printf 'x%.0s' {1..81})" --question Q "${O2[@]}" --recommend 1 --why w)" "2"
 eq "no question -> 2"       "$(ok --title T "${O2[@]}" --recommend 1 --why w)" "2"
-eq "one option -> 2"        "$(ok --title T --question Q --option A a --recommend 1 --why w)" "2"
-eq "option without what -> 2" "$(ok --title T --question Q --option A "" --option B b --recommend 1 --why w)" "2"
+eq "one option -> 2"        "$(ok --title T --question Q --option Alpha a --recommend 1 --why w)" "2"
+eq "option without what -> 2" "$(ok --title T --question Q --option Alpha "" --option Beta b --recommend 1 --why w)" "2"
 eq "recommend out of range -> 2" "$(ok --title T --question Q "${O2[@]}" --recommend 3 --why w)" "2"
-eq "recommend by label works" "$(ok --title T --question Q "${O2[@]}" --recommend B --why w)" "0"
-eq "recommend unknown label -> 2" "$(ok --title T --question Q "${O2[@]}" --recommend C --why w)" "2"
+eq "recommend by label works" "$(ok --title T --question Q "${O2[@]}" --recommend Beta --why w)" "0"
+eq "recommend unknown label -> 2" "$(ok --title T --question Q "${O2[@]}" --recommend Gamma --why w)" "2"
 eq "no why -> 2"            "$(ok --title T --question Q "${O2[@]}" --recommend 1)" "2"
 eq "unknown flag -> 2"      "$(ok --title T --question Q "${O2[@]}" --recommend 1 --why w --nope)" "2"
-eq "label with | -> 2"      "$(ok --title T --question Q --option "A|B" a --option C c --recommend 1 --why w)" "2"
+eq "label with | -> 2"      "$(ok --title T --question Q --option "Alpha|Beta" a --option Gamma c --recommend 1 --why w)" "2"
 eq "rejected calls wrote only the valid one" "$(jq '.waiting_on_you | length' "$S7")" "1"
 
 # The picker's --picker flag (bin/hooks/picker-hook.sh): stores source + tool_use_id +
@@ -261,13 +261,13 @@ eq "--picker stores tool_use_id"            "$(jq -r '.waiting_on_you[0].tool_us
 eq "--picker stores transcript_path"       "$(jq -r '.waiting_on_you[0].transcript_path' "$S8")" "/tmp/ses.jsonl"
 eq "--picker stores picker_answerable"     "$(jq -r '.waiting_on_you[0].picker_answerable' "$S8")" "true"
 eq "--picker keeps the receipt"             "$(printf '%s' "$out" | grep -c 'ON BOARD: picker-34567890')" "1"
-"$A" "$S8" m2 thinker true --title "T?" --question "Q" --option A a --option B b --recommend 1 --why w \
+"$A" "$S8" m2 thinker true --title "T?" --question "Q" --option Alpha a --option Beta b --recommend 1 --why w \
   --picker toolu_x /tmp/x.jsonl false >/dev/null 2>&1
 eq "--picker false stays boolean false"     "$(jq -r '.waiting_on_you[1].picker_answerable' "$S8")" "false"
 S9="$TMP/sq9.json"; printf '%s' "$EMPTY" > "$S9"
-"$A" "$S9" x lead true --title T --question Q --option A a --option B b --recommend 1 --why w \
+"$A" "$S9" x lead true --title T --question Q --option Alpha a --option Beta b --recommend 1 --why w \
   --picker toolu_x /tmp/x.jsonl maybe >/dev/null 2>&1; eq "--picker bad answerable -> 2" "$?" "2"
-"$A" "$S9" x lead true --title T --question Q --option A a --option B b --recommend 1 --why w \
+"$A" "$S9" x lead true --title T --question Q --option Alpha a --option Beta b --recommend 1 --why w \
   --picker toolu_x >/dev/null 2>&1; eq "--picker missing values -> 2" "$?" "2"
 eq "--picker rejections write nothing"      "$(jq '.waiting_on_you | length' "$S9")" "0"
 eq "no --picker means no source field"      "$(jq -r '.waiting_on_you[0] | has("source")' "$S6")" "false"
@@ -286,7 +286,7 @@ printf '{"run_id":"run_1","status":"running","waiting_on_you":[]}' > "$SP"
   s.upsert("squads", { project: "proj", topic: "sq" }, { repo: "path:/x", observed_at: 1, updated_at: 1 });
   s.upsert("config", { project: "proj", file: "github", key: "repo:path:/x" }, { value: "o/r", observed_at: 1 });
   s.close();') || echo "  FAIL: seeding loop.db" >&2
-PA() { "$A" "$SP" "$@" --title T --question Q --option A a --option B b --recommend 1 --why w; }
+PA() { "$A" "$SP" "$@" --title T --question Q --option Alpha a --option Beta b --recommend 1 --why w; }
 out="$(PA pq1 lead true --pr 1 2>&1)"; rc=$?
 eq "--pr from a Lead is refused (the loop asks)" "$rc" "1"
 eq "... with the loop message"                "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; #')" "1"
@@ -327,12 +327,12 @@ eq "... with its reasons"                     "$(printf '%s' "$out" | grep -c 'P
   pr(21196, { verdict: "waiting", reasons: JSON.stringify("required:signoff") });
   pr(21197, { verdict: "waiting", reasons: JSON.stringify("required:signoff") });
   s.close();') || echo "  FAIL: seeding loop.db (U86)" >&2
-Q86() { "$A" "$SP" "${@/lead/thinker}" --option A a --option B b --recommend 1 --why w; }
+Q86() { "$A" "$SP" "${@/lead/thinker}" --option Alpha a --option Beta b --recommend 1 --why w; }
 out="$(Q86 draft-q lead true --title "Approve #21223" --question "Please approve #21223." 2>&1)"; rc=$?
 eq "a title naming a draft PR is refused with no --pr" "$rc" "1"
 eq "... naming the PR and reason"          "$(printf '%s' "$out" | grep -c 'PR #21223 is not ready (draft): send its Builder to fix it first')" "1"
 eq "... and writes nothing"                "$(jq '[.waiting_on_you[] | select(.id=="draft-q")] | length' "$SP")" "0"
-out="$("$A" "$SP" lead-q lead true --title "Approve #21223" --question "Please approve #21223." --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+out="$("$A" "$SP" lead-q lead true --title "Approve #21223" --question "Please approve #21223." --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"; rc=$?
 eq "a Lead question merely mentioning a non-unit PR enqueues" "$rc" "0"
 eq "... with no pr stored (not a loop PR question)" "$(jq -r '.waiting_on_you[] | select(.id=="lead-q") | has("pr")' "$SP")" "false"
 (cd "$ROOT" && DS_STATE_ROOT="$R" bun -e '
@@ -351,10 +351,10 @@ eq "... and write nothing"                 "$(jq '[.waiting_on_you[] | select(.i
 out="$(Q86 split-q lead true --title "About #20350" --question "And what of #20473?" 2>&1)"; rc=$?
 eq "one PR in the title and one in the question are refused too" "$rc" "2"
 SPU="$TMP/squ.json"; printf '{"run_id":"run_1","status":"running","waiting_on_you":[],"units":[{"slug":"u1","status":"dispatched","pr":"21223"}]}' > "$SPU"
-out="$("$A" "$SPU" unit-q lead true --title "Approve #21223" --question "Please approve #21223." --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+out="$("$A" "$SPU" unit-q lead true --title "Approve #21223" --question "Please approve #21223." --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"; rc=$?
 eq "a Lead naming its unit PR is refused (the loop asks)" "$rc" "1"
 eq "... with the loop message"             "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; #')" "1"
-out="$("$A" "$SPU" unit2-q builder-u1 true --title "T" --question "Approve #21223 and #13?" --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+out="$("$A" "$SPU" unit2-q builder-u1 true --title "T" --question "Approve #21223 and #13?" --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"; rc=$?
 eq "a Builder naming its unit PR plus another is refused" "$rc" "1"
 eq "... with the loop message"             "$(printf '%s' "$out" | grep -c 'the loop asks PR questions; #')" "1"
 # the refusal names its poster: (a) an open loop question, (b) only human gates, (c) not ready, (d) unread.
@@ -368,7 +368,7 @@ eq "... with the loop message"             "$(printf '%s' "$out" | grep -c 'the 
   s.close();') || echo "  FAIL: seeding loop.db (refusals)" >&2
 SPR="$R/proj/squads/sq-refusals.json"
 printf '%s' '{"run_id":"run_1","status":"running","units":[{"slug":"u1-a","status":"dispatched","pr":"51"},{"slug":"u2-b","status":"dispatched","pr":"52"},{"slug":"u3-c","status":"dispatched","pr":"53"},{"slug":"u4-d","status":"dispatched","pr":"54"}],"waiting_on_you":[{"id":"loop-pr-53","asker":"loop","pr":"53","blocking":false,"question":"q"}]}' > "$SPR"
-rf() { out="$("$A" "$SPR" "$1" "$2" true --title "About #$3" --question Q --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?; }
+rf() { out="$("$A" "$SPR" "$1" "$2" true --title "About #$3" --question Q --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"; rc=$?; }
 cnt() { printf '%s' "$out" | grep -c -- "$1"; }
 nw() { jq '.waiting_on_you | length' "$SPR"; }
 rf r1 lead 53
@@ -388,12 +388,12 @@ eq "(c) ... fix it in its unit, Lead via send-role" "$(cnt 'fix it in your unit,
 rf r5 lead 54
 eq "(d) unread PR state, Lead: exit 1" "$rc" "1"
 eq "(d) ... says the loop has not read it, with the Lead step" "$(cnt '#54 is in a state the loop has not read yet')" "1"
-out="$("$A" "$SPR" r6 lead true --pr 77 --title T --question Q --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+out="$("$A" "$SPR" r6 lead true --pr 77 --title T --question Q --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"; rc=$?
 eq "an explicit --pr that is no unit's: exit 1 with the general rule" "$rc" "1"
 eq "... starts with the loop rule" "$(cnt '^ask-operator: the loop asks PR questions; #77 is not one of this squad')" "1"
 eq "every refusal writes nothing" "$(nw)" "1"
 eq "... nor changes the status" "$(jq -r .status "$SPR")" "running"
-out="$("$A" "$SP" two-mention lead true --title "T" --question "Close #12 and #13?" --option A a --option B b --recommend 1 --why w 2>&1)"; rc=$?
+out="$("$A" "$SP" two-mention lead true --title "T" --question "Close #12 and #13?" --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"; rc=$?
 eq "a Lead mentioning two non-unit numbers enqueues" "$rc" "0"
 Q86 issu-q lead true --title "T" --question "PRD-18424 for U6?" >/dev/null 2>&1
 eq "an issue key and a unit enqueue without a PR check" "$?" "0"
@@ -417,7 +417,7 @@ eq "... while unrelated entries stay"      "$(jq '[.waiting_on_you[] | select(.i
 
 # A mirrored picker question naming a PR is not refused (the picker is already open).
 S10="$TMP/sq10.json"; printf '%s' "$EMPTY" > "$S10"
-"$A" "$S10" picker-1 builder-u1 true --title "Approve #21223" --question "Approve #21223?" --option A a --option B b --recommend 1 --why w --picker toolu_x /tmp/x.jsonl true >/dev/null 2>&1
+"$A" "$S10" picker-1 builder-u1 true --title "Approve #21223" --question "Approve #21223?" --option Alpha a --option Beta b --recommend 1 --why w --picker toolu_x /tmp/x.jsonl true >/dev/null 2>&1
 eq "a mirrored picker question naming a PR enqueues" "$?" "0"
 eq "... with no pr stored"                 "$(jq -r '.waiting_on_you[0] | has("pr")' "$S10")" "false"
 
@@ -428,12 +428,35 @@ mkdir -p "$TMP/obin" "$TMP/owt"; : > "$TMP/olog"
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/olog"; exit 1\n' "$TMP" > "$TMP/obin/orca"; chmod +x "$TMP/obin/orca"
 S11="$TMP/sq11.json"; printf '%s' "$EMPTY" > "$S11"
 out="$(cd "$TMP/owt" && env -u BACKEND PATH="$TMP/obin:$PATH" DS_ORCA_CLI_BIN_DIR="$TMP/obin" DS_BACKEND=tmux DS_WT="$TMP/owt" \
-  "$A" "$S11" off-1 thinker true --title "Ship it" --question "Ship u1?" --option A a --option B b --recommend 1 --why w 2>&1)"
+  "$A" "$S11" off-1 thinker true --title "Ship it" --question "Ship u1?" --option Alpha a --option Beta b --recommend 1 --why w 2>&1)"
 eq "off Orca: asks through the contract adapter"  "$?" "0"
 eq "... is on the board"                   "$(printf '%s' "$out" | grep -c '^ON BOARD: off-1 (blocking)')" "1"
 eq "... and pinged (nothing to ping)"      "$(printf '%s' "$out" | grep -c 'NOT pinged')" "0"
 eq "... with its local:: worktree"         "$(jq -r '.waiting_on_you[0].card_wt' "$S11")" "local::$TMP/owt"
 eq "... and no Orca call"                  "$(wc -c < "$TMP/olog" | tr -d ' ')" "0"
+
+# Markdown questions: an option named with one letter or digit is refused, except a picker mirror
+# (its labels are the terminal picker's); a long one-line question warns; newlines are stored.
+SW="$TMP/sqw.json"; printf '%s' "$EMPTY" > "$SW"
+NAMED=(--option "Keep it" "no change" --option "Raise limit" "one line")
+for bad in A b 2 " C " É; do
+  out="$("$A" "$SW" w1 thinker true --title T --question Q --option "$bad" x --option "Raise limit" y --recommend 2 --why w 2>&1)"; rc=$?
+  eq "one-character label '$bad' -> 2"        "$rc" "2"
+done
+eq "..says to name the option"               "$(printf '%s' "$out" | grep -c 'name the option: `É` says nothing on the card — use 1–3 words')" "1"
+eq "..and writes nothing"                    "$(jq -c . "$SW")" "$EMPTY"
+"$A" "$SW" picker-w thinker true --title T --question Q --option A x --option 2 y --recommend 1 --why w --picker toolu_w /tmp/w.jsonl true >/dev/null 2>&1
+eq "a --picker mirror keeps its labels -> 0" "$?" "0"
+eq "..and is queued with them"               "$(jq -c '.waiting_on_you[] | select(.id=="picker-w") | .options' "$SW")" '["A","2"]'
+LONG="$(printf 'word %.0s' {1..80})"
+err="$("$A" "$SW" w-long thinker true --title T --question "$LONG" "${NAMED[@]}" --recommend 1 --why w 2>&1 >/dev/null)"; rc=$?
+eq "a long one-line question is queued"      "$rc:$(jq '[.waiting_on_you[] | select(.id=="w-long")] | length' "$SW")" "0:1"
+eq "..with the markdown warning"             "$(printf '%s' "$err" | grep -c 'write it as markdown: a plain lead, bullets, the ask last (conventions/escalation.md)')" "1"
+MD="$(printf 'Start: fix — cause: x\n\nThe export fails.\n\n- it times out\n- %s\n\n**Raise the limit?**' "$LONG")"
+err="$("$A" "$SW" w-md thinker true --title T --question "$MD" "${NAMED[@]}" --recommend 1 --why w 2>&1 >/dev/null)"; rc=$?
+eq "named labels are accepted"               "$rc" "0"
+eq "a long multi-line question does not warn" "$(printf '%s' "$err" | grep -c 'write it as markdown')" "0"
+eq "newlines reach the state file intact"    "$(jq -r '.waiting_on_you[] | select(.id=="w-md") | .question' "$SW")" "$MD"
 
 echo "ask-operator: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

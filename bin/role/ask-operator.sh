@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # ask-operator.sh — the ONE way a squad role raises a question to the operator.
 #
-#   ask-operator.sh <state-file> <id> <asker> <blocking:true|false> --title "<~8 words>" --question "<2-3 sentences>" \
+#   ask-operator.sh <state-file> <id> <asker> <blocking:true|false> --title "<~8 words>" --question "<markdown>" \
 #     --option "<label>" "<what happens>" --option … --recommend <n|label> --why "<one line>"
 #
 # The title is the board's one-line row; the board's overlay shows the question, each option with
 # what happens, and the recommended one pre-selected (plus a free-text answer).
+# --question is markdown the board renders: a `Start:` line if any, one plain sentence, 2–5 context
+# bullets, then the ask in bold, a blank line between blocks (conventions/escalation.md). Over 300
+# characters with no line break prints a warning. An option label of one letter or digit is refused
+# (exit 2), except with --picker, whose labels mirror a live terminal picker.
 # Old form, still accepted (agents on older prompts): … "<question>" "<suggestion>" "<why>" ["A|B|C"].
 # Every question carries the asker's suggested answer and why — required, so the operator can
 # accept in one step (/ds-q) instead of working it out from scratch.
