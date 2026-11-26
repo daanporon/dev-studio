@@ -61,12 +61,16 @@ const NAME = `(?<![\\w.-])(?=[\\w.-]*?${KEY})([\\w.-]+)`;
 // `NAME=value` and `--name=value`; `name: value`, `"name": "value"` (JSON); `--name value`. With spaces around the
 // sign, a quoted key or a type between (`password = "x"`, `'password' => 'x'`, `apiKey: string = "x"`) only a
 // quoted value counts, so prose and `token == other` stay.
-const TYPE = String.raw`(?:[ \t]*:[ \t]*[A-Za-z_][\w.<>\[\]]*(?:[ \t]*\|[ \t]*[\w.<>\[\]]+)*)?`;
-const SPACED = String.raw`(?:\\*["'])?(?:${TYPE}[ \t]*(?::=|=>|=(?!=))|[ \t]*:)[ \t]*`;
+// A type as an annotation writes it: `str`, `Optional[str]`, `Map<string, string>`, `str | None`.
+const TYPE_NAME = String.raw`[A-Za-z_][\w.]*(?:\[[\w., |\[\]]{0,80}\]|<[\w., |<>\[\]]{0,80}>)?\??`;
+const TYPES = String.raw`${TYPE_NAME}(?:[ \t]*\|[ \t]*${TYPE_NAME})*`;
+const SPACED = String.raw`(?:\\*["'])?(?:(?:[ \t]*:[ \t]*${TYPES})?[ \t]*(?::=|=>|=(?!=))|[ \t]*:)[ \t]*`;
+// In `name: Type = "x"` the word after the colon is the type; the spaced form hides what is assigned.
+const NOT_TYPED = String.raw`(?![ \t]*${TYPES}[ \t]*=(?!=)[ \t]*["'])`;
 const ASSIGNS = [
   new RegExp(`${NAME}(=(?!=))(${VALUE})`, "gi"),
-  new RegExp(`${NAME}(${String.raw`\\*["']?:(?:[ \t]+|(?=\\*["']))`})(${VALUE})`, "gi"),
   new RegExp(`${NAME}(${SPACED})(${QUOTED})`, "gi"),
+  new RegExp(`${NAME}(${String.raw`\\*["']?:(?:[ \t]+|(?=\\*["']))`})${NOT_TYPED}(${VALUE})`, "gi"),
   new RegExp(`(?<![\\w.-])(?=--[\\w-]*?${KEY})(--[\\w-]+)([ \\t]+)(?!-)(${VALUE})`, "gi"),
 ];
 
@@ -93,7 +97,8 @@ export function redact(text: string): string {
   for (const re of USER_FLAGS) {
     out = out.replace(re, (all, flag: string, user, pw) => {
       const literal = flag.endsWith("'"); // the shell expands nothing in single quotes
-      return (!literal && isRef(pw)) || /^\d+:\d+$/.test(user + pw) ? all : `${flag}${user}${hide(pw)}`;
+      // A substitution runs, so it stays on the card.
+      return (!literal && !pw.startsWith("'") && (isRef(pw) || /\$\(|`/.test(pw))) || /^\d+:\d+$/.test(user + pw) ? all : `${flag}${user}${hide(pw)}`;
     });
   }
   for (const re of ASSIGNS) {
