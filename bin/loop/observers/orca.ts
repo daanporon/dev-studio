@@ -392,9 +392,11 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
       const tails: string[] = [];
       // U19: a member the board pressed keys at within KEYS_STALE_S, or one whose chat panel shows its screen
       // (observed_chat source 'screen'), is re-read once its output moved past the last read, at most every SCREEN_EVERY_S,
-      // so the panel's screen view follows a menu as it changes.
+      // so the panel's screen view follows a menu as it changes. So is one whose permission menu is being timed or
+      // carded (episodes permission-screen): an answered one must leave the tail while its command still prints.
       const watched = new Set((store.db.query(`SELECT member AS wt FROM requests WHERE project = ? AND kind = 'keys' AND member IS NOT NULL AND created_at >= ?
-        UNION SELECT wt FROM observed_chat WHERE project = ? AND source = 'screen' AND gone_at IS NULL`).all(project, now - KEYS_STALE_S, project) as Row[]).map((r) => String(r.wt)));
+        UNION SELECT wt FROM observed_chat WHERE project = ? AND source = 'screen' AND gone_at IS NULL
+        UNION SELECT subject FROM episodes WHERE project = ? AND kind = 'permission-screen'`).all(project, now - KEYS_STALE_S, project, project) as Row[]).map((r) => String(r.wt)));
       store.tx(() => {
         for (const w of mine) {
           const path = pathOf(w), d = byWt.get(w.worktreeId), state = workerState(w);
