@@ -215,8 +215,8 @@ function finishMark(arc: Database, label: string, migrations: string[], counts: 
 
 export type AppendResult = { archive: string; counts: Counts; source: Counts; rows: number; added: number };
 
-// Adds to the label's finished archive every row of loop.db it does not hold identically, in one transaction
-// with a second `removed_meta` entry. A row changed since it was copied takes its newer version. No archived log
+// Adds to the label's finished archive every row of loop.db it does not hold identically, in one transaction,
+// with another `removed_meta` entry when it added any. A row changed since it was copied takes its newer version. No archived log
 // row is lost: one whose rowid loop.db gave to another row moves to a free rowid. Other tables, still whole in
 // loop.db, keep what they held except where a row there now has the same key or rowid.
 // `counts` are the archive's totals now, `source` loop.db's rows of the label in the same snapshot.
@@ -254,7 +254,8 @@ export function appendRows(dbPath: string, label: string, archivePath: string): 
         added += strays.length;
         counts[t] = (arc.query(`SELECT COUNT(*) AS n FROM main.${t}`).get() as { n: number }).n;
       }
-      finishMark(arc, label, migrations, counts);
+      // Nothing added: the latest entry still holds.
+      if (added) finishMark(arc, label, migrations, counts);
       return { counts, source, added };
     })();
     arc.run("DETACH DATABASE src");
@@ -302,7 +303,8 @@ export function deleteLogBatch(store: Store, label: string, archivePath: string,
     const ids = (db.query(`SELECT a.rowid AS r FROM arc.${table} AS a CROSS JOIN main.${table} AS s ON s.rowid = a.rowid
       WHERE a.rowid > ?1 AND s.project = ?2 AND ${same} ORDER BY a.rowid LIMIT ?3`).all(after, label, limit) as { r: number }[]).map((x) => x.r);
     if (!ids.length) return { deleted: 0, held_ms: 0, next: null };
-    const del = db.query(`DELETE FROM main.${table} AS s WHERE s.rowid IN (SELECT value FROM json_each(?2)) AND s.project = ?1
+    // `+` keeps the project index out of it: the lock is held for the listed rowids, not for all the label's rows.
+    const del = db.query(`DELETE FROM main.${table} AS s WHERE s.rowid IN (SELECT value FROM json_each(?2)) AND +s.project = ?1
       AND EXISTS (SELECT 1 FROM arc.${table} AS a WHERE a.rowid = s.rowid AND ${same})`);
     const txn = db.transaction(() => del.run(label, JSON.stringify(ids)).changes);
     const r = timed(db, () => txn.immediate());

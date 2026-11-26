@@ -344,6 +344,41 @@ describe("project-rows batched log delete (U6)", () => {
     }
   });
 
+  test("a row changed after the batch picked it, before the lock, is not deleted", () => {
+    const { s, db, arc, src } = logs(3);
+    const c = copyRows(src, "gone", arc);
+    // Another writer, after the batch picked its rowids and before its transaction begins.
+    const meanwhile = (sql: string) => {
+      const real = s.db.transaction.bind(s.db);
+      (s.db as { transaction: unknown }).transaction = (fn: () => unknown) => {
+        (s.db as { transaction: unknown }).transaction = real;
+        const other = new Database(src);
+        try { other.run(sql); } finally { other.close(); }
+        return real(fn);
+      };
+    };
+    for (const [t, col] of [["orca_calls", "state"], ["relayed", "error"], ["events", "kind"]] as const) {
+      meanwhile(`UPDATE ${t} SET ${col} = 'raced' WHERE rowid = (SELECT MIN(rowid) FROM ${t} WHERE project = 'gone')`);
+      expect(deleteLogBatch(s, "gone", arc, t, 100).deleted).toBe(c.counts[t] - 1);
+      expect(count(db, t, `project = 'gone' AND ${col} = 'raced'`)).toBe(1);
+    }
+  });
+
+  test("an archived keyed row whose rowid went to another row moves, and both are kept", () => {
+    const { db, arc, src } = logs(3);
+    const c = copyRows(src, "gone", arc);
+    for (const [t, key] of [["orca_calls", "retry_id"], ["relayed", "msg_id"]] as const) {
+      const top = db.query(`SELECT rowid AS r, ${key} AS k FROM ${t} WHERE project = 'gone' ORDER BY rowid DESC LIMIT 1`).get() as { r: number; k: string };
+      db.run(`UPDATE ${t} SET ${key} = 'other-row' WHERE rowid = ${top.r}`);
+      const a = appendRows(src, "gone", arc);
+      expect(a.added).toBe(1);
+      expect(a.counts[t]).toBe(c.counts[t] + 1);
+      expect(rowsIn(arc, `SELECT ${key} AS k FROM ${t} WHERE ${key} IN ('${top.k}', 'other-row')`)).toHaveLength(2);
+    }
+    expect(appendRows(src, "gone", arc).added).toBe(0);
+    expect(rowsIn(arc, "SELECT counts FROM removed_meta")).toHaveLength(3);   // none for a call that added nothing
+  });
+
   test("another label's archive, a missing one and another table are refused", () => {
     const { s, db, arc, src } = logs(2);
     expect(() => deleteLogBatch(s, "gone", arc, "events", 5)).toThrow("no archive");
@@ -380,13 +415,17 @@ describe.if(!!bench)("project-rows bench", () => {
       const copyMs = Math.round(performance.now() - t0);
       const t1 = performance.now();
       const per = LOG_TABLES.map((t) => ({ t, ...drain(s, label, join(dir, `rows-${label}.db`), t, BATCH_ROWS) }));
-      const r = deleteRows(s, label, noLogs(c.counts));
+      const t2 = performance.now();
+      const again = appendRows(join(dir, "loop.db"), label, join(dir, `rows-${label}.db`));
+      const appendMs = Math.round(performance.now() - t2);
+      expect([again.added, ...LOG_TABLES.map((t) => again.source[t])]).toEqual([0, 0, 0, 0]);
+      const r = deleteRows(s, label, noLogs(again.source));
       const deleteMs = Math.round(performance.now() - t1);
       expect(r.ok).toBe(true);
       for (const sp of projectTables(s.db)) if (sp.mode === "delete" && sp.table !== "observed_exposed") expect([sp.table, count(s.db, sp.table, sp.where(""), label)]).toEqual([sp.table, 0]);
       for (const d of per) expect([d.t, d.deleted]).toEqual([d.t, c.counts[d.t]]);
       const longest = Math.max(r.held_ms, ...per.map((d) => d.held));
-      console.log(`bench ${label}: rows=${c.rows} longest_hold_ms=${longest} batches=${per.reduce((n, d) => n + d.batches, 0)} batch_hold_ms=${Math.max(...per.map((d) => d.held))} final_hold_ms=${r.held_ms} copy_ms=${copyMs} delete_ms=${deleteMs} total_ms=${copyMs + deleteMs} (batch=${BATCH_ROWS}, no pauses)${r.ok ? ` cleared_links=${r.cleared_links} cleared_pins=${r.cleared_pins}` : ""}`);
+      console.log(`bench ${label}: rows=${c.rows} longest_hold_ms=${longest} batches=${per.reduce((n, d) => n + d.batches, 0)} batch_hold_ms=${Math.max(...per.map((d) => d.held))} final_hold_ms=${r.held_ms} copy_ms=${copyMs} final_append_ms=${appendMs} delete_ms=${deleteMs} total_ms=${copyMs + deleteMs} (batch=${BATCH_ROWS}, no pauses)${r.ok ? ` cleared_links=${r.cleared_links} cleared_pins=${r.cleared_pins}` : ""}`);
     }
   }, 600_000);
 });

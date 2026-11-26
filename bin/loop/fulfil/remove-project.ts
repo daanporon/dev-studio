@@ -21,10 +21,12 @@
 //   moved             two ticks later: a folder back at state/<label>/ goes into the archive as after-move/;
 //                     then db/project-rows.ts copyRows writes loop-rows.db in the archive
 //   copied            the log tables first, in batches (deleteLogBatch, only rows the archive holds): about 2 s
-//                     of batches a tick, a short pause between two, and `wait` while rows are left; then
+//                     of batches a tick, a short pause between two, and `wait` while rows are left; then, with no
+//                     await between them, appendRows (what changed while the batches ran, in any table) and
 //                     deleteRows: one transaction that counts again, expects no log row, and deletes the rest;
-//                     a count that changed copies again (5 tries; once a batch ran, appendRows adds to the same
-//                     archive), a delete that already committed (every count 0 now) goes on
+//                     a log row that came late goes round the batches again, a count that changed copies again
+//                     (5 tries; once a batch ran, appendRows adds to the same archive), a delete that already
+//                     committed (every count 0 now) goes on
 //   deleted           removed.json in the archive, one `project_removed` event, the request done
 //
 // Progress is the open request's `result` ({step, label, archive, text}); `text` comes from STEP_TEXT, never the
@@ -91,6 +93,12 @@ const sliceMs = () => envInt("DS_LOOP_REMOVE_SLICE_MS", 2000);
 // Longer than SQLite's longest busy-handler sleep (100 ms), so a waiting writer gets the lock between two batches.
 const BATCH_PAUSE_MS = 120;
 
+// What deleteRows expects once the batches are done: loop.db's rows at the latest copy, and no log row.
+function rest(copy: NonNullable<Plan["copy"]>): Counts {
+  const counts: Counts = { ...(copy.source ?? copy.counts) };
+  for (const t of LOG_TABLES) if (t in counts) counts[t] = 0;
+  return counts;
+}
 const logRows = (counts: Counts | undefined) => LOG_TABLES.reduce((n, t) => n + (counts?.[t] ?? 0), 0);
 function stepText(p: Plan): string {
   const total = logRows(p.copy?.counts);
@@ -302,18 +310,24 @@ async function run(a: Action, x: Exec): Promise<Result> {
     case "copied": {
       // The same wait text every time, so a long delete writes one event.
       if (!(await deleteLogs(x, () => p, put))) return { wait: "deleting the log rows in batches" };
-      // The batches took the log rows, so one left now is a row the archive does not hold.
-      const counts: Counts = { ...(p.copy!.source ?? p.copy!.counts) };
-      for (const t of LOG_TABLES) if (t in counts) counts[t] = 0;
-      const d = deleteRows(x.store, label, counts);
-      if (d.ok) { put({ step: "deleted", deleted: { rows: d.rows + (p.log?.deleted ?? 0), cleared_pins: d.cleared_pins, cleared_links: d.cleared_links, held_ms: d.held_ms } }); break; }
+      const before = rest(p.copy!);
+      // The batches took ticks, and a count does not show a row that changed meanwhile: the archive takes what
+      // it lacks now. No await from here to deleteRows.
+      const c = appendRows(dbPath(root), label, join(p.archive!, "loop-rows.db"));
       // A replay after the delete committed: every table that had rows to delete here is empty now.
-      const expected = Object.entries(counts).filter(([, n]) => n > 0);
-      if (expected.length && expected.every(([t]) => d.mismatch[t]?.now === 0)) { put({ step: "deleted", deleted: p.deleted ?? null }); break; }
-      const changed = Object.keys(d.mismatch).join(", ");
-      if ((p.copies ?? 0) >= COPY_TRIES) return fail(a, x, p, `the project's rows kept changing while they were copied (${changed}); the archive is at ${p.archive}`);
+      const expected = Object.entries(before).filter(([, n]) => n > 0);
+      if (expected.length && expected.every(([t]) => c.source[t] === 0)) { put({ step: "deleted", deleted: p.deleted ?? null }); break; }
+      put({ copy: { counts: c.counts, source: c.source, rows: c.rows, set_aside: p.copy!.set_aside } });
+      // A log row here came after the batches passed it.
+      let changed: string[] = LOG_TABLES.filter((t) => c.source[t]);
+      if (!changed.length) {
+        const d = deleteRows(x.store, label, rest(p.copy!));
+        if (d.ok) { put({ step: "deleted", deleted: { rows: d.rows + p.log!.deleted, cleared_pins: d.cleared_pins, cleared_links: d.cleared_links, held_ms: d.held_ms } }); break; }
+        changed = Object.keys(d.mismatch);
+      }
+      if ((p.copies ?? 0) >= COPY_TRIES) return fail(a, x, p, `the project's rows kept changing while they were copied (${changed.join(", ")}); the archive is at ${p.archive}`);
       put({ step: "moved", moved_tick: x.tick - 2 });
-      return { wait: `the rows of ${changed} changed since the copy: copying again` };
+      return { wait: `the rows of ${changed.join(", ")} changed since the copy: copying again` };
     }
     case "deleted": {
       const record = {

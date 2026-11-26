@@ -350,4 +350,21 @@ describe("ds remove-project through the loop (remove-project U3)", () => {
     a.close();
     expect(labelRows(r.s)).toEqual([]);
   }, 60_000);
+
+  test("a row changed while the batches run, its table's count the same, is archived as it was last", async () => {
+    process.env.DS_LOOP_REMOVE_BATCH_ROWS = "4";
+    process.env.DS_LOOP_REMOVE_SLICE_MS = "1";
+    const r = rig();
+    logRows(r, 10);
+    const id = r.file();
+    await r.run(id, () => r.step() === "copied" && plan(r).log?.batches === 1);
+    expect(r.s.db.run("UPDATE squads SET topic = 'changed-late' WHERE project = 'fx'").changes).toBeGreaterThan(0);
+    const res = await r.run(id);
+    expect(res.ok).toBe(true);
+    expect(plan(r).copies).toBe(1);
+    const a = new Database(join(res.archive, "loop-rows.db"), { readonly: true });
+    expect(a.query("SELECT DISTINCT topic FROM squads").all()).toEqual([{ topic: "changed-late" }]);
+    a.close();
+    expect(labelRows(r.s)).toEqual([]);
+  }, 60_000);
 });
