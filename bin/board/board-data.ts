@@ -13,6 +13,7 @@
 // It never runs a command and never reads a state file, so it renders with orca, gh and git off
 // PATH, and with the loop stopped it shows the last data behind a "loop down" banner.
 import { resolveBackUp, returnOf } from "../loop/settings/roster.ts";
+import { menuOptions, menuText } from "../loop/chat/menu.ts";
 import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
 import { basename, dirname, join, resolve } from "node:path";
 import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
@@ -2193,6 +2194,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       project: l, id: x.id ?? null, from: typeof x.asker === "string" && x.asker !== "sweep" ? x.asker : null, text, title: x.title ?? shortTitle(text, x.id ?? null),
       card: typeof x.kind === "string" ? x.kind : typeof x.card === "string" ? x.card : null, reason: typeof x.reason === "string" ? x.reason : null,
       squad: typeof x.squad === "string" ? x.squad : null, unit: typeof x.unit === "string" ? x.unit : null,
+      // A card about one member (a permission prompt) names whose chat it opens.
+      chat_wt: typeof x.chat_wt === "string" ? x.chat_wt : null, chat_label: typeof x.chat_label === "string" ? x.chat_label : null,
       // A notice's one option is an acknowledgement, so it is no answer: `choices` are the options only when
       // the answer acts (2+ options, or the card's `acts_on_answer` marker); a lone option is shown as `when`.
       ...alertAnswers(x),
@@ -2270,7 +2273,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     // The inbox: every question and proposed fix from squads that aren't on hold: blocking first,
     // then approvals, then questions, oldest first; each carries the command to copy.
     needs_you: [...studioAlerts.map((a) => ({
-      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true,
+      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true, chat_wt: a.chat_wt, chat_label: a.chat_label,
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
@@ -3198,27 +3201,7 @@ function chatCrew(db: Db, project: string, topic: string) {
   });
 }
 
-// Board chat U19b: the option count of a numbered menu at the bottom of a screen (a Claude permission prompt,
-// the folder-trust prompt), else 0. The last run of option lines numbered 1, 2, 3… within the last 25 non-blank
-// lines counts, and only when one of them carries the selection marker; a numbered list in plain output has none.
-export function menuOptions(tail: string): number { return menuText(tail).count; }
-
-// The same scan with the menu's text (the Question view): `options` are the last run's labels with the marker and
-// number stripped, `prompt` the up to 4 non-blank lines just above the run (the question the menu asks).
-export function menuText(tail: string): { count: number; prompt: string[]; options: string[] } {
-  const lines = tail.split("\n").filter((l) => l.trim() !== "").slice(-25);
-  let run: { mark: boolean; label: string; at: number }[] = [];
-  let last: typeof run = [];
-  lines.forEach((l, at) => {
-    const m = /^\s*([❯>›▶»])?\s*(\d{1,2})\.\s+(\S.*)$/.exec(l);
-    if (!m) return;
-    if (Number(m[2]) === 1) run = [];
-    if (Number(m[2]) === run.length + 1) { run.push({ mark: !!m[1], label: m[3].trim(), at }); last = run.slice(); }
-  });
-  if (last.length < 2 || !last.some((o) => o.mark)) return { count: 0, prompt: [], options: [] };
-  const prompt = lines.slice(Math.max(0, last[0].at - 4), last[0].at).map((l) => l.trim());
-  return { count: last.length, prompt, options: last.map((o) => o.label) };
-}
+export { menuOptions, menuText };
 
 // The open questions whose card opens a chat with this member (the cards' chat_wt rule in squad(): the card's
 // worktree, else the Lead's), as the Question view shows them. Blocking first, then oldest first. [] for the Studio.

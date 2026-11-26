@@ -11,6 +11,12 @@
 //      or the picker-done tombstone); its worktree (card_wt, else the asker's member row) has no
 //      worker state; it has no live terminal; or it is not `waiting` and the entry is over 2 min
 //      old. A missing transcript is no signal; with no worktree known only the transcript reaps.
+//   permission-prompt-needs-you U3, a permission prompt the hook missed: a squad member whose screen
+//      (observed_workers.tail) shows a permission menu (chat/menu.ts) with no open picker entry on its
+//      worktree for PERMISSION_STUCK_S (120) gets ONE card (kind permission_prompt) naming the role, with the
+//      prompt and options from the screen, and one `permission_asked` event (via screen). The card only opens
+//      the member's chat: a wrapped screen is no safe source for a Yes or No. The `episodes` row (kind
+//      permission-screen, subject the worktree) holds when this menu was first seen.
 // An alert is an `alert` action {target: squad|project, id, text, option, why}: the tick's claim
 // keeps it to one per (subject, episode), and an episode the sweep already alerted (its
 // <key>.alerted marker, imported as an `alerted` episodes row) is not alerted again.
@@ -32,6 +38,8 @@
 //   U67, Restart failed    one card per member (fulfil/request.ts giveUp, kind restart_failed, its member's
 //            worktree and episode): gone once the member is gone, its limit episode closed, or it runs on
 //            a listed account; a card from before U67 is matched by its text "<who> of <squad> (…".
+//   permission-prompt-needs-you U3, a permission card goes once the member's screen no longer shows that menu,
+//            the member's worker is gone, or a picker entry is open on its worktree.
 //   U199, Reviews stopped   (`review-stopped:<branch>`, kind review_stopped, from bin/review/review-unit.sh): gone once its
 //            unit is done or cancelled, its squad closed, its worktree removed, or the worktree's
 //            ds-review-stop file is missing or under 2 (the stop was lifted); an older card with no kind
@@ -64,6 +72,7 @@ import { allDone } from "../pause/wake.ts";
 import { retestDue } from "../squad/retest.ts";
 import { gitDir } from "../io/git-dir.ts";
 import { debriefTopic } from "../../board/card-place.ts";
+import { permissionMenu } from "../chat/menu.ts";
 import { cancellationReality, cancellationRepository, sharedBuilder, sharedPr, prNumber } from "../squad/cancel.ts";
 
 const PICKER_STALE_S = 120;
@@ -188,15 +197,92 @@ export function runawayUnits(ctx: TickCtx): Action[] {
   return out;
 }
 
+// The worktree a picker entry sits on: its card_wt, else the asker's member row; "" when neither names one.
+function pickerWt(store: Store, project: string, squad: string, q: Row): string {
+  if (typeof q.card_wt === "string" && q.card_wt) return q.card_wt;
+  if (!q.asker) return "";
+  const m = store.db.query("SELECT wt FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND (role || CASE WHEN suffix != '' THEN '-' || suffix ELSE '' END) = ? ORDER BY ord DESC, id DESC")
+    .get(project, squad, String(q.asker)) as { wt: string } | null;
+  return m?.wt ?? "";
+}
+
+// --- permission-prompt-needs-you U3: a permission prompt the hook missed ---------------------------
+
+export const PERMISSION_KIND = "permission_prompt";
+const PERMISSION_STUCK_S = 120;
+
+// The worktrees an open picker entry sits on: that prompt already reaches the operator as a question.
+function pickerWts(store: Store, project: string): Set<string> {
+  const rows = store.db.query("SELECT squad, doc FROM observed_pickers WHERE project = ?").all(project) as { squad: string; doc: string }[];
+  const out = new Set<string>();
+  for (const r of rows) {
+    let q: Row;
+    try { q = JSON.parse(r.doc) as Row; } catch { continue; }
+    if (q.closed !== true) out.add(pickerWt(store, project, r.squad, q));
+  }
+  return out;
+}
+
+// What the screen asks, and an id that stays the same for as long as the same menu is up.
+function shownPrompt(tail: unknown): { prompt: string[]; options: string[]; sig: string } | null {
+  const m = permissionMenu(String(tail ?? ""));
+  return m && { ...m, sig: String(cksum([...m.prompt, ...m.options].join("\n"))) };
+}
+
+export function permissionScreens(ctx: TickCtx): Action[] {
+  const { store, project, now } = ctx, out: Action[] = [];
+  const after = envInt("PERMISSION_STUCK_S", PERMISSION_STUCK_S), asked = pickerWts(store, project);
+  const members = store.db.query(`SELECT MAX(m.id) AS id, m.squad, m.role, m.suffix, m.wt, w.tail FROM members m
+    JOIN squads s ON s.project = m.project AND s.topic = m.squad
+    JOIN observed_workers w ON w.project = m.project AND w.wt = m.wt AND w.gone_at IS NULL
+    WHERE m.project = ? AND COALESCE(m.status, '') != 'gone' AND COALESCE(s.status, '') NOT IN ('closed', 'gone')
+    GROUP BY m.wt`).all(project) as Row[];
+  const up = new Set<string>();
+  for (const m of members) {
+    const wt = String(m.wt), menu = asked.has(wt) ? null : shownPrompt(m.tail);
+    if (!menu) continue;
+    up.add(wt);
+    const mark = { project, subject: wt, kind: "permission-screen" };
+    let ep = store.get("episodes", mark);
+    if (ep?.episode_key !== menu.sig) {
+      store.upsert("episodes", mark, { squad: String(m.squad), episode_key: menu.sig, state: "seen", source: "loop", started_at: now, observed_at: now });
+      ep = store.get("episodes", mark)!;
+    }
+    if (now - Number(ep.started_at) < after || paused(store, { project, squad: String(m.squad), member: wt })) continue;
+    const squad = String(m.squad), role = String(m.role) + (m.suffix ? `-${m.suffix}` : "");
+    const shown = [...menu.prompt, ...menu.options.map((o, i) => `${i + 1}. ${o}`)].join("\n");
+    const acts = alertAction(store, { project, squad, key: `${squad}.${role}`, episode: `permission-${menu.sig}@${ep.started_at}`,
+      title: `${role} is waiting on a permission prompt`, card: PERMISSION_KIND, text: `${role} is waiting on a permission prompt. Its screen shows:\n${shown}`,
+      option: "pressed the key in its chat", why: "the role stays stuck until someone presses a key there",
+      fields: { member: wt, prompt: menu.sig, chat_wt: wt, chat_label: role } });
+    if (acts.length && ep.state === "seen") {
+      store.tx(() => {
+        store.upsert("episodes", mark, { state: "carded", observed_at: now });
+        store.fact("permission_asked", [], { project, squad, member: wt, payload: { role, via: "screen", text: shown.slice(0, 200) } });
+      });
+    }
+    out.push(...acts);
+  }
+  // A menu that left the screen (or got its picker entry) starts the wait again the next time it shows.
+  for (const r of store.db.query("SELECT subject FROM episodes WHERE project = ? AND kind = 'permission-screen'").all(project) as { subject: string }[]) {
+    if (!up.has(r.subject)) store.db.run("DELETE FROM episodes WHERE project = ? AND subject = ? AND kind = 'permission-screen'", [project, r.subject]);
+  }
+  return out;
+}
+
+// Why a permission card is no longer true, or false while its menu is still on the screen.
+function permissionGone(store: Store, project: string, a: Row): string | false {
+  const wt = String(a.member ?? "");
+  const w = store.db.query("SELECT tail FROM observed_workers WHERE project = ? AND wt = ? AND gone_at IS NULL").get(project, wt) as { tail: string | null } | null;
+  if (!w) return "its agent's worktree is gone";
+  if (shownPrompt(w.tail)?.sig !== a.prompt) return "the screen no longer shows the prompt";
+  return pickerWts(store, project).has(wt) ? "the prompt reached the operator as a question" : false;
+}
+
 // Why a picker entry is stale, or null while it may still be open.
 export function pickerStale(store: Store, project: string, squad: string, q: Row, now: number): string | null {
   if (q.closed === true) return q.tombstone ? "its picker closed (picker-done tombstone)" : "its picker closed (tool_result in the transcript)";
-  let wt = typeof q.card_wt === "string" ? q.card_wt : "";
-  if (!wt && q.asker) {
-    const m = store.db.query("SELECT wt FROM members WHERE project = ? AND squad = ? AND wt IS NOT NULL AND (role || CASE WHEN suffix != '' THEN '-' || suffix ELSE '' END) = ? ORDER BY ord DESC, id DESC")
-      .get(project, squad, String(q.asker)) as { wt: string } | null;
-    wt = m?.wt ?? "";
-  }
+  const wt = pickerWt(store, project, squad, q);
   if (!wt) return null;
   if (paused(store, { project, squad, member: wt })) return null;
   const w = store.db.query("SELECT state FROM observed_workers WHERE project = ? AND wt = ? AND gone_at IS NULL").get(project, wt) as { state: string | null } | null;
@@ -384,6 +470,7 @@ export function alertGone(store: Store, project: string, a: Row, now = Math.floo
     const sq = store.db.query("SELECT want FROM squads WHERE project = ? AND topic = ? ORDER BY id DESC").get(project, String(a.squad ?? "")) as Row | null;
     return sq?.want === "gone" ? false : "its squad is no longer closing";
   }
+  if (a.kind === PERMISSION_KIND) return permissionGone(store, project, a);
   // U4: the loop no longer raises Loop-stalled cards; the board's loop line shows restarts.
   if (/^loop-stall-\d+$/.test(id)) return "loop stalls are shown on the board's loop line now";
   // U232: a poke-capped card clears once the member did what the poke asked.
@@ -556,6 +643,6 @@ export default {
   run(ctx: TickCtx) {
     reapPickers(ctx);
     settleLimitQuestions(ctx);
-    return [...runawayUnits(ctx), ...dropAlerts(ctx)];
+    return [...runawayUnits(ctx), ...permissionScreens(ctx), ...dropAlerts(ctx)];
   },
 } satisfies Reconciler;
