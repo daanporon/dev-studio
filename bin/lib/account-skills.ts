@@ -229,7 +229,10 @@ export async function accountPlan(adapter: string, agent: string, account: strin
   if (agent !== "claude") return "";
   const d = await adapterOut(adapter, ["claude-config-dir", account]);
   if (!d.ok) return "";
-  const f = d.out ? `${d.out}/.claude.json` : `${home()}/.claude.json`;
+  return claudePlan(d.out ? `${d.out}/.claude.json` : `${home()}/.claude.json`);
+}
+/** The plan in a Claude `.claude.json` (accountPlan's reader), "" when unknown. */
+export function claudePlan(f: string): string {
   if (!isFile(f)) return "";
   let tier = "";
   try {
