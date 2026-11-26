@@ -15,7 +15,7 @@ import { ROOT } from "../core/store.ts";
 const OUTCOMES = new Set(["used", "nothing_to_reset", "no_grant", "already_used", "failed"]);
 
 /** The forced accounts refresh (accounts-refresh.sh without --max-age), detached like the state observer's. */
-function refreshAccounts(root: string): void {
+export function refreshAccounts(root: string): void {
   Bun.spawn([join(ROOT, "bin", "lib", "accounts-refresh.sh")],
     { env: { ...process.env, DS_STATE_ROOT: root }, stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
 }

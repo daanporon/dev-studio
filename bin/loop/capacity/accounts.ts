@@ -6,6 +6,7 @@
 //   knownAccounts(store)                                        every known account with its state
 //   mergeOrcaImport / parseAccountFolders / copyLoginIds        the state observer's merge of the refresh's files
 //   setDefaultAccount / removeAccount                           `ds account default|remove` (issue #125)
+//   addAccount                                                  `ds account add`'s row: added, back or already there (U5)
 //
 // A disabled account has accounts.state = 'disabled'; NULL is enabled ('draining' is the v2 hook,
 // U25). pick.ts leaves a disabled account out on every rung and accountBlock names it, so nothing new
@@ -20,6 +21,7 @@
 // U2 (provider-billing-fallback): enabling an account with a live credits hold also clears the hold
 // (credits.ts clearCredits, one `account_credits_cleared` event), even when it was not disabled. So does
 // a live login hold (claude-login-ended U2: login.ts clearLogin, one `account_login_cleared` event).
+import { existsSync } from "node:fs";
 import { now, type FactRow, type Row, type Store } from "../core/store.ts";
 import { accountFolder, type AccountRow } from "../../lib/account-dirs.ts";
 import { findKind } from "../../lib/account-kinds/index.ts";
@@ -210,5 +212,46 @@ export function removeAccount(store: Store, req: { agent: string; account: strin
     store.db.run("UPDATE accounts SET removed_at = ? WHERE agent = ? AND account = ?", [at, agent, account]);
     store.event("account_removed", { payload: { agent, account, by } });
     return { changed: true };
+  });
+}
+
+/** What `ds account add` came to (KTD6, R6): a new row, a removed row with the same login back, or the same login
+ *  already listed (nothing written). `folder` is the row's folder afterwards. */
+export type AddOutcome = { outcome: "added" | "back" | "there"; account: string; label: string; folder: string };
+
+/** `ds account add`'s row (issue #125, U5): a `ds` row for `agent:account` on `folder`, unless the login is already
+ *  in the list (its row, or the agent's own login: "there") or on a removed row (cleared, and repointed at `folder`
+ *  when its own folder is gone: "back"). One `account_added` event for a row added or back. */
+export function addAccount(store: Store, req: { agent: string; account: string; folder: string; loginId: string | null; by: string },
+  env: Record<string, string | undefined> = process.env, at = now()): AddOutcome {
+  const { agent, account, folder, loginId, by } = req;
+  const kind = findKind(agent);
+  return store.tx(() => {
+    const done = (outcome: AddOutcome["outcome"], r: Row, f: string): AddOutcome => {
+      const label = String(r.label ?? r.account);
+      if (outcome !== "there") store.event("account_added", { payload: { agent, account: String(r.account), label, outcome, by } });
+      return { outcome, account: String(r.account), label, folder: f };
+    };
+    if (loginId) {
+      if (kind && kind.loginId(kind.systemDir(env), true, env) === loginId) {
+        const sys = store.get("accounts", { agent, account: kind.systemId }) ?? { account: kind.systemId };
+        return done("there", sys, kind.systemDir(env));
+      }
+      const same = store.db.query("SELECT * FROM accounts WHERE agent = ? AND login_id = ? ORDER BY removed_at IS NOT NULL, account")
+        .all(agent, loginId) as Row[];
+      const live = same.find((r) => r.removed_at == null && r.source != null);
+      if (live) return done("there", live, accountFolder(live as AccountRow, env));
+      const gone = same.find((r) => r.removed_at != null);
+      if (gone) {
+        const old = accountFolder(gone as AccountRow, env), repoint = !existsSync(old);
+        store.db.run(`UPDATE accounts SET removed_at = NULL, config_dir = CASE WHEN ? THEN ? ELSE config_dir END,
+          source = CASE WHEN ? THEN 'ds' ELSE COALESCE(source, 'ds') END WHERE agent = ? AND account = ?`,
+        [repoint ? 1 : 0, folder, repoint ? 1 : 0, agent, gone.account as string]);
+        return done("back", gone, repoint ? folder : old);
+      }
+    }
+    store.db.run("INSERT INTO accounts (agent, account, label, config_dir, source, login_id, observed_at) VALUES (?, ?, ?, ?, 'ds', ?, ?)",
+      [agent, account, account, folder, loginId, at]);
+    return done("added", { account, label: account }, folder);
   });
 }

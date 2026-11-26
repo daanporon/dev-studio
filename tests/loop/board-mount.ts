@@ -27,7 +27,9 @@ export async function mount(b: any, open = true, fixtures: Record<string, any> =
     const hit = Object.keys(fixtures).sort((x, y) => y.length - x.length).find((k) => String(url).startsWith(k));
     return json(hit ? fixtures[hit] : String(url).startsWith("board.json") ? b : String(url).startsWith("api/messages") ? { unread: 2, messages: [] } : {});
   };
-  window.EventSource = class { onmessage: any; close() {} };
+  // The page's stream objects, so a test can push an event (which also makes the page poll again).
+  const streams: any[] = (window.__streams = []);
+  window.EventSource = class { onmessage: any; constructor() { streams.push(this); } close() {} };
   window.confirm = () => false;
   window.document.write('<!doctype html><html><head></head><body><div id="root"></div></body></html>');
   // The page's three <script src> builds, from the pinned packages instead of unpkg.
