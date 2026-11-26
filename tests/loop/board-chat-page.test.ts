@@ -304,36 +304,48 @@ test("U19: on a touch screen Enter is a new line and only Send sends", async () 
 const keyButtons = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("chat-key"))
   .map((n) => [n.values[0], n.values[n.values.length - 1], n]);
 const stopBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-stop"));
-const bannerBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-banner"));
+const cardOf = (root: any) => nodes(root).find((n) => n.strings.startsWith("<div class=\u0000>") && n.values[0] && String(n.values[0]).startsWith("chat-dock "));
+const dockOf = (root: any): string | null => cardOf(root) ? String(cardOf(root).values[0]).slice("chat-dock ".length) : null;
+const lineBtn = (root: any) => nodes(root).find((n) => n.strings.includes("chat-dline"));
 const questionView = (root: any) => nodes(root).find((n) => n.strings.includes("data-chat-question"));
-const segBtn = (root: any, v: string) => nodes(root).find((n) => segMatch(n, v));
+const dockBtn = (root: any, cls: string) => nodes(root).find((n) => n.strings.includes(cls) && n.strings.startsWith("<div class=\"chat-dhd\""));
 const hasKeyRow = (root: any) => nodes(root).some((n) => n.strings.includes('class="chat-keys"'));
 const menuTail = "❯ 1. Yes\n  2. No\n  3. Other";
-const segMatch = (n: any, v: string) => n.strings.startsWith("<button key=") && String(n.values[1]).includes("chat-segb") && n.values[0] === v;
-// Switch the panel to Screen: the three-way control's Screen button while something is asked, else the one toggle.
-const toScreen = (p: any) => {
-  const root = p.render();
-  fnIn(nodes(root).find((n) => segMatch(n, "screen")) ?? nodes(root).find((n) => n.strings.includes('class="btn sm chat-scr"')))();
+const scrToggle = (root: any) => nodes(root).find((n) => n.strings.includes('class="btn sm chat-scrtog"'));
+// The card's header buttons, in order: [‹, ›,] ⤢, ▾ (functions of the one header template).
+const headFns = (root: any) => {
+  const n = nodes(root).find((x) => x.strings.includes('class="chat-dhd"'))!;
+  return n.values.filter((v: any) => typeof v === "function");
 };
+const pressFull = (p: any) => headFns(p.render()).at(-2)();
+const pressFold = (p: any) => headFns(p.render()).at(-1)();
+const navFns = (root: any) => nodes(root).find((x) => x.strings.includes('aria-label="Next question"'))!.values.filter((v: any) => typeof v === "function");
+// What the panel draws between the .mhd opening and the log: the header and the member tabs.
+const headerText = (root: any) => flat(root).split('class="mhd"')[1].split('class="chat-wrap"')[0];
+// Switch the panel to Screen with the message box's toggle.
+const toScreen = (p: any) => { const t = scrToggle(p.render()); if (!t.values.includes("true")) fnIn(t)(); };
 const idle = { agent: "claude", source: "transcript", sends: [], turns: [], working: false };
 
-test("mobile-chat-close-hidden U1: on a phone a member with a screen gets the Chat/Screen switch, not the lone toggle; none without a screen", () => {
+test("chat-view-switcher U1: the header has no view switch; on a phone the Screen toggle is a bare ▭ in the message box row; none without a screen", () => {
   const had = (globalThis as any).matchMedia;
   (globalThis as any).matchMedia = (q: string) => ({ matches: q === "(max-width:600px)" });
   try {
     const p = panel();
     p.render();
     p.setData(idle);
-    expect(segBtn(p.render(), "chat")).toBeUndefined();
-    p.setData({ ...idle, screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
+    expect(scrToggle(p.render())).toBeUndefined();
+    p.setData({ ...idle, questions: [bq("q1")], screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
     let root = p.render();
-    expect(nodes(root).some((n) => n.strings.includes('class="btn sm chat-scr"'))).toBe(false);
-    expect(segBtn(root, "question")).toBeUndefined();
-    expect(segBtn(root, "chat")).toBeDefined();
-    fnIn(segBtn(root, "screen"))();
+    expect(headerText(root)).not.toMatch(/chat-seg|chat-scr|Question|Screen/);
+    const row = nodes(root).find((n) => n.strings.includes('class="chat-row"'));
+    expect(row.values).toContain(scrToggle(root));
+    expect(scrToggle(root).values).toContain("▭");
+    expect(scrToggle(root).values).toContain("Screen");   // the aria-label of the bare glyph
+    fnIn(scrToggle(root))();
     root = p.render();
     expect(hasKeyRow(root)).toBe(true);
-    fnIn(segBtn(root, "chat"))();
+    expect(dockOf(root)).toBe("open");   // the card stays in both views
+    fnIn(scrToggle(root))();
     expect(hasKeyRow(p.render())).toBe(false);
   } finally { (globalThis as any).matchMedia = had; }
 });
@@ -364,28 +376,35 @@ test("U19: Chat never shows a key row; idle has no Stop; working has a round ■
   expect(p.h.states).toContain("pressed Esc");
 });
 
-test("U19: a menu on the member's screen opens the Question view; in Chat it is a banner, no key row; tapping it opens the Question view", () => {
+test("U19: a menu on the member's screen opens the docked card; folded it is one line with no key row; tapping the line opens it", () => {
   const p = panel();
   p.render();
   p.setData({ ...idle, screen: { tail: menuTail, menu: 3, prompt: ["Do you want to proceed?"], options: ["Yes", "No", "Other"], at: T, age_s: 1 } });
   let root = p.render();
+  expect(dockOf(root)).toBe("open");
   expect(questionView(root)).toBeDefined();
   expect(hasKeyRow(root)).toBe(false);
-  fnIn(segBtn(root, "chat"))();
+  pressFold(p);
   root = p.render();
+  expect(dockOf(root)).toBe("folded");
   expect(questionView(root)).toBeUndefined();
   expect(hasKeyRow(root)).toBe(false);
-  expect(JSON.stringify(bannerBtn(root))).toContain("Do you want to proceed?");
-  fnIn(bannerBtn(root))();
+  expect(flat(lineBtn(root))).toContain("Do you want to proceed?");
+  expect(flat(lineBtn(root))).toContain("▴");
+  fnIn(lineBtn(root))();
   root = p.render();
-  expect(bannerBtn(root)).toBeUndefined();
+  expect(lineBtn(root)).toBeUndefined();
   expect(questionView(root)).toBeDefined();
-  // No menu on screen: no banner, and the one Screen toggle.
+  // The same card sits above the screen.
+  toScreen(p);
+  root = p.render();
+  expect(hasKeyRow(root)).toBe(true);
+  expect(questionView(root)).toBeDefined();
+  // No menu on screen: no card, and the one Screen toggle.
   p.setData({ ...idle, screen: { tail: "> ", menu: 0, at: T, age_s: 1 } });
   root = p.render();
-  expect(bannerBtn(root)).toBeUndefined();
-  expect(questionView(root)).toBeUndefined();
-  expect(nodes(root).some((n) => n.strings.includes('class="btn sm chat-scr"'))).toBe(true);
+  expect(cardOf(root)).toBeUndefined();
+  expect(scrToggle(root)).toBeDefined();
 });
 
 test("U19: under Screen every key shows, with the menu digits, in every state; its Esc stays Esc and each press posts api/keys", async () => {
@@ -410,7 +429,7 @@ test("U19: under Screen every key shows, with the menu digits, in every state; i
 
 test("U19: a member with no transcript shows its live screen; a toggle switches between screen and chat", () => {
   const screenOf = (root: any) => nodes(root).find((n) => n.strings.includes('class="chat-screen"'));
-  const toggle = (root: any) => nodes(root).find((n) => n.strings.includes('class="btn sm chat-scr"'));
+  const toggle = scrToggle;
   const p = panel();
   p.render();
   p.setData({ agent: "muse", source: "screen", sends: [], turns: [{ role: "screen", text: "old", at: null }],
@@ -418,10 +437,10 @@ test("U19: a member with no transcript shows its live screen; a toggle switches 
   let root = p.render();
   expect(screenOf(root).values).toContain("Pick one:\n❯ 1. Yes\n  2. No");
   expect(screenOf(root).values).toContain("read 4 s ago");
-  expect(toggle(root).values).toContain("Chat");
-  // The toggle sits in the header, just before ✕.
-  const head = nodes(root).find((n) => n.strings.includes('class="mhd"'));
-  expect(JSON.stringify(head)).toContain("chat-scr");
+  expect(toggle(root).values).toContain("▭ Chat");
+  // The toggle sits in the message box row, not in the header.
+  expect(nodes(root).find((n) => n.strings.includes('class="chat-row"')).values).toContain(toggle(root));
+  expect(headerText(root)).not.toMatch(/chat-seg|chat-scr|<button[^>]*>(Chat|Screen)/);
   fnIn(toggle(root))();
   root = p.render();
   expect(screenOf(root)).toBeUndefined();
@@ -432,7 +451,7 @@ test("U19: a member with no transcript shows its live screen; a toggle switches 
   q.setData({ agent: "claude", source: "transcript", sends: [], turns: [{ role: "assistant", text: "hi", at: T }], screen: { tail: "x", at: T, age_s: 90 } });
   root = q.render();
   expect(screenOf(root)).toBeUndefined();
-  expect(toggle(root).values).toContain("Screen");
+  expect(toggle(root).values).toContain("▭ Screen");
   fnIn(toggle(root))();
   expect(screenOf(q.render()).values).toContain("read 2 min ago");
   // No screen read: no toggle.
@@ -624,14 +643,14 @@ test("U2: Dismiss posts api/chat-dismiss for that send; a refusal shows its text
   expect(reloads).toBe(1);
 });
 
-// chat-key-buttons U2: the Question view.
+// chat-key-buttons U2, chat-view-switcher U1: the docked question card.
 const bq = (id: string, over: any = {}) => ({ id, title: "Title " + id, question: "Question " + id + "?", choices: [{ label: "Yes", does: "do it" }, { label: "No", does: null }], since: "2026-11-25T10:00:00Z",
   blocking: true, source: "lead", answerable: true, ...over });
 // A node's text: its strings with the values filled in (functions and false leave nothing).
 const flat = (v: any): string => Array.isArray(v) ? v.map(flat).join("") : v?.strings !== undefined
   ? v.strings.split("\u0000").map((x: string, i: number) => x + (i < v.values.length ? flat(v.values[i]) : "")).join("") : typeof v === "function" || v == null || v === false ? "" : String(v);
 const btnWith = (root: any, text: string) => nodes(root).find((n) => n.strings.includes(text) && n.values.some((v: any) => typeof v === "function"))!;
-// The rendered QOptions of the Question view (the stub html leaves a component as a node): its props come from the attributes.
+// The rendered QOptions of the question card (the stub html leaves a component as a node): its props come from the attributes.
 const qoptions = (p: any, root: any) => {
   const n = nodes(root).find((x) => x.values[0] === p.mod.QOptions)!;
   const names = n.strings.split("\u0000").map((seg: string) => /(\w+)=$/.exec(seg)?.[1]);
@@ -642,34 +661,69 @@ const qoptions = (p: any, root: any) => {
 const optBtns = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("<span class=\"n\">"));
 const qopts = (root: any) => nodes(root).filter((n) => n.strings.includes("chat-qopt") || n.values.some((v: any) => typeof v === "string" && v.includes("chat-qopt")));
 
-test("U2: a blocking board question opens the Question view once; a non-blocking one shows only the banner", () => {
+test("U2: a blocking board question opens the card once; the fold holds until a new since; a non-blocking one starts folded", () => {
   const p = panel();
   p.render();
   p.setData({ ...idle, questions: [bq("q1")] });
   let root = p.render();
-  expect(questionView(root)).toBeDefined();
+  expect(dockOf(root)).toBe("open");
   expect(flat(questionView(root))).toContain("Title q1");
   expect(flat(questionView(root))).toContain("Question q1?");
+  expect(flat(cardOf(root))).toContain("builder-x asks");
+  expect(flat(cardOf(root))).not.toContain("1 of 1");
   expect(hasKeyRow(root)).toBe(false);
-  // The operator goes back to Chat: it stays there while the same asking is open (opened once).
-  fnIn(segBtn(root, "chat"))();
+  // The operator folds it: it stays folded while the same asking is open (opened once).
+  pressFold(p);
   p.setData({ ...idle, questions: [bq("q1")] });
   root = p.render();
+  expect(dockOf(root)).toBe("folded");
   expect(questionView(root)).toBeUndefined();
-  expect(JSON.stringify(bannerBtn(root))).toContain("builder-x asks: Title q1");
+  expect(flat(lineBtn(root))).toContain("builder-x asks: Title q1");
   // A new asking (another since) opens it again.
   p.setData({ ...idle, questions: [bq("q1", { since: "2026-11-25T11:00:00Z" })] });
-  expect(questionView(p.render())).toBeDefined();
-  // Non-blocking: no auto-open, the banner and the three-way control.
+  expect(dockOf(p.render())).toBe("open");
+  // Non-blocking: no auto-open, the folded line.
   const n = panel();
   n.render();
   n.setData({ ...idle, questions: [bq("q2", { blocking: false })] });
   root = n.render();
-  expect(questionView(root)).toBeUndefined();
-  expect(JSON.stringify(bannerBtn(root))).toContain("asks: Title q2");
-  expect(segBtn(root, "question")).toBeDefined();
-  fnIn(bannerBtn(root))();
-  expect(questionView(n.render())).toBeDefined();
+  expect(dockOf(root)).toBe("folded");
+  expect(flat(lineBtn(root))).toContain("asks: Title q2");
+  fnIn(lineBtn(root))();
+  expect(dockOf(n.render())).toBe("open");
+});
+
+test("chat-view-switcher U1: ⤢ fills the panel and ⤡ returns; ⤢ holds until a new blocking item; answering folds the card", async () => {
+  const p = panel();
+  p.render();
+  p.setData({ ...idle, questions: [bq("q1")] });
+  const box = (root: any) => root.values[1];
+  expect(box(p.render())).toBe("mbox chat");
+  pressFull(p);
+  p.setData({ ...idle, questions: [bq("q1")] });
+  let root = p.render();
+  expect(dockOf(root)).toBe("full");
+  expect(box(root)).toBe("mbox chat dock-full");
+  expect(flat(cardOf(root))).toContain("⤡");
+  pressFull(p);
+  root = p.render();
+  expect(dockOf(root)).toBe("open");
+  expect(flat(cardOf(root))).toContain("⤢");
+  pressFull(p);
+  p.setData({ ...idle, questions: [bq("q1", { since: "2026-11-25T11:00:00Z" })] });
+  root = p.render();
+  expect(dockOf(root)).toBe("open");   // a new asking opens at the card size
+  const choices = nodes(qoptions(p, questionView(root))).filter((n) => n.strings.startsWith("<button key="));
+  await fnIn(choices[0])();
+  expect(cardOf(p.render())).toBeUndefined();   // the only question is answered: no card
+  // With another, non-blocking one left, the card folds.
+  const q = panel();
+  q.render();
+  q.setData({ ...idle, questions: [bq("q3"), bq("q4", { blocking: false })] });
+  await fnIn(nodes(qoptions(q, questionView(q.render()))).filter((n) => n.strings.startsWith("<button key="))[0])();
+  root = q.render();
+  expect(dockOf(root)).toBe("folded");
+  expect(flat(lineBtn(root))).toContain("asks: Title q4");
 });
 
 test("U2: two open questions page '1 of 2', the screen menu first; a choice posts the answer with its since and the card's key leaves", async () => {
@@ -677,18 +731,18 @@ test("U2: two open questions page '1 of 2', the screen menu first; a choice post
   p.render();
   p.setData({ ...idle, questions: [bq("q1")], screen: { tail: menuTail, menu: 2, prompt: ["Do you want to proceed?"], options: ["Yes", "No"], at: T, age_s: 1 } });
   let root = p.render();
-  expect(flat(questionView(root))).toContain("1 of 2");
+  expect(flat(cardOf(root))).toContain("1 of 2");
   expect(flat(questionView(root))).toContain("Do you want to proceed?");
   // Next: the board question; its choice answers it.
-  nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Next question"')).values.filter((v: any) => typeof v === "function")[1]();
+  navFns(root)[1]();
   root = p.render();
-  expect(flat(questionView(root))).toContain("2 of 2");
+  expect(flat(cardOf(root))).toContain("2 of 2");
   expect(flat(questionView(root))).toContain("Title q1");
   const choices = nodes(qoptions(p, questionView(root))).filter((n) => n.strings.startsWith("<button key="));
   expect(choices.map((c) => c.values[0])).toEqual(["Yes", "No"]);
   await fnIn(choices[0])();
   expect(p.answers).toEqual([["p", "one", "q1", "Yes", "2026-11-25T10:00:00Z"]]);
-  // Answered: it is gone from the view (the page marks it sent), the panel is back on Chat or the next item.
+  // Answered: it is gone from the card (the page marks it sent).
   root = p.render();
   expect(flat(questionView(root) ?? "")).not.toContain("Title q1");
 });
@@ -703,21 +757,21 @@ test("U3: opened for a question id, the Question view starts there, blocking or 
   };
   for (const blocking of [true, false]) {
     const { root } = open("q2", blocking);
-    expect(flat(questionView(root))).toContain("2 of 2");
+    expect(flat(cardOf(root))).toContain("2 of 2");
     expect(flat(questionView(root))).toContain("Question q2?");
   }
   const unknown = open("gone");
-  expect(flat(questionView(unknown.root))).toContain("1 of 2");
+  expect(flat(cardOf(unknown.root))).toContain("1 of 2");
   expect(flat(questionView(unknown.root))).toContain("Question q1?");
   // Paging still works from the named question, and keeps the view open when nothing blocks.
   for (const blocking of [true, false]) {
     const { p, root } = open("q2", blocking);
-    nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Previous question"'))!.values.filter((v: any) => typeof v === "function")[0]();
-    expect(flat(questionView(p.render()))).toContain("1 of 2");
+    navFns(root)[0]();
+    expect(flat(cardOf(p.render()))).toContain("1 of 2");
   }
   // A menu that comes up later shows first, over the named question.
   const { p, root } = open("q2", false);
-  fnIn(segBtn(root, "chat"))();
+  pressFold(p);
   p.setData({ ...idle, questions: [bq("q1", { blocking: false }), bq("q2", { blocking: false })], screen: { tail: menuTail, menu: 2, prompt: ["Proceed now?"], options: ["Yes", "No"], at: T, age_s: 1 } });
   expect(flat(questionView(p.render()))).toContain("Proceed now?");
 });
@@ -733,6 +787,7 @@ test("U2: a terminal-only picker shows its text and Open Screen to answer, no an
   expect(flat(list)).toContain("Yes");
   btnWith(questionView(root), "Open Screen to answer").values.filter((v: any) => typeof v === "function").pop()();
   expect(hasKeyRow(p.render())).toBe(true);
+  expect(dockOf(p.render())).toBe("open");   // the card stays open over the screen
 });
 
 test("U2: a screen menu with no board question has one button per option that posts api/keys with its digit, and Esc leaves the menu", async () => {
@@ -745,7 +800,8 @@ test("U2: a screen menu with no board question has one button per option that po
   expect(hasKeyRow(root)).toBe(false);
   await fnIn(btns[1])();
   expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["2"] }]]);
-  // After the press the panel is back on Chat.
+  // After the press the card folds.
+  expect(dockOf(p.render())).toBe("folded");
   await fnIn(btnWith(questionView(root), "Esc · leave the menu"))();
   expect(p.posts.at(-1)).toEqual(["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]);
 });
@@ -768,7 +824,7 @@ test("U4: the free-text answer box is keyed by question id + since, so paging re
   const boxKey = () => nodes(questionView(root)).find((n) => n.strings.includes("chat-qtext")).values[0];
   const first = boxKey();
   expect(first).toContain("q1");
-  nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Next question"')).values.filter((v: any) => typeof v === "function")[1]();
+  navFns(root)[1]();
   root = p.render();
   const second = boxKey();
   expect(second).toContain("q2");

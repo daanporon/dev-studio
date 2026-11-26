@@ -83,7 +83,7 @@ const openChatOf = (label: string): Open => async (p) => {
   return click(p, ".chat-tab", new RegExp("^" + label.slice(0, 12)))   // a long tab label is cut at 14;
 };
 // mobile-chat-close-hidden U1: a long unit name, with mail and a new reply on another member (set on the api/chat reply), so
-// the switcher carries its badge and dot beside the Screen switch.
+// the switcher carries its badge and dot.
 const LONG = "builder-u51-compliance-manager-scope";
 const openLongName: Open = async (p) => {
   await p.route("**/api/chat?*", async (r: any) => {
@@ -93,9 +93,9 @@ const openLongName: Open = async (p) => {
   });
   if (!(await openChatOf(LONG)(p))) return false;
   await p.waitForTimeout(3500);   // the next poll brings a reply newer than the seen mark
-  if (await p.locator(".chat .mhd .chat-segb").count()) {   // the phone's switch toggles the view both ways
-    await click(p, ".chat-segb", /^Screen/); if (!(await p.locator("pre.chat-screen").count())) return false;
-    await click(p, ".chat-segb", /^Chat/); if (await p.locator("pre.chat-screen").count()) return false;
+  if (await p.locator(".chat .chat-scrtog").count()) {   // the toggle switches the view both ways
+    await click(p, ".chat-scrtog"); if (!(await p.locator("pre.chat-screen").count())) return false;
+    await click(p, ".chat-scrtog"); if (await p.locator("pre.chat-screen").count()) return false;
   }
   return true;
 };
@@ -106,24 +106,55 @@ const openLongMenu: Open = async (p) => {
   await p.locator(".chat-menu .chat-swlabel").first().evaluate((e: any, t: string) => { e.textContent = t; }, LONG + "-and-a-tail-wider-than-any-phone");
   return true;
 };
+// chat-view-switcher U1: a question longer than the card (set on the api/chat reply) for builder-platform, with no screen menu.
+const longQuestion = (choices: boolean): Open => async (p) => {
+  await p.route("**/api/chat?*", async (r: any) => {
+    const res = await r.fetch(), j = await res.json();
+    if (j.screen) j.screen.menu = 0;
+    j.questions = [{ id: "long-q", title: "Which way should the long migration go?", question: choices ? Array.from({ length: 40 }, (_, i) => `- point ${i + 1}: a line of detail the operator reads before answering`).join("\n") : "Say which way.",
+      choices: choices ? [{ label: "Yes", does: "do it" }, { label: "No", does: null }] : [], since: "2026-11-25T10:00:00Z", blocking: true, source: "lead", answerable: true }];
+    await r.fulfill({ response: res, json: j });
+  });
+  return openChatOf("builder-platform")(p);
+};
+// The long card at its open size, then ⤢: the body scrolls on its own, ✕ and Send stay on screen, and ⤢ fills the panel.
+const LONG_CARD = `(() => { const q = (s) => document.querySelector(".chat " + s) || document.querySelector(".mbox.chat" + s), bad = [];
+  const box = document.querySelector(".mbox.chat"), body = box.querySelector(".chat-dbody"), dock = box.querySelector(".chat-dock"), wrap = box.querySelector(".chat-wrap");
+  if (!body || !dock) return ["no open card"];
+  const B = box.getBoundingClientRect(), on = (s) => { const b = box.querySelector(s).getBoundingClientRect(); return b.width > 0 && b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight; };
+  if (!(body.scrollHeight > body.clientHeight + 20)) bad.push("the card body does not scroll " + body.scrollHeight + "/" + body.clientHeight);
+  body.scrollTop = 99999; const top = dock.querySelector(".chat-dhd").getBoundingClientRect(); if (top.top < dock.getBoundingClientRect().top - 1) bad.push("the top line scrolled away"); body.scrollTop = 0;
+  if (!on(".mhd .mclose")) bad.push("✕ is off screen"); if (!on(".chat-send")) bad.push("Send is off screen");
+  const cap = (innerWidth <= 600 ? 0.5 : 0.6) * B.height; if (dock.getBoundingClientRect().height > cap + 2) bad.push("open card " + Math.round(dock.getBoundingClientRect().height) + " px, cap " + Math.round(cap));
+  if (wrap.getBoundingClientRect().height < 100) bad.push("the chat above the card is " + Math.round(wrap.getBoundingClientRect().height) + " px");
+  box.querySelector(".chat-dfull").click();
+  return new Promise((ok) => setTimeout(() => {
+    const d = box.querySelector(".chat-dock").getBoundingClientRect(), hd = box.querySelector(".mhd").getBoundingClientRect(), tabs = box.querySelector(".chat-tabs"), foot = box.querySelector(".qfoot").getBoundingClientRect();
+    const from = (tabs || box.querySelector(".mhd")).getBoundingClientRect().bottom;
+    if (d.top - from > 2 || foot.top - d.bottom > 12) bad.push("⤢ does not fill the panel: " + Math.round(d.top - from) + " above, " + Math.round(foot.top - d.bottom) + " below");
+    if (getComputedStyle(box.querySelector(".chat-wrap")).visibility !== "hidden") bad.push("the log still shows under ⤢");
+    if (!on(".mhd .mclose")) bad.push("⤢: ✕ is off screen"); if (!on(".chat-send")) bad.push("⤢: Send is off screen");
+    ok(bad);
+  }, 300)); })()`;
 // chat-key-buttons U1: what each chat view must show, run in the page; returns the list of problems.
 const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.querySelector(".chat " + s), all = (s) => [...document.querySelectorAll(".chat " + s)], bad = [];
   const card = q(".chat-card"), vis = (e) => e && e.getBoundingClientRect().width > 0;
   if (!card) bad.push("no .chat-card"); else {
-    const kids = [...card.querySelectorAll("button")].map((b) => b.className.replace(/btn |chat-round /g, "").trim());
+    const kids = [...card.querySelectorAll("button:not(.chat-scrtog)")].map((b) => b.className.replace(/btn |chat-round /g, "").trim());
     const okKids = want === "long" || want === "long-menu" || want === "working" || want === "menu" || want === "screen" || want === "question" ? ["chat-attach", "chat-stop", "chat-send pri"] : ["chat-attach", "chat-send pri"];
     if (JSON.stringify(kids.map((k) => k.replace("pri chat-send", "chat-send pri"))) !== JSON.stringify(okKids)) bad.push("card buttons " + kids);
     const r = card.getBoundingClientRect(); if (r.height > 200) bad.push("card is " + Math.round(r.height) + " px tall");
     if (parseFloat(getComputedStyle(card).borderTopLeftRadius) < 16) bad.push("card radius");
-    for (const b of card.querySelectorAll("button")) { const x = b.getBoundingClientRect(); if (x.width < 32 || x.height < 32 || x.width > 34 || (b.className.indexOf("chat-attach") < 0 && x.width !== x.height)) bad.push("round button " + b.className + " " + Math.round(x.width) + "x" + Math.round(x.height)); }
+    for (const b of card.querySelectorAll("button:not(.chat-scrtog)")) { const x = b.getBoundingClientRect(); if (x.width < 32 || x.height < 32 || x.width > 34 || (b.className.indexOf("chat-attach") < 0 && x.width !== x.height)) bad.push("round button " + b.className + " " + Math.round(x.width) + "x" + Math.round(x.height)); }
   }
-  const keys = q(".chat-keys"), scr = q(".mhd .chat-scr, .mhd .chat-segb");
+  const keys = q(".chat-keys"), scr = q(".chat-row .chat-scrtog");
   if (want === "screen") { const n = keys ? keys.querySelectorAll("button").length : 0; if (n !== 8) bad.push("Screen shows " + n + " keys, not Esc ↑ ↓ ⏎ ⇥ 1 2 3"); if (keys && card && keys.getBoundingClientRect().bottom > card.getBoundingClientRect().top + 1) bad.push("keys not above the card"); }
   else if (keys) bad.push("Chat shows a key row");
-  if (want === "idle") { if (q(".chat-stop")) bad.push("idle shows ■"); if (q(".chat-banner")) bad.push("idle shows a menu banner"); }
+  if (want === "idle") { if (q(".chat-stop")) bad.push("idle shows ■"); if (q(".chat-dock")) bad.push("idle shows a question card"); }
   if (want === "working" && !(q(".chat-stop") && q(".chat-stop").closest(".chat-card"))) bad.push("working has no ■ in the card");
-  if (want === "question") { const qv = q(".chat-q"); if (!qv) bad.push("no Question view"); else { for (const b of qv.querySelectorAll(".chat-qopt")) { const x = b.getBoundingClientRect(); if (x.height < 44) bad.push("choice " + Math.round(x.height) + " px tall"); } if (!qv.querySelector(".chat-qopt")) bad.push("no choices"); } if (keys) bad.push("Question shows a key row"); }
-  if (want === "menu") { const b = q(".chat-banner"); if (!b || !/Open ›/.test(b.textContent)) bad.push("no menu banner"); }
+  if (want === "question") { const qv = q(".chat-q"); if (!qv) bad.push("no Question view"); else { for (const b of qv.querySelectorAll(".chat-qopt")) { const x = b.getBoundingClientRect(); if (x.height < 44) bad.push("choice " + Math.round(x.height) + " px tall"); } if (!qv.querySelector(".chat-qopt")) bad.push("no choices"); } if (!q(".chat-dock.open")) bad.push("the card is not open"); if (!(q(".chat-wrap") && q(".chat-wrap").getBoundingClientRect().height >= 100)) bad.push("no chat above the card"); if (keys) bad.push("Question shows a key row"); }
+  if (want === "menu") { const b = q(".chat-dock.folded .chat-dline"); if (!b || !/▴/.test(b.textContent)) bad.push("no folded menu line"); else if (b.getBoundingClientRect().height > 70) bad.push("the folded line is " + Math.round(b.getBoundingClientRect().height) + " px tall"); }
+  if (want === "screen" && !q(".chat-dock.open .chat-qopt")) bad.push("the screen menu has no card with options");
   if (want === "long-menu" && innerWidth <= 600) {
     const m = q(".chat-menu"); if (!m) bad.push("no .chat-menu"); else {
       const b = m.getBoundingClientRect(); if (b.left < 0 || b.right > innerWidth || b.bottom > innerHeight) bad.push("menu " + Math.round(b.left) + "→" + Math.round(b.right) + " (bottom " + Math.round(b.bottom) + ") not inside " + innerWidth + "x" + innerHeight);
@@ -132,31 +163,31 @@ const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.que
       for (const it of m.querySelectorAll(".chat-mi")) { const x = it.getBoundingClientRect(), l = it.querySelector(".chat-swlabel"); if (x.height < 44) bad.push("menu row " + Math.round(x.height) + " px tall"); if (x.right > b.right + 1 || l.getBoundingClientRect().right > x.right + 1) bad.push("menu row sticks out: " + l.textContent); if (l.scrollWidth > l.clientWidth && getComputedStyle(l).textOverflow !== "ellipsis") bad.push("cut without an ellipsis: " + l.textContent); }
     }
   }
-  if (want !== "working" && !scr) bad.push("Screen toggle is not in the header");
-  // mobile-chat-close-hidden U1: on a phone the switch is its own full-width row of 44 px buttons and the header never overflows.
+  // chat-view-switcher U1: Screen sits in .chat-row, never in the header and never as a row of its own.
+  if (want !== "working" && !scr) bad.push("Screen toggle is not in .chat-row");
+  if (q(".mhd .chat-scrtog, .mhd .chat-scr, .mhd .chat-seg")) bad.push("a view switch is in the header");
+  if (scr) { const a = q(".chat-row .chat-attach").getBoundingClientRect(), t = scr.getBoundingClientRect(); if (Math.abs((a.top + a.bottom) - (t.top + t.bottom)) > 4) bad.push("Screen toggle is on a row of its own"); }
+  // mobile-chat-close-hidden U1: on a phone the header is one row with ✕ on screen and never overflows.
   if (want === "long" && innerWidth <= 600) {
-    const hd = q(".mhd"), seg = q(".mhd .chat-seg"), x = q(".mhd .mclose").getBoundingClientRect(), dot = q(".chat-swbtn .chat-new"), mailBadge = q(".chat-swbtn .msg-badge");
+    const hd = q(".mhd"), x = q(".mhd .mclose").getBoundingClientRect(), dot = q(".chat-swbtn .chat-new"), mailBadge = q(".chat-swbtn .msg-badge");
     if (!vis(dot) || !vis(mailBadge)) bad.push("the switcher shows no mail badge and new-reply dot");
     else if (mailBadge.scrollWidth > mailBadge.clientWidth) bad.push("the mail badge is squeezed");
     if (x.right > innerWidth) bad.push("✕ right edge " + Math.round(x.right) + " past " + innerWidth);
     if (hd.scrollWidth !== innerWidth) bad.push("header scrollWidth " + hd.scrollWidth + " is not " + innerWidth);
-    if (!seg) bad.push("no Chat/Screen switch"); else {
-      const g = seg.getBoundingClientRect(); if (g.top < x.bottom - 1 || g.width < innerWidth - 40) bad.push("the switch is not on its own row " + Math.round(g.top) + " " + Math.round(g.width));
-      const bs = [...seg.querySelectorAll("button")]; if (bs.map((b) => b.textContent) + "" !== "Chat,Screen" || bs.some((b) => b.getBoundingClientRect().height < 44)) bad.push("switch buttons " + bs.map((b) => b.textContent + " " + Math.round(b.getBoundingClientRect().height)));
-    }
+    if (hd.getBoundingClientRect().height > 80) bad.push("the header is " + Math.round(hd.getBoundingClientRect().height) + " px tall, not one row");
   }
   const lab = q(".chat-swbtn .chat-swlabel"); if (lab && lab.textContent === "tester" && lab.scrollWidth > lab.clientWidth) bad.push("the short label tester is cut");
-  if (scr && q(".qfoot .chat-scr")) bad.push("Screen toggle still in the footer");
   return bad; })(${JSON.stringify(want)})`;
 const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; chat?: string; open: Open }[] = [
   { name: "question", strict: true, open: (p) => click(p, ".qrow, .qnote") },
   { name: "chat", strict: true, open: async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) },
   { name: "chat-working", strict: true, chat: "working", open: openChat },
   { name: "chat-idle", strict: true, chat: "idle", open: openChatOf("tester") },
-  { name: "chat-menu", strict: true, chat: "menu", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-segb", /^Chat/)) },
+  { name: "chat-menu", strict: true, chat: "menu", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-dfold")) },
   { name: "chat-question", strict: true, chat: "question", open: openChatOf("builder-platform") },
-  { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-segb", /^Screen/)) },
-  { name: "long-name-chat", strict: true, chat: "long", open: openLongName },   // not ^chat: its 1280 measures must equal the base
+  { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-scrtog")) },
+  { name: "chat-long-question", strict: true, chat: "long-card", open: longQuestion(true) },
+  { name: "long-name-chat", strict: true, chat: "long", open: openLongName },
   { name: "long-name-menu", strict: true, chat: "long-menu", open: openLongMenu },
   { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
   { name: "page", strict: true, kind: "page", open: async () => true },
@@ -171,6 +202,7 @@ const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; cha
   { name: "plan-viewer", strict: true, open: async (p) => (await click(p, ".row.squad")) && (await click(p, '.docbox .plan, .docbox button, [data-ev="open-doc"]')) },
   { name: "kb-question", strict: true, kind: "keyboard", field: ".modal .qbody textarea", open: (p) => click(p, ".qrow, .qnote") },
   { name: "kb-chat", strict: true, kind: "keyboard", field: ".chat-modal .chat-in", open: async (p) => (await click(p, ".qrow, .qnote")) && (await click(p, ".modal .chat-btn")) },
+  { name: "kb-chat-question", strict: true, kind: "keyboard", field: ".chat-modal .chat-dock .chat-qtext", open: longQuestion(false) },
   { name: "kb-chat-idle", strict: true, kind: "keyboard", field: ".chat-modal .chat-in", chat: "idle", open: openChatOf("tester") },
   { name: "event-data", strict: true, open: async (p) => { await p.evaluate(() => { const d = document.querySelector("#events") as any; if (d) d.open = true; }); await p.waitForTimeout(500); return click(p, '#events .ev[role="button"], #events .evmore'); } },
 ];
@@ -189,7 +221,7 @@ const KB_MEASURE = `((field) => {
   const vis = (e) => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 && getComputedStyle(e).display !== "none"; };
   const boxes = [...document.querySelectorAll(".modal .mbox")], box = boxes[boxes.length - 1];
   const f = document.querySelector(field);
-  return { vh: innerHeight, popup: r(box), primary: r(box && [...box.querySelectorAll(".qfoot .btn.pri")].filter(vis).pop()), field: r(f), focused: document.activeElement === f,
+  return { cardSend: f && f.classList.contains("chat-qtext") ? r(f.nextElementSibling) : undefined, vh: innerHeight, popup: r(box), primary: r(box && [...box.querySelectorAll(".qfoot .btn.pri")].filter(vis).pop()), field: r(f), focused: document.activeElement === f,
     kb: document.documentElement.classList.contains("kb-open"), secondary: box ? [...box.querySelectorAll(".qfoot>.qsec, .qfoot>.chat-btn")].filter(vis).length : 0,
     vvh: document.documentElement.style.getPropertyValue("--vvh") };
 })`;
@@ -244,7 +276,8 @@ const shoot = async (size: any, view: string, base: boolean) => {
     return { opened, m: null, kb, back, cover, stays, hide, after, y0 };
   }
   const m = opened ? await p.evaluate(MEASURE) : null;
-  if (m && v.chat) m.chat = await p.evaluate(CHAT_CHECK(v.chat));
+  if (m && v.chat) m.chat = await p.evaluate(v.chat === "long-card" ? LONG_CARD : CHAT_CHECK(v.chat));
+  if (opened && !base && v.chat === "long-card") await p.screenshot({ path: join(OUT, `${size.w}-${view}-full.png`) });
   if (opened && !base) await p.screenshot({ path: join(OUT, `${size.w}-${view}.png`) });
   await ctx.close();
   return { opened, m } as any;
@@ -262,6 +295,7 @@ for (const { size, v } of RUNS) {
     const H = size.h - 300, inside = (b: any) => b && b.y >= 0 && b.y + b.h <= H + 1;
     need(!!kb.popup && kb.popup.y === 0 && Math.abs(kb.popup.h - H) <= 1, `keyboard open: sheet ${JSON.stringify(kb.popup)} is not the ${H} px above the keyboard`);
     need(inside(kb.primary) && kb.primary.h >= 44, `keyboard open: Send ${JSON.stringify(kb.primary)} not above the keyboard`);
+    if (v.name === "kb-chat-question") need(!!kb.cardSend && inside(kb.cardSend) && kb.cardSend.h >= 44, `keyboard open: the card's send button ${JSON.stringify(kb.cardSend)} not above the keyboard`);
     need(kb.focused && inside(kb.field), `keyboard open: the focused field ${JSON.stringify(kb.field)} (focused ${kb.focused}) not above the keyboard`);
     for (const c of cover) {
       need(c.inside && c.topmost, `keyboard open: the point (${c.x}, ${c.y}) under the sheet hits the board, not the sheet`);
@@ -303,7 +337,8 @@ for (const { size, v } of RUNS) {
     need(m.small === 0, `${m.small} input(s) under 16 px (${m.fonts})`);
     need(m.out.length === 0 && m.boxScrollW <= m.vw + 1, `sticks out past the right edge: ${m.out} (box scrollWidth ${m.boxScrollW})`);
   }
-  if (!size.phone && !/^chat/.test(v.name)) {   // the chat views changed on purpose at every width (chat-key-buttons U1)
+  // The chat views changed on purpose at every width (chat-key-buttons U1); long-name-chat too: its header lost the Screen button (chat-view-switcher U1).
+  if (!size.phone && !/^chat/.test(v.name) && v.name !== "long-name-chat") {
     const b = await shoot(size, v.name, true); report[`${key}@base`] = b;
     const pick = (x: any) => x.m && { popup: x.m.popup, fonts: x.m.fonts, btns: x.m.btns, flowLefts: x.m.flowLefts, units: x.m.units, evs: x.m.evs, menu: x.m.menu, close: x.m.close && { w: x.m.close.w, h: x.m.close.h }, foot: x.m.foot && { h: x.m.foot.h }, docW: x.m.docW };
     const a = JSON.stringify(pick({ m })), c = JSON.stringify(pick(b));
@@ -318,7 +353,7 @@ const TITLE = `(() => { const lead = document.querySelector(".chat .mhd .chat-le
   const alone = r(probe).width, aloneH = r(probe).height; probe.remove();
   const sub = hd.querySelector(".chat-sub"), close = hd.querySelector(".mclose");
   return { text: lead.textContent, h: r(lead).height, lh: aloneH, w: r(lead).width, alone, closeMid: r(close).top + r(close).height / 2, leadMid: r(lead).top + r(lead).height / 2, subEllipsis: !sub || getComputedStyle(sub).textOverflow === "ellipsis" || sub.scrollWidth <= sub.clientWidth + 1, hdH: r(hd).height,
-    seg: !!hd.querySelector(".chat-seg") }; })()`;   // on a phone a member with a screen has the switch, on its own row
+    seg: !!hd.querySelector(".chat-seg, .chat-scr, .chat-scrtog"), tog: !!document.querySelector(".chat .chat-row .chat-scrtog") }; })()`;
 for (const w of [390, 320]) for (const who of ["member", "studio"]) {
   const key = `${w}/chat-title-${who}`;
   const ctx = await browser.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
@@ -334,7 +369,8 @@ for (const w of [390, 320]) for (const who of ["member", "studio"]) {
   need(Math.abs(t.h - t.lh) <= 1, "the Chat · title is not one line");
   need(t.w >= t.alone - 1, "the Chat · title is narrower than its own text");
   need(Math.abs(t.closeMid - t.leadMid) <= 4, "the ✕ is not on the title's row");
-  if (who === "member") need(t.seg, "the Chat/Screen switch is not in the header");   // this member has a screen read
+  need(!t.seg, "a view switch is in the header");
+  if (who === "member") need(t.tog, "no Screen toggle in the message box row");   // this member has a screen read
   need(t.subEllipsis, "the .chat-sub neither fits nor ends in an ellipsis");
   console.log(`ok   ${key}: title ${Math.round(t.w)}x${Math.round(t.h)}`);
 }
