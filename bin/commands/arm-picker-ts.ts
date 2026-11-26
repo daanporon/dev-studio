@@ -1,4 +1,5 @@
-// arm-picker-ts.ts — bin/hooks/arm-picker.sh, ported (U190): merge the picker-mirror hooks and the
+// arm-picker-ts.ts — bin/hooks/arm-picker.sh, ported (U190): merge the picker-mirror hooks (the
+// AskUserQuestion pair and the PermissionRequest one, for safety-check prompts) and the
 // broad-kill Bash guard into a role worktree's .claude/settings.local.json. bin/hooks/arm-picker.sh
 // runs it (U193: the only body). Same arguments, output, exit codes and settings.
 import { join } from "node:path";
@@ -41,6 +42,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   const self = join(ROOT, "bin", "hooks", "picker-hook.sh");
   const pre = `${self} pre ${STATE} ${ROLE} ${WT}`, post = `${self} post ${STATE} ${ROLE} ${WT}`;
+  const permission = `${self} permission ${STATE} ${ROLE} ${WT}`;
   const guard = join(ROOT, "bin", "hooks", "no-broad-kill-hook.sh");
   const mine = [self, join(ROOT, "bin", "picker-hook.sh")], guards = [guard, join(ROOT, "bin", "no-broad-kill-hook.sh")];
   const rc = mergeSettings(path, (s) => {
@@ -49,10 +51,13 @@ export async function run(argv: string[]): Promise<number> {
       { matcher: "AskUserQuestion", hooks: [{ type: "command", command: pre, timeout: 15 }] },
       { matcher: "Bash", hooks: [{ type: "command", command: guard, timeout: 5 }] }]));
     const postHooks = strip(or(get(s.hooks, "PostToolUse"), []), mine);
-    return setKey(s, "hooks", setKey(s.hooks, "PostToolUse", [...postHooks,
+    s = setKey(s, "hooks", setKey(s.hooks, "PostToolUse", [...postHooks,
       { matcher: "AskUserQuestion", hooks: [{ type: "command", command: post, timeout: 15 }] }]));
+    const askHooks = strip(or(get(s.hooks, "PermissionRequest"), []), mine);
+    return setKey(s, "hooks", setKey(s.hooks, "PermissionRequest", [...askHooks,
+      { matcher: "*", hooks: [{ type: "command", command: permission, timeout: 15 }] }]));
   });
   if (rc !== 0) return rc;
-  writeOut(`armed picker PreToolUse/PostToolUse hooks + broad-kill Bash guard in ${join(path, ".claude", "settings.local.json")} -> ${pre}\n`);
+  writeOut(`armed picker PreToolUse/PostToolUse/PermissionRequest hooks + broad-kill Bash guard in ${join(path, ".claude", "settings.local.json")} -> ${pre}\n`);
   return 0;
 }
