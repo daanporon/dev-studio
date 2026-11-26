@@ -416,6 +416,44 @@ test("the unit window: title, status line, only filled rows, Builder model, Plan
   } finally { await r.window.happyDOM.close(); }
 });
 
+// ---- unit-resource-usage U1: the window's Machine row: the Builder's sample now and the unit's totals.
+test("the unit window's Machine row: live and totals, a stale sample, a done unit, no figures", async () => {
+  const sample = { rss_kb: 3145728, mem_kb: 2097152, cpu_pct: 142.4, procs: 5, psi_cpu: 3, psi_mem: null, at: now - 10 };
+  const totals = { cpu_h: 1.25, peak_cpu_pct: 310, peak_rss_kb: 4194304 };
+  const open = async (resources: any, over: Record<string, any>, slug: string, check: (row: any) => void) => {
+    const sq = udBoard.squads[0];
+    const r = await mount({ ...udBoard, squads: [{ ...sq, members: [{ ...sq.members[0], resources }], units: sq.units.map((u: any) => ({ ...u, ...(over[u.slug] || {}) })) }] }, false);
+    const w = r.window, doc = w.document;
+    try {
+      doc.getElementById("flow").open = true;
+      await new Promise((x) => setTimeout(x, 30));
+      const card = [...doc.querySelectorAll(".fcard")].find((c: any) => c.querySelector(".t").textContent.trim() === slug) as any;
+      card.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+      await new Promise((x) => setTimeout(x, 30));
+      expect(doc.querySelector(".ud")).not.toBeNull();
+      check(doc.querySelector("dd.ud-res"));
+      expect(r.errors).toEqual([]);
+    } finally { await w.happyDOM.close(); }
+  };
+  await open(sample, { "u6-building": { cpu: totals } }, "u6-building", (row) => {
+    expect(row.previousElementSibling?.textContent).toBe("Machine");
+    expect(row.querySelector(".ud-res-now")?.textContent).toBe("now: CPU 142% · RAM 2.0G · 5 processes");
+    expect(row.querySelector(".ud-res-total")?.textContent).toBe("So far: 1.3 CPU-h · peak CPU 310% · peak RAM 4.0G");
+    const tip = row.querySelector("span")?.getAttribute("title");
+    for (const part of ["100% = one core", "counted once", "CPU pressure 3", "Sampled at "]) expect(tip).toContain(part);
+    expect(tip).not.toContain("Memory pressure");
+  });
+  await open({ ...sample, mem_kb: null, cpu_pct: null, at: now - 300 }, { "u6-building": { cpu: { cpu_h: 0.05, peak_cpu_pct: null, peak_rss_kb: null } } }, "u6-building", (row) => {
+    expect(row.querySelector(".ud-res-now")?.textContent).toBe("last measured 5m ago: CPU — · RAM 3.0G · 5 processes");
+    expect(row.querySelector(".ud-res-total")?.textContent).toBe("So far: 0.05 CPU-h");
+    expect(row.querySelector("span")?.getAttribute("title")).toContain("RAM now is RSS");
+  });
+  await open(sample, { "adhoc-done": { cpu: totals, builder_wt: "wt-b" } }, "adhoc-done", (row) => {
+    expect(row.textContent).toBe("Used: 1.3 CPU-h · peak CPU 310% · peak RAM 4.0G");
+  });
+  await open(null, {}, "u9-bare", (row) => expect(row).toBeNull());
+});
+
 // ---- hold-cancels-queue-undo-approval U3: the Plans list's approved chip and "Take back approval".
 test("the Plans list: an approved plan shows its chip and a menu item that opens the confirm", async () => {
   const sq = { ...udBoard.squads[0], plans: [
