@@ -70,6 +70,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .brief-panel .bpct{font-family:var(--mono);color:var(--fg)} .brief-panel .barrow{color:var(--mut)} .brief-panel a{color:var(--blue)}
 .brief-week{margin:10px 0 0} .brief-day{cursor:pointer;color:var(--blue);padding:3px 0;font-size:13px} .brief-day.on{color:var(--fg);font-weight:600} .brief-latest{margin-bottom:10px} .nodebrief{font-size:12px}
 .evlog{margin:22px 0 0} .evlog summary{cursor:pointer;font-size:15px;font-weight:600;margin-bottom:10px} .evlog summary small{font-weight:400;font-size:12px;color:var(--mut);margin-left:8px}
+.arch-sec{margin:22px 0 0} .arch-sec>summary{cursor:pointer;font-size:15px;font-weight:600;margin-bottom:10px} .arch-sec>summary small{font-weight:400;font-size:12px;color:var(--mut);margin-left:8px}
 .evctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;font-size:12px} .evday{padding:6px 12px 2px;border-top:1px solid var(--line);font:600 12px var(--mono);color:var(--mut)} .evempty{padding:12px;color:var(--mut);font-size:12px} .ev:focus-visible{outline:2px solid var(--fg);outline-offset:-2px} .evctl select{background:#0f1218;border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:3px 6px;font:12px inherit}
 .ev{display:grid;grid-template-columns:64px 130px 220px 1fr;gap:10px;padding:4px 12px;border-top:1px solid var(--line);font:12px var(--mono);cursor:pointer} .ev:hover{background:#1a1f28} .ev .p{color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .ev .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ev.in{padding-left:28px;background:#12161d} .ev.in:hover{background:#1a1f28} .ev.msg{cursor:default} .ev.msg .s{display:flex;gap:8px;min-width:0} .ev.msg .sl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer} .ev.msg .sl:hover{text-decoration:underline} .evmore{flex:none;background:none;border:0;padding:0;color:var(--mut);text-decoration:underline;font:inherit;cursor:pointer}
@@ -200,10 +201,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .plan{display:flex;gap:8px;align-items:center;cursor:pointer;color:var(--blue);font:13px var(--mono);padding:6px 8px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;word-break:break-all}
 .crew .m .acct{color:var(--mut);font-size:11px} .crew .m .acct.dflt{color:var(--dim)} .crew .m .st{font-size:11px;color:var(--mut)} .crew .m .st{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .crew .m .st .wish{color:var(--amber,#e5a23c)} .crew .m .warn{color:var(--red);font-size:11px;margin-left:6px} .crew .m .tok{color:var(--dim);font-size:11px} .crew .m .tok.amber{color:var(--amber)} .crew .m .tok.red{color:var(--red)}
 .prop{display:flex;align-items:center;gap:8px;font:13px var(--mono);margin-bottom:6px} .prop span{flex:1}
-.arch{padding:12px 16px;border-top:1px solid var(--line);font-size:13px;color:var(--mut)}
-.arch button{background:none;border:0;color:var(--fg);text-decoration:underline;cursor:pointer;padding:0;margin-left:8px}
-.arch .item,.detail .item{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:6px 0;font:12px var(--mono)}
-.arch .item>*{white-space:nowrap}
+.detail .item{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding:6px 0;font:12px var(--mono)}
 .fb-draft{border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:10px}.fb-body{white-space:pre-wrap;margin:6px 0}.fb-note,.fb-note-row{margin:4px 0}.fb-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px}.fb-edit input,.fb-edit textarea{width:100%;box-sizing:border-box}.fb-leak.bad{color:var(--bad,#e5534b)}.fb-filters{display:flex;gap:6px;margin-bottom:8px}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50}
 /* a fixed overlay chains the scroll it does not use to the page: :has() freezes the page while any popup (stacked or not) is open, the gutter keeps the width, contain keeps each popup's scroll to itself */
@@ -4303,7 +4301,7 @@ function App() {
   const [lastOk, setLastOk] = useState(null);
   const [open, setOpen] = useState(() => new Set(store.get("b:open", [])));
   const [filter, setFilter] = useState(() => store.get("b:filter", "all"));
-  const [showArch, setShowArch] = useState(false);
+  const [archOpen, setArchOpen] = useState(false);
   const [acctOpen, setAcctOpen] = useState(() => new Set(store.get("b:acctOpen", [])));
   const toggleAcct = (k) => setAcctOpen((o) => { const n = new Set(o); n.has(k) ? n.delete(k) : n.add(k); store.set("b:acctOpen", [...n]); return n; });
   const [accOpen, setAccOpen] = useState(() => lstore.get("b:accts", true));
@@ -4592,24 +4590,6 @@ function App() {
           ${isOpen && html`<${Detail} s=${s} onPlan=${setPlan} planOpen=${!!plan} toast=${setToast} setAsk=${setAsk} askKeys=${askKeys} prerequisites=${data.prerequisites} flow=${data.flow} />`}
         </${React.Fragment}>`; })}
       ${shown.some((s) => st.get(key(s)).total > 0) && html`<${UnitKey} />`}
-      ${data.archived.length > 0 && html`<${React.Fragment}><div class="arch">Archived (${data.archived.length}) · ${data.archived.slice(0, 6).map((a) => a.topic).join(", ")}${data.archived.length > 6 ? "…" : ""}
-        <button onClick=${() => setShowArch(!showArch)}>${showArch ? "hide" : "show"}</button></div>
-        ${showArch && data.archived.map((a, i) => { const k = "arch:" + a.topic + ":" + (a.closed_at || i), isOpen = open.has(k);
-          const merged = a.prs.filter((p) => p.status === "merged").length;
-          return html`<${React.Fragment} key=${k}>
-            <div class=${"row squad" + (isOpen ? " open" : "")} onClick=${() => toggle(k)}>
-              <span class="caret">›</span>
-              <div style=${{ minWidth: 0 }}><div class="topic">${a.type === "testing" ? "🧪 " : ""}${a.topic}</div><div class="sub" title=${a.framing}>${a.framing}</div></div>
-              <span><span class="pill">archived</span></span>
-              <span class="c-lead dim">${a.closed_at ? "closed " + a.closed_at.slice(0, 10) : "—"}</span>
-              <span class="c-units"><${UnitsCell} st=${{ total: a.progress.total, merged: a.progress.done }} /></span>
-              <span class="c-prs prs">${a.prs.length ? merged + "/" + a.prs.length + " merged" : "—"}</span>
-              <span class="c-open"></span>
-              <${SpentCell} r=${a.spent_since} />
-              <span class="c-menu"></span>
-            </div>
-            ${isOpen && html`<div class="detail"><${Docs} s=${a} onPlan=${setPlan} closed=${true} />${(a.leftovers || []).length > 0 && html`<${LeftoversBox} ...${{ s: a }} />`}<div class="item">${a.prs.map((p) => html`<${PrChip} key=${p.num} pr=${p} />`)}</div></div>`}
-          </${React.Fragment}>`; })}</${React.Fragment}>`}
     </div>
     </details>
 
@@ -4642,6 +4622,28 @@ function App() {
 
     <${Briefs} list=${data.briefings || []} schedule=${data.briefing_schedule} project=${data.project || (data.squads[0] && data.squads[0].label) || ""} />
     <${EventLog} tick=${data.generated_at} toast=${setToast} />
+
+    ${data.archived.length > 0 && html`<details class="arch-sec" id="archived" open=${archOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== archOpen) setArchOpen(o); }}>
+      <summary>Archived<small>${data.archived.length} squad${data.archived.length === 1 ? "" : "s"} · closed for good; click one for its documents and PRs</small></summary>
+      <div class="tbl">
+        <div class="row head"><span></span><span>Squad</span><span>Phase</span><span class="c-lead">Closed</span><span class="c-units">Units</span><span class="c-prs">PRs</span><span class="c-open">Open</span><span class="c-spent num" title="spent since the squad started (price-weighted tokens)">Spent</span><span class="c-menu"></span></div>
+        ${data.archived.map((a, i) => { const k = "arch:" + a.topic + ":" + (a.closed_at || i), isOpen = open.has(k);
+          const merged = a.prs.filter((p) => p.status === "merged").length;
+          return html`<${React.Fragment} key=${k}>
+            <div class=${"row squad" + (isOpen ? " open" : "")} onClick=${() => toggle(k)}>
+              <span class="caret">›</span>
+              <div style=${{ minWidth: 0 }}><div class="topic">${a.type === "testing" ? "🧪 " : ""}${a.topic}</div><div class="sub" title=${a.framing}>${a.framing}</div></div>
+              <span><span class="pill">archived</span></span>
+              <span class="c-lead dim">${a.closed_at ? "closed " + a.closed_at.slice(0, 10) : "—"}</span>
+              <span class="c-units"><${UnitsCell} st=${{ total: a.progress.total, merged: a.progress.done }} /></span>
+              <span class="c-prs prs">${a.prs.length ? merged + "/" + a.prs.length + " merged" : "—"}</span>
+              <span class="c-open"></span>
+              <${SpentCell} r=${a.spent_since} />
+              <span class="c-menu"></span>
+            </div>
+            ${isOpen && html`<div class="detail"><${Docs} s=${a} onPlan=${setPlan} closed=${true} />${(a.leftovers || []).length > 0 && html`<${LeftoversBox} ...${{ s: a }} />`}<div class="item">${a.prs.map((p) => html`<${PrChip} key=${p.num} pr=${p} />`)}</div></div>`}
+          </${React.Fragment}>`; })}
+      </div></details>`}
 
     ${squadChat && html`<${ChatPanel} ...${squadChat} onPlan=${setPlan} planOpen=${!!plan} onClose=${() => setSquadChat(null)} />`}
     ${studioChat && html`<${ChatPanel} ...${studioChat} onPlan=${setPlan} planOpen=${!!plan} onSeen=${() => bumpSeen((n) => n + 1)} onClose=${() => { setStudioChat(null); bumpSeen((n) => n + 1); }} />`}
