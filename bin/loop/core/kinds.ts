@@ -170,6 +170,8 @@ export const FACTS = {
   limited: ep,
   message_delivered: obj({ ids: arr(num) }),
   message_read: obj({ ids: arr(num), by: str }),
+  // permission-prompt-needs-you: one per permission prompt a role waits on; via "hook" or "screen"; agent = a helper agent raised it.
+  permission_asked: obj({ role: str, tool: opt(str), via: str, agent: opt(bool), text: str }),
   message_replied: obj({ id: num, reply: opt(num), request: opt(num) }),
   message_sent: obj({ key: str, to: str, from: str, kind: str, subject: str }),
   finish_recorded: obj({ key: str, member: str, unit: opt(str), outcome: str, gen: opt(str) }),
