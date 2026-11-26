@@ -62,10 +62,12 @@ const NAME = `(?<![\\w.-])(?=[\\w.-]*?${KEY})([\\w.-]+)`;
 // sign, a quoted key or a type between (`password = "x"`, `'password' => 'x'`, `apiKey: string = "x"`) only a
 // quoted value counts, so prose and `token == other` stay.
 // A type as an annotation writes it: `str`, `Optional[str]`, `Map<string, string>`, `str | None`.
-// A bracket body holds one nested level and cannot run past its closer: overlapping bodies backtrack
-// exponentially, and the replace then silently stops matching.
-const SQUARE = String.raw`\[(?:[\w., |]|\[[\w., |]{0,80}\]){0,80}\]`;
-const ANGLE = String.raw`<(?:[\w., |\[\]]|<[\w., |\[\]]{0,80}>){0,80}>`;
+// A bracket body nests to 5 levels and no level can run past its closer: a body that could would overlap the
+// union, backtrack exponentially, and the replace would then silently stop matching.
+const nested = (open: string, close: string, plain: string, depth: number): string =>
+  `${open}(?:${plain}${depth > 1 ? `|${nested(open, close, plain, depth - 1)}` : ""}){0,80}${close}`;
+const SQUARE = nested(String.raw`\[`, String.raw`\]`, String.raw`[\w., |]`, 5);
+const ANGLE = nested("<", ">", String.raw`[\w., |\[\]]`, 5);
 const TYPE_NAME = String.raw`[A-Za-z_][\w.]*(?:${SQUARE}|${ANGLE})?\??`;
 const TYPES = String.raw`${TYPE_NAME}(?:[ \t]*\|[ \t]*${TYPE_NAME})*`;
 const SPACED = String.raw`(?:\\*["'])?(?:(?:[ \t]*:[ \t]*${TYPES})?[ \t]*(?::=|=>|=(?!=))|[ \t]*:)[ \t]*`;

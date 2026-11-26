@@ -134,6 +134,12 @@ describe("redact: passwords, login headers and URL credentials", () => {
     expect(redact(`password: ${"a<>|".repeat(60)}a; DB_PASSWORD: zzreal`)).toEndWith(`DB_PASSWORD: ${R}`);
     expect(performance.now() - t).toBeLessThan(2000);
   });
+  test.each([
+    "Optional[Dict[str, List[int]]]", "dict[str, tuple[int, list[str]]]", "Optional[Callable[[int], str]]",
+    "Map<string, Map<string, List<int>>>", "A[B[C[D[E[int]]]]]",
+  ])("a deeply nested type does not hide the assignment: %s", (type) => {
+    expect(redact(`password: ${type} = "zzS"`)).toBe(`password: ${type} = "${R}"`);
+  });
   test.each([String.raw`curl -u "admin:zzA\$(zzB" x`, 'curl -u "admin:zzA\\`zzB" x', String.raw`curl -u admin:"zzA\$(zzB" x`])
   ("an escaped substitution in a -u password is text: %s", (text) => expect(redact(text)).not.toContain("zz"));
 });
