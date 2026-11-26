@@ -39,6 +39,9 @@ Carries only the gaps Orca leaves:
   the indented lines under it, `about` (the `What:` text, 1200 characters at most), `done` and `check`
   (the `Done:` and `Check:` lines, 400 each), and updates them on every re-registration; `add-unit
   --about <text>` sets `about` for an ad-hoc unit. A unit without them shows "not stored" and how to add it.
+- `units[].links` — http(s) URLs with more on the unit, from the `Link:` lines in its plan block (`register-plan`,
+  following the plan like `about`) or `add-unit --link <url>` (repeatable); at most 5, 500 characters each
+  (`conventions/plan-shape.md` step e). Absent = none.
 - `units[].hold` — a minor follow-up unit (a non-blocking bug the Tester found) stays
   `planned` but `ready-units` excludes it, so the Lead's auto-picker never dispatches it.
   A hold with no `hold_reason` is a parked follow-up or a plan `HELD` line. A plan `HELD`
