@@ -12,6 +12,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { JOIN_MAX_BYTES } from "./host-keys.ts";
+import { REQUEST_TIMEOUT_MS } from "./request.ts";
 import type { Store } from "../loop/core/store.ts";
 
 export const LINK_VERSION = "1";
@@ -24,7 +25,7 @@ export const pingMs = () => envMs("DS_LINK_PING_MS", 10_000);
 /** Silence after which an end calls the link down (30 s); DS_LINK_DEAD_MS. */
 export const deadMs = () => envMs("DS_LINK_DEAD_MS", 30_000);
 /** How long a request waits for its answer by default (30 s). */
-export const REQUEST_TIMEOUT_MS = 30_000;
+export { REQUEST_TIMEOUT_MS } from "./request.ts";
 
 export type Frame = { t: string; [k: string]: unknown };
 

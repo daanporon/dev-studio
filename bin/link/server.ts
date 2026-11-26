@@ -15,7 +15,7 @@
 // ping pass records hosts.last_seen_at; the hello also records link_version, up_migration and code_rev (KTD15).
 // Run as a script: `bun bin/link/server.ts <binds> <port>`; it exits 75 when a file under bin/link/ changes, so
 // the loop restarts it on the new code (uncounted, like the board).
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ServerWebSocket, Server } from "bun";
 import { open, stateRoot, type Store } from "../loop/core/store.ts";
@@ -23,7 +23,9 @@ import { tailnetIp } from "../loop/io/tailnet.ts";
 import { Challenges, nameProblem, parseJoinFrame, requestJoin, verifyHello } from "./host-keys.ts";
 import { deadMs, JOIN_MAX_BYTES, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
 
-export const socketPath = (root: string) => join(root, "link", "server.sock");
+import { socketPath } from "./request.ts";
+// The unix-socket client lives in request.ts (role-side code imports it without this server); re-exported here.
+export { linkRequest, socketPath } from "./request.ts";
 
 type Conn = { phase: "new" | "challenged" | "up" | "closing"; name: string; nonce: Buffer | null; peer: Peer | null; addr: string };
 type WS = ServerWebSocket<Conn>;
@@ -238,16 +240,6 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
   };
 }
 
-/** Ask a linked host from any process on main, through the server's unix socket. Throws when the server is not
- *  running, the host is not linked or the host's handler failed. */
-export async function linkRequest(root: string, host: string, ch: string, body: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
-  const sock = socketPath(root);
-  if (!existsSync(sock)) throw new Error("link: the link server is not running on main");
-  const r = await fetch("http://link/request", { unix: sock, method: "POST", body: JSON.stringify({ host, ch, body, timeout_ms: timeoutMs }), headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(timeoutMs + 5000) } as RequestInit);
-  const j = await r.json() as { ok: boolean; body?: unknown; error?: string };
-  if (!j.ok) throw new Error(j.error ?? "link: request failed");
-  return j.body;
-}
 
 // The newest mtime of the files under bin/link/ (the code this process runs).
 function codeStamp(dir = import.meta.dir): number {
