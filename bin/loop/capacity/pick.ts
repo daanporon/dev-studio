@@ -497,7 +497,7 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
     const r = rungs[i], tag = rungTag(r);
     if (!canLaunch(backend, r.agent)) { noLaunch.add(r.agent); skipped.push(`${tag} (no launch line on ${backend})`); continue; }
     let accts = accounts(store, r.agent, now, req.limited ?? []).filter((a) => matchesPlan(r.plan, a.plan));
-    if (account && tableOf(store, r.agent).gone.has(account)) {
+    if (account && tableOf(store, r.agent).gone.has(String(account))) {
       lost = true;
       skipped.push(`${tag} (${account} gone)`);
       tried.push(tag);
