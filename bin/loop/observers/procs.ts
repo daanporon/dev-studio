@@ -415,7 +415,7 @@ export function procsObserver(opts: ProcsOpts = {}): Observer {
         if (Math.abs(btime + Math.floor(p.start / CLK_TCK) - w.started_at) > BTIME_SLACK_S) continue;
         roots.set(p.pid, key(w)); rootOf.set(key(w), p.pid);
       }
-      const wts = (store.db.query("SELECT project, wt, path FROM observed_worktrees WHERE gone_at IS NULL AND path IS NOT NULL").all() as Wt[])
+      const wts = (store.db.query("SELECT project, wt, path FROM observed_worktrees WHERE gone_at IS NULL AND path IS NOT NULL AND host = 'local'").all() as Wt[])
         .map((w) => ({ key: key(w), path: canon(w.path) })).filter((w) => w.path !== "/").sort((a, b) => b.path.length - a.path.length);
       const cwds = new Map<number, { path: string; deleted: boolean } | null>();
       const cwdOf = (pid: number) => { if (!cwds.has(pid)) cwds.set(pid, readCwdRaw(proc, pid)); return cwds.get(pid)!; };
@@ -444,7 +444,7 @@ export function procsObserver(opts: ProcsOpts = {}): Observer {
       for (const id of containers.keys()) if (!ids.has(id)) containers.delete(id);
 
       let leftoverOf: ReturnType<typeof leftovers> | null = null;
-      const leftover = (p: string) => (leftoverOf ??= leftovers(store.db.query("SELECT project, wt, path FROM observed_worktrees WHERE path IS NOT NULL").all() as Wt[]))(p);
+      const leftover = (p: string) => (leftoverOf ??= leftovers(store.db.query("SELECT project, wt, path FROM observed_worktrees WHERE path IS NOT NULL AND host = 'local'").all() as Wt[]))(p);
       // A container's owner: the live worktree holding its compose dir or a bind source (longest
       // wins), else a removed worktree's leftover row; null leaves it a host group.
       const ctrOwner = new Map<string, string | null>();
@@ -546,8 +546,9 @@ export function procsObserver(opts: ProcsOpts = {}): Observer {
           [project, u.squad, u.slug, charged / CLK_TCK, charges ? cpuPct(charged, secs) : null, e.rss_kb, wt, now, now]);
           noteLaneMove(store, project, u.squad, u.slug);   // a light unit past light_lane_cpu_h (U3)
         }
-        for (const r of store.db.query("SELECT project, wt FROM observed_procs").all() as WtId[]) {
-          if (!per.has(key(r))) store.db.run("DELETE FROM observed_procs WHERE project = ? AND wt = ?", [r.project, r.wt]);
+        // side-loop-host U6: a side host's uploaded rows (host != local) are not this scan's to drop.
+        for (const r of store.db.query("SELECT project, wt FROM observed_procs WHERE host = 'local'").all() as WtId[]) {
+          if (!per.has(key(r))) store.db.run("DELETE FROM observed_procs WHERE project = ? AND wt = ? AND host = 'local'", [r.project, r.wt]);
         }
         const g = [...groups.values()].map((e) => ({ label: e.label, comm: e.comm, procs: e.procs, rss_kb: e.rss_kb, mem_kb: memOf(`\x01${e.label}`), cpu_pct: pct(e.ticks), cpu_cg_pct: cpuCgOf(`\x01${e.label}`) }))
           .sort((a, b) => b.rss_kb - a.rss_kb);

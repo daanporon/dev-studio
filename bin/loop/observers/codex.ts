@@ -109,7 +109,7 @@ export function scanRollouts(store: Store, dir: string, since: number, at: numbe
           read_to: Math.max(end, from), ...(turn ? { model: turn.model, effort: turn.effort, model_at: turn.at } : {}), observed_at: at });
       } catch { /* unreadable now: tried again next scan */ }
     }
-    store.db.run("DELETE FROM observed_rollouts WHERE mtime < ?", [since]);
+    store.db.run("DELETE FROM observed_rollouts WHERE mtime < ? AND host = 'local'", [since]);
   });
 }
 
