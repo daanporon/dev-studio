@@ -2,7 +2,7 @@
 // only when a fresh screen still shows that prompt (bin/loop/chat/permission.ts), through the answer fulfiller
 // against the fake Orca's screen. tests/board-serve.sh covers the board's 409s.
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LoopActuator, type Fulfiller } from "../../bin/loop/core/actuator.ts";
@@ -19,13 +19,14 @@ const ROOT = join(import.meta.dir, "..", "..");
 const FIXTURE = join(ROOT, "tests", "fixtures", "loop", "state");
 const T = 1_800_000_000;
 const WT = "0a1b2c3d-0000-4000-8000-00000000d3a0::/home/user/orca/workspaces/demo/ds-dev-studio-builder-demo";
-const RULE = "─".repeat(60);
+const RULE = "─".repeat(60), DASH = "╌".repeat(60);
 
-// Claude Code's dialog as 2.1.x draws it: a full-width rule, the tool's lines, the question, the menu.
-const screen = (cmd: string[], opts = ["Yes", "No"], question = "Do you want to proceed?", above = "● Bash(ls)\n  ⎿  done") =>
-  [above, RULE, " Bash command", "", ...cmd.map((l) => `   ${l}`), "   Push the branch", "",
-    " Claude Code can't be sure it read this command the way the shell will.", question,
-    ...opts.map((o, i) => `${i ? "  " : "❯"} ${i + 1}. ${o}`), "", " Esc to cancel · Tab to amend"].join("\n");
+// Claude Code's dialog as 2.1.332 draws it (U5, the Tester's saved screens): a full-width rule, the header, the
+// call's description, the command between two dashed rules, the warning, the question, the menu.
+const screen = (cmd: string[], opts = ["Yes", "No"], question = "Do you want to proceed?", above = "● Bash(ls)\n  ⎿  done", desc = ["Push the branch"], header = "Bash command") =>
+  [above, RULE, ` ${header}`, ...desc.map((l) => ` ${l}`), DASH, ...cmd.map((l) => ` ${l}`), DASH,
+    " │ Claude Code can't be sure it read this command the way the shell will.", question,
+    ...opts.map((o, i) => `${i ? "  " : "❯"} ${i + 1}. ${o}`), " Esc to cancel · Tab to amend"].join("\n");
 const PUSH = screen(["git push origin work"]);
 
 describe("permissionKey (the screen check)", () => {
@@ -84,15 +85,82 @@ describe("permissionKey (the screen check)", () => {
     expect(checkable("Bash", { command }, command)).toBe(false);
   });
   test("a file change matches on its file's name in the question", () => {
-    const edit = screen(["(diff)"], ["Yes", "No"], "Do you want to make this edit to notes.md?");
-    expect(permissionKey(edit, { tool: "Edit", shown: "/w/docs/notes.md\nnew text" }, "No")).toEqual({ digit: 2 });
+    // 2.1.332's file dialog (from its source: title, subtitle path, the diff in the same dashed box, the question).
+    const edit = [RULE, " Edit file", " docs/notes.md", DASH, "  12 - old text", "  12 + new text", DASH,
+      " Do you want to make this edit to notes.md?", "❯ 1. Yes", "  2. Yes, allow all edits during this session (shift+tab)", "  3. No"].join("\n");
+    expect(permissionKey(edit, { tool: "Edit", shown: "/w/docs/notes.md\nnew text" }, "No")).toEqual({ digit: 3 });
     expect(permissionKey(edit, { tool: "Edit", shown: "/w/docs/other.md\nnew text" }, "Yes")).toHaveProperty("why");
+    expect(claudePrompt(edit)?.dialog).toContain("+ new text");
+  });
+  test("a helper agent's or an unsandboxed header still matches; another header or layout does not", () => {
+    for (const h of ["Bash command · from the general-purpose agent", "Bash command (unsandboxed)"])
+      expect(permissionKey(screen(["git push origin work"], undefined, undefined, undefined, undefined, h), bash, "Yes")).toEqual({ digit: 1 });
+    expect(permissionKey(screen(["git push origin work"], undefined, undefined, undefined, undefined, "Run command"), bash, "Yes")).toHaveProperty("why");
+    // The old command-then-description layout (never seen live) and a second command block.
+    const old = [RULE, " Bash command", "   git push origin work", "   Push the branch", " Do you want to proceed?", "❯ 1. Yes", "  2. No"].join("\n");
+    expect(permissionKey(old, bash, "Yes")).toHaveProperty("why");
+    const two = screen(["git push origin work"]).replace(`${DASH}\n │`, `${DASH}\n rm -rf ./build\n${DASH}\n │`);
+    expect(two).toContain("rm -rf");
+    expect(permissionKey(two, bash, "Yes")).toHaveProperty("why");
+  });
+  test("a description that wraps matches; a cut or different one does not", () => {
+    const d = "Push the branch to origin so the pull request picks up the review fixes from this round";
+    expect(permissionKey(screen(["git push origin work"], undefined, undefined, undefined, [d.slice(0, 40), d.slice(40)]), { ...bash, description: d }, "Yes")).toEqual({ digit: 1 });
+    expect(permissionKey(screen(["git push origin work"], undefined, undefined, undefined, [`${d.slice(0, 40)}…`]), { ...bash, description: d }, "Yes")).toHaveProperty("why");
+    expect(permissionKey(screen(["git push origin work"], undefined, undefined, undefined, ["Push the branch now"]), bash, "Yes")).toHaveProperty("why");
   });
   test("claudePrompt keeps only the dialog's lines", () => {
+    expect(claudePrompt(PUSH)?.dialog).toContain("git push origin work");
     expect(claudePrompt(PUSH)).toMatchObject({ question: "Do you want to proceed?", options: ["Yes", "No"] });
     expect(claudePrompt(PUSH)?.dialog).not.toContain("Bash(ls)");
   });
   test("checkable: a Bash command or a file change shown in full", () => {
+    expect(checkable("Bash", { command: "ls" }, "ls")).toBe(true);
+  });
+});
+
+// The Tester's saved screens of Claude Code 2.1.332's real dialog (U5): the screen-tail output as captured, with only
+// the home folder in a conversation line above the dialog renamed for the leak guard.
+describe("permissionKey on the real dialog (saved screens)", () => {
+  const read = (f: string) => readFileSync(join(ROOT, "tests", "fixtures", "loop", "permission", f), "utf8");
+  const S123D = read("s123d.screen-prompt.txt"), S4 = read("s4.screen-prompt.txt");
+  // s123d.entry.json's shown text; the description is the call's, read from its transcript.
+  const command = 'v=$(false || (echo none)); echo "probe=$v"';
+  const call = (description: string, cmd = command) => ({ tool: "Bash", shown: command, command: cmd, description });
+  const d123 = "Safe trigger for safety-check prompt", d4 = "Scenario 4 trigger, answered No on board";
+  test("Yes and No press their own digit", () => {
+    expect(permissionKey(S123D, call(d123), "Yes")).toEqual({ digit: 1 });
+    expect(permissionKey(S123D, call(d123), "No")).toEqual({ digit: 2 });
+    expect(permissionKey(S4, call(d4), "No")).toEqual({ digit: 2 });
+    expect(permissionKey(S4, call(d4), "Yes")).toEqual({ digit: 1 });
+  });
+  test("a command changed by one character, a longer one or an extra line presses nothing", () => {
+    const at = (from: string, to: string) => S123D.replace(`\n ${command}\n`, `\n ${command.replace(from, to)}\n`);
+    expect(permissionKey(at("none", "nonf"), call(d123), "Yes")).toHaveProperty("why");
+    expect(permissionKey(S123D.replace(`\n ${command}\n`, `\n ${command}; rm -rf ./build\n`), call(d123), "Yes")).toHaveProperty("why");
+    expect(permissionKey(S123D.replace(`\n ${command}\n`, `\n ${command}\n rm -rf ./build\n`), call(d123), "Yes")).toHaveProperty("why");
+    // The screen's command against a call whose command is shorter.
+    expect(permissionKey(S123D, call(d123, "v=$(false || (echo none))"), "Yes")).toHaveProperty("why");
+  });
+  test("a different description presses nothing", () => {
+    expect(permissionKey(S123D, call(d4), "Yes")).toHaveProperty("why");
+    expect(permissionKey(S4, call(d123), "No")).toHaveProperty("why");
+  });
+  test("the helper agent's header still matches", () => {
+    const helper = S123D.replace("\n Bash command\n", "\n Bash command · from the general-purpose agent\n");
+    expect(helper).toContain("general-purpose");
+    expect(permissionKey(helper, call(d123), "Yes")).toEqual({ digit: 1 });
+  });
+  test("the dialog runs from the solid rule to the question", () => {
+    const p = claudePrompt(S123D);
+    expect(p?.question).toBe("Do you want to proceed?");
+    expect(p?.dialog?.split("\n")[0]).toBe(" Bash command");
+    expect(p?.dialog).not.toContain("Running 2 shell commands");
+  });
+});
+
+describe("checkable", () => {
+  test("a Bash command or a file change shown in full", () => {
     expect(checkable("Bash", { command: "ls" }, "ls")).toBe(true);
     expect(checkable("Bash", { command: "ls" }, "ls\n… (cut)")).toBe(false);
     expect(checkable("Write", { file_path: "/a/b.md" }, "/a/b.md\nhi")).toBe(true);

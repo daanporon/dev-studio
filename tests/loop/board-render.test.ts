@@ -920,8 +920,11 @@ test("a safety-check prompt shows its command as a code block and says to answer
     await wait(100);
     const body = doc.querySelector(".qbody");
     expect(body.querySelector("pre.qcmd").textContent).toBe(shown);
-    expect(body.textContent).toContain("Answer it in builder-u1's terminal — Claude stopped at a safety check");
-    expect(body.querySelectorAll("button.opt").length).toBe(0); // read-only: nothing to send
+    // U5: why, where to answer it, and the screen's options as plain text, no option rows.
+    expect(body.textContent).toContain("The board can't check this command. Answer it in builder-u1's terminal.");
+    expect(body.textContent).toContain("On the screen: 1. Yes · 2. No");
+    expect(body.querySelectorAll(".opt").length).toBe(0);
+    expect(note.textContent).toContain("The board can't check this command");
     expect(r.errors).toEqual([]);
   } finally { await w.happyDOM.close(); }
 });

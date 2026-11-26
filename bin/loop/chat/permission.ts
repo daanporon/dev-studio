@@ -1,7 +1,7 @@
 // permission.ts — may the board answer a Claude safety-check prompt, and with which key (permission-prompt-needs-you U2).
 // The hook (bin/lib/permission-prompt.ts) asks `checkable` before it marks an entry answerable; the answer fulfiller
 // (fulfil/answer.ts) asks `permissionKey` on a fresh screen right before it presses anything.
-import { claudePrompt } from "./menu.ts";
+import { claudePrompt, unbox } from "./menu.ts";
 import { redact, REDACTED } from "../core/redact.ts";
 
 export const FILE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
@@ -34,25 +34,30 @@ export function checkable(tool: string, input: any, shown: string): boolean {
 // Whitespace and box-drawing characters go on both sides: the dialog wraps and indents a long command.
 const squash = (s: string) => s.replace(/[\s─-╿]+/g, "");
 
-/** Does the dialog show exactly this command? It must fill whole lines from the dialog's first or second
- *  non-blank line (the one under its " Bash command" header) and the next non-blank line must start the call's
- *  description, so neither a longer command (`git push --force` for `git push`) nor a second line after it
- *  (`git push` then `rm -rf x`) passes. Without a description the command's end can't be told: false. */
+// Claude Code 2.1.332's Bash dialog (U5, from its source and the Tester's saved screens): a "Bash command" header
+// (maybe "(unsandboxed)" or "(runs on …)", maybe " · from the <type> agent" for a helper), the call's description,
+// then the command between two dashed rules, then the warning lines. The fitted form ("Run command") asks no
+// "Do you want to proceed?", so claudePrompt never finds it.
+const HEADER = /^Bash command(?: \([^)]*\))?(?: · .+)?$/;
+const DASHED = /^[┄┅┈┉╌╍]+$/;
+
+/** Does the dialog show exactly this call? Its first line is the Bash header; the lines from there to the first
+ *  dashed rule are the description, the lines between the first and second dashed rule the command, both squashed
+ *  (wrapping and indents don't count) and equal in full; and there is no third dashed rule (a second block). So a
+ *  longer command (`git push --force` for `git push`), an extra line, a different or cut description, or any
+ *  other layout passes nothing. Without a description the call can't be tied down: false. */
 export function showsCommand(dialog: string, command: string, description: string): boolean {
   const cmd = squash(command), desc = squash(description);
   if (!cmd || !desc) return false;
-  const lines = dialog.split("\n").map(squash);
-  const starts = lines.flatMap((l, i) => (l ? [i] : [])).slice(0, 2);
-  return starts.some((s) => {
-    let acc = "", i = s;
-    for (; i < lines.length && acc.length < cmd.length; i++) acc += lines[i];
-    if (acc !== cmd) return false;
-    return lines.slice(i).join("").startsWith(desc);
-  });
+  const lines = dialog.split("\n").filter((l) => l.trim() !== "");
+  const rules = lines.flatMap((l, i) => (DASHED.test(l.trim()) ? [i] : []));
+  if (rules.length !== 2 || !lines.length || !HEADER.test(unbox(lines[0]))) return false;
+  const text = (from: number, to: number) => lines.slice(from, to).map(squash).join("");
+  return text(1, rules[0]) === desc && text(rules[0] + 1, rules[1]) === cmd;
 }
 
 /** The digit to press for `answer` ("Yes" or "No") on this screen, or why nothing may be pressed: the screen must
- *  show Claude's "Do you want to …?" menu, its dialog must show the call's whole command, then its description
+ *  show Claude's "Do you want to …?" menu, its dialog must show the call's description and whole command
  *  (showsCommand; `command` and `description` come from the transcript's tool_use, else `shown`) or, for a file
  *  change, the question line the file's name, and exactly one option must read exactly `answer`. Never any
  *  other option ("Yes, and don't ask again"). */

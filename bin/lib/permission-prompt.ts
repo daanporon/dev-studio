@@ -25,9 +25,12 @@ export function shownText(tool: string, input: any): string {
   return Array.from(text).length > SHOWN_CAP ? `${head(text, SHOWN_CAP)}\n… (cut)` : text;
 }
 
-export function promptTitle(role: string, tool: string): string {
+/** The card title; a helper agent's prompt says so ("tester's helper agent (general-purpose) asks: …", U5). `agent` is
+ *  the hook's agent_type, or "helper agent" when the hook gave none. */
+export function promptTitle(role: string, tool: string, agent = ""): string {
   const ask = tool === "Bash" ? "run this command?" : FILE_TOOLS.includes(tool) ? "change this file?" : `use ${head(tool, 30)}?`;
-  const tail = ` asks: ${ask}`;
+  const helper = agent ? `'s helper agent${agent === "helper agent" ? "" : ` (${head(agent, 40)})`}` : "";
+  const tail = `${helper} asks: ${ask}`;
   return `${head(role, 80 - Array.from(tail).length)}${tail}`;
 }
 

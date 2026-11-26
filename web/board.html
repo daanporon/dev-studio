@@ -2289,13 +2289,15 @@ const askingKey = (k, since) => (k && since ? k + "@" + since : k);
 const closingQ = new Set();
 const closeKey = (n) => n.label + "/" + n.squad;
 const pruneSent = (data) => { // drop the marks of askings no longer on the board (Needs-you items and loop notes)
-  const live = new Set([...(data.needs_you || []).map(akey), ...(data.loop_notes || []).map((n) => n.project + "/_studio/" + n.id)]);
+  // U5: a safety-check card whose press was refused is live again, terminal-only: its mark goes, so nothing says "pressed".
+  const live = new Set([...(data.needs_you || []).filter((n) => !(n.source === "picker" && n.picker_kind === "permission" && n.picker_answerable !== true)).map(akey),
+    ...(data.loop_notes || []).map((n) => n.project + "/_studio/" + n.id)]);
   for (const k of [...sentQ.keys()]) if (!live.has(k)) sentQ.delete(k);
   const rows = new Set((data.needs_you || []).filter((n) => n.kind === "done").map(closeKey));
   for (const k of [...closingQ]) if (!rows.has(k)) closingQ.delete(k);
 };
 // A Needs-you item the operator already acted on is hidden at once (before the loop has acted and the next refresh).
-const cardGone = (n) => (n.id && sentQ.has(akey(n))) || (n.kind === "done" && closingQ.has(closeKey(n)));
+const cardGone = (n) => (n.id && sentQ.has(akey(n)) && !(n.source === "picker" && n.picker_kind === "permission")) || (n.kind === "done" && closingQ.has(closeKey(n)));
 // The one list of a Needs-you item's actions, read by its card, by the window the card opens and by the question
 // window: [{key, label, cls, opens?, card?, confirm?}] in the order shown. `opens` actions only open a window (a card
 // shows them, the window it opened does not); `card: false` is for the question window only. Running one is
@@ -2417,6 +2419,17 @@ function ShownText({ n }) {
 }
 // Where a safety-check prompt is answered, and who raised it.
 const promptWhere = (n, who) => "Answer it in " + who + "'s terminal" + (n.agent ? " (its helper agent " + n.agent + " asks)" : "");
+// permission-prompt-needs-you U5: a safety-check prompt the board can't press shows why, where to answer it, and the
+// screen's options as plain text, never as tiles that look pressable.
+const permOnly = (n) => n.source === "picker" && n.picker_kind === "permission" && n.picker_answerable !== true;
+function PermWhy({ n, who, cls }) {
+  return html`<div class=${cls} data-perm-why>${n.picker_refused ? "The board didn't press it: " + n.picker_refused : "The board can't check this command"}. ${promptWhere(n, who)}.</div>
+    ${n.choices.length > 0 && html`<div class="lndet" data-perm-opts>On the screen: ${n.choices.map((c, j) => j + 1 + ". " + c.label).join(" · ")}</div>`}`;
+}
+// A safety-check prompt answered on the board stays on Needs you until the loop has read the screen and pressed (or
+// refused): the server lists it `pending` while its answer request is open, and this tab marks it from the send on.
+const permChecking = (n) => n.source === "picker" && n.picker_kind === "permission" && !permOnly(n) && !!n.id && (n.pending === true || sentQ.has(akey(n)));
+const CheckingLine = ({ who }) => html`<div class="pnote" data-perm-checking>Sent, checking ${who}'s screen…</div>`;
 
 // AskOverlay: one question at a time, tabs for the rest of the inbox. Numbered options (the
 // recommended one pre-selected) plus free text; 1-9 picks, ←/→ switch tabs, Esc closes.
@@ -2944,12 +2957,12 @@ const qLine = !qItems.length ? "" : qItems[0].menu
             ${qCur.options.map((o, i) => html`<button key=${i} type="button" class="btn chat-qopt" disabled=${pressing === shown.wt} onClick=${() => pressOpt(i)}>${i + 1}. ${o}</button>`)}
             <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(foldQ)}>Esc · leave the menu</button>`
           : html`<h3>${linkedQ(qCur.title, qCur.repo_slug)}</h3>${qCur.doc && onPlan && html`<div><button type="button" class="btn sm" data-ev="open-doc" onClick=${() => onPlan(qCur.doc)}>${docLabel(qCur)}</button></div>`}
-            ${qCur.shown ? html`<${ShownText} n=${qCur} />${qCur.picker_kind === "permission" && !qCur.answerable && html`<div class="chat-qprompt">${promptWhere(qCur, qCur.asker || shown.label)}</div>`}` : qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
+            ${qCur.shown ? html`<${ShownText} n=${qCur} />${qCur.picker_kind === "permission" && !qCur.answerable && html`<${PermWhy} n=${qCur} who=${qCur.asker || shown.label} cls="chat-qprompt" />`}` : qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
             ${qCur.answerable
               ? html`<${QOptions} n=${qCur} rec=${qRec} onPick=${(l) => answerQ(qCur, l)} />
                 ${qRec && !qCur.choices.some((c) => c.label === qRec) && html`<div class="sugg"><b>Suggested:</b> ${qRec}${qCur.why ? html` — ${linkedQ(qCur.why, qCur.repo_slug)}` : ""}</div>`}
                 ${qCur.choices.length === 0 && html`<textarea key=${qCur.key} class="chat-qtext" ref=${qText} placeholder="Type your answer"></textarea><button type="button" class="btn pri" onClick=${() => { const v = qText.current && qText.current.value.trim(); if (v) answerQ(qCur, v); }}>Send</button>`}`
-              : html`<${QOptions} n=${qCur} termOnly=${true} /><button type="button" class="btn chat-qopt" onClick=${() => { setScreenOn(true); setDock("open"); }}>Open Screen to answer</button>`}`}</div>`}</div>`}
+              : html`${qCur.picker_kind !== "permission" && html`<${QOptions} n=${qCur} termOnly=${true} />`}<button type="button" class="btn chat-qopt" onClick=${() => { setScreenOn(true); setDock("open"); }}>Open Screen to answer</button>`}`}</div>`}</div>`}
       <div class="qfoot">
         ${showScreen && html`<div class="chat-keys" role="toolbar" aria-label=${"Keys for " + shown.label}>${CHAT_KEYS.concat(chatDigits(scr.menu)).map(([k, l, tip]) => html`<button key=${k} type="button"
           class="btn sm chat-key" title=${tip} aria-label=${tip} disabled=${pressing === shown.wt}
@@ -2985,6 +2998,8 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
   const [chat, setChat] = useState(null);         // the asker's chat panel, open over this card
   const isPicker = !!n && n.source === "picker"; // a terminal-picker mirror: no recommendation, nothing pre-selected
   const termOnly = isPicker && n.picker_answerable !== true; // multi-question / multiSelect: the board can't answer it
+  // U5: a safety-check prompt answered here (or in another tab: `pending`) while the loop still checks the screen.
+  const checking = isPicker && n.picker_kind === "permission" && !termOnly && !!n.id && (n.pending === true || sentQ.has(akey(n)));
   const val = n ? (pick[akey(n)] ?? (isPicker ? "" : n.suggestion) ?? "") : "";
   const set = (v) => setPick((p) => ({ ...p, [akey(n)]: v }));
   // The asking first seen on each question while this overlay is open: a different `since` is the question asked again.
@@ -2997,7 +3012,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
   const openAct = acts.find((a) => a.key === "open-debrief"), markAct = acts.find((a) => a.key === "mark-read");
   const one = studioCard && n.choices.length === 1 ? n.choices[0].label : null; // the lone acting answer is the primary button
   const send = async (answer = one !== null ? one : val) => {
-    if (!n || termOnly) return; // the server also refuses these (409)
+    if (!n || termOnly || checking) return; // the server also refuses these (409)
     const k = nkey(n); setSt({ busy: true });
     try {
       await sendAnswer(n.label, n.squad, n.id, answer, ...(n.since ? [n.since] : [])); setSt({}); bump((x) => x + 1);
@@ -3018,7 +3033,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
         return;
       }
       if (e.key === "ArrowRight") go(1); else if (e.key === "ArrowLeft") go(-1);
-      else if (/^[1-9]$/.test(e.key) && n && !termOnly && n.choices[+e.key - 1]) set(n.choices[+e.key - 1].label);
+      else if (/^[1-9]$/.test(e.key) && n && !termOnly && !checking && n.choices[+e.key - 1]) set(n.choices[+e.key - 1].label);
       else if (e.key === "Enter" && n && !termOnly && n.id && !sentQ.has(akey(n))) { if (studioCard && n.choices.length === 0) send(markAct ? markAct.answer : ""); else if (val.trim() || one !== null) send(); }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
@@ -3050,10 +3065,12 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
         ${!n.plain && n.text !== n.title && !n.shown && html`<${QMd} cls="qtxt" text=${n.text} slug=${n.repo_slug} />`}
         ${n.id && isPicker && !termOnly && html`<div class="pnote">${n.picker_kind === "permission" ? html`Yes or No is pressed in ${n.from}'s terminal only while its screen still shows this command; otherwise nothing is typed and you answer it there.` : html`This mirrors the live picker in ${n.from}'s terminal: your pick is pressed there as its option, and the entry clears once the picker records it.`}</div>`}
         ${n.id && (termOnly
-          ? html`<div class="pnote">${n.picker_kind === "permission" ? promptWhere(n, n.from) + (n.picker_refused ? " — the board did not press it (" + n.picker_refused + ")." : " — Claude stopped at a safety check, and the board can't answer this prompt.") : "Answer it in " + n.from + "'s terminal — this picker has several questions or allows several picks, so the board can't answer it."} It clears once it is answered.</div>
-            <${QOptions} n=${n} termOnly=${true} />`
+          ? (n.picker_kind === "permission" ? html`<${PermWhy} n=${n} who=${n.from} cls="pnote" /><div class="lndet">It clears once it is answered.</div>`
+            : html`<div class="pnote">Answer it in ${n.from}'s terminal — this picker has several questions or allows several picks, so the board can't answer it. It clears once it is answered.</div>
+            <${QOptions} n=${n} termOnly=${true} />`)
           : html`${studioCard && n.when && html`<div class="when mut">When done: ${n.when}</div>`}
-            ${!(studioCard && one !== null) && html`<${QOptions} n=${n} val=${val} rec=${rec} onPick=${set} />`}
+            ${checking && html`<${CheckingLine} who=${n.from} />`}
+            ${!(studioCard && one !== null) && html`<${QOptions} n=${n} val=${val} rec=${rec} onPick=${set} disabled=${checking} />`}
           ${rec && !n.choices.some((c) => c.label === rec) && html`<div class="sugg"><b>Suggested:</b> ${rec}${n.why ? html` — ${linkedQ(n.why, n.repo_slug)}` : ""}</div>`}
           ${!studioCard && n.picker_kind !== "permission" && html`<textarea enterkeyhint="send" placeholder=${"Or type your own answer (" + (typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches ? "Enter" : "⌘/Ctrl+Enter") + " sends)"} value=${isChoice ? "" : val} onInput=${(e) => set(e.target.value)}></textarea>`}`)}
         ${n.plain && n.revision && html`<details class="qdetails"><summary>Whole plan in plain words</summary>${n.facts && html`<div class="qfacts">${[n.facts.steps + " steps", n.facts.hard + " hard", n.facts.start_now + " start now"].map((t) => html`<span key=${t} class="qfact">${t}</span>`)}</div>`}
@@ -3070,13 +3087,13 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           onClick=${() => setChat({ project: n.label, topic: n.card_squad || n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead", qid: n.id })}>Chat with ${n.chat_label || "the Lead"}</button>`}
         <span class="sp"></span>
         ${st.err && html`<span class="err">not sent: ${st.err}</span>`}
-        ${sent && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
+        ${sent && !checking && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
         <button class="btn qsec" disabled=${i === 0} onClick=${() => go(-1)}>←</button><button class="btn qsec" disabled=${i === items.length - 1} onClick=${() => go(1)}>→</button>
         ${n.id ? (termOnly ? null
             : studioCard && n.choices.length > 0
               ? html`<button class="btn" disabled=${st.busy || !!sent} onClick=${() => send("")}>Dismiss</button>
                 <button class="btn pri" disabled=${(one === null && !val.trim()) || st.busy || !!sent} onClick=${() => send()}>${st.busy ? "Sending…" : one !== null ? one : "Send"}</button>`
-              : html`<button class="btn pri" disabled=${(!studioCard && !val.trim()) || st.busy || !!sent} onClick=${() => send(markAct ? markAct.answer : studioCard ? "" : val)}>${st.busy ? "Sending…" : markAct ? "Mark read" : studioCard ? "Dismiss" : "Send"}</button>`)
+              : html`<button class="btn pri" disabled=${(!studioCard && !val.trim()) || st.busy || !!sent || checking} onClick=${() => send(markAct ? markAct.answer : studioCard ? "" : val)}>${st.busy ? "Sending…" : markAct ? "Mark read" : studioCard ? "Dismiss" : "Send"}</button>`)
           : html`<button class="btn pri" title=${n.command} onClick=${() => copy(n.command, toast)}>Approve</button>`}
       </div>
     </div>
@@ -4726,7 +4743,7 @@ function App() {
         <div class="l2">${linkedQ(n.title, n.repo_slug)}</div>
         ${debrief ? (n.text && n.text !== n.title && html`<div class="lndet dbr">${linkedQ(n.text, n.repo_slug)}</div>`)
           : n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
-          : n.shown ? html`<${ShownText} n=${n} />${n.picker_kind === "permission" && n.picker_answerable !== true && html`<div class="lndet">${promptWhere(n, n.from)}</div>`}`
+          : n.shown ? html`<${ShownText} n=${n} />${permOnly(n) ? html`<${PermWhy} n=${n} who=${n.from} cls="lndet" />` : permChecking(n) && html`<${CheckingLine} who=${n.from} />`}`
           : n.text && !textInTitle(n) && html`<div class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}</div>`}
         ${n.why && html`<div class="lndet">Why: ${linkedQ(mdPlain(n.why), n.repo_slug)}</div>`}</div>`;
     })}</div>`}

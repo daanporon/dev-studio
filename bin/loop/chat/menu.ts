@@ -38,13 +38,14 @@ const CODEX_ABOVE = 15;
 
 // Claude's permission dialog on a screen (fulfil/answer.ts presses Yes or No only after reading it): the
 // "Do you want to …?" line among the 4 non-blank lines above the menu, the dialog's lines between it and the
-// nearest line above that opens the dialog or belongs to the conversation (a rule or a corner, or a line that
+// nearest line above that opens the dialog or belongs to the conversation (a solid rule or a corner, or a line that
 // starts with ● ⏺ ⎿ ❯ ✻ ✢: a pending tool call is shown there, maybe another call's command), and the options.
-// A side border (│) is no boundary.
+// A side border (│) is no boundary, and neither is a dashed rule (┄ ╌ …): Claude Code draws the command or the diff
+// between two of them inside the dialog (permission-prompt-needs-you U5).
 // Border characters at either end of a line are dropped. `dialog` is null when no such boundary is on screen.
 const BOX = /^[\s─-╿]+|[\s─-╿]+$/g;
-const unbox = (l: string) => l.replace(BOX, "");
-const BOUNDARY = /^[─━═┄┅┈┉╌╍╭╮╰╯┌┐└┘●⏺⎿❯✻✢]/;
+export const unbox = (l: string) => l.replace(BOX, "");
+const BOUNDARY = /^[─━═╭╮╰╯┌┐└┘●⏺⎿❯✻✢]/;
 export function claudePrompt(tail: string): { question: string; dialog: string | null; options: string[] } | null {
   const all = tail.split("\n").filter((l) => l.trim() !== "");
   const { lines, run } = scan(tail);

@@ -1,0 +1,38 @@
+handle: term_c6e2edbf-310b-40e9-a373-3621dcdaea43
+status: running
+source: screen
+cursor: 1
+oldest cursor: 0
+latest cursor: 1
+
+● Write(~/dev/tools/dev-studio/state/dev-studio-public/notes/permission-prompt-needs-you-tester-bugs-live.md)
+  ⎿  Wrote 40 lines to
+     ~/dev/tools/dev-studio/state/dev-studio-public/notes/permission-prompt-needs-you-tester-bugs-live.md
+       1 # Live pass bugs: permission prompts (tester-prompts, 2026-11-26)
+       2
+       3 Host at 90ccda10. Claude Code 2.1.332 in bypass mode. Board at 127.0.0.1:8789. Trigger: `v=$(false || (e
+         cho none)); echo "probe=$v"` (Thinker #3782). It prompts.
+       4 Evidence folder: `state/dev-studio-public/notes/permission-prompt-needs-you-tester-evidence/`.
+       5
+       6 ## Bug 1 — blocking (U2): Yes or No on the board never presses for a real Bash prompt
+       7
+       8 - **What happened.** The card `picker-nTCV73dH` showed in 2.8 s, answerable. The operator pressed Yes on
+          the board at 17:38:59Z. Request 13077 failed with `not pressed: the screen shows a different command —
+     … +33 lines (~4 KB)
+  Ran 1 shell command
+● Sent. Now scenario 4: No from the board. I expect the same refusal, then Claude's auto-block after about 2 minutes.
+  Running 2 shell commands…
+  ⎿  $ v=$(false || (echo none)); echo "probe=$v"
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Scenario 4 trigger, answered No on board
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ v=$(false || (echo none)); echo "probe=$v"
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ Claude Code can't be sure it read this command the way the shell will, so it can't rule out a dangerous removal.
+ │ Read the command, and don't go ahead if you can't tell what it does.
+ ⚠ Claude Code will automatically block this request in 1:58, to avoid holding up an unattended session
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+ Esc to cancel · Tab to amend
