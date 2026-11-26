@@ -330,6 +330,21 @@ describe("orca observer", () => {
     expect(workers(s)[THINKER].suspect).toBe(0);
   });
 
+  test("a screen that settles after new output, or shows a permission menu, is read again", async () => {
+    const s = imported(), o = FakeOrca.recorded(RECORDED), l = loopOf(s, o);
+    await l.tick(T);
+    const lead = () => o.worktrees.find((w) => w.worktreeId === LEAD)!;
+    const at = async (now: number, outAt: number) => { o.reset(); lead().lastOutputAt = outAt * 1000; await l.tick(now); return o.calls.screenTail; };
+
+    expect(await at(T + 8, T + 6)).toEqual([]);
+    expect(await at(T + 11, T + 6)).toEqual([LEAD]);
+    expect(await at(T + 16, T + 6)).toEqual([]);
+
+    // A timed permission menu is followed while the output still moves.
+    s.upsert("episodes", { project: "fx", subject: LEAD, kind: "permission-screen" }, { episode_key: "1", state: "seen", source: "loop", started_at: T + 16, observed_at: T + 16 });
+    expect(await at(T + 40, T + 39)).toEqual([LEAD]);
+  });
+
   test("a screen read that fails after a state change is tried again next tick", async () => {
     const s = imported(), o = FakeOrca.recorded(RECORDED), l = loopOf(s, o);
     await l.tick(T);

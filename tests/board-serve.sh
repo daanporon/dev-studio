@@ -904,7 +904,7 @@ jt "U2: a note carries its allowed action" "$TMP/u2.json" '[.loop_notes[] | sele
 jt "U2: an unknown action is dropped" "$TMP/u2.json" '[.loop_notes[] | select(.id=="loop-u2-bad")][0].act == null'
 jt "U2: a Studio ask carries its squad for Show squad" "$TMP/u2.json" '[.needs_you[] | select(.id=="loop-u2-ask")][0] | .card_squad == "ans" and has("repo_slug") and has("pr") and has("act")'
 eq "web board: a loop note shows its text and why under a title without the squad prefix" "$(grep -cF 'class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}' "$ROOT/web/board.html")$(grep -cF 'const noteTitle' "$ROOT/web/board.html")$(grep -cF 'squads.length > 1' "$ROOT/web/board.html")" "211"
-eq "web board: Show squad on a Studio card, the PR chip and the action button" "$(grep -cF 'n.card_squad' "$ROOT/web/board.html")$(grep -cF 'function ActBtn' "$ROOT/web/board.html")$(grep -cF 'onShow(n.project, n.squad)' "$ROOT/web/board.html")" "311"
+eq "web board: Show squad on a Studio card, the PR chip and the action button" "$(grep -cF 'n.card_squad' "$ROOT/web/board.html")$(grep -cF 'function ActBtn' "$ROOT/web/board.html")$(grep -cF 'onShow(n.project, n.squad)' "$ROOT/web/board.html")" "511"
 
 # POST /api/request files a `studio` request; the loop writes it out for the Studio as
 # <state root>/<label>/requests/_studio/board-<action>[-<topic>]-<id>.txt, which the Studio's watch
