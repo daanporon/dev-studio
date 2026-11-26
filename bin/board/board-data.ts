@@ -37,6 +37,7 @@ import { compareSquads } from "./squad-order.ts";
 import { archiveDebriefStep, type Step } from "../loop/squad/archive-debrief.ts";
 import { removeWaitS } from "../loop/squad/close-drift.ts";
 import { redact, redactDeep } from "../loop/chat/redact.ts";
+import { isHidden } from "../loop/chat/permission.ts";
 import { planUnitFacts } from "../loop/squad/plan-lines.ts";
 import { blockingForUnit, entryOf, list, pressRefused, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
 import { DEFAULTS as BRIEFING_DEFAULTS, gaveUp as briefingGaveUp, localDate, nextSlot, parseDays, parseTime, scheduleSince } from "../loop/reconcilers/briefing.ts";
@@ -1889,7 +1890,8 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
     limited: limited.filter((l) => l?.topic === topic).map((l) => l.who),
     progress: progress(u),
     prs,
-    questions: arr(st.waiting_on_you).map((x) => ({
+    // U4: a permission entry is redacted again here, so one an older hook queued shows no secret either.
+    questions: arr(st.waiting_on_you).map((x) => (x?.picker_kind === "permission" ? redactDeep(x) : x)).map((x) => ({
       id: x.id ?? null, asker: x.asker ?? null, blocking: x.blocking === true, question: x.question ?? null,
       unit: questionUnit(x),
       // The member an answer is typed into (the card's worktree, else the Lead): the card's Chat opens its panel.
@@ -3375,7 +3377,8 @@ function shownFields(x: any): Record<string, string> {
 // terminal-only once the loop refused to press for it (picker_refused says why; questions.ts pressRefused).
 function pickerFields(db: Db | null | undefined, project: string, topic: string, x: any): { picker_answerable: boolean | null; picker_refused: string | null } {
   const refused = db && x?.picker_kind === "permission" && x.picker_answerable === true ? pressRefused(db.s, project, topic, String(x.id ?? ""), x.tool_use_id) : null;
-  return { picker_answerable: refused ? false : x?.picker_answerable ?? null, picker_refused: refused };
+  const hidden = x?.picker_kind === "permission" && isHidden(String(x.shown ?? "")); // U4: terminal-only, no refusal to report
+  return { picker_answerable: refused || hidden ? false : x?.picker_answerable ?? null, picker_refused: refused };
 }
 
 // The open questions whose card opens a chat with this member (the cards' chat_wt rule in squad(): the card's

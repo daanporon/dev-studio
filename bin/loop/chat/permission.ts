@@ -2,12 +2,17 @@
 // The hook (bin/lib/permission-prompt.ts) asks `checkable` before it marks an entry answerable; the answer fulfiller
 // (fulfil/answer.ts) asks `permissionKey` on a fresh screen right before it presses anything.
 import { claudePrompt } from "./menu.ts";
+import { redact, REDACTED } from "../core/redact.ts";
 
 export const FILE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const CUT = "\n… (cut)";
 
 /** Was the shown text cut at its cap (shownText's "(cut)" line)? */
 export const isCut = (shown: string): boolean => shown.endsWith(CUT);
+
+/** Does the card hide part of the prompt behind `[redacted]`? The board never takes an answer for what it did not
+ *  show (D5), and a redaction could hide more than the secret, so such a prompt is answered in the terminal. */
+export const isHidden = (shown: string): boolean => redact(shown).includes(REDACTED);
 
 /** The file a file tool's prompt is about, from its shown text: Edit and Write show the path on the first line,
  *  the others their input as JSON. "" when there is none. */
@@ -18,10 +23,10 @@ export function shownPath(tool: string, shown: string): string {
 }
 const base = (p: string) => p.replace(/\/+$/, "").split("/").pop() ?? "";
 
-/** Can the screen check tie this prompt down: a Bash command or a file change shown in full? Other tools
+/** Can the screen check tie this prompt down: a Bash command or a file change shown in full, nothing hidden? Other tools
  *  (a read outside the tree, a fetch) show their input as JSON, which the dialog never prints. */
 export function checkable(tool: string, input: any, shown: string): boolean {
-  if (isCut(shown)) return false;
+  if (isCut(shown) || isHidden(shown)) return false;
   if (tool === "Bash") return typeof input?.command === "string" && input.command.trim() !== "";
   return FILE_TOOLS.includes(tool) && base(shownPath(tool, shown)) !== "";
 }
@@ -54,6 +59,7 @@ export function showsCommand(dialog: string, command: string, description: strin
 export function permissionKey(screen: string, entry: { tool: string; shown: string; command?: string; description?: string }, answer: string): { digit: number } | { why: string } {
   if (answer !== "Yes" && answer !== "No") return { why: "only Yes or No is pressed on a permission prompt" };
   if (isCut(entry.shown)) return { why: "the command was too long to show in full" };
+  if (isHidden(entry.shown)) return { why: "the card hides a secret in it" };
   const p = claudePrompt(screen);
   if (!p) return { why: "the screen shows no permission prompt" };
   if (entry.tool === "Bash") {
