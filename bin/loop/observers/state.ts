@@ -1,7 +1,8 @@
 // state.ts — the state-file observer (U4): the runtime files the loop and the hooks write,
 // into observed_* rows, each file re-read only when its mtime or size moved (gate.ts).
 //
-//   host:     accounts.tsv -> observed_accounts (+ accounts), tokens.tsv -> observed_tokens,
+//   host:     accounts.tsv -> observed_accounts (+ accounts), accounts-orca.tsv -> accounts (Orca's profiles),
+//             account-folders.tsv -> observed_account_folders (+ accounts.login_id), tokens.tsv -> observed_tokens,
 //             Lavish state.json + start log -> observed_sessions
 //   project:  dispatcher.json -> projects, requests/<dir>/*.txt -> requests, alerts.json -> observed_alerts,
 //             loop/squad-spent.tsv -> observed_spend,
@@ -19,6 +20,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { confirm, Gate, replace, sig } from "../core/gate.ts";
+import { copyLoginIds, mergeOrcaImport, parseAccountFolders, parseOrcaImport } from "../capacity/accounts.ts";
 import { accountRows, alertRows, dispatcherRows, doneRequests, isObj, mtime, num, readJson, requestFiles, requestRows, spendRows, tokenRows, tsv } from "../db/import-json.ts";
 import type { Observer, TickCtx } from "../core/plugins.ts";
 import { discoverProjects } from "../settings/projects.ts";
@@ -191,6 +193,18 @@ export function stateObserver(opts: StateOpts = {}): Observer {
       (opts.refreshAccounts ?? refreshAccounts)(store.root, maxAge);
     }
     file(store, at, "accounts.tsv", sig(f), () => accountRows(store.root), [["observed_accounts", {}]]);
+    // Orca's profiles into the list, after accounts.tsv so a row it just made is claimed (issue #125, KTD4).
+    const o = join(store.root, "accounts-orca.tsv");
+    store.tx(() => gate.run("accounts-orca.tsv", sig(o), () => {
+      const imp = existsSync(o) ? parseOrcaImport(readFileSync(o, "utf8")) : null;
+      if (imp) { mergeOrcaImport(store, imp, at); copyLoginIds(store); }
+    }));
+    const d = join(store.root, "account-folders.tsv"), scope: [string, Row][] = [["observed_account_folders", {}]];
+    store.tx(() => gate.run("account-folders.tsv", sig(d), () => {
+      if (!existsSync(d)) return;
+      replace(store, parseAccountFolders(readFileSync(d, "utf8"), at), at, scope);
+      copyLoginIds(store);
+    }, () => confirm(store, at, scope)));
   }
 
   // Lavish review pages: each belongs to the project whose member worktree holds its file, or whose
