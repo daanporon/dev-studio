@@ -116,7 +116,6 @@ describe("project-rows", () => {
 
     const arc = join(tmp(), "loop-rows.db");
     const c = copyRows(join(s.root, "loop.db"), "gone", arc);
-    expect(c.reused).toBe(false);
     expect(c.counts).toEqual(gone);
     const r = deleteRows(s, "gone", c.counts);
     expect(r.ok).toBe(true);
@@ -189,19 +188,22 @@ describe("project-rows", () => {
     expect(deleteRows(s, "gone", c.counts).ok).toBe(true);
   });
 
-  test("a finished copy for another label is refused; one for this label is reused or set aside", () => {
+  test("a finished copy for another label is refused; one for this label is set aside, never reused", () => {
     const s = store(), db = s.db;
     seedTwo(s);
     const dir = tmp(), arc = join(dir, "loop-rows.db");
-    copyRows(join(s.root, "loop.db"), "stay", arc);
+    const first = copyRows(join(s.root, "loop.db"), "stay", arc);
     expect(() => copyRows(join(s.root, "loop.db"), "gone", arc)).toThrow(/already holds the rows of 'stay'/);
-    const again = copyRows(join(s.root, "loop.db"), "stay", arc);
-    expect(again.reused).toBe(true);
-    put(db, "events", { project: "stay" });
+    // Same counts, different rows: a reused copy would miss the new row and the delete would lose it.
+    const ev = db.query("SELECT id FROM events WHERE project = 'stay' LIMIT 1").get() as { id: number };
+    db.run("DELETE FROM events WHERE id = ?", [ev.id]);
+    const added = put(db, "events", { project: "stay" });
     const fresh = copyRows(join(s.root, "loop.db"), "stay", arc);
-    expect(fresh.reused).toBe(false);
     expect(fresh.set_aside).toEqual([join(dir, "loop-rows.stale-1.db")]);
-    expect(fresh.counts.events).toBe(again.counts.events + 1);
+    expect(fresh.counts).toEqual(first.counts);
+    const a = new Database(arc, { readonly: true });
+    try { expect(count(a, "events", "id = ?", added)).toBe(1); } finally { a.close(); }
+    expect(archiveMeta(join(dir, "loop-rows.stale-1.db"))?.label).toBe("stay");
   });
 
   test("open pins on the label are archived and closed; another project's pins stay", () => {

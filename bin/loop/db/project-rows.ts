@@ -133,31 +133,20 @@ function sourceCounts(db: Database, specs: Spec[], label: string, s: string): Co
 const sameCounts = (a: Counts, b: Counts) =>
   Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
 
-export type CopyResult = { archive: string; counts: Counts; rows: number; reused: boolean; set_aside: string[] };
+export type CopyResult = { archive: string; counts: Counts; rows: number; set_aside: string[] };
 
 // Writes every row of `label` from the loop.db at `dbPath` into a fresh SQLite file at `archivePath` and
 // returns the per-table counts, checked against the source in the same snapshot. An archive already finished
-// for another label is refused; one finished for this label is reused when the source still has exactly its
-// counts, else renamed aside (`.stale-<n>.db`); an unfinished one is renamed aside (`.partial-<n>.db`).
+// for another label is refused. One finished for this label is never reused, since equal counts do not prove
+// equal rows (a delete-then-insert keeps the count): it is renamed aside (`.stale-<n>.db`), as an unfinished
+// one is (`.partial-<n>.db`), and a fresh copy is written. A caller retrying after its delete committed must
+// know that from its own record, not from this file.
 export function copyRows(dbPath: string, label: string, archivePath: string): CopyResult {
   const setAsideList: string[] = [];
   const meta = archiveMeta(archivePath);
   if (meta && meta.label !== label) throw new Error(`project-rows: ${archivePath} already holds the rows of '${meta.label}'`);
-  const src = new Database(dbPath, { readonly: true });
-  src.run("PRAGMA busy_timeout = 5000");
-  try {
-    if (meta) {
-      const now_ = sourceCounts(src, projectTables(src), label, "");
-      if (sameCounts(now_, meta.counts)) {
-        return { archive: archivePath, counts: meta.counts, rows: Object.values(meta.counts).reduce((a, b) => a + b, 0), reused: true, set_aside: [] };
-      }
-      setAsideList.push(setAside(archivePath, "stale"));
-    } else if ([archivePath, `${archivePath}-journal`, `${archivePath}-wal`].some(existsSync)) {
-      setAsideList.push(setAside(archivePath, "partial"));
-    }
-  } finally {
-    src.close();
-  }
+  if (meta) setAsideList.push(setAside(archivePath, "stale"));
+  else if ([archivePath, `${archivePath}-journal`, `${archivePath}-wal`].some(existsSync)) setAsideList.push(setAside(archivePath, "partial"));
 
   const arc = new Database(archivePath, { create: true });
   try {
@@ -184,7 +173,7 @@ export function copyRows(dbPath: string, label: string, archivePath: string): Co
       return after;
     })();
     arc.run("DETACH DATABASE src");
-    return { archive: archivePath, counts, rows: Object.values(counts).reduce((a, b) => a + b, 0), reused: false, set_aside: setAsideList };
+    return { archive: archivePath, counts, rows: Object.values(counts).reduce((a, b) => a + b, 0), set_aside: setAsideList };
   } finally {
     arc.close();
   }
