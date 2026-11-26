@@ -25,7 +25,7 @@ import pending, { retireCapacityFacts } from "../../bin/loop/fulfil/pending.ts";
 import request from "../../bin/loop/fulfil/request.ts";
 import { accountBlock, pick as pickAccount } from "../../bin/loop/capacity/pick.ts";
 import alertsReconciler, { dropAlerts } from "../../bin/loop/reconcilers/alerts.ts";
-import { makeLimits, pickLoop, type Pick, type PickArgs } from "../../bin/loop/reconcilers/limits.ts";
+import { worker as accountOfWorker, makeLimits, pickLoop, type Pick, type PickArgs } from "../../bin/loop/reconcilers/limits.ts";
 import record from "../../bin/loop/reconcilers/record.ts";
 import { decide } from "../../bin/loop/core/decide.ts";
 import { cleanupGlobs, limit, limitInt, limitLine } from "../../bin/loop/settings/limits.ts";
@@ -171,6 +171,8 @@ function imported(): Store {
   const s = open(d); stores.push(s); importJson(s, d, () => {});
   roster(s);
   s.upsert("accounts", { agent: "claude", account: ACCT }, { observed_at: T });
+  // dev-studio's default: the account of a worker none is recorded for (the Studio).
+  s.upsert("accounts", { agent: "claude", account: "acct-a" }, { source: "orca", config_dir: d, is_default: 1, observed_at: T });
   for (const account of [ACCT, "acct-b"]) s.upsert("observed_accounts", { agent: "claude", account }, { updated: String(T), observed_at: T });
   // The fixture parks acct-b on a stale limit (an "expired" note); the decider reads real account
   // state, so these tests start unparked — a test needing a limit sets its own.
@@ -184,6 +186,7 @@ function imported(): Store {
 function worker(s: Store, wt: string, state: string, o: { tail?: string; since?: number; out?: number } = {}) {
   s.upsert("observed_workers", { project: "fx", wt }, { state, tail: o.tail ?? "❯", tail_at: T, since: o.since ?? T - 900, last_output_at: o.out ?? T - 900, limited: null, gone_at: null, suspect: 0, observed_at: T });
 }
+const worker_ = (s: Store, wt: string) => accountOfWorker(s, "fx", member(s, wt), wt)?.account;
 function usage(s: Store, session: string | null, weekly: string | null, account = ACCT) {
   s.upsert("observed_accounts", { agent: "claude", account }, { session_pct: session, session_reset: session ? String(T + 7200) : null, weekly_pct: weekly, weekly_reset: weekly ? String(T + 86400) : null, observed_at: T });
 }
@@ -936,7 +939,7 @@ describe("the Studio out of credits (U8, U10)", () => {
 
   test("dialog-stuck Studio on a 100% account: the limit path, with the next pick named", async () => {
     const s = imported(), { got, loop } = studioLoop(s, OTHER);
-    usage(s, "100", "40", "acct-a");   // no member row: the agent's default (first listed) account
+    usage(s, "100", "40", "acct-a");   // no member row: the agent's default account
     worker(s, STUDIO, "working", { out: T - 900 });
     await loop.tick(T);
     expect(kinds(got)).toEqual(["alert"]);
@@ -1314,7 +1317,6 @@ describe("U40: stuck members move on their own", () => {
   for (const [name, spoil] of [
     ["empty", (s: Store) => s.db.run("DELETE FROM observed_accounts")],
     ["stale", (s: Store) => s.db.run("UPDATE observed_accounts SET updated = ?", [String(T - 3600)])],
-    ["a failed read (claude's `system` alone)", (s: Store) => { s.db.run("DELETE FROM observed_accounts"); s.upsert("observed_accounts", { agent: "claude", account: "system" }, { updated: String(T), observed_at: T }); }],
   ] as [string, (s: Store) => void][]) {
     test(`an account list that is ${name} moves nobody`, async () => {
       const s = imported();
@@ -1330,6 +1332,38 @@ describe("U40: stuck members move on their own", () => {
       expect(member(s, THINKER).limited_until).toBeNull();
     });
   }
+
+  // issue #125, U3: the list comes from the accounts table, so the system login alone is a real one.
+  test("a list of the `system` login alone moves a member off another account", async () => {
+    const s = imported();
+    s.db.run("DELETE FROM observed_accounts");
+    s.upsert("observed_accounts", { agent: "claude", account: "system" }, { updated: String(T), observed_at: T });
+    on(s, THINKER, "acct-gone");
+    worker(s, THINKER, "idle");
+    await reconcile(s, picker(OTHER));
+    expect(listed(s)[0]).toMatchObject({ wt: THINKER, line: "account acct-gone is no longer listed" });
+  });
+
+  test("a worker with no recorded account is on the default account, not the first listed one", async () => {
+    const s = imported();
+    s.db.run("UPDATE accounts SET is_default = 0 WHERE agent = 'claude'");
+    s.upsert("accounts", { agent: "claude", account: "acct-b" }, { source: "orca", config_dir: s.root, is_default: 1, observed_at: T });
+    usage(s, "100", "20", "acct-b");
+    s.db.run("UPDATE members SET account = NULL WHERE wt = ?", [THINKER]);
+    worker(s, THINKER, "idle");
+    expect(worker_(s, THINKER)).toBe("acct-b");
+    s.db.run("UPDATE accounts SET is_default = 0 WHERE agent = 'claude'");
+    expect(worker_(s, THINKER)).toBe("system");   // no row marked: the system login, never list order
+  });
+
+  test("a member on a removed account moves at once, ahead of the next refresh", async () => {
+    const s = imported();
+    s.upsert("accounts", { agent: "claude", account: "acct-b" }, { source: "orca", config_dir: s.root, removed_at: T - 1, observed_at: T });
+    on(s, THINKER, "acct-b");
+    worker(s, THINKER, "idle");
+    await reconcile(s, picker(OTHER));
+    expect(listed(s)[0]).toMatchObject({ wt: THINKER, line: "account acct-b is no longer listed" });
+  });
 
   test("a member with no account or the `system` account counts as listed", async () => {
     const s = imported();

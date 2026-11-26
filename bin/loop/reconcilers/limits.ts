@@ -53,6 +53,7 @@ import { wake } from "../pause/wake.ts";
 import { scan, type LimitRow } from "../capacity/fingerprints.ts";
 import { limit, limitInt } from "../settings/limits.ts";
 import { accountList, ladder, overrideOf, pick as pickAccount, placeRung, sameModel, workDone } from "../capacity/pick.ts";
+import { defaultFromRows, type AccountRow } from "../../lib/account-dirs.ts";
 import { backUpOf } from "../settings/roster.ts";
 import { liveAccount, liveOf } from "./record.ts";
 import { liveSquads } from "./liveness.ts";
@@ -174,10 +175,9 @@ export function worker(store: Store, P: string, m: Row | null, wt: string, proj?
     squad, role, suffix, who, key: crew ? `${squad}.${who}` : "studio", agent, account, model };
 }
 
-// The sweep's default_account: the agent's first listed account.
+// The account of a worker none is recorded for: dev-studio's default for its agent (`ds account default`).
 function defaultAccount(store: Store, agent: string): string {
-  const r = store.db.query("SELECT account FROM accounts WHERE agent = ?1 ORDER BY account IN (SELECT account FROM observed_accounts WHERE agent = ?1) DESC, rowid LIMIT 1").get(agent) as { account: string } | null;
-  return r?.account ?? "";
+  return defaultFromRows(store.db.query("SELECT * FROM accounts WHERE agent = ?").all(agent) as AccountRow[], agent).account;
 }
 
 const silent = (w: Worker, t: number, min: number) => w.state === "working" && w.lastOutput !== null && t - w.lastOutput >= min * 60;

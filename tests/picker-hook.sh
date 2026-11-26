@@ -205,7 +205,7 @@ eq "permission exits 0" "$rc" "0"
 eq "permission prints nothing: no decision" "$out" ""
 wait_q "$P1" '.waiting_on_you | length == 1' 15 || { fail=$((fail+1)); echo "  FAIL: permission queued nothing" >&2; }
 eq "permission id comes from the unanswered tool_use" "$(entry "$P1" '[.id,.tool_use_id,.transcript_path]|join(" ")')" "picker-00002222 toolu_new00002222 $PTR"
-eq "permission is a blocking picker entry" "$(entry "$P1" '[.source,.picker_kind,.blocking,.picker_answerable,.tool]|map(tostring)|join(" ")')" "picker permission true false Bash"
+eq "permission is a blocking picker entry, answerable when matched and shown in full" "$(entry "$P1" '[.source,.picker_kind,.blocking,.picker_answerable,.tool]|map(tostring)|join(" ")')" "picker permission true true Bash"
 eq "permission keeps the command verbatim" "$(entry "$P1" .shown)" "$CMD"
 eq "question carries the command in a code block" "$(entry "$P1" .question)" "$(printf '```\n%s\n```\n\nin /tmp/wt-builder' "$CMD")"
 eq "permission title" "$(entry "$P1" .title)" "builder-u1 asks: run this command?"
