@@ -74,7 +74,7 @@ absent 'failed poll with request prints no empty inbox' "$out" 'do a check-in an
 has 'failed poll with request reports read error on stderr' "$err" 'INBOX READ FAILED: invalid_argument:'
 absent 'failed reads send no ack' "$(cat "$CLI_LOG")" '--ack'
 export DS_ORCA_CLI_BIN_DIR="$TMP/missing"
-for op in inbox-peek-self ps worker-states status account-list; do
+for op in inbox-peek-self ps worker-states status preflight; do
   run "$B" "$op"
   eq "missing DS override fails for $op" "$rc" 1
   has "missing DS override names directory for $op" "$err" "$TMP/missing"

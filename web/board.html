@@ -293,12 +293,15 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-stop{background:var(--red-bg);border:2px solid var(--red);color:var(--red)} .chat-send{font-size:16px}
 .chat-row .chat-attach{background:transparent;border:0;border-radius:50%;color:var(--mut)} .chat-row .chat-attach:hover,.chat-row .chat-attach:focus-visible{color:var(--fg);background:transparent;border:0} .chat-row .chat-attach:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 .chat-attach svg{width:16px;height:16px;display:block}
-.chat-banner{display:block;width:100%;margin-top:8px;text-align:left;white-space:normal;font:12px var(--mono);color:var(--amber);background:var(--amber-bg);border-color:var(--amber)}
+.chat-dock{flex:0 1 auto;min-height:44px;display:flex;flex-direction:column;margin:0 12px 8px;border:1px solid var(--amber);border-radius:10px;background:var(--amber-bg)} .chat-dock.open{max-height:60%}
+.mbox.chat.dock-full>.chat-wrap{flex:0 0 0px;height:0;min-height:0;overflow:hidden;visibility:hidden} .chat-dock.full{flex:1 1 0}
+.mbox .chat-dline{display:flex;align-items:center;gap:8px;width:100%;text-align:left;white-space:normal;font:12px var(--mono);color:var(--amber);background:transparent;border:0} .chat-dline .chat-dtext{flex:1;min-width:0;overflow-wrap:anywhere}
+.chat-dhd{flex:none;display:flex;align-items:center;gap:6px;padding:4px 6px 4px 10px;font:12px var(--mono);color:var(--amber)} .chat-dhd .sp{flex:1} .chat-dhd>.chat-dtext{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-q.chat-dbody{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px 10px 10px} .chat-dbody>*{flex:none}
 .chat-left{font:11px var(--mono);color:var(--dim)} .chat-left.low{color:var(--amber)}
 .chat-keys{flex:1 1 100%;display:flex;gap:4px;overflow-x:auto;min-width:0;scrollbar-width:none} .chat-key{flex:0 0 auto;min-width:34px;min-height:32px;font:12px var(--mono)}
-.chat-scr{flex:none;min-height:32px;margin-left:8px} .mbox.chat>.mhd{flex-wrap:nowrap}
-.chat-seg{flex:none;display:inline-flex;margin-left:8px;border:1px solid var(--line);border-radius:8px;overflow:hidden} .chat-segb{margin:0;border:0;border-radius:0;min-height:32px;padding:0 9px} .chat-segb.on{background:var(--amber-bg);color:var(--amber)}
-.chat-q{display:flex;flex-direction:column;gap:8px;padding:4px 0} .chat-q h3{margin:0;font-size:15px} .chat-qnav{display:flex;align-items:center;gap:8px;font:12px var(--mono);color:var(--dim)}
+.chat-row .chat-scrtog{flex:none;min-height:32px;white-space:nowrap} .chat-scrtog[aria-pressed="true"]{background:var(--amber-bg);color:var(--amber);border-color:var(--amber)} .mbox.chat>.mhd{flex-wrap:nowrap}
+.chat-q{display:flex;flex-direction:column;gap:8px;padding:4px 0} .chat-q h3{margin:0;font-size:15px} .chat-qnav{flex:none;display:flex;align-items:center;gap:4px;white-space:nowrap;font:12px var(--mono);color:var(--dim)}
 .chat-qprompt{font:13px/1.45 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere} .chat-qprompt.md{white-space:normal} .chat-qopt{display:block;width:100%;text-align:left;min-height:44px;white-space:normal} .chat-qesc{align-self:flex-start;background:none;border:0;color:var(--dim);font:12px var(--mono);text-decoration:underline;cursor:pointer;padding:8px 0}
 .chat-ask{color:var(--amber);font-weight:700;margin-left:4px}
 .chat-screen{margin:0;padding:8px;font:11px/1.35 var(--mono);white-space:pre;overflow-x:auto;background:var(--bg);border:1px solid var(--line);border-radius:6px} .chat-screen-at{display:block;margin-top:4px}
@@ -313,7 +316,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-tabs{flex:none;display:flex;gap:4px;padding:6px 12px 0;overflow-x:auto;white-space:nowrap;border-bottom:1px solid var(--line)} .chat-tab{flex:none;display:inline-flex;align-items:center;gap:2px;max-width:200px;padding:5px 10px;border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;background:transparent;color:var(--mut);font:600 12px var(--mono);cursor:pointer} .chat-tab.on{background:var(--panel2);color:var(--fg);border-color:var(--line)} .chat-tab:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 .chat-swlabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .chat-new{display:inline-block;flex:none;width:8px;height:8px;margin-left:6px;border-radius:50%;background:var(--blue)} .chat-lead{flex:none;white-space:nowrap} .chat-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .mhd .chat-sub{flex:0 1000 auto} .mhd .chat-sw{position:relative;display:inline-block;vertical-align:middle;flex:0 1 auto;min-width:0;max-width:60%} .mbox .chat-swbtn{min-width:0} .chat-swbtn>.msg-badge,.chat-swbtn>.chat-ask{flex:none}
 .chat-swbtn{display:inline-flex;align-items:center;max-width:100%;min-height:44px;padding:0 8px;font:600 13px var(--mono)} .chat-menu{position:absolute;z-index:60;top:100%;left:0;display:flex;flex-direction:column;gap:2px;min-width:220px;max-width:calc(100vw - 24px);padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4)} .chat-mi{display:flex;align-items:center;min-height:44px;text-align:left;border-color:transparent;background:transparent} .chat-mi[aria-checked="true"]{border-color:var(--line);background:var(--panel)}
-@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px} .chat-cbtn{padding:8px 12px;min-height:32px} .chat-segb{min-height:44px;padding:0 10px;flex:1} .mbox.chat>.mhd:has(.chat-seg){flex-wrap:wrap} .mhd:has(.chat-seg) .chat-sub{display:none} .mhd .chat-seg{order:9;flex:1 0 100%;margin:0 0 8px} .chat-qnav .btn{min-height:44px;min-width:44px} .mbox.chat>.mhd{position:relative} .mbox.chat>.mhd .chat-sw{position:static} .mbox.chat .chat-menu{left:12px;right:12px;min-width:0;max-width:none}}
+@media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px} .chat-cbtn{padding:8px 12px;min-height:32px} .chat-dock.open{max-height:50%} .chat-dhd .btn{min-height:44px} .chat-qnav .btn{min-height:44px;min-width:44px} .mbox.chat>.mhd{position:relative} .mbox.chat>.mhd .chat-sw{position:static} .mbox.chat .chat-menu{left:12px;right:12px;min-width:0;max-width:none}}
 .qfoot .err{font-size:12px;color:var(--red)} .qfoot .ok{font-size:12px;color:var(--green)}
 /* Phone: every popup is a full-screen sheet (the box fills the viewport; only its body scrolls; header, tabs and footer stay put) and no input is under 16px, so a tap never zooms the page. */
 @media (max-width:600px){
@@ -348,6 +351,7 @@ html:has(.modal) #root{visibility:hidden}
 html:has(.modal) .modal,html:has(.modal) .toast{visibility:visible}
 .kb-open .mbox>.qfoot>.qsec,.kb-open .mbox>.qfoot>.chat-btn{display:none}
 .kb-open .mbox.chat>.qfoot>.chat-note{display:none}
+.kb-open .mbox.chat:not(.dock-full)>.chat-wrap{min-height:40px}
 .kb-open .mbox.chat .chat-left:not(.low){display:none}
 }
 /* Phone, inside the sheets: Settings tabs scroll in one row, the Limits table stacks, footers wrap, every tap target is 44px. */
@@ -361,6 +365,7 @@ html:has(.modal) .modal,html:has(.modal) .toast{visibility:visible}
 .rt-save{bottom:0;margin:12px -12px 0;padding:10px 12px max(10px,env(safe-area-inset-bottom));flex-wrap:wrap}
 .mbox .btn,.mbox button:not(.mclose),.mbox .opt,.mbox a.btn,.set-tab,.role-name{min-height:44px;min-width:44px}
 .chat-row{gap:10px} .chat-round{font-size:15px} .chat-round::after{inset:-5px} .chat-send{font-size:17px} .chat-attach svg{width:18px;height:18px} .mbox .chat-card .chat-round{width:34px;height:34px;min-width:34px;min-height:34px} /* the 44px tap target is the ::after, not the drawn circle */
+.mbox .chat-card .chat-scrtog{position:relative;width:34px;height:34px;min-width:34px;min-height:34px;padding:0} .chat-scrtog::after{content:"";position:absolute;inset:-6px}
 .mbox .opt{width:100%} .mbox .link-chip,.mbox .chip-btn{min-height:44px;display:inline-flex;align-items:center}
 .mbox .ud dl{grid-template-columns:minmax(0,1fr)} .ud dl,.fcd dl{grid-template-columns:minmax(0,1fr);gap:2px 0} .ud dd{margin-bottom:8px}
 .mbox>.md{padding-left:12px;padding-right:12px;overflow-wrap:anywhere} .mbox>.md pre,.mbox>.md table,.mbox pre{max-width:100%;overflow-x:auto} .mbox .ev-data,.mbox .evdata{white-space:pre-wrap;overflow-wrap:anywhere}
@@ -2325,7 +2330,7 @@ const promptWhere = (n, who) => "Answer it in " + who + "'s terminal" + (n.agent
 // recommended one pre-selected) plus free text; 1-9 picks, ←/→ switch tabs, Esc closes.
 // planOpen: the plan modal is stacked over this overlay, so every key belongs to it (Esc closes the plan only).
 const docLabel = (n) => /^plan-/.test(n.id || "") ? "Open plan" : "Open doc";
-// The answer list of one question, shared by the card (AskOverlay: a tap picks, Send sends) and the chat's Question view
+// The answer list of one question, shared by the card (AskOverlay: a tap picks, Send sends) and the chat's docked question card
 // (a tap answers). termOnly: a terminal-only picker, shown read-only.
 function QOptions({ n, val, rec, termOnly, onPick, disabled }) {
   return html`<div class="opts">${n.choices.map((c, j) => termOnly
@@ -2604,8 +2609,8 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
   const [drag, setDrag] = useState(false);
   const [screenOn, setScreenOn] = useState(null);   // null: the live screen when the member has no transcript, else the conversation
   const [pressing, setPressing] = useState("");    // the worktree a key press is in flight for
-  const [qOn, setQOn] = useState(null);             // the operator's pick of the Question view: {wt, key, on}; a new blocking question resets it to open
-  const [qAt, setQAt] = useState(qid || 0);         // which open question the Question view shows: an index, or the id it was opened for
+  const [qOn, setQOn] = useState(null);             // the operator's pick for the docked question card: {wt, key, dock: folded|open|full}; a new blocking question resets it to open
+  const [qAt, setQAt] = useState(qid || 0);         // which open question the card shows: an index, or the id it was opened for
   const [, bump] = useState(0);
   const log = useRef(null), input = useRef(null), cur = useRef(wt), tabs = useRef(null), menuOn = useRef(false), swBtn = useRef(null);
   const pick = useRef(null), held = useRef({}), slots = useRef({}), seq = useRef(0), planOn = useRef(false);
@@ -2715,14 +2720,18 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
     if ((!t && !ids.length) || busy === to || uploading) return;
     const n = chatCount(text);
     if (n > CHAT_MAX) { setErr("not sent: " + n + " characters, the limit is " + CHAT_MAX); return; }   // the text stays in the box
+    const raw = text;   // the box as it was sent
     setBusy(to); setErr("");
     try {
       await post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t });
-      store.del(chatDraftKey(project, topic, to));   // a send clears that member's whole draft
-      held.current[to] = [];
+      // Only what was sent leaves: text typed and images attached while the post was pending stay. An edit to the sent text keeps it all.
+      const now = cur.current === to && input.current ? String(input.current.value) : String(chatDraft(project, topic, to).text || "");
+      const rest = now.startsWith(raw) ? now.slice(raw.length) : now;
+      chatDraftSet(project, topic, to, rest);
+      putHeld(to, heldOf(to).filter((f) => !ids.includes(f.id)));
       if (cur.current === to) {
-        setText(""); setFiles([]); setNote("");
-        if (input.current) { input.current.value = ""; grow(input.current); }   // setText has not rendered yet: empty the box before it is measured
+        setText(rest); setNote("");
+        if (input.current) { input.current.value = rest; grow(input.current); }   // setText has not rendered yet: set the box before it is measured
         setPinned(true); load();
       }
     } catch (e) {
@@ -2774,22 +2783,22 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
   const openKey = useRef(null);
   if (data && openKey.current === null) openKey.current = blockKey;
   const qNamed = typeof qAt === "string" && (!blockKey || blockKey === openKey.current) ? qItems.findIndex((x) => x.id === qAt) : -1;
-  const qView = qItems.length > 0 && (qOn && qOn.wt === shown.wt && qOn.key === blockKey ? qOn.on : blockKey !== "" || qNamed >= 0);
-  const showScreen = !qView && !!scr && (screenOn == null ? data.source === "screen" : screenOn);
-  const view = qView ? "question" : showScreen ? "screen" : "chat";
-  const goView = (v) => { setQOn({ wt: shown.wt, key: blockKey, on: v === "question" }); if (v !== "question") setScreenOn(v === "screen"); };
+  const dock = !qItems.length ? null : qOn && qOn.wt === shown.wt && qOn.key === blockKey ? qOn.dock : blockKey !== "" || qNamed >= 0 ? "open" : "folded";
+  const setDock = (d) => setQOn({ wt: shown.wt, key: blockKey, dock: d });
+  const showScreen = !!scr && (screenOn == null ? data.source === "screen" : screenOn);
   const qIdx = typeof qAt === "string" ? Math.max(qNamed, 0) : Math.min(qAt, qItems.length - 1);
   const qCur = qItems[qIdx] || null;
-  const pageQ = (i) => { goView("question"); setQAt(i); };   // paging keeps the view open when nothing blocks
+  const pageQ = (i) => { setDock(dock === "full" ? "full" : "open"); setQAt(i); };   // paging keeps the card open when nothing blocks
+  const foldQ = () => { setDock("folded"); setQAt(0); };
   const qRec = qCur && qCur.source !== "picker" ? qCur.suggestion : null;   // a picker's option 1 is only first, not recommended
   // A tap on a choice is the card's own answer: sendAnswer posts api/answer with the question's `since`.
   const answerQ = async (q, answer) => {
     const to = shown.wt;
     setErr("");
-    try { await sendAnswer(project, topic, q.id, answer, q.since); if (cur.current === to) { goView("chat"); setQAt(0); bump((x) => x + 1); load(); } }
+    try { await sendAnswer(project, topic, q.id, answer, q.since); if (cur.current === to) { foldQ(); bump((x) => x + 1); load(); } }
     catch (e) { if (cur.current === to) setErr("not sent: " + String(e.message || e)); }
   };
-  const pressOpt = async (i) => { await press([String(i + 1)], String(i + 1)); goView("chat"); setQAt(0); };
+  const pressOpt = async (i) => { await press([String(i + 1)], String(i + 1)); foldQ(); };
   const turns = (data && data.turns) || [], sends = (data && data.sends) || [], rows = chatRows(turns, sends);
   const left = CHAT_MAX - chatCount(text);
   // The members to show: the live crew in the Crew box's order; the shown member always has a tab (first when it is not in `crew`).
@@ -2810,8 +2819,11 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
   const dot = (m) => chatNewReply(project, m) && html`<span class="chat-new" title="New reply" aria-hidden="true"></span>`;
   const badge = (n, tip) => n > 0 && html`<span class="msg-badge" title=${tip}>${n}</span>`;
   const ask = (m) => m.asks > 0 && html`<span class="chat-ask" title="Has an open question" aria-label="open question">?</span>`;
+const qLine = !qItems.length ? "" : qItems[0].menu
+    ? (qItems.length > 1 || !(qItems[0].prompt || []).length ? shown.label + "'s screen shows a menu" : qItems[0].prompt[qItems[0].prompt.length - 1])
+    : shown.label + " asks: " + qItems[0].title;
   return html`<div class="modal chat-modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div class=${"mbox chat" + (drag ? " drop" : "")} onDragOver=${(e) => { if (dragHas(e)) { e.preventDefault(); if (!drag) setDrag(true); } }}
+    <div class=${"mbox chat" + (drag ? " drop" : "") + (dock === "full" ? " dock-full" : "")} onDragOver=${(e) => { if (dragHas(e)) { e.preventDefault(); if (!drag) setDrag(true); } }}
       onDragLeave=${(e) => { if (!(e.relatedTarget && e.currentTarget.contains(e.relatedTarget))) setDrag(false); }}
       onDrop=${(e) => { if (dragHas(e)) { e.preventDefault(); setDrag(false); attach(e.dataTransfer.files); } }}>
       <div class="mhd"><span class="chat-lead">${topic === "_studio" ? "Chat · Studio · " + project : "Chat · "}</span>${topic === "_studio" ? null : html`${phone && multi
@@ -2820,34 +2832,32 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
             onClick=${() => setMenu(!menu)}><span class="chat-swlabel">${shown.label}</span> ▾${badge(othersMail, "mail for the other members")}${others.some((m) => m.asks > 0) && html`<span class="chat-ask" title="Another member has an open question" aria-label="open question elsewhere">?</span>`}${othersNew && html`<span class="chat-new" title="New reply elsewhere" aria-hidden="true"></span>`}</button>
           ${menu && html`<div class="chat-menu" role="menu">${members.map((m) => html`<button key=${m.wt} class="btn chat-mi" role="menuitemradio" aria-checked=${m.wt === shown.wt ? "true" : "false"}
             aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))} onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label}</span>${badge(mail(m), chatMailTip(m))}${ask(m)}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}</span>`
-        : shown.label}`}<span class="mut chat-sub">${topic === "_studio" ? "" : " · " + topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span>${qItems.length > 0 || (phone && scr) ? html`<span class="chat-seg" role="group" aria-label="View">${[...(qItems.length > 0 ? [["question", "Question"]] : []), ["chat", "Chat"], ...(scr ? [["screen", "Screen"]] : [])].map(([v, l]) => html`<button key=${v} type="button"
-          class=${"btn sm chat-segb" + (view === v ? " on" : "")} aria-pressed=${view === v ? "true" : "false"} onClick=${() => goView(v)}>${l}</button>`)}</span>`
-        : scr && html`<button type="button" class="btn sm chat-scr" aria-pressed=${showScreen ? "true" : "false"} title="Show the member's live screen" onClick=${() => setScreenOn(!showScreen)}>${showScreen ? "Chat" : "Screen"}</button>`}<button class="btn sm mclose" onClick=${onClose}>✕</button></div>
+        : shown.label}`}<span class="mut chat-sub">${topic === "_studio" ? "" : " · " + topic}${data && data.agent ? " · " + data.agent : ""}${data && data.source === "screen" ? " · screen tail" : ""}</span><span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
       ${multi && !phone && html`<div class="chat-tabs" role="tablist" aria-label="Members of this squad" ref=${tabs} onKeyDown=${tabKey}>${members.map((m, i) => html`<button key=${m.wt} id=${tabId(i)} class=${"chat-tab" + (m.wt === shown.wt ? " on" : "")} role="tab"
         aria-selected=${m.wt === shown.wt ? "true" : "false"} tabindex=${m.wt === shown.wt ? 0 : -1} title=${m.label} aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))}
         onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label.length > 14 ? m.label.slice(0, 13) + "…" : m.label}</span>${badge(mail(m), chatMailTip(m))}${ask(m)}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}
-      <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${qView && qCur
-        ? html`<div class="chat-q" data-chat-question>${qItems.length > 1 && html`<div class="chat-qnav"><button type="button" class="btn sm" aria-label="Previous question" disabled=${qIdx <= 0} onClick=${() => pageQ(Math.max(0, qIdx - 1))}>‹</button>
-            <span>${qIdx + 1} of ${qItems.length}</span><button type="button" class="btn sm" aria-label="Next question" disabled=${qIdx >= qItems.length - 1} onClick=${() => pageQ(Math.min(qItems.length - 1, qIdx + 1))}>›</button></div>`}
+      <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${showScreen
+        ? html`<pre class="chat-screen" aria-label="Live screen">${scr.tail || "(blank screen)"}</pre><span class="chat-time chat-screen-at">${scr.age_s == null ? "not read yet" : "read " + chatAge(scr.age_s) + " ago"}</span>`
+        : rows.length ? rows.map((r, i) => chatTurn(r, data.source, i, (n) => chatImgUrl(project, topic, n), { project, reload: load, edit: editSend }))
+        : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
+        ${data && data.working && html`<div class="chat-work">Working…</div>`}</div>
+        ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
+      ${dock && qCur && html`<div class=${"chat-dock " + dock}>${dock === "folded"
+        ? html`<button type="button" class="btn sm chat-dline" aria-expanded="false" onClick=${() => setDock("open")}><span class="chat-dtext">${qLine}</span><span aria-hidden="true">▴</span></button>`
+        : html`<div class="chat-dhd"><span class="chat-dtext">${shown.label} asks</span>${qItems.length > 1 && html`<span class="chat-qnav">· ${qIdx + 1} of ${qItems.length} <button type="button" class="btn sm" aria-label="Previous question" disabled=${qIdx <= 0} onClick=${() => pageQ(Math.max(0, qIdx - 1))}>‹</button><button type="button" class="btn sm" aria-label="Next question" disabled=${qIdx >= qItems.length - 1} onClick=${() => pageQ(Math.min(qItems.length - 1, qIdx + 1))}>›</button></span>`}<span class="sp"></span>
+            <button type="button" class="btn sm chat-dfull" aria-label=${dock === "full" ? "Back to card size" : "Full size"} aria-pressed=${dock === "full" ? "true" : "false"} onClick=${() => setDock(dock === "full" ? "open" : "full")}>${dock === "full" ? "⤡" : "⤢"}</button>
+            <button type="button" class="btn sm chat-dfold" aria-label="Fold" aria-expanded="true" onClick=${() => setDock("folded")}>▾</button></div>
+          <div class="chat-q chat-dbody" key=${qCur.key} data-chat-question>
           ${qCur.menu ? html`<div class="chat-qprompt">${qCur.prompt.join("\n") || shown.label + "'s screen shows a menu"}</div>
             ${qCur.options.map((o, i) => html`<button key=${i} type="button" class="btn chat-qopt" disabled=${pressing === shown.wt} onClick=${() => pressOpt(i)}>${i + 1}. ${o}</button>`)}
-            <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(() => goView("chat"))}>Esc · leave the menu</button>`
+            <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(foldQ)}>Esc · leave the menu</button>`
           : html`<h3>${linkedQ(qCur.title, qCur.repo_slug)}</h3>${qCur.doc && onPlan && html`<div><button type="button" class="btn sm" data-ev="open-doc" onClick=${() => onPlan(qCur.doc)}>${docLabel(qCur)}</button></div>`}
             ${qCur.shown ? html`<${ShownText} n=${qCur} />${qCur.picker_kind === "permission" && !qCur.answerable && html`<div class="chat-qprompt">${promptWhere(qCur, qCur.asker || shown.label)}</div>`}` : qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
             ${qCur.answerable
               ? html`<${QOptions} n=${qCur} rec=${qRec} onPick=${(l) => answerQ(qCur, l)} />
                 ${qRec && !qCur.choices.some((c) => c.label === qRec) && html`<div class="sugg"><b>Suggested:</b> ${qRec}${qCur.why ? html` — ${linkedQ(qCur.why, qCur.repo_slug)}` : ""}</div>`}
                 ${qCur.choices.length === 0 && html`<textarea key=${qCur.key} class="chat-qtext" ref=${qText} placeholder="Type your answer"></textarea><button type="button" class="btn pri" onClick=${() => { const v = qText.current && qText.current.value.trim(); if (v) answerQ(qCur, v); }}>Send</button>`}`
-              : html`<${QOptions} n=${qCur} termOnly=${true} /><button type="button" class="btn chat-qopt" onClick=${() => goView("screen")}>Open Screen to answer</button>`}`}</div>`
-        : showScreen
-        ? html`<pre class="chat-screen" aria-label="Live screen">${scr.tail || "(blank screen)"}</pre><span class="chat-time chat-screen-at">${scr.age_s == null ? "not read yet" : "read " + chatAge(scr.age_s) + " ago"}</span>`
-        : rows.length ? rows.map((r, i) => chatTurn(r, data.source, i, (n) => chatImgUrl(project, topic, n), { project, reload: load, edit: editSend }))
-        : html`<div class="empty">${data ? "Nothing read from this member yet." : "Loading…"}</div>`}
-        ${data && data.working && html`<div class="chat-work">Working…</div>`}
-        ${view === "chat" && qItems.length > 0 && html`<button type="button" class="btn sm chat-banner" onClick=${() => goView("question")}>${qItems[0].menu
-          ? (qItems.length > 1 || !(qItems[0].prompt || []).length ? shown.label + "'s screen shows a menu" : qItems[0].prompt[qItems[0].prompt.length - 1])
-          : shown.label + " asks: " + qItems[0].title} — ${qItems[0].menu ? "Open" : "Answer"} ›</button>`}</div>
-        ${!pinned && html`<button class="btn chat-down" title="Jump to the newest" onClick=${toEnd}>↓</button>`}</div>
+              : html`<${QOptions} n=${qCur} termOnly=${true} /><button type="button" class="btn chat-qopt" onClick=${() => { setScreenOn(true); setDock("open"); }}>Open Screen to answer</button>`}`}</div>`}</div>`}
       <div class="qfoot">
         ${showScreen && html`<div class="chat-keys" role="toolbar" aria-label=${"Keys for " + shown.label}>${CHAT_KEYS.concat(chatDigits(scr.menu)).map(([k, l, tip]) => html`<button key=${k} type="button"
           class="btn sm chat-key" title=${tip} aria-label=${tip} disabled=${pressing === shown.wt}
@@ -2864,7 +2874,7 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
           onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing && !e.shiftKey && !chatTouch()) { e.preventDefault(); send(); } }} onPaste=${onPaste}></textarea>
           <div class="chat-row">
           <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
-            <button type="button" class="btn chat-round chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg></button><span class="sp"></span>
+            <button type="button" class="btn chat-round chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg></button>${scr && html`<button type="button" class="btn sm chat-scrtog" aria-pressed=${showScreen ? "true" : "false"} aria-label=${phone ? "Screen" : undefined} title="Show the member's live screen" onClick=${() => setScreenOn(!showScreen)}>${phone ? "▭" : showScreen ? "▭ Chat" : "▭ Screen"}</button>`}<span class="sp"></span>
             <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left < 0 ? `${-left} over` : `${left} left`}</span>
             ${data && data.working && html`<button type="button" class="btn chat-round chat-stop" title="Press Esc: stops a working agent, closes a menu" aria-label="Stop" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc")}>■</button>`}
             <button class="btn pri chat-round chat-send" aria-label="Send" title=${busy === shown.wt ? "Sending…" : uploading ? "Uploading…" : "Send"} disabled=${busy === shown.wt || uploading || (!chatText(text) && !files.length)} onClick=${send}>${busy === shown.wt || uploading ? "…" : "↑"}</button>
@@ -3067,6 +3077,22 @@ function UnitActions({ s, u, toast, onDetails }) {
 }
 // A unit's Builder: the squad member whose worktree is the unit's `builder_wt` (null when it is gone or not started).
 const builderMember = (s, u) => (u.builder_wt && (s.members || []).find((m) => m.wt && m.wt === u.builder_wt)) || null;
+// The unit window's `Machine` row: what the Builder's process tree uses now (open unit only) and the unit's totals
+// from `unit_cpu`; null when there is neither. The loop samples every 30 s, so a sample over 2 minutes old says its age.
+const unitMachine = (u, bm, open, done) => {
+  const r = open && bm ? bm.resources : null, c = u.cpu;
+  if (!r && !c) return null;
+  const pct = (v) => Math.round(v) + "%";
+  const stale = r && r.at != null && Date.now() / 1000 - r.at > 120;
+  const peaks = c ? [c.peak_cpu_pct != null && "peak CPU " + pct(c.peak_cpu_pct), c.peak_rss_kb != null && "peak RAM " + kbText(c.peak_rss_kb)].filter(Boolean) : [];
+  const tip = ["CPU: 100% = one core.",
+    r && (r.mem_kb != null ? "RAM now is memory counted once." : "RAM now is RSS (shared pages count in each process)."),
+    c && c.peak_rss_kb != null && "Peak RAM is RSS.",
+    r && r.psi_cpu != null && "CPU pressure " + r.psi_cpu + ".",
+    r && r.psi_mem != null && "Memory pressure " + r.psi_mem + ".",
+    r && r.at != null && "Sampled at " + clockOf(r.at) + "."].filter(Boolean).join(" ");
+  return html`<span title=${tip}>${r && html`<div class="ud-res-now">${stale ? "last measured " + docAge(r.at) + " ago" : "now"}: CPU ${r.cpu_pct == null ? "—" : pct(r.cpu_pct)} · RAM ${kbText(r.mem_kb ?? r.rss_kb)} · ${r.procs} ${r.procs === 1 ? "process" : "processes"}</div>`}${c && html`<div class="ud-res-total">${done ? "Used" : "So far"}: ${[cpuH(c) + " CPU-h", ...peaks].join(" · ")}</div>`}</span>`;
+};
 // A unit's short title: its stored `title`, else the first clause of `about` (cut near 80 characters), else the slug in words.
 const slugWords = (slug) => String(slug).replace(/^u\d+-/, "").replace(/-/g, " ");
 const unitTitle = (u) => {
@@ -3097,6 +3123,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, planOpe
   const b = u.builder, tierName = (u.tier || "").replace(/ ⚠\S+$/, "").split("·")[0].replace(/^std$/, "standard").replace(/↑$/, ""), model = b && b.model_label;
   const planFile = u.plan ? String(u.plan).split("/").pop() : null;
   const planDoc = planFile && (s.plans || []).find((p) => p.name === planFile);
+  const machine = unitMachine(u, bm, open, done);
   const rows = [
     u.about && ["ud-about", done ? "What it did" : "What it does", u.about],
     u.done_text && ["ud-done", "Done when", u.done_text],
@@ -3109,6 +3136,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, planOpe
       ? html`<b>${bm.label}</b> <span class="mut">· ${bm.state || "?"}${tierName ? " · " + tierName : ""}${model ? " · " : ""}</span>${model && (b.model_mismatch && b.model ? html`${model} <span class="mut">(set: ${b.model})</span>` : model)}${memberLinks(s, bm).length > 0 && html` <span class="mut">· 🔗</span> <${MemberLinks} items=${memberLinks(s, bm)} />`}`
       : html`<span class="none">gone — its worktree is no longer on the squad</span>`],
     open && ["ud-runs", "Runs on", runsOn(u)],
+    machine && ["ud-res", "Machine", machine],
     card && card.paused && ["ud-paused", "Paused", pausedText(card)],
     u.plan && ["ud-plan", "Plan", html`${planDoc && onPlan ? html`<a href="#" class="ud-planlink" title="Open the plan" onClick=${(e) => { e.preventDefault(); onClose(); onPlan(planDoc); }}>${planFile}</a>` : planFile}${u.plan_unit ? " · " + u.plan_unit : ""}`],
   ].filter(Boolean);

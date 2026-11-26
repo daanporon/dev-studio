@@ -196,6 +196,8 @@ mkdir -p "$REPO/bin/backend" "$REPO/bin/commands"; cp "$ROOT/bin/backend/orca.sh
 cp "$ROOT/bin/ds" "$ROOT/bin/ds.ts" "$REPO/bin/"; cp "$ROOT/bin/commands/backend.ts" "$REPO/bin/commands/"
 # orca.ts builds its Claude launch lines from drivers/claude-launch.ts (U11), which imports nothing local.
 mkdir -p "$REPO/bin/loop/drivers"; cp "$ROOT/bin/loop/drivers/claude-launch.ts" "$REPO/bin/loop/drivers/"
+# …and reads its account list and login folders through account-dirs.ts and the account kinds (issue #125).
+mkdir -p "$REPO/bin/lib/account-kinds"; cp "$ROOT/bin/lib/account-dirs.ts" "$REPO/bin/lib/"; cp "$ROOT/bin/lib/account-kinds/"*.ts "$REPO/bin/lib/account-kinds/"
 # shellcheck source=tests/lib/install-ts.sh
 . "$ROOT/tests/lib/install-ts.sh"; install_ts_copy "$REPO"
 mkdir -p "$REPO/conventions"

@@ -539,6 +539,18 @@ proc 105 node 1 /w/d
 proc 106 claude 1 /w/e "CLAUDE_CONFIG_DIR=$tmp/home/.claude/"
 check "agent-accounts: top-level claudes with a known account" "$(printf '/w/a\tmain\tclaude\t-\tacc1\t-\t100\t-\t-\n/w/b\tmain\tclaude\t-\tsystem\t-\t103\t-\t-\n/w/e\tmain\tclaude\t-\tsystem\t-\t106\t-\t-')" \
   "$(DS_PROC="$fp" DS_ORCA_DATA="$od" DS_CLAUDE_HOME="$tmp/home/.claude" "$ROOT/bin/backend/orca.sh" agent-accounts | sort)"
+# issue #125 U2: a folder the accounts table names maps to its account, a Codex by its CODEX_HOME. Orca's own
+# CODEX_HOME overlay is still the default login; a Codex folder nothing knows is left out.
+fpt="$tmp/proc-table"; fp_was="$fp"; fp="$fpt"
+proc 200 claude 1 /w/ds "CLAUDE_CONFIG_DIR=$tmp/ds-claude/"
+proc 201 codex 1 /w/cx "CODEX_HOME=$tmp/ds-codex"
+proc 202 codex 1 /w/orca "CODEX_HOME=$tmp/overlay"; printf 'ORCA_CODEX_HOME=%s\0' "$tmp/overlay" >> "$fp/202/environ"
+proc 203 codex 1 /w/odd "CODEX_HOME=$tmp/odd"
+proc 204 codex 1 /w/own
+fp="$fp_was"
+bun "$ROOT/tests/lib/accounts-table.ts" "$tmp/table-state" claude dsA A ds "$tmp/ds-claude" 0 codex work Work ds "$tmp/ds-codex" 0
+check "agent-accounts: the accounts table's folders, per agent" "$(printf '/w/cx work\n/w/ds dsA\n/w/orca default\n/w/own default')" \
+  "$(DS_PROC="$fpt" DS_ORCA_DATA="$od" DS_STATE_ROOT="$tmp/table-state" HOME="$tmp/home" "$ROOT/bin/backend/orca.sh" agent-accounts | awk -F'\t' '{print $1, $5}' | sort)"
 # U90: a worker shows every agent it runs. A muse Builder's review-unit `claude -p` prints its own
 # main line plus a sub line with its model and account on the same worktree; a sub without a
 # --model flag reports "-". U98: a `claude -p` is a sub line even under the member's own claude

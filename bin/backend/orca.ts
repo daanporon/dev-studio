@@ -12,6 +12,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import { cachedRead, canonRead, countDrop, countSpawn, dropCached, runsOfWrite, type SpawnKind } from "./orca-cache.ts";
 import { clientRead, orcaClientOn, streams } from "./orca-client.ts";
 import { bashQ, claudeLine, claudeSettings, markTrusted, orcaData, systemJsonDir, utf8Locale, type ClaudeConfig, type LaunchLine } from "../loop/drivers/claude-launch.ts";
+import { defaultAccount, folderOf, knownFolders, listAccounts, type AccountRow } from "../lib/account-dirs.ts";
+import { jsonField } from "../lib/account-kinds/claude.ts";
+import { findKind, KINDS, kindEnv, kindOf } from "../lib/account-kinds/index.ts";
 
 type Env = Record<string, string | undefined>;
 type Sink = (b: string | Uint8Array) => void;
@@ -553,32 +556,30 @@ async function wtCreateLocked(ctx: Ctx, repo: string, name: string, parent: stri
 }
 
 // --- accounts -------------------------------------------------------------------------------------
-/** claude_accounts: "<id>\t<label>" per Claude account, the default login first: every host profile
- *  Orca manages plus the system login (`system`). Just the system login when Orca lists none. */
+/** The state root: loop.db and its accounts table, the locks and the loop's caches. */
+const stateRootOf = (env: Env): string => env.DS_STATE_ROOT || `${root(env)}/state`;
+const accountLabel = (r: AccountRow, env: Env): string => {
+  if (r.label) return r.label.replace(/[\t\n]/g, " ");
+  if (r.account !== findKind(r.agent)?.systemId) return r.account;
+  if (r.agent !== "claude") return "default";
+  // The logged-in system login names its address, as the account list always has.
+  const email = jsonField(join(systemJsonDir(env), ".claude.json"), ["oauthAccount", "emailAddress"]);
+  return email ? `system login (${email.replace(/[\t\n]/g, " ")})` : "system login";
+};
+const accountRows = (env: Env, agent: string): string[] =>
+  listAccounts(stateRootOf(env), agent, env).map((r) => `${r.account}\t${accountLabel(r, env)}`);
+/** claude_accounts: "<id>\t<label>" per Claude account, the default first, from loop.db's accounts table
+ *  (issue #125, KTD3); just the system login when the table lists none. */
 export async function claudeAccounts(ctx: Ctx): Promise<string[]> {
-  const r = await orca(ctx, ["account", "list", "--json"], "drop");
-  const rows: string[] = [];
-  if (r.code === 0) {
-    try {
-      for (const d of docs(r.out)) {
-        const c = alt(idx(idx(d, "result"), "claude"), {});
-        const def = alt(alt(idx(idx(c, "activeAccountIdsByRuntime"), "host"), idx(c, "activeAccountId")), "system");
-        const email = idx(c, "systemDefaultEmail");
-        const list: { id: any; label: any }[] = [{ id: "system", label: "system login" + (truthy(email) ? ` (${interp(email)})` : "") }];
-        for (const a of each(alt(idx(c, "accounts"), []))) {
-          if (alt(idx(a, "managedAuthRuntime"), "host") !== "host") continue;
-          list.push({ id: idx(a, "id"), label: alt(idx(a, "email"), idx(a, "organizationName"), idx(a, "id")) });
-        }
-        const same = (x: unknown) => JSON.stringify(x) === JSON.stringify(def);
-        for (const a of [...list.filter((a) => same(a.id)), ...list.filter((a) => !same(a.id))]) {
-          if (typeof a.label !== "string") throw new JqError(`${jqType(a.label)} cannot be matched, as it is not a string`);
-          rows.push(`${interp(a.id)}\t${a.label.replace(/[\t\n]/g, " ")}`);
-        }
-      }
-    } catch (e) { if (!(e instanceof JqError)) throw e; }
-  }
-  const out = chomp(rows.map((l) => l + "\n").join(""));
-  return out ? out.split("\n") : ["system\tsystem login"];
+  return accountRows(ctx.env, "claude");
+}
+
+/** The Claude account a start that names none launches on: the table's default; `system` when the table marks
+ *  the system row (so Orca's `claude` function cannot re-select its own profile), empty (a plain `claude`) when
+ *  the table marks none. */
+function claudeDefault(env: Env): string {
+  const r = defaultAccount(stateRootOf(env), "claude", env);
+  return r.account !== "system" ? r.account : r.is_default ? "system" : "";
 }
 
 /** orca_accounts: Orca's own account list for dev-studio's import (issue #125, KTD4), or null when `orca
@@ -630,8 +631,12 @@ const MUSE_HELPERS = new Set(["exec", "config", "export", "trace", "model-profil
  *  in bash's hash order); everything is read and printed as bytes. */
 export function agentAccounts(env: Env): string {
   const proc = env.DS_PROC || "/proc";
-  const sys = bytes(claudeSys(env)).replace(/\/$/, "");
+  const dirBytes = (p: string): string => bytes(p).replace(/\/$/, "");
   const data = bytes(orcaData(env));
+  const folders = new Map(KINDS.filter((k) => k.envVar).map((k) => [k.agent, {
+    sys: dirBytes(k.agent === "claude" ? claudeSys(env) : k.systemDir(env)),
+    table: knownFolders(stateRootOf(env), k.agent, env).map(([f, id]) => [dirBytes(f), id] as const),
+  }]));
   const read = (f: string): string | null => { try { return latin1(readFileSync(f)); } catch { return null; } };
   /** `read -r v < f`: the first line, ends trimmed; null when there is no full line. */
   const readLine = (f: string): string | null => {
@@ -695,21 +700,25 @@ export function agentAccounts(env: Env): string {
     if (c === "codex" && al && al.length > 1 && (al[1] === "exec" || al[1] === "app-server")) isp = true;
     if (c === "muse" && al && al.length > 1 && MUSE_HELPERS.has(al[1])) isp = true;
     if (!isp && c === "claude" && anyclaude) continue;
-    let acct: string;
-    if (c === "claude") {
+    const kind = kindOf(c), known = folders.get(c);
+    let acct = kind.systemId;
+    if (kind.envVar && known) {
       const envf = `${proc}/${pid}/environ`;
-      if (!readable(envf)) continue;
-      const e = read(envf);
-      if (e === null) continue;
-      let cfg = "";
-      for (const kv of e.split("\0").slice(0, -1)) if (kv.startsWith("CLAUDE_CONFIG_DIR=")) cfg = kv.slice(18);
-      cfg = cfg.replace(/\/$/, "");
-      const pre = `${data}/claude-profiles/`;
-      if (cfg === "" || cfg === sys) acct = "system";
-      else if (cfg.startsWith(pre) && cfg.length >= pre.length + 5 && cfg.endsWith("/home")) acct = cfg.slice(pre.length, -5);
-      else continue;
+      const e = readable(envf) ? read(envf) : null;
+      if (e === null && c === "claude") continue;
+      const vars = (e ?? "").split("\0").slice(0, -1);
+      const value = (name: string): string => (vars.findLast((kv) => kv.startsWith(`${name}=`))?.slice(name.length + 1) ?? "").replace(/\/$/, "");
+      const cfg = value(kind.envVar);
+      // Orca points a Codex it launches at a home of its own (ORCA_CODEX_HOME): still the default login.
+      if (cfg !== "" && cfg !== known.sys && !(c === "codex" && cfg === value("ORCA_CODEX_HOME"))) {
+        const row = known.table.find(([f]) => f === cfg);
+        const pre = `${data}/claude-profiles/`;
+        if (row) acct = bytes(row[1]);
+        else if (c === "claude" && cfg.startsWith(pre) && cfg.length >= pre.length + 5 && cfg.endsWith("/home")) acct = cfg.slice(pre.length, -5);
+        else continue;
+      }
       if (acct === "" || acct.includes("/")) continue;
-    } else acct = "default";   // muse and codex have one login each (see account-list)
+    }
     let cwd: string;
     try { cwd = latin1(readlinkSync(`${proc}/${pid}/cwd`, { encoding: "buffer" })).replace(/\n+$/, ""); } catch { continue; }
     const argv = (al ?? []).join("\n").replace(/\n+$/, "").split("\n");
@@ -732,8 +741,17 @@ export function agentAccounts(env: Env): string {
 // refreshes a token (that rotates the login). One call per account per DS_USAGE_TTL_S (a host-wide cache
 // shared by every project's sweep); a failure (no token, expired, 429, network) is cached too and prints
 // `-`, never "exhausted".
-/** account_home: an account's Claude config dir; `system` is the default login. */
-const accountHome = (env: Env, id: string): string => id === "system" ? claudeSys(env) : `${orcaData(env)}/claude-profiles/${id}/home`;
+/** An account's login folder (KTD3). Claude's system login is claudeSys, which tests move. */
+const accountDir = (env: Env, agent: string, id: string): string =>
+  agent === "claude" && id === "system" ? claudeSys(env) : folderOf(stateRootOf(env), agent, id, env);
+const accountHome = (env: Env, id: string): string => accountDir(env, "claude", id);
+/** The env that points `agent` at account `id` ({} for its system row), or null when the agent has no
+ *  folder variable to reach another account with. */
+function accountEnv(env: Env, agent: string, id: string): Record<string, string> | null {
+  const kind = kindOf(agent);
+  if (id === kind.systemId) return {};
+  return kind.envVar ? kindEnv(kind, accountDir(env, agent, id)) : null;
+}
 /** iso_epoch: an ISO string or epoch s/ms as epoch s, "-" when unknown. */
 function isoEpoch(env: Env, v: string): string {
   if (v === "" || v === "-" || v === "null") return "-";
@@ -892,9 +910,9 @@ function cache(f: string, row: string, enc: BufferEncoding = "latin1"): void {
  *  or failed) is `-` numbers plus the generic note "out of credits", which the loop holds the account on
  *  (bin/loop/capacity/credits.ts; provider words stay here). Any other failure prints NO row (usage stays
  *  unknown, never exhausted) plus one stderr line, and the miss is cached (an empty file). */
-async function museUsage(ctx: Ctx, dir: string, ttl: number, now: number): Promise<string> {
+async function museUsage(ctx: Ctx, dir: string, ttl: number, now: number, id: string): Promise<string> {
   if (!Bun.which("muse", { PATH: ctx.env.PATH ?? "" })) return "";
-  const f = `${dir}/muse-default.tsv`;
+  const f = `${dir}/muse-${id}.tsv`;
   let row = cached(f, ttl, now);
   if (row === null) {
     row = "";
@@ -918,7 +936,7 @@ async function museUsage(ctx: Ctx, dir: string, ttl: number, now: number): Promi
     if (!row) ctx.err("orca adapter: muse usage unavailable (no login, error, or unexpected output); no muse row\n");
     cache(f, row);
   }
-  return row ? `muse\tdefault\t${row}\n` : "";
+  return row ? `muse\t${id}\t${row}\n` : "";
 }
 /** The free-resets shape (conventions/backend.md `account-resets`) from codex app-server's
  *  `rateLimitResetCredits`. `credits: null` is a count with no detail rows (an empty list); the count is
@@ -1005,14 +1023,15 @@ async function codexCall(ctx: Ctx, cwd: string, method: string, params?: Record<
   stop();
   return got;
 }
-/** codex_usage: the Codex row from one `codex app-server` rate-limits read, with the muse row's cache file
+/** codex_usage: one Codex account's row from one `codex app-server` rate-limits read (`ctx` carries the
+ *  account's folder env), with the muse row's cache file
  *  naming and the Claude rows' TTL, fail TTL and keepStale. Each window maps by its length: up to 300
  *  minutes is the session column, longer the weekly one (the free plan's 30-day window reads as weekly).
  *  The same answer writes `codex-default.resets.json` (read by `account-resets`); a failure leaves it. No
  *  figures at all prints no row (unknown, never exhausted) plus one stderr line. */
-async function codexUsage(ctx: Ctx, dir: string, ttl: number, failTtl: number, now: number): Promise<string> {
+async function codexUsage(ctx: Ctx, dir: string, ttl: number, failTtl: number, now: number, id: string): Promise<string> {
   if (!Bun.which("codex", { PATH: ctx.env.PATH ?? "" })) return "";
-  const f = `${dir}/codex-default.tsv`;
+  const f = `${dir}/codex-${id}.tsv`;
   let row = cached(f, ttl, now, failTtl);
   if (row === null) {
     const res = await codexRead(ctx, dir);
@@ -1030,12 +1049,12 @@ async function codexUsage(ctx: Ctx, dir: string, ttl: number, failTtl: number, n
       }
       const [s, sr] = cols.session ?? ["-", "-"], [w, wr] = cols.weekly ?? ["-", "-"];
       fresh = `${s}\t${sr}\t${w}\t${wr}`;
-      cache(`${dir}/codex-default.resets.json`, JSON.stringify(codexResets((res as Record<string, unknown>).rateLimitResetCredits, now)), "utf8");
+      cache(`${dir}/codex-${id}.resets.json`, JSON.stringify(codexResets((res as Record<string, unknown>).rateLimitResetCredits, now)), "utf8");
     }
     row = keepStale(f, fresh, now); cache(f, row);
     if (!isObj(rl)) ctx.err("orca adapter: codex usage unavailable (no login, error, timeout, or unexpected output)\n");
   }
-  return row && !/^-\t-\t-\t-$/.test(row) ? `codex\tdefault\t${row}\n` : "";
+  return row && !/^-\t-\t-\t-$/.test(row) ? `codex\t${id}\t${row}\n` : "";
 }
 /** The host-wide usage cache dir (shared by every project's loop). */
 const usageDir = (env: Env): string => env.DS_USAGE_CACHE || `${env.XDG_CACHE_HOME || `${env.HOME}/.cache`}/dev-studio/account-usage`;
@@ -1047,8 +1066,13 @@ export async function accountUsage(ctx: Ctx): Promise<void> {
   const env = ctx.env, dir = usageDir(env);
   const ttl = Number(env.DS_USAGE_TTL_S || "300"), failTtl = Number(env.DS_USAGE_FAIL_TTL_S || "60"), now = nowS(env);
   try { mkdirSync(dir, { recursive: true }); } catch { /* cache is best effort */ }
-  for (const l of await accountList(ctx)) {
-    const [agent, id] = readTabs(l, 3);
+  const rows = (await accountList(ctx)).map((l) => readTabs(l, 3));
+  // Another account of an agent is read with its kind's folder env; without one, it has no usage read.
+  const others = (agent: string): [Ctx, string][] => rows.flatMap(([a, id]): [Ctx, string][] => {
+    const extra = a === agent && id ? accountEnv(env, agent, id) : null;
+    return extra ? [[{ ...ctx, env: { ...env, ...extra } }, id]] : [];
+  });
+  for (const [agent, id] of rows) {
     if (agent !== "claude" || !id) continue;
     const f = `${dir}/claude-${id}.tsv`;
     const home = accountHome(env, id);
@@ -1069,8 +1093,8 @@ export async function accountUsage(ctx: Ctx): Promise<void> {
     }
     ctx.out(`claude\t${id}\t${row}\n`);
   }
-  ctx.out(await museUsage(ctx, dir, ttl, now));
-  ctx.out(await codexUsage(ctx, dir, ttl, failTtl, now));
+  for (const [c, id] of others("muse")) ctx.out(await museUsage(c, dir, ttl, now, id));
+  for (const [c, id] of others("codex")) ctx.out(await codexUsage(c, dir, ttl, failTtl, now, id));
 }
 /** RESET_STATES: the generic free-resets states; anything else read from a sidecar is `unknown`. */
 const RESET_STATES = new Set(["reported", "not_reported", "unknown"]);
@@ -1093,10 +1117,9 @@ export async function accountResets(ctx: Ctx): Promise<void> {
     ctx.out(`${agent}\t${id}\t${JSON.stringify(doc)}\n`);
   }
 }
-/** account-list lines: claude's accounts (default first), then muse's and codex's one login each. */
+/** account-list lines: each agent's accounts, its default first. */
 export async function accountList(ctx: Ctx): Promise<string[]> {
-  const cl = (await claudeAccounts(ctx)).join("\n").split("\n").map((l) => `claude\t${l}`);
-  return [...cl, "muse\tdefault\tdefault", "codex\tdefault\tdefault"];
+  return ["claude", "muse", "codex"].flatMap((agent) => accountRows(ctx.env, agent).map((l) => `${agent}\t${l}`));
 }
 
 // --- account-reset-use (account-free-resets U4) -----------------------------------------------------
@@ -1172,7 +1195,7 @@ export async function accountResetUse(ctx: Ctx, a: string[]): Promise<number> {
   try { mkdirSync(dir, { recursive: true }); } catch { /* codex's cwd; the call says if it cannot start */ }
   let got: [ResetOutcome, string] | null;
   if (agent === "claude") got = await claudeResetUse(ctx, id, grant, key);
-  else if (agent === "codex") got = await codexResetUse(ctx, dir, grant, key);
+  else if (agent === "codex") got = await codexResetUse({ ...ctx, env: { ...ctx.env, ...accountEnv(ctx.env, "codex", id) } }, dir, grant, key);
   else return say("failed", `${agent} has no free resets`);
   if (got === null) { ctx.err(`account-reset-use: no answer from ${agent}; the claim is in doubt, retry with the same key\n`); return 1; }
   if (RESET_STALE.has(got[0])) for (const ext of ["tsv", "resets.json"]) rmSync(`${dir}/${agent}-${id}.${ext}`, { force: true });
@@ -2660,10 +2683,14 @@ async function runWorkerStart(ctx: Ctx, what: string, args: string[]): Promise<b
     return false;
   }
 }
-/** on_other_account: this start must launch on a non-default Claude account. No account, or the default
- *  login, is the plain worker-start. Each call reads the account list once. */
+/** on_other_account: this start must launch in a tab on <acct>. Claude: any account but the table's default.
+ *  Codex and Muse: any account but their system row, which Orca's own worker-start launches. */
 async function onOtherAccount(ctx: Ctx, agent: string, acct: string): Promise<boolean> {
-  return agent === "claude" && acct !== "" && acct !== (await claudeAccounts(ctx))[0].split("\t")[0];
+  if (acct === "") return false;
+  // claudeDefault, not the list's first row: with no marked or system row listed, that is a named account.
+  if (agent === "claude") return acct !== (claudeDefault(ctx.env) || "system");
+  const kind = findKind(agent);
+  return !!kind && acct !== kind.systemId;
 }
 /** claude_home: that account's Claude config dir, or null (said on stderr) when it does not exist. */
 function claudeHome(ctx: Ctx, acct: string): string | null {
@@ -2685,7 +2712,8 @@ async function linkProjects(ctx: Ctx): Promise<void> {
   const target = `${claudeSys(ctx.env)}/projects`, base = `${orcaData(ctx.env)}/claude-profiles`, key = "account-projects";
   let names: string[] = [];
   try { names = readdirSync(base).filter((n) => !n.startsWith(".")).sort(byBytes); } catch { /* no profiles */ }
-  const todo = names.map((n) => `${base}/${n}/home`).filter((h) => isDir(h) && !projectsLinked(h, target));
+  const table = knownFolders(stateRootOf(ctx.env), "claude", ctx.env).filter(([, id]) => id !== "system").map(([f]) => f);
+  const todo = [...new Set([...names.map((n) => `${base}/${n}/home`), ...table])].filter((h) => isDir(h) && !projectsLinked(h, target));
   if (!todo.length) return;
   try { mkdirSync(target, { recursive: true }); } catch {
     say(ctx, `orca adapter: warning: cannot make ${target}: not linking any account's projects`);
@@ -2890,6 +2918,29 @@ async function claudeTab(ctx: Ctx, wt: string, acct: string, args: string[]): Pr
   const where = { wt, account: acct };
   if (!h) return noTab(ctx, `could not open a terminal in ${wt} for account ${acct}`, where, created);
   return launched(ctx, h, `claude on account ${acct} never came up in ${wt}`, where);
+}
+/** codex_trust: what Orca does before it types a Codex worker's line: mark the worktree trusted in that
+ *  CODEX_HOME's config.toml, so the TUI comes up without the question. Best effort, never rewriting a line. */
+function codexTrust(ctx: Ctx, dir: string, wt: string): void {
+  const f = `${dir}/config.toml`, head = `[projects.${JSON.stringify(wtPath(wt))}]`;
+  try {
+    const had = existsSync(f) ? readFileSync(f, "utf8") : "";
+    if (!had.split("\n").includes(head)) appendFileSync(f, `${had && !had.endsWith("\n") ? "\n" : ""}\n${head}\ntrust_level = "trusted"\n`);
+  } catch { say(ctx, `orca adapter: not pre-trusting ${wtPath(wt)}: cannot write ${f}`); }
+}
+/** agent_tab: a new tab running a Codex or Muse on <account>: its kind's folder env on its own launch line
+ *  (KTD17). Like the line Orca types for it, it has no path gates. */
+async function agentTab(ctx: Ctx, wt: string, agent: string, acct: string, model: string, effort: string): Promise<string | null> {
+  const kind = kindOf(agent), dir = accountDir(ctx.env, agent, acct);
+  if (!kind.envVar || !kind.command) return null;
+  if (!isDir(dir)) { say(ctx, `orca adapter: no ${agent} home for account ${acct} (${dir})`); return null; }
+  if (agent === "codex") codexTrust(ctx, dir, wt);
+  const utf8 = utf8Locale(ctx.env);
+  const cmd = ["env", `${kind.envVar}=${bashQ(dir, utf8)}`, ...kind.command(model, effort).map((a) => bashQ(a, utf8))].join(" ");
+  const { h, created } = await openTab(ctx, wt, `${agent}@${[...acct].slice(0, 8).join("")}`, cmd);
+  const where = { wt, account: acct };
+  if (!h) return noTab(ctx, `could not open a terminal in ${wt} for account ${acct}`, where, created);
+  return launched(ctx, h, `${agent} on account ${acct} never came up in ${wt}`, where);
 }
 /** The worker identity a loop start gives its terminal (U4 of orca-backend-alternatives, bin/loop/core/whoami.ts):
  *  `DS_MEMBER=… DS_WT=… DS_GEN=… ` from the DS_START_MEMBER/DS_START_GEN the loop sent, empty for a start the loop
@@ -3116,35 +3167,41 @@ async function guardFreshStart(ctx: Ctx, wt: string): Promise<number> {
  *  host is a claude tab under that account's home (plain `claude` for the default login), then worker-start
  *  --terminal (keeps Run/Task/Dispatch): worker-start --agent can't pass claude flags (the auto-compact
  *  <window>, skill overrides) or the PATH that puts bin/hooks/path-gates first (the hook shims, U235; U9 made
- *  the default login take it too). A failed start closes that tab unless a retry id owns it, then the replay uses it. Other agents, and a
+ *  the default login take it too). A Codex or Muse on an account other than its system login is a tab too,
+ *  with its kind's folder env (KTD17), and is refused when its kind has none. A failed start closes that tab
+ *  unless a retry id owns it, then the replay uses it. Codex and Muse on their system login, and a
  *  default-login Claude with --on, take the plain worker-start --agent: Orca types their launch line, so they
- *  run without the path gates. Managed accounts live on this host, so not with --on; a window with --on is
+ *  run without the path gates. Accounts live on this host, so not with --on; a window with --on is
  *  dropped. Other agents ignore the window. */
 async function startWorker(ctx: Ctx, what: string, wt: string, agent: string, model: string, host: string, effort: string,
   acct: string, window: string, rest: string[]): Promise<boolean> {
   await linkProjects(ctx);
+  if (agent !== "claude" && !acct && !host) acct = defaultAccount(stateRootOf(ctx.env), agent, ctx.env).account;
   let cs = agent === "claude" ? await compactSettings(ctx, window, wt) : [];
-  if (cs.length && host && !(await onOtherAccount(ctx, agent, acct))) {
+  const other = await onOtherAccount(ctx, agent, acct);
+  if (cs.length && host && !other) {
     say(ctx, `orca adapter: ${what} — no auto-compact window with --on ${host} (launching with the default)`);
     cs = [];
   }
-  if ((await onOtherAccount(ctx, agent, acct)) || cs.length || (agent === "claude" && !host)) {
-    if (host) { say(ctx, `orca adapter: ${what} — launching on account ${acct} works on this host only, not --on ${host}`); return false; }
-    let tabAcct = (await onOtherAccount(ctx, agent, acct)) ? acct : "";
-    if (!tabAcct) {   // the default login: plain claude, unless that default is a managed account
-      tabAcct = (await claudeAccounts(ctx))[0].split("\t")[0];
-      if (tabAcct === "system") tabAcct = "";
-    }
-    const ca = ["--model", model, ...(effort ? ["--effort", effort] : [])];
-    const h = await retryTab(sub(ctx), (c) => claudeTab(c, wt, tabAcct, [...ca, ...cs]), { wt, account: tabAcct });
-    if (h === null) return false;
-    delete ctx.env.DS_LOOP_ACTIVITY;   // launched: the bind and its cleanup run whatever a pause says
-    if (await runWorkerStart(ctx, `${what}${tabAcct ? ` (account ${tabAcct})` : ""}`, ["--worktree", `id:${wt}`, ...rest, "--terminal", h])) return true;
-    await forgetTab(ctx, h);
+  if (!other && !cs.length && !(agent === "claude" && !host)) {
+    return runWorkerStart(ctx, what, ["--worktree", `id:${wt}`, ...rest, "--agent", agent, "--model", model,
+      ...(host ? ["--on", host] : []), ...(effort ? ["--effort", effort] : [])]);
+  }
+  if (host) { say(ctx, `orca adapter: ${what} — launching on account ${acct} works on this host only, not --on ${host}`); return false; }
+  if (agent !== "claude" && !kindOf(agent).envVar) {
+    say(ctx, `orca adapter: ${what} — ${agent} has no folder variable, so only its own login can be launched, not account ${acct}`);
     return false;
   }
-  return runWorkerStart(ctx, what, ["--worktree", `id:${wt}`, ...rest, "--agent", agent, "--model", model,
-    ...(host ? ["--on", host] : []), ...(effort ? ["--effort", effort] : [])]);
+  // The default login: plain claude, unless the table names a default.
+  const tabAcct = other ? acct : claudeDefault(ctx.env);
+  const ca = ["--model", model, ...(effort ? ["--effort", effort] : [])];
+  const h = await retryTab(sub(ctx), (c) => agent === "claude" ? claudeTab(c, wt, tabAcct, [...ca, ...cs])
+    : agentTab(c, wt, agent, tabAcct, model, effort), { wt, account: tabAcct });
+  if (h === null) return false;
+  delete ctx.env.DS_LOOP_ACTIVITY;   // launched: the bind and its cleanup run whatever a pause says
+  if (await runWorkerStart(ctx, `${what}${tabAcct ? ` (account ${tabAcct})` : ""}`, ["--worktree", `id:${wt}`, ...rest, "--terminal", h])) return true;
+  await forgetTab(ctx, h);
+  return false;
 }
 /** keep_open: --keep-open for a standing role (lead|thinker|studio), nothing otherwise (U64). A standing role
  *  lives across turns; without --keep-open Orca closes a finished worker's terminal, so a standing role
@@ -3221,11 +3278,11 @@ const WORKERS: Record<string, Verb> = {
     if (agent !== "claude" && agent !== "") { say(ctx, `orca adapter: worker-resume — no resume for agent ${a[5]}`); return 1; }
     const acct = blank(a[4]);
     const cs = await compactSettings(ctx, blank(a[6]), a[1]);
-    const other = await onOtherAccount(ctx, "claude", acct);
+    const on = (await onOtherAccount(ctx, "claude", acct)) ? acct : claudeDefault(ctx.env);
     if (!need(ctx, a, 4)) return 1;
-    const h = await retryTab(sub(ctx), other
-      ? (c) => claudeTab(c, a[1], acct, ["--continue", "--model", a[3], ...cs])
-      : (c) => resumeTab(c, a[1], a[3], cs), { wt: a[1], ...(other ? { account: acct } : {}) });
+    const h = await retryTab(sub(ctx), on
+      ? (c) => claudeTab(c, a[1], on, ["--continue", "--model", a[3], ...cs])
+      : (c) => resumeTab(c, a[1], a[3], cs), { wt: a[1], ...(on ? { account: on } : {}) });
     if (h === null) return 1;
     delete ctx.env.DS_LOOP_ACTIVITY;   // launched: see launched
     if (await runWorkerStart(ctx, `worktree ${a[1]} (resume)`, ["--terminal", h, "--worktree", `id:${a[1]}`, "--spec", a[2], "--run", a[0],
@@ -3653,8 +3710,8 @@ async function runtimeReachable(ctx: Ctx): Promise<boolean> {
 /** The CLAUDE_CONFIG_DIR of a managed account (its profile home), "" for `system`, null when the home is missing. */
 function claudeConfigDir(ctx: Ctx, acct: string): string | null {
   if (acct === "system") return "";
-  const h = `${orcaData(ctx.env)}/claude-profiles/${acct}/home`;
-  try { return statSync(h).isDirectory() ? h : null; } catch { return null; }
+  const h = accountHome(ctx.env, acct);
+  return isDir(h) ? h : null;
 }
 
 /** U264: `current`'s answer per cwd and CLI, inside the loop only. */
@@ -3714,7 +3771,7 @@ export const VERBS: Record<string, Verb> = {
     if (!a[0]) { ctx.err("orca adapter: claude-config-dir needs an account id\n"); return 2; }
     if (a[0] === "system") return 0;
     const h = claudeConfigDir(ctx, a[0]);
-    if (h === null) { ctx.err(`orca adapter: no Claude home for account ${a[0]} (${orcaData(ctx.env)}/claude-profiles/${a[0]}/home)\n`); return 1; }
+    if (h === null) { ctx.err(`orca adapter: no Claude home for account ${a[0]} (${accountHome(ctx.env, a[0])})\n`); return 1; }
     ctx.out(`${h}\n`);
     return 0;
   },
@@ -3911,8 +3968,7 @@ export const VERBS: Record<string, Verb> = {
   async "studio-start"(ctx, a) {
     if (!need(ctx, a, 6)) return 1;
     const wt = a[0], model = blank(a[2]), effort = blank(a[3]);
-    let acct = blank(a[1]);
-    if (!acct) { acct = (await claudeAccounts(ctx))[0].split("\t")[0]; if (acct === "system") acct = ""; }
+    const acct = blank(a[1]) || claudeDefault(ctx.env);
     const cs = await compactSettings(ctx, blank(a[4]), wt);
     const h = await claudeTab(ctx, wt, acct,
       [...(model ? ["--model", model] : []), ...(effort ? ["--effort", effort] : []), ...cs, ...(a[5] ? [a[5]] : [])]);
@@ -3933,7 +3989,7 @@ export const VERBS: Record<string, Verb> = {
 };
 
 /** Local process/config reads and the PR close need no orca, so they work during CLI repair. */
-const NO_CLI = new Set(["claude-config-dir", "agent-accounts", "pr-close"]);
+const NO_CLI = new Set(["claude-config-dir", "agent-accounts", "pr-close", "account-list", "account-usage", "account-resets"]);
 export const PORTED = Object.keys(VERBS);
 
 /** Run one verb as orca.sh did: resolve the CLI first (except NO_CLI), then the verb on its own copy of the

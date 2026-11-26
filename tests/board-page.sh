@@ -225,7 +225,7 @@ jt "unit details: hold kind and reason, and who waits on it" "$TMP/det.json" "$D
 jt "unit details: a unit with no stored text carries nulls, for the fallback" "$TMP/det.json" "$DQ | .\"u3-bare\" | .about == null and .done_text == null and .check_text == null and .hold_kind == null"
 jt "unit details: done_at is on the done unit's row and null on an open one" "$TMP/det.json" "$DQ | .\"adhoc-fix\".done_at == 1700000000 and .\"u3-bare\".done_at == null"
 ud_fn=$(sed -n '/^function UnitDetails(/,/^}/p' "$ROOT/web/board.html")
-for f in ud-title ud-slug ud-status ud-about ud-done ud-check ud-links ud-waits ud-dependents ud-hold ud-builder ud-plan ud-release ud-cancel ud-chat ud-show ud-answer ud-bar; do
+for f in ud-title ud-slug ud-status ud-about ud-done ud-check ud-links ud-waits ud-dependents ud-hold ud-builder ud-res ud-plan ud-release ud-cancel ud-chat ud-show ud-answer ud-bar; do
   eq "unit details: the window has $f" "$(printf '%s' "$ud_fn" | grep -cF "$f" | sed 's/^[1-9][0-9]*$/ok/')" "ok"
 done
 eq "unit details: no 'not stored' text and no add-unit hint" "$(printf '%s' "$ud_fn" | grep -cF 'not stored')$(printf '%s' "$ud_fn" | grep -cF 'add-unit')" "00"
@@ -592,6 +592,7 @@ jt "card: no host-group list rides with the card" "$TMP/c1.json" '.machine.card 
 jq '.machine = {mem_total_kb:100000000,mem_avail_kb:50000000,cpu_busy_pct:600} | . + {"procs":[["mB1",1000000,100,1],["oW9",2000000,200,1,"zzother"]],"host_procs":false}' "$TMP/seed-h0.json" > "$TMP/seed-cardall.json"
 SEED="$TMP/seed-cardall.json" mkdb "$HL"; render --json > "$TMP/cardall.json"
 jt "card: the all-projects view has one project segment per project, adding up to in use" "$TMP/cardall.json" '.machine.card | (.ram.segments | length == 2) and (([.ram.segments[].value]|add) + .ram.other == .ram.used) and (.cpu.segments | length == 2)'
+jt "consumers: a member's resources.at is the sample's observed_at" "$TMP/c1.json" '[.squads[].members[] | .resources | select(. != null) | .at] as $a | ($a | length) > 0 and ($a | all(. == ($a[0]) and . > 0 and (now - .) < 600))'
 jt "consumers: per-member resources, NULL cpu stays null" "$TMP/c1.json" '(.squads[] | select(.topic=="sqc") | .members | map({(.label):.resources}) | add) | (.["builder-u1"].rss_kb==2202009 and .["builder-u1"].cpu_pct==300 and .lead.cpu_pct==280)'
 cseed '{"procs":[["mB1",2202009,null,5],["mL1",1468006,null,3]],"host_procs":false}' > "$TMP/c2.json"
 cseed '{"machine":{"mem_total_kb":100000000,"mem_avail_kb":50000000,"cpu_busy_pct":1200},"procs":[["mB1",1000,300,1],["mL1",1000,280,1]],"host_procs":[{"comm":"x","procs":1,"rss_kb":1,"cpu_pct":620}]}' > "$TMP/c5.json"

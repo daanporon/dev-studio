@@ -14,6 +14,8 @@ export const codex: AccountKind = {
   credentialsFile: "auth.json",
   loginId: () => null,
   login: null,
+  command: (model, effort) => ["codex", "-c", "disable_paste_burst=true", "--dangerously-bypass-approvals-and-sandbox",
+    "--model", model, ...(effort ? ["-c", `model_reasoning_effort=${effort}`] : [])],
   usage: true,
   resets: true,
 };
