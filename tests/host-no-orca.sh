@@ -2,7 +2,8 @@
 # host-no-orca.sh — orca-backend-alternatives U58: a project whose Studio and squads run on tmux needs no Orca for
 # the host commands. With Orca absent (the adapter a stub that logs and exits 127, no `orca` on PATH), `ds team`,
 # `directory.sh list|reach` and `set-orca-depth` exit 0 with their line and never call the stub for that project
-# (`accounts-refresh`, `account-skills check` and `install-skills` cover loop.db's accounts, issue #125); a Studio off Orca asking an Orca-only verb gets `<verb>: not on tmux`,
+# (`accounts-refresh`, `account-skills check` and `install-skills` cover loop.db's accounts, issue #125; a walk adds an
+# account with a fake claude, picks it and reads its usage on the board); a Studio off Orca asking an Orca-only verb gets `<verb>: not on tmux`,
 # exit 2, no stack. tests/board.sh covers the board side by side with an Orca project.
 set -euo pipefail
 
@@ -111,7 +112,6 @@ rc=0; out="$(PATH="$TMP/clibin:$PATH" BACKEND="$TMP/orca-stub" skills install-sk
 covers "install-skills --check"
 # An Orca CLI that is there but does not answer (exits 127): the adapter's preflight fails, the same one line.
 ln -s "$TMP/orca-stub" "$TMP/nobin/orca"
-rm -f "$DS_STATE_ROOT/accounts.tsv"
 rc=0; out="$(refresh)" || rc=$?
 check "accounts-refresh, Orca not answering: exits 0, no #125 line, the table's list" "0 0 system zzds " "$rc $(printf '%s\n' "$out" | grep -c 'issue #125') $(claude_rows)"
 check "accounts-refresh, Orca not answering: unreachable" "orca: unreachable" "$(head -1 "$DS_STATE_ROOT/accounts-orca.tsv")"
@@ -133,6 +133,107 @@ hasnt "studio off Orca: no stack" "$out" "    at "
 check "studio off Orca: the refusals never call Orca" "" "$(cat "$LOG")"
 rc=0; out="$(probe preflight)" || rc=$?
 hasnt "studio off Orca: preflight is not refused" "$out" "not on tmux"
+
+# The walk (issue #125's Done), still with no orca CLI: `ds account add` with a fake claude, log in as the board's
+# Send code does, the picker puts the builder on the new account, and the rendered board shows its usage row.
+# The loop is its own account-add fulfiller and state observer (walk.ts); its login terminal runs the real login
+# line under sh. A fake curl answers the usage call, so nothing here reaches a provider.
+mkdir -p "$TMP/walkbin"
+cat > "$TMP/walkbin/claude" <<'EOF'
+#!/bin/sh
+[ "$*" = "auth login --claudeai" ] || exit 2
+echo "Open https://claude.ai/oauth/authorize?code=true&client_id=made-up-client&state=walk"
+echo "Paste code here if prompted >"
+read -r code
+[ "$code" = "made-up-code" ] || exit 1
+printf '{"claudeAiOauth":{"accessToken":"sentinel-walk-token","expiresAt":9999999999999}}' > "$CLAUDE_CONFIG_DIR/.credentials.json"
+printf '{"oauthAccount":{"accountUuid":"made-up-walk-login"}}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+EOF
+cat > "$TMP/walkbin/curl" <<'EOF'
+#!/bin/sh
+if grep -q sentinel-walk-token; then
+  printf '{"five_hour":{"utilization":37,"resets_at":"2099-01-01T00:00:00Z"},"seven_day":{"utilization":12,"resets_at":"2099-01-02T00:00:00Z"}}\n200'
+else
+  printf '\n401'
+fi
+EOF
+chmod +x "$TMP/walkbin/claude" "$TMP/walkbin/curl"
+cat > "$TMP/walk.ts" <<EOF
+import { LoopActuator } from "$ROOT/bin/loop/core/actuator.ts";
+import { FakeBackend } from "$ROOT/bin/loop/fakes/orca.ts";
+import { accountAdd, type Terminals } from "$ROOT/bin/loop/fulfil/account-add.ts";
+import { stateObserver } from "$ROOT/bin/loop/observers/state.ts";
+import { dropLoginCode } from "$ROOT/bin/lib/account-login-code.ts";
+import { open, now } from "$ROOT/bin/loop/core/store.ts";
+import { Loop } from "$ROOT/bin/loop/core/tick.ts";
+const s = open();
+let screen = "", proc: ReturnType<typeof spawn> | null = null;
+const spawn = (line: string) => Bun.spawn(["sh", "-c", line], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+const terms: Terminals = {
+  async open(_x, project, req) {
+    proc = spawn(req.line);
+    void (async () => { for await (const c of proc!.stdout as ReadableStream<Uint8Array>) screen += new TextDecoder().decode(c); })();
+    return { via: "orca", handle: "walk-term", project };
+  },
+  async read() { return screen; },
+  async close() { proc?.kill(); },
+  async type(_x, _t, text) { const i = proc!.stdin as import("bun").FileSink; i.write(text + "\\n"); i.flush(); return true; },
+};
+if (process.argv[2] === "observe") {
+  const loop = new Loop(s, { observers: [stateObserver()], reconcilers: [] }, new LoopActuator({ orca: new FakeBackend(), fulfillers: [] }), { projects: () => ["$LBL"] });
+  loop.boot(now()); await loop.tick(now());
+} else {
+  const f = accountAdd({ terminals: terms, refresh: () => {} });
+  const act = new LoopActuator({ orca: new FakeBackend(), fulfillers: [f] });
+  const loop = new Loop(s, { observers: [], reconcilers: [f] }, act, { projects: () => ["$LBL"] });
+  loop.boot(now());
+  let sent = false, last: any = null;
+  for (let i = 0; i < 200; i++) {
+    await loop.tick(now()); await act.drain();
+    const row = s.db.query("SELECT id, done_at, result FROM requests WHERE kind = 'account-add'").get() as any;
+    last = row;
+    const r = JSON.parse(row.result ?? "{}");
+    if (row.done_at != null) break;
+    if (!sent && r.state === "waiting_login") { console.log("link: " + r.url); dropLoginCode(s.root, Number(row.id), "made-up-code"); sent = true; }
+    await Bun.sleep(50);
+  }
+  console.log(last?.result ?? "no request");
+}
+proc?.kill();
+s.close();
+process.exit(0);
+EOF
+walk_env() { HOME="$TMP/home" DS_CLAUDE_SYSTEM_JSON_DIR="$TMP/home" DS_ORCA_CLI_BIN_DIR="$TMP/nobin" DS_USAGE_CACHE="$TMP/usage" \
+  DS_USAGE_URL="http://usage.invalid/usage" PATH="$TMP/walkbin:$NOPATH" "$@"; }
+q "INSERT OR REPLACE INTO health (id, pid, started_at, tick_at, progress_at) VALUES (1, 1, $(date +%s), $(date +%s), $(date +%s))" >/dev/null
+rc=0; out="$(walk_env "$ROOT/bin/ds" account add walk --project "$LBL" --no-wait 2>&1)" || rc=$?
+check "walk: the add is filed" "0" "$rc"
+rc=0; out="$(cd "$ROOT" && walk_env bun "$TMP/walk.ts" add 2>&1)" || rc=$?
+has "walk: the login link" "$out" "link: https://claude.ai/oauth/authorize"
+has "walk: added" "$out" "added claude:walk"
+check "walk: the folder is under the accounts root" "yes" "$(test -f "$DS_STATE_ROOT/accounts/claude/walk/.credentials.json" && echo yes || echo no)"
+for a in system zzds; do walk_env "$ROOT/bin/ds" account disable "claude:$a" >/dev/null 2>&1 || bad "walk: disable $a" "failed"; done
+rc=0; out="$(walk_env "$ROOT/bin/ds" accounts-refresh 2>&1)" || rc=$?
+check "walk: accounts-refresh exits 0" "0" "$rc"
+rc=0; out="$(cd "$ROOT" && walk_env bun "$TMP/walk.ts" observe 2>&1)" || rc=$?
+check "walk: the state observer reads the refresh" "0" "$rc"
+rc=0; out="$(walk_env "$ROOT/bin/ds" pick "$LBL" builder --member "local::$TMP/b1" --agent claude --json 2>&1)" || rc=$?
+check "walk: the pick exits 0" "0" "$rc"
+has "walk: the builder is picked onto the new account" "$out" '"account": "walk"'
+rc=0; out="$(walk_env "$ROOT/bin/board/board.sh" "$LBL" 2>&1)" || rc=$?
+check "walk: the board renders" "0" "$rc"
+has "walk: the board shows the account's usage row" "$(printf '%s\n' "$out" | grep -F walk | grep -F '37%' || true)" "37%"
+check "walk: the token stays in its folder" "" "$(grep -rl sentinel-walk-token "$DS_STATE_ROOT" "$TMP/usage" 2>/dev/null | grep -v "/accounts/claude/walk/.credentials.json" || true)"
+check "walk: never calls the Orca stub" "" "$(cat "$LOG")"
+
+# The docs say it (issue #125 R9): the remove warning, no Orca account prerequisite, and the how-to for a new agent.
+doc() { tr '\n' ' ' < "$ROOT/$1" | sed 's/ > / /g'; }
+has "USAGE: never run orca account remove" "$(doc docs/USAGE.md)" 'never remove in Orca an account that dev-studio uses from Orca'
+has "USAGE: names orca account remove" "$(doc docs/USAGE.md)" '`orca account remove`'
+for f in docs/USAGE.md README.md docs/settings.md docs/how-it-works.md docs/solutions/2026-10-06-worker-start-needs-managed-account.md; do
+  check "$f: no longer asks for orca account add" "0" "$(grep -c 'orca account add' "$ROOT/$f" || true)"
+done
+has "scripts.md: Adding an agent's accounts names the kinds folder" "$(sed -n "/^## Adding an agent's accounts/,/^## Verify detail/p" "$ROOT/docs/scripts.md")" 'bin/lib/account-kinds/'
 
 echo "host-no-orca: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

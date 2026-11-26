@@ -11,7 +11,7 @@ Quick map:
 | Thresholds (context, compaction, picker) | `conventions/limits.conf` | `/ds-limits`, or board Settings → Limits |
 | Ship mode (how work reaches its target) | `conventions/projects.conf` | `/ds-mode` |
 | Autonomy (checkpoints vs fire-and-forget) | per squad, at spawn | `/ds-start-squad` options |
-| Accounts (whose quota a role spends) | `orca account …` + `state/accounts.tsv` | `orca account add`, automatic after that |
+| Accounts (whose quota a role spends) | loop.db's account list (usage cached in `state/accounts.tsv`) | `ds account …`, or board Settings → Accounts |
 | Host behaviour (board, loop) | environment variables | export them where the loop/board runs |
 
 Per-project overrides of roles, limits, models and ship mode are rows in the loop's
@@ -407,9 +407,10 @@ scope/cost/secrets) — those still come to you. See
 
 ## Accounts: whose quota a role spends
 
-Managed Claude accounts live on the host that runs the workers. Check them
-with `orca account list`; if it is empty, run `orca account add` once (it signs
-in a managed account on the Orca host) before starting squads.
+dev-studio keeps one account list for the whole host, for every agent, in loop.db. List it with
+`bin/ds account`. Add a login with `ds account add <name> [--agent codex]`, or with **Add account** on the
+board's Settings → Accounts tab; `--dir <folder>` adds a folder that is already logged in
+([USAGE](USAGE.md#accounts), which also warns against removing accounts in Orca).
 
 - Usage and limits are cached in `state/accounts.tsv`, rewritten by
   `bin/lib/accounts-refresh.sh` (the loop refreshes the same account data).
@@ -422,7 +423,7 @@ in a managed account on the Orca host) before starting squads.
 - The picker also skips an account you disabled (below). Its `why` (`bin/ds pick ... --json`)
   names it, e.g. `fill_first; acct-a disabled`.
 
-No setting to change here day to day: add accounts with `orca account add`,
+No setting to change here day to day: add accounts with `ds account add`,
 and tune the skip thresholds with `pick_session_max` / `pick_weekly_max`
 above.
 
