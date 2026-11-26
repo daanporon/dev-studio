@@ -30,7 +30,7 @@ import { planChanges } from "./plan-changes.ts";
 import { compareSquads } from "./squad-order.ts";
 import { archiveDebriefStep, type Step } from "../loop/squad/archive-debrief.ts";
 import { removeWaitS } from "../loop/squad/close-drift.ts";
-import { redact } from "../loop/chat/redact.ts";
+import { redact, redactDeep } from "../loop/chat/redact.ts";
 import { planUnitFacts } from "../loop/squad/plan-lines.ts";
 import { blockingForUnit, entryOf, list, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
 import { DEFAULTS as BRIEFING_DEFAULTS, gaveUp as briefingGaveUp, localDate, nextSlot, parseDays, parseTime, scheduleSince } from "../loop/reconcilers/briefing.ts";
@@ -1774,7 +1774,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
       since: x.since ?? null, age_min: ageMin(x.since),
       // A terminal-picker mirror (bin/hooks/picker-hook.sh): the board answers it by keystroke when
       // picker_answerable (one single-select question); otherwise "answer it in the terminal".
-      source: x.source ?? null, picker_answerable: x.picker_answerable ?? null,
+      source: x.source ?? null, picker_answerable: x.picker_answerable ?? null, ...shownFields(x),
       pr: qpr(x?.pr),
       ...questionDoc(db, label, topic, x, u),
     })).sort((a, b) => (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1) || (b.age_min ?? 0) - (a.age_min ?? 0)),
@@ -2277,7 +2277,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
         squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, since: q.since ?? null, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
         text: q.question, title: q.title, titled: q.titled, choices: q.choices,
         suggestion: q.suggestion, why: q.why, options: q.options, age_min: q.age_min, command: null,
-        source: q.source ?? null, picker_answerable: q.picker_answerable ?? null,
+        source: q.source ?? null, picker_answerable: q.picker_answerable ?? null, ...shownFields(q),
         pr: q.pr ?? null, repo_slug: s.repo_slug ?? null,
         doc: q.doc ?? null, plain: q.plain ?? null, plain_from: q.plain_from ?? null, facts: q.facts ?? null, revision: q.revision ?? null, changes: q.changes ?? null,
       })),
@@ -2569,6 +2569,7 @@ export function renderText(b: Board): string {
       // A picker mirror lives in the asker's terminal (not the Lead's) and recommends nothing.
       const where = q.source === "picker" ? `answer it in ${q.asker}'s terminal${q.picker_answerable === true ? " or on the web board" : ""}` : `answer at the ${s.topic} Lead`;
       o.push(`   ${q.blocking ? "‼ BLOCKING" : "❗"} ${q.asker}: ${text.length > 100 ? text.slice(0, 100) + "…" : text} (${ag}) — ${where}`);
+      if (q.shown) o.push(...String(q.shown).split("\n").map((l) => `      │ ${l}`));
       if (q.suggestion && q.source !== "picker") o.push(`      suggested: ${q.suggestion}${q.why ? " — " + q.why : ""}`.replace(/[\t\n]/g, " "));
     }
     for (const m of s.members) if (m.limited) o.push(`   ⏸ usage limit: ${m.label} — ${m.limited.line}${m.limited.wait_label ? ` (${m.limited.wait_label})` : m.limited.switching ? " (restart on the next account requested)" : ""}`);
@@ -3220,6 +3221,12 @@ export function menuText(tail: string): { count: number; prompt: string[]; optio
   return { count: last.length, prompt, options: last.map((o) => o.label) };
 }
 
+// What a prompt in a terminal is about, on the entries that carry it (picker-hook.sh permission): the
+// text a card draws as a code block, where it runs and which helper agent asks. Absent fields are left out.
+function shownFields(x: any): Record<string, string> {
+  return Object.fromEntries(["picker_kind", "shown", "agent", "cwd"].filter((k) => typeof x?.[k] === "string" && x[k]).map((k) => [k, x[k]]));
+}
+
 // The open questions whose card opens a chat with this member (the cards' chat_wt rule in squad(): the card's
 // worktree, else the Lead's), as the Question view shows them. Blocking first, then oldest first. [] for the Studio.
 function chatQuestionsAll(db: Db, project: string, topic: string) {
@@ -3234,6 +3241,7 @@ function chatQuestionsAll(db: Db, project: string, topic: string) {
       choices: (arr(x.choices).length ? arr(x.choices) : (arr(x.options).length ? arr(x.options) : x.suggestion ? [x.suggestion] : []).map((l: any) => ({ label: String(l), does: null })))
         .map((c: any) => ({ label: redact(String(c?.label ?? "")), does: c?.does ? redact(String(c.does)) : null })),
       since: x.since ?? null, blocking: x.blocking === true, source: x.source ?? null, answerable: !(x.source === "picker" && x.picker_answerable !== true),
+      ...(typeof x.shown === "string" ? redactDeep({ ...shownFields(x), asker: String(x.asker ?? "") }) : {}),
     })).sort((a: any, b: any) => (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1) || String(a.since ?? "").localeCompare(String(b.since ?? "")));
 }
 function chatQuestions(db: Db, project: string, topic: string, wt: string) {

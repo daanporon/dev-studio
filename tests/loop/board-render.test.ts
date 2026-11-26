@@ -817,3 +817,28 @@ test("update banner: Show commits opens a dialog with each commit and Esc closes
     expect(r.root.querySelector('[role="dialog"]')).toBeNull();
   } finally { await r.window.happyDOM.close(); }
 });
+
+// permission-prompt-needs-you U1: the command is a code block on the row and in the card, and both say it is answered in the role's terminal.
+test("a safety-check prompt shows its command as a code block and says to answer it in the role's terminal", async () => {
+  const shown = 'echo start\nrm -- "$HOME/.ds-none"';
+  const card = { squad: "sq", label: "fixture", kind: "blocking", id: "picker-00002222", since: "2026-11-20T10:00:00Z", from: "builder-u1", title: "builder-u1 asks: run this command?", titled: true,
+    text: "```\n" + shown + "\n```", source: "picker", picker_kind: "permission", picker_answerable: false, shown, cwd: "/tmp/wt-builder",
+    choices: [{ label: "Yes", does: "let it run this once" }, { label: "No", does: "refuse it" }], options: ["Yes", "No"], age_min: 1 };
+  const r = await mount({ ...board, needs_you: [card] }, false);
+  const w = r.window, doc = w.document;
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && !doc.querySelector(".qnote"); k++) await wait(25);
+    const note = doc.querySelector(".qnote");
+    expect(note.querySelector("pre.qcmd").textContent).toBe(shown);
+    expect(note.textContent).toContain("Answer it in builder-u1's terminal");
+    expect(note.textContent).not.toContain("```");
+    note.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    const body = doc.querySelector(".qbody");
+    expect(body.querySelector("pre.qcmd").textContent).toBe(shown);
+    expect(body.textContent).toContain("Answer it in builder-u1's terminal — Claude stopped at a safety check");
+    expect(body.querySelectorAll("button.opt").length).toBe(0); // read-only: nothing to send
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});

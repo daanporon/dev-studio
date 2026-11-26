@@ -155,6 +155,9 @@ export const FACTS = {
   delivery_verified: obj(delivery),
   exposed: obj({ name: str, role: opt(str), scope: opt(str), suffix: opt(str), url: opt(str), audience: opt(str), stop: opt(bool), ports: opt(arr(num)) }),
   feedback_imported: obj({ file: str, lines: num, added: num, renamed: opt(str) }),
+  // A role stopped at a safety-check prompt (project and squad are the event's columns): `agent` when a
+  // helper agent raised it, `text` the first 200 redacted characters of what the prompt is about.
+  permission_asked: obj({ role: str, tool: opt(str), via: str, agent: opt(bool), text: str }),
   feedback_noted: obj({ key: str, project: str, member: opt(str), source: str }),
   feedback_drafted: obj({ repo: str, notes: num, drafts: num, blocked: num, kept: num, model: opt(str), account: opt(str), head: opt(str) }),
   // U3: a draft on its way out, out (filed #issue), edited, dismissed (a draft or one note), a note restored.
