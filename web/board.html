@@ -169,8 +169,11 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .arow>*{min-width:0} .arow .al{display:flex;align-items:center;gap:6px;color:var(--fg);min-width:0} .arow .al .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto}
 .arow.off>*{opacity:.5} .arow .bdg.off{background:#2a2d33;color:var(--fg);opacity:1}
 .arow .lu.awarn,.mrow .lu.awarn{color:var(--amber);white-space:normal;overflow-wrap:anywhere} .arow .al{flex-wrap:wrap} .arow .al .t{max-width:100%} .afacts{margin:-4px 0 10px;font-size:11px;color:var(--dim);overflow-wrap:anywhere}
-.acc-sec .amanage{margin-left:8px}
-.mrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font:12px var(--mono);color:var(--mut)} .mrow:first-child{border-top:0} .mrow .al{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--fg);min-width:0} .mrow .al .t{overflow-wrap:anywhere} .mrow .mark{flex:none;font-size:10px;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue)} .mrow .bdg{flex:none;font-size:10px;padding:1px 6px;border-radius:4px;background:#23272f;color:var(--mut)}
+.acc-sec .acc-head{justify-content:flex-end;margin:0 0 8px}
+.mrow .mbtns{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end} .acct-ctl{margin-bottom:8px}
+.acct-pending{border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px;font:12px var(--mono);color:var(--mut);overflow-wrap:anywhere} .acct-pending .al{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--fg)} .acct-pending .lu{margin-top:4px} .acct-pending .awarn,.acct-form .awarn{color:var(--amber)} .acct-pending .dcode{font-size:15px;color:var(--fg);user-select:all}
+.acct-paste{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px} .acct-paste input{flex:1 1 200px;min-width:0} .acct-form label{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.mrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font:12px var(--mono);color:var(--mut)} .mrow:first-child{border-top:0} .mrow .al{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--fg);min-width:0} .mrow .al .t{overflow-wrap:anywhere} .mrow .mark,.acct-pending .mark{flex:none;font-size:10px;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue)} .mrow .bdg,.acct-pending .bdg{flex:none;font-size:10px;padding:1px 6px;border-radius:4px;background:#23272f;color:var(--mut)}
 .arow .mark{flex:none;font-size:10px;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue)}
 .arow .bdg{flex:none;font-size:10px;padding:1px 6px;border-radius:4px;background:#23272f;color:var(--mut)} .arow .bdg.plan{margin-left:6px} .arow .bdg.limited{background:var(--red-bg);color:var(--red)}
 .arow .lr{display:flex;justify-content:space-between} .arow .track{height:6px;border-radius:3px;background:#23272f;margin:3px 0;overflow:hidden} .arow .fill{height:100%;border-radius:3px}
@@ -526,6 +529,7 @@ function toastOf(e) {
     const r = p.result || {};
     if (p.kind === "account-reset" && r.outcome && mine.has(p.id)) return "free reset: " + resetOutcome(r.outcome) + (r.detail ? " (" + r.detail + ")" : "");
     if (r.ok === false) return "request #" + p.id + " (" + p.kind + ") failed: " + (r.error || "no reason given");
+    if ((p.kind === "account-add" || p.kind === "account-move") && r.text && mine.has(p.id)) return r.text;   // "already there as …", a move's plugin paths
     if (p.kind === "run-switch" && mine.has(p.id)) return r.result || "Restarted";
     return mine.has(p.id) ? "done: " + p.kind + " (request #" + p.id + ")" : null;
   }
@@ -1548,19 +1552,107 @@ function AccountRow({ a, all, isDefault, project, open, onToggle, toast }) {
     ${isOpen && html`<div class="adetail"><${AccountDetail} a=${a} all=${all} project=${project} toast=${toast} isDefault=${isDefault} /></div>`}
   </${React.Fragment}>`;
 }
-// issue #125 U7: every account, the disabled and folder-only ones the strip hides included. A folder-only login
-// is not an account, so it has no switch.
-function AccountsPanel({ accounts, folderOnly, project, toast, onClose }) {
-  useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k); }, []);
-  return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div class="mbox acct-panel" style=${{ width: "min(720px,100%)" }} role="dialog" aria-label="Manage accounts">
-      <div class="mhd">Manage accounts<span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
-      <div class="md">${accounts.length + folderOnly.length === 0 && html`<div class="mut">no accounts yet</div>`}
-        ${accounts.map((a) => html`<div class="mrow" key=${a.agent + "/" + a.account}><div><div class="al"><span class="mark">${a.agent}</span><span class="t" title=${a.account}>${a.label || a.account}</span>${a.tag && html`<span class="bdg where">${a.tag}</span>`}${a.default && html`<span class="bdg">default</span>`}${a.disabled && html`<span class="bdg">disabled</span>`}</div>
-          ${acctWarnings(a)}${a.merged_into && html`<div class="lu">same login as ${a.merged_into}: the Accounts section shows them as one row</div>`}</div>${accountSwitch(a, accounts, project, toast)}</div>`)}
-        ${folderOnly.map((f) => html`<div class="mrow" key=${f.agent + "/" + f.folder}><div><div class="al"><span class="mark">${f.agent}</span><span class="t" title=${f.folder}>${f.folder}</span><span class="bdg where">${f.tag}</span></div>
-          <div class="lu">a login folder no account uses${f.login_short ? " · login " + f.login_short : ""}</div>${acctWarnings(f)}</div></div>`)}</div>
-    </div></div>`;
+// issue #125 U9: Settings' Accounts tab. The list is the host's, not the project's: every account (the disabled
+// and folder-only ones the strip hides included), the adds in progress, and Add. A folder-only login is not an
+// account, so it has no switch; its Add opens the dialog on its folder.
+function AccountsPane({ accounts, folderOnly, adds, kinds, project, toast }) {
+  const [adding, setAdding] = useState(null);   // the Add dialog's start values {agent, dir}
+  const addable = (agent) => kinds.some((k) => k.agent === agent);
+  return html`<div class="acct-pane">
+    <p class="set-note acct-shared">Shared by all projects on this host — not part of this project's Export/Import.</p>
+    <div class="sqctl acct-ctl"><button class="btn sm acct-add" disabled=${!kinds.length} onClick=${() => setAdding({})}>Add account</button></div>
+    ${adds.map((a) => html`<${AccountAdd} key=${a.id} a=${a} toast=${toast} />`)}
+    ${accounts.length + folderOnly.length === 0 && html`<div class="mut">no accounts yet</div>`}
+    ${accounts.map((a) => html`<div class="mrow" key=${a.agent + "/" + a.account}><div><div class="al"><span class="mark">${a.agent}</span><span class="t" title=${a.account}>${a.label || a.account}</span>${a.tag && html`<span class="bdg where">${a.tag}</span>`}${a.default && html`<span class="bdg">default</span>`}${a.disabled && html`<span class="bdg">disabled</span>`}</div>
+      ${acctWarnings(a)}${a.merged_into && html`<div class="lu">same login as ${a.merged_into}: the Accounts section shows them as one row</div>`}</div>
+      <div class="mbtns">${a.move && html`<${MoveButton} a=${a} toast=${toast} />`}${accountSwitch(a, accounts, project, toast)}</div></div>`)}
+    ${folderOnly.map((f) => html`<div class="mrow" key=${f.agent + "/" + f.folder}><div><div class="al"><span class="mark">${f.agent}</span><span class="t" title=${f.folder}>${f.folder}</span><span class="bdg where">${f.tag}</span></div>
+      <div class="lu">a login folder no account uses${f.login_short ? " · login " + f.login_short : ""}</div>${acctWarnings(f)}</div>
+      <div class="mbtns">${addable(f.agent) && html`<button class="abtn acct-add-folder" onClick=${() => setAdding({ agent: f.agent, dir: f.folder })}>Add</button>`}</div></div>`)}
+    ${adding && html`<${AddAccountDialog} start=${adding} kinds=${kinds} project=${project} toast=${toast} onClose=${() => setAdding(null)} />`}
+  </div>`;
+}
+const sayFor = (toast) => (t) => { toast(t); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast(null), 4000); };
+// `ds account move` from the board: the confirm carries the rotation warning; `force` goes only while Orca still lists it.
+function MoveButton({ a, toast }) {
+  const [busy, setBusy] = useState(false);
+  const say = sayFor(toast), name = a.label || a.account;
+  const go = async () => {
+    if (!confirm("Move " + name + " into dev-studio? Its login folder is copied and dev-studio uses the copy; Orca's folder stays as it is.\n\nWarning: " + a.move.warning + "."
+      + (a.move.force ? "\n\nOrca still lists this account: OK keeps both copies and accepts that risk." : ""))) return;
+    setBusy(true);
+    try { const b = await post("api/account-move", { agent: a.agent, account: a.account, force: a.move.force }); say("move requested (#" + b.id + ")"); await awaitDone(b.id); }
+    catch (e) { say("not sent: " + (e.message || e)); }
+    setBusy(false);
+  };
+  const pending = busy || a.move.pending != null;
+  return html`<button class="abtn acct-move" disabled=${pending} title="Copy this account's login folder into dev-studio's own" onClick=${go}>${pending ? "Moving…" : "Move"}</button>`;
+}
+function AddAccountDialog({ start, kinds, project, toast, onClose }) {
+  const [agent, setAgent] = useState(start.agent || (kinds[0] && kinds[0].agent) || "");
+  const [name, setName] = useState("");
+  const [dir, setDir] = useState(start.dir || "");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  // On the document, so Escape closes this dialog and not Settings under it (its listener is on the window).
+  useEffect(() => { const k = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }; document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k); }, []);
+  const send = async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true); setErr("");
+    try {
+      const b = await post("api/account-add", { project, agent, name: name.trim(), ...(dir.trim() ? { dir: dir.trim() } : {}) });
+      sayFor(toast)(b.queued ? "queued: runs when the project resumes (#" + b.id + ")" : "add requested (#" + b.id + ")");
+      onClose();
+    } catch (x) { setErr(String(x.message || x)); setBusy(false); }
+  };
+  return html`<div class="modal acct-dlg" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <form class="mbox" style=${{ width: "min(480px,100%)" }} role="dialog" aria-modal="true" aria-label="Add account" onSubmit=${send}>
+      <div class="mhd">Add account<span class="sp"></span><button type="button" class="btn sm mclose" onClick=${onClose}>✕</button></div>
+      <div class="md acct-form">
+        <label>Agent<select class="add-agent" value=${agent} onChange=${(e) => setAgent(e.target.value)}>${kinds.map((k) => html`<option key=${k.agent} value=${k.agent}>${k.agent}</option>`)}</select></label>
+        <label>Name<input class="add-name" type="text" value=${name} onInput=${(e) => setName(e.target.value)} autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="a lowercase letter, then a-z, 0-9 and -" /></label>
+        <label>Existing folder (optional)<input class="add-dir" type="text" value=${dir} onInput=${(e) => setDir(e.target.value)} autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="a folder already logged in; empty opens a new login" /></label>
+        ${err && html`<div class="lu awarn" role="alert">${err}</div>`}
+        <div><button type="submit" class="btn sm pri" disabled=${busy || !agent || !name.trim()}>Add</button></div>
+      </div></form></div>`;
+}
+// One add from its request's progress: waiting for login (the link, and a device flow's code or a paste flow's
+// box) until it ends, then what came of it for a while (account_adds, board-data.ts).
+function AccountAdd({ a, toast }) {
+  const open = a.state !== "done" && a.state !== "failed";
+  const status = a.state === "done" ? "added" : a.state === "failed" ? "failed" : a.queued ? "queued" : a.state === "code_typed" || a.state === "logged_in" ? "logging in" : "waiting for login";
+  const url = open && /^https?:\/\//i.test(a.url || "") ? a.url : null;
+  return html`<div class="acct-pending" data-state=${a.state}>
+    <div class="al"><span class="mark">${a.agent}</span><span class="t">${a.name}</span><span class="bdg">${status}</span></div>
+    ${a.queued ? html`<div class="lu">runs when project ${a.project} resumes</div>`
+      : a.state === "done" ? html`<div class="lu">${a.text}</div>`
+      : a.state === "failed" ? html`<div class="lu awarn">${a.error || a.text}</div>`
+      : html`<${React.Fragment}>
+        ${url ? html`<div class="lu">Open <a href=${url} target="_blank" rel="noopener noreferrer">${url}</a></div>` : a.text && html`<div class="lu">${a.text}</div>`}
+        ${url && a.device_code && html`<div class="lu">and type this code on that page: <code class="dcode">${a.device_code}</code></div>`}
+        ${a.line && html`<div class="lu"><code>${a.line}</code> <button class="abtn" onClick=${() => copy(a.line, toast)}>copy</button></div>`}
+        ${a.why && html`<div class="lu awarn">${a.why}</div>`}
+        ${a.flow === "paste" && a.state === "waiting_login" && html`<${PasteCode} key=${a.why || ""} id=${a.id} />`}
+      </${React.Fragment}>`}
+  </div>`;
+}
+// The pasted login code is a secret: the box is uncontrolled (no state holds it), emptied once sent, and only
+// "sent" or the server's refusal (which never carries the code) is shown.
+function PasteCode({ id }) {
+  const box = useRef(null);
+  const [msg, setMsg] = useState("");
+  const send = async (e) => {
+    e.preventDefault();
+    const code = box.current.value;
+    if (!code.trim()) return;
+    box.current.value = "";
+    try { await post("api/account-login-code", { request: id, code }); setMsg("sent"); }
+    catch (x) { setMsg("not sent: " + (x.message || x)); }
+  };
+  return html`<form class="acct-paste" onSubmit=${send}>
+    <input ref=${box} type="text" aria-label="login code" placeholder="paste the code from that page" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+    <button type="submit" class="btn sm">Send code</button>${msg && html`<span class="lu" role="status">${msg}</span>`}</form>`;
 }
 // The ⚠ badge for a role whose real model/account differs from its configured one.
 const cfgText = (m) => "configured " + (m.model || "?") + " @" + (m.account_cfg_label || m.account_cfg || m.account_label || m.account || "default") + " — running " + (m.model_label || "?") + " @" + (m.account_real_label || m.account_real || "?");
@@ -3791,11 +3883,13 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
 
 // Settings: the project's limits (GET/POST api/limits -> limits.sh). Changes apply on the next
 // sweep minute / board refresh; auto_compact_* apply when an agent is next (re)started.
-const SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"]];
-function Settings({ project, projects, toast, onClose }) {
+const SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"], ["accounts", "Accounts"]];
+function Settings({ project, projects, accounts, folderOnly, adds, kinds, at, toast, onClose }) {
   const backend = ((projects || []).find((p) => p.label === project) || {}).studio_backend || "orca";
-  const [tab, setTab] = useState(SETTINGS_TABS[0][0]);
+  const tabAt = (t) => (SETTINGS_TABS.some(([k]) => k === t) ? t : SETTINGS_TABS[0][0]);
+  const [tab, setTab] = useState(() => tabAt(at));
   const [importing, setImporting] = useState(false);
+  useEffect(() => { if (at) { setImporting(false); setTab(tabAt(at)); } }, [at]);   // `#settings/<tab>` while it is open
   const [rev, setRev] = useState(0);   // bumped by an applied import: the tabs read their rows again
   const [query, setQuery] = useState("");   // the search box; not stored, so each opening starts empty
   const box = useRef(null);
@@ -3812,7 +3906,7 @@ function Settings({ project, projects, toast, onClose }) {
       <button class="btn sm mclose" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
       <div class="set-note set-backend" style=${{ margin: "8px 16px 0" }}>Backend: <b class="mono">${backend}</b> — the Studio's; new squads start on it. To change it run <code>ds up ${project} --backend ${"<name>"}</code>; squads already running keep theirs.</div>
       ${importing ? html`<div class="set-body"><${ImportPane} project=${project} toast=${toast} onBack=${() => setImporting(false)} onApplied=${() => setRev((n) => n + 1)} /></div>` : html`<div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
-      <div class="set-body set-searched" key=${rev}><div class="set-search"><input ref=${box} type="search" aria-label="Search settings" placeholder="Search settings" value=${query} disabled=${!searched} title=${searched ? undefined : "This tab is not searched"} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${searchKey} />${searched && query && html`<button class="btn sm set-clear" aria-label="Clear search" title="Clear search" onClick=${clearSearch}>✕</button>`}</div>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}</div>`}</div></div>`;
+      <div class="set-body set-searched" key=${rev}><div class="set-search"><input ref=${box} type="search" aria-label="Search settings" placeholder="Search settings" value=${query} disabled=${!searched} title=${searched ? undefined : "This tab is not searched"} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${searchKey} />${searched && query && html`<button class="btn sm set-clear" aria-label="Clear search" title="Clear search" onClick=${clearSearch}>✕</button>`}</div>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}${tab === "accounts" && html`<${AccountsPane} accounts=${accounts} folderOnly=${folderOnly} adds=${adds} kinds=${kinds} project=${project} toast=${toast} />`}</div>`}</div></div>`;
 }
 
 // Import in Settings: a source (a file, pasted export text, or another project on this host) -> the plan
@@ -4346,16 +4440,18 @@ function App() {
   const [acctOpen, setAcctOpen] = useState(() => new Set(store.get("b:acctOpen", [])));
   const toggleAcct = (k) => setAcctOpen((o) => { const n = new Set(o); n.has(k) ? n.delete(k) : n.add(k); store.set("b:acctOpen", [...n]); return n; });
   const [accOpen, setAccOpen] = useState(() => lstore.get("b:accts", true));
-  const [manage, setManage] = useState(false);
   const [machOpen, setMachOpen] = useState(() => lstore.get("b:machine", true));
   const [sqOpen, setSqOpen] = useState(() => lstore.get("b:squads", true));
   const [flowFocus, setFlowFocus] = useState(null);   // { stage, n }: a tile asks the Flow to open at that column
   const [plan, setPlan] = useState(null);
   const [ask, setAsk] = useState(null);          // nkey of the inbox item open in the overlay
   const [toastMsg, setToast] = useState(null), [startOpen, setStartOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(() => location.hash === "#settings");
-  const setSettings = (o) => { setSettingsOpen(o); history.replaceState(null, "", o ? "#settings" : location.pathname + location.search); };
-  useEffect(() => { const h = () => setSettingsOpen(location.hash === "#settings"); addEventListener("hashchange", h); return () => removeEventListener("hashchange", h); }, []);
+  // `#settings` or `#settings/<tab>`: the tab ("" for the first), null while Settings is closed.
+  const settingsHash = () => { const m = /^#settings(?:\/([a-z]+))?$/.exec(location.hash); return m ? m[1] || "" : null; };
+  const [settingsAt, setSettingsAt] = useState(settingsHash);
+  const settingsOpen = settingsAt != null;
+  const setSettings = (o) => { setSettingsAt(o ? "" : null); history.replaceState(null, "", o ? "#settings" : location.pathname + location.search); };
+  useEffect(() => { const h = () => setSettingsAt(settingsHash()); addEventListener("hashchange", h); return () => removeEventListener("hashchange", h); }, []);
   useEffect(() => { if (!settingsOpen) return; const k = (e) => { if (e.key === "Escape") setSettings(false); }; addEventListener("keydown", k); return () => removeEventListener("keydown", k); }, [settingsOpen]);
 
   useEffect(() => {
@@ -4639,13 +4735,13 @@ function App() {
       return un ? html`<${UnitDetails} s=${sq} u=${un} toast=${setToast} ask=${flowUnit.ask} onAsk=${setAsk} onShow=${showMember} card=${flowUnit.card} onPlan=${setPlan} planOpen=${!!plan} onClose=${() => setFlowUnit(null)} />`
         : html`<${FlowCardDetails} card=${flowUnit.card} now=${Date.now() / 1000} onAsk=${setAsk} onClose=${() => setFlowUnit(null)} />`; })()}
     ${data.accounts && (() => {
-      // The strip: enabled logins, and a disabled account while a role still runs on it (`strip`); the rest is in the Manage panel.
+      // The strip: enabled logins, and a disabled account while a role still runs on it (`strip`); the rest is in Settings' Accounts tab.
       const rows = data.accounts.filter((a) => a.strip !== false), hidden = data.accounts.filter((a) => a.strip === false && !a.merged_into).length + (data.account_folders || []).length;
       return html`<details class="acc-sec" id="accounts" open=${accOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== accOpen) { setAccOpen(o); lstore.set("b:accts", o); } }}>
-      <summary>Accounts<small>${rows.length} · 5-hour and 7-day usage left${hidden > 0 ? " · " + hidden + " hidden" : ""}</small><span class="asof">${asOf(data.as_of && data.as_of.accounts)}</span><button class="btn sm amanage" onClick=${(e) => { e.preventDefault(); e.stopPropagation(); setManage(true); }}>Manage</button></summary>
+      <summary>Accounts<small>${rows.length} · 5-hour and 7-day usage left${hidden > 0 ? " · " + hidden + " hidden" : ""}</small><span class="asof">${asOf(data.as_of && data.as_of.accounts)}</span></summary>
+      ${data.project && html`<div class="sqhead acc-head"><div class="sqctl"><button class="btn sm amanage" title="Add, move and switch accounts in Settings" onClick=${() => { location.hash = "#settings/accounts"; }}>Manage</button></div></div>`}
       ${rows.length > 0 && html`<div class="acct-tbl tbl"><div class="arow head"><span></span><span>Account</span><span>5-hour</span><span>7-day</span><span>Free resets</span><span>In use</span></div>
         ${rows.map((a) => { const k = a.agent + "/" + a.account; return html`<${AccountRow} key=${k} a=${a} all=${data.accounts} toast=${setToast} project=${data.project} isDefault=${!!a.default} open=${acctOpen.has(k)} onToggle=${() => toggleAcct(k)} />`; })}</div>`}</details>`; })()}
-    ${manage && html`<${AccountsPanel} accounts=${data.accounts || []} folderOnly=${data.account_folders || []} project=${data.project} toast=${setToast} onClose=${() => setManage(false)} />`}
 
     ${M && html`<details class="mach-sec" id="machine" open=${machOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== machOpen) { setMachOpen(o); lstore.set("b:machine", o); } }}>
       <summary>Machine<small><span class=${M.load.level}>load ${M.load.x != null ? M.load.x + "× cores" : "?"}</span> · <span class=${M.mem.level}>mem ${M.mem.pct ?? "?"}%</span> · ${M.swap.total_kb ? html`<span class=${M.swap.level}>swap ${M.swap.pct}%${M.swap.level === "crit" ? " ✖" : M.swap.level === "warn" ? " ⚠" : ""}</span>` : "no swap"}${M.disk && html` · <span class=${M.disk.level}>disk ${M.disk.free_pct}% free</span>`}</small><span class="asof" style=${M.stale ? { color: "var(--amber)" } : {}} title=${M.stale ? "older than 3 × the sampling cadence" : ""}>${asOf(data.as_of && data.as_of.machine)}</span></summary>
@@ -4689,7 +4785,7 @@ function App() {
     ${squadChat && html`<${ChatPanel} ...${squadChat} onPlan=${setPlan} planOpen=${!!plan} onClose=${() => setSquadChat(null)} />`}
     ${studioChat && html`<${ChatPanel} ...${studioChat} onPlan=${setPlan} planOpen=${!!plan} onSeen=${() => bumpSeen((n) => n + 1)} onClose=${() => { setStudioChat(null); bumpSeen((n) => n + 1); }} />`}
     ${feedbackOpen && html`<${FeedbackPanel} summary=${data.feedback} project=${data.project} toast=${setToast} onClose=${() => setFeedbackOpen(false)} />`}
-    ${settingsOpen && data.project && html`<${Settings} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setSettings(false)} />`}
+    ${settingsOpen && data.project && html`<${Settings} project=${data.project} projects=${data.projects} accounts=${data.accounts || []} folderOnly=${data.account_folders || []} adds=${data.account_adds || []} kinds=${data.account_kinds || []} at=${settingsAt} toast=${setToast} onClose=${() => setSettings(false)} />`}
 
     ${ask && html`<${AskOverlay} cardActions=${cardActions} data=${data} onDebrief=${openDebriefOf} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}
     ${plan && html`<div class="modal doc-modal" onClick=${(e) => { if (e.target === e.currentTarget) setPlan(null); }}>

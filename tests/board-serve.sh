@@ -855,6 +855,38 @@ DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.t
 eq "login-code: an ended add is 409"             "$(cp_ "{\"request\":$AID,\"code\":\"$ACODE\"}")" "409"
 eq "login-code: ... and no drop file"            "$(test -e "$DBR/account-login/$AID" && echo yes || echo no)" "no"
 
+# issue #125 U9: the picker's agent and an existing folder on account-add, and POST /api/account-move.
+ADIR="$TMP/acct-dir"; mkdir -p "$ADIR/in" "$ADIR/empty"; echo '{}' > "$ADIR/in/.credentials.json"
+last_add(){ dbq "SELECT payload FROM requests WHERE kind = 'account-add' ORDER BY id DESC LIMIT 1" | jq -c '.[0].payload | fromjson | [.agent, .name, .dir]'; }
+eq "account-add: an unknown agent is 400"        "$(ap "{\"project\":\"$LBL\",\"name\":\"u9a\",\"agent\":\"nope\"}")" "400"
+eq "account-add: a relative folder is 400"       "$(ap "{\"project\":\"$LBL\",\"name\":\"u9a\",\"dir\":\"in\"}")" "400"
+eq "account-add: a missing folder is 400"        "$(ap "{\"project\":\"$LBL\",\"name\":\"u9a\",\"dir\":\"$ADIR/nope\"}")" "400"
+eq "account-add: a folder with no login is 400"  "$(ap "{\"project\":\"$LBL\",\"name\":\"u9a\",\"dir\":\"$ADIR/empty\"}")" "400"
+has "account-add: ... naming the missing file"   "$(cat "$TMP/post.out")" ".credentials.json"
+eq "account-add: a logged-in folder is 202"      "$(ap "{\"project\":\"$LBL\",\"name\":\"u9a\",\"dir\":\"$ADIR/in/\"}")" "202"
+eq "account-add: ... filed with that folder"     "$(last_add)" "[\"claude\",\"u9a\",\"$ADIR/in\"]"
+eq "account-add: the picker's other kind is 202" "$(ap "{\"project\":\"$LBL\",\"name\":\"u9b\",\"agent\":\"codex\"}")" "202"
+eq "account-add: ... filed for it, with no dir"  "$(last_add)" '["codex","u9b",null]'
+eq "board: the open adds and the picker's kinds" "$(curl -s "http://127.0.0.1:$PORT/board.json" | jq -c '[([.account_adds[] | select(.name == "u9b") | [.agent, .name, .state, .flow]]), .account_kinds[0].agent]')" '[[["codex","u9b","queued","device"]],"claude"]'
+AM="http://127.0.0.1:$PORT/api/account-move"
+am(){ post -H "$O" -H "$CT" -d "$1" "$AM"; }
+mvr(){ dbq "SELECT project, requested_by, payload FROM requests WHERE kind = 'account-move' ORDER BY id" | jq -c '[.[] | [.project, .requested_by, (.payload | fromjson)]]'; }
+dbw "INSERT INTO accounts (agent, account, label, config_dir, source, login_id, orca_listed, observed_at) VALUES ('claude', 'u9-orca', 'u9@example.com', '$ADIR/in', 'orca', 'u9-login', 1, 1)"
+eq "account-move: no account is 400"             "$(am '{"agent":"claude"}')" "400"
+eq "account-move: the system login is 409"       "$(am '{"agent":"claude","account":"system"}')" "409"
+eq "account-move: one Orca lists, unforced, 409" "$(am '{"agent":"claude","account":"u9-orca"}')" "409"
+has "account-move: ... with the rotation risk"   "$(cat "$TMP/post.out")" "rotate its token"
+eq "account-move: foreign Origin is 403"         "$(post -H 'Origin: http://evil.example' -H "$CT" -d '{"agent":"claude","account":"u9-orca","force":true}' "$AM")" "403"
+eq "account-move: none of those filed a request" "$(mvr)" "[]"
+eq "account-move: forced is 202"                 "$(am '{"agent":"claude","account":"u9-orca","force":true}')" "202"
+eq "account-move: U8's request, host-wide"       "$(mvr)" '[[null,"board",{"agent":"claude","account":"u9-orca","force":true,"by":"board"}]]'
+eq "account-move: a second while open is 409"    "$(am '{"agent":"claude","account":"u9-orca","force":true}')" "409"
+has "account-move: ... saying one is in progress" "$(cat "$TMP/post.out")" "already in progress"
+# The settings export is the project's config rows: the host's account list is never in it.
+eq "export: no account of the host's list is in a project's settings export" "$(curl -s "http://127.0.0.1:$PORT/api/settings-export?project=$LBL" | grep -c '^#! ds-settings\|u9-orca\|u9@example.com\|u9-login')" "1"
+dbw "DELETE FROM accounts WHERE account = 'u9-orca'"
+dbw "UPDATE requests SET done_at = 1 WHERE kind IN ('account-add', 'account-move') AND done_at IS NULL"
+
 # POST /api/leftover-remove (archive-leftovers U4): a Leftovers box's Remove files one `leftover-remove` request
 # for a leftover the squad names; 404 for none, 409 with one open, 400 for a body that is no JSON or bad fields.
 # The fulfiller's runs are tests/loop/leftover-remove-button.test.ts.
