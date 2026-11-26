@@ -12,7 +12,7 @@ import { LoopActuator, type Fulfiller } from "../../bin/loop/core/actuator.ts";
 import { FakeBackend as FakeOrca } from "../../bin/loop/fakes/orca.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
-import { dbPath, open, type Row, type Store } from "../../bin/loop/core/store.ts";
+import { dbPath, open, openReadOnly, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { openRemoval } from "../../bin/loop/squad/project-removal.ts";
 import { planKey } from "../../bin/loop/fulfil/remove-project.ts";
@@ -168,6 +168,18 @@ describe("ds remove-project through the loop (remove-project U3)", () => {
     expect(readFileSync(join(res.archive, "after-move", "late.txt"), "utf8")).toBe("late\n");
     expect(existsSync(join(r.S, "fx"))).toBe(false);
   }, 60_000);
+
+  // `ds up` on a first install reads loop.db while the loop may not have made its tables yet.
+  test("a loop.db with no tables yet holds no open removal", () => {
+    const root = mkdtempSync(join(tmpdir(), "ds-remove-bare-"));
+    temps.push(root);
+    const bare = new Database(dbPath(root), { create: true });
+    bare.run("CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)");
+    bare.close();
+    const s = openReadOnly(root);
+    stores.push(s);
+    expect(openRemoval(s, "fx")).toBe(null);
+  });
 
   test("a squad start is refused while the removal is open", async () => {
     const r = rig();

@@ -223,15 +223,17 @@ export function removalSummary(store: Store, label: string): RemovalSummary {
   };
 }
 
-/** The open `remove-project` request of `label` (its id), or null. The command attaches to it, and while it is
- *  open `ds up`, a squad wish and a squad start for the label are refused (KTD6, KTD12). */
 /** One line naming what blocks removing `label` (the command's refusal, the loop's failure), or null. */
 export function blockedText(store: Store, label: string): string | null {
   const bad = removalBlockers(store, label);
   return bad.length ? `'${label}' cannot be removed: ${bad.map((b) => b.text + (b.clear ? ` (clear: ${b.clear})` : "")).join("; ")}` : null;
 }
 
+/** The open `remove-project` request of `label` (its id), or null. The command attaches to it, and while it is
+ *  open `ds up`, a squad wish and a squad start for the label are refused (KTD6, KTD12). */
 export function openRemoval(store: Store, label: string): number | null {
+  // `ds up` can read a loop.db the loop is still creating: with no table there is no removal.
+  if (!store.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'requests'").get()) return null;
   const r = store.db.query("SELECT id FROM requests WHERE kind = 'remove-project' AND done_at IS NULL AND json_extract(payload, '$.label') = ? ORDER BY id LIMIT 1")
     .get(label) as { id: number } | null;
   return r ? Number(r.id) : null;
