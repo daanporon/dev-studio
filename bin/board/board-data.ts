@@ -34,7 +34,7 @@ import { archiveDebriefStep, type Step } from "../loop/squad/archive-debrief.ts"
 import { removeWaitS } from "../loop/squad/close-drift.ts";
 import { redact, redactDeep } from "../loop/chat/redact.ts";
 import { planUnitFacts } from "../loop/squad/plan-lines.ts";
-import { blockingForUnit, entryOf, list, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
+import { blockingForUnit, entryOf, list, pressRefused, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
 import { DEFAULTS as BRIEFING_DEFAULTS, gaveUp as briefingGaveUp, localDate, nextSlot, parseDays, parseTime, scheduleSince } from "../loop/reconcilers/briefing.ts";
 import { limit } from "../loop/settings/limits.ts";
 import { ANSWERED, ANSWERED_BY, ENDED, RECEIVER_RUNNING, UNREAD, WAITING } from "../loop/messages/messages.ts";
@@ -1806,7 +1806,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
       since: x.since ?? null, age_min: ageMin(x.since),
       // A terminal-picker mirror (bin/hooks/picker-hook.sh): the board answers it by keystroke when
       // picker_answerable (one single-select question); otherwise "answer it in the terminal".
-      source: x.source ?? null, picker_answerable: x.picker_answerable ?? null, ...shownFields(x),
+      source: x.source ?? null, ...pickerFields(db, label, topic, x), ...shownFields(x),
       pr: qpr(x?.pr),
       ...questionDoc(db, label, topic, x, u),
     })).sort((a, b) => (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1) || (b.age_min ?? 0) - (a.age_min ?? 0)),
@@ -2322,7 +2322,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
         squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, since: q.since ?? null, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
         text: q.question, title: q.title, titled: q.titled, choices: q.choices,
         suggestion: q.suggestion, why: q.why, options: q.options, age_min: q.age_min, command: null,
-        source: q.source ?? null, picker_answerable: q.picker_answerable ?? null, ...shownFields(q),
+        source: q.source ?? null, picker_answerable: q.picker_answerable ?? null, picker_refused: q.picker_refused ?? null, ...shownFields(q),
         pr: q.pr ?? null, repo_slug: s.repo_slug ?? null,
         doc: q.doc ?? null, plain: q.plain ?? null, plain_from: q.plain_from ?? null, facts: q.facts ?? null, revision: q.revision ?? null, changes: q.changes ?? null,
       })),
@@ -3252,6 +3252,13 @@ function shownFields(x: any): Record<string, string> {
   return Object.fromEntries(["picker_kind", "shown", "agent", "cwd"].filter((k) => typeof x?.[k] === "string" && x[k]).map((k) => [k, x[k]]));
 }
 
+// A picker's answerability as the board offers it: permission-prompt-needs-you U2 turns a safety-check prompt
+// terminal-only once the loop refused to press for it (picker_refused says why; questions.ts pressRefused).
+function pickerFields(db: Db | null | undefined, project: string, topic: string, x: any): { picker_answerable: boolean | null; picker_refused: string | null } {
+  const refused = db && x?.picker_kind === "permission" && x.picker_answerable === true ? pressRefused(db.s, project, topic, String(x.id ?? ""), x.tool_use_id) : null;
+  return { picker_answerable: refused ? false : x?.picker_answerable ?? null, picker_refused: refused };
+}
+
 // The open questions whose card opens a chat with this member (the cards' chat_wt rule in squad(): the card's
 // worktree, else the Lead's), as the Question view shows them. Blocking first, then oldest first. [] for the Studio.
 function chatQuestionsAll(db: Db, project: string, topic: string) {
@@ -3266,7 +3273,7 @@ function chatQuestionsAll(db: Db, project: string, topic: string) {
       id: x.id ?? null, title: String(x.title ?? shortTitle(String(x.question ?? ""), x.id ?? null)), question: redact(String(x.question ?? "")),
       choices: (arr(x.choices).length ? arr(x.choices) : (arr(x.options).length ? arr(x.options) : x.suggestion ? [x.suggestion] : []).map((l: any) => ({ label: String(l), does: null })))
         .map((c: any) => ({ label: redact(String(c?.label ?? "")), does: c?.does ? redact(String(c.does)) : null })),
-      since: x.since ?? null, blocking: x.blocking === true, source: x.source ?? null, answerable: !(x.source === "picker" && x.picker_answerable !== true),
+      since: x.since ?? null, blocking: x.blocking === true, source: x.source ?? null, answerable: !(x.source === "picker" && pickerFields(db, project, topic, x).picker_answerable !== true),
       // The suggestion is redacted as the labels are, so the Question view can match it to its option.
       suggestion: x.suggestion == null ? null : redact(String(x.suggestion)), why: x.why == null ? null : redact(String(x.why)),
       repo_slug: slug, doc: linkedDoc(db, project, topic, x),

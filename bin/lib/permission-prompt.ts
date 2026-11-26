@@ -4,9 +4,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { redact, redactDeep } from "../loop/core/redact.ts";
+import { FILE_TOOLS } from "../loop/chat/permission.ts";
 
 export const SHOWN_CAP = 2000;
-const FILE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 /** The first `n` codepoints. */
