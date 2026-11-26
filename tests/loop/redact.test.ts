@@ -39,6 +39,26 @@ const SHAPES: [string, string][] = [
   ["PASSWORD='zzcut", `PASSWORD='${R}`],
   ["PASSWORD='$zzliteral' x", `PASSWORD='${R}' x`],
   ["API_KEY=zzs3\nls -la", `API_KEY=${R}\nls -la`],
+  // Spaced, quoted-key and typed assignments, as an Edit or Write card's new text has them.
+  ['DB_PASSWORD = "zz pass"', `DB_PASSWORD = "${R}"`],
+  ["password = 'zzpass'", `password = '${R}'`],
+  ['{"password" : "zzpass"}', `{"password" : "${R}"}`],
+  ["'password' => 'zzpass',", `'password' => '${R}',`],
+  ['password := "zzpass"', `password := "${R}"`],
+  ['const apiKey: string = "zzpass";', `const apiKey: string = "${R}";`],
+  ["token: str | None = 'zzpass'", `token: str | None = '${R}'`],
+  // A JSON body inside a double-quoted shell argument.
+  [String.raw`curl -d "{\"password\":\"zzpass\"}" x`, String.raw`curl -d "{\"password\":\"[redacted]\"}" x`],
+  [String.raw`curl -d "{\"password\": \"zz pass\"}" x`, String.raw`curl -d "{\"password\": \"[redacted]\"}" x`],
+  [String.raw`tool --password=\"zzpass\" x`, String.raw`tool --password=\"[redacted]\" x`],
+  [String.raw`{"password":"zz\"tail9","n":1}`, `{"password":"${R}","n":1}`],
+  // A quoted password after -u, or the whole login quoted.
+  ["curl -u admin:'zzpass' x", `curl -u admin:'${R}' x`],
+  ['curl -u admin:"zz pass" x', `curl -u admin:"${R}" x`],
+  ["curl -u 'admin:zz pa;ss&zz|(zz)<zz>' x", `curl -u 'admin:${R}' x`],
+  ['curl --user "admin:zz pass;word" x', `curl --user "admin:${R}" x`],
+  ["curl -u 'admin:$zzliteral' x", `curl -u 'admin:${R}' x`],
+  ["git clone https://bob@corp.example.com:zzpass@example.com/r", `git clone https://bob@corp.example.com:${R}@example.com/r`],
 ];
 
 // Text that stays as it is.
@@ -61,6 +81,16 @@ const KEPT = [
   "GH_TOKEN=$(gh auth token) gh pr list",
   'curl -H "Authorization: Bearer $TOKEN" x',
   'curl -u "$USER:$PASS" x',
+  'curl -u admin:"$PASS" x',
+  'curl -u "admin:$PASS" x',
+  String.raw`curl -d "{\"password\":\"$PASS\"}" x`,
+  'if (token === "x") return;',
+  'if password != "x": pass',
+  'docker run -u "1000:1000" img',
+  "  token = get_token(env)",
+  "the password = what you typed",
+  "  self.token = token",
+  "ssh://git@example.com:22/r.git",
   "PGPASSWORD=\"$DB_PASS\" psql",
   "docker run -u 1000:1000 img",
   "date -u +%H:%M",

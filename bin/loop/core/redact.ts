@@ -3,7 +3,8 @@
 // permission cards. Only the secret becomes `[redacted]`: a `Bearer` or another scheme word, a header's or a
 // flag's name and a URL's user stay. A PEM private-key block with no END line (cut text) is redacted to the end,
 // and an END line whose BEGIN was cut off (a screen's top) is redacted from the start. Not covered, on purpose:
-// `mysql -pSECRET` and other one-letter flags, and a secret with no name or shape around it.
+// `mysql -pSECRET` and other one-letter flags, an unquoted value with spaces around `=` (an INI file's), and a
+// secret with no name or shape around it.
 export const REDACTED = "[redacted]";
 
 const SHAPES: RegExp[] = [
@@ -19,16 +20,18 @@ const SHAPES: RegExp[] = [
 
 // A value: quoted (to its closing quote, or the line's end on a cut screen; a quote followed by a space is
 // taken as the end of an outer string, not the start of a value), else up to a space or a shell
-// metacharacter, so the command around a secret stays readable.
+// metacharacter, so the command around a secret stays readable. The first quoted form is `\"…\"`, a string
+// inside a quoted JSON body; a bare value is never the backslash that opens or closes one.
 const BARE = "[^\\s\"'`;|&<>()]+";
-const VALUE = `"(?!\\s)(?:\\\\.|[^"\\\\\\r\\n])+"?|'(?!\\s)[^'\\r\\n]+'?|${BARE}`;
+const QUOTED = String.raw`\\{1,8}"(?!\s)(?:(?!\\{1,8}")[^"\r\n])+(?:\\{1,8}")?|"(?!\s)(?:\\.|[^"\\\r\n])+"?|'(?!\s)[^'\r\n]+'?`;
+const VALUE = `${QUOTED}|(?!\\\\{1,8}["'])${BARE}`;
 
 // `$NAME`, `${NAME}` and `$(…)` name a secret without holding it. In single quotes the shell keeps them as text.
-const isRef = (v: string) => /^"?\$/.test(v);
+const isRef = (v: string) => /^(?:\\*")?\$/.test(v);
 /** The value with its quotes kept and what they hold replaced. */
 function hide(v: string): string {
-  const q = v[0] === '"' || v[0] === "'" ? v[0] : "";
-  return q ? `${q}${REDACTED}${v.length > 1 && v.endsWith(q) ? q : ""}` : REDACTED;
+  const q = /^(?:\\+"|["'])/.exec(v)?.[0] ?? "";
+  return q ? `${q}${REDACTED}${v.length > q.length && v.endsWith(q) ? q : ""}` : REDACTED;
 }
 
 // Headers whose value is a credential, whatever the scheme. Digest and AWS4 carry a list of parameters.
@@ -44,7 +47,7 @@ const KEY = "(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)";
 const NOT_A_SECRET = new Set(("file files path dir stdin env name names type url uri prompt ttl expiry expires expiration length len limit " +
   "count cache scanning protection bucket helper endpoint command cmd store method source policy field var ref tokenizer " +
   "ts js sh json md py yml yaml toml txt log").split(" "));
-const PLAIN = /^["']?(?:true|false|null|none|undefined|yes|no|string|number|boolean)["',]*$/i;
+const PLAIN = /^[\\"']*(?:true|false|null|none|undefined|yes|no|str|bytes|string|number|boolean)[\\"',]*$/i;
 function secretName(name: string): boolean {
   if (name === "PWD" || name === "OLDPWD" || /^--no-/i.test(name)) return false; // the shell's folders; a switch
   const last = name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().split(/[-_.]+/).filter(Boolean).pop() ?? "";
@@ -55,17 +58,29 @@ function keepValue(name: string, v: string): boolean {
   return isRef(v) || PLAIN.test(v) || (/tokens/i.test(name) && /^["']?\d+["',]*$/.test(v));
 }
 const NAME = `(?<![\\w.-])(?=[\\w.-]*?${KEY})([\\w.-]+)`;
-// `NAME=value` and `--name=value`; `name: value`, `"name": "value"` (JSON); `--name value`.
+// `NAME=value` and `--name=value`; `name: value`, `"name": "value"` (JSON); `--name value`. With spaces around the
+// sign, a quoted key or a type between (`password = "x"`, `'password' => 'x'`, `apiKey: string = "x"`) only a
+// quoted value counts, so prose and `token == other` stay.
+const TYPE = String.raw`(?:[ \t]*:[ \t]*[A-Za-z_][\w.<>\[\]]*(?:[ \t]*\|[ \t]*[\w.<>\[\]]+)*)?`;
+const SPACED = String.raw`(?:\\*["'])?(?:${TYPE}[ \t]*(?::=|=>|=(?!=))|[ \t]*:)[ \t]*`;
 const ASSIGNS = [
   new RegExp(`${NAME}(=(?!=))(${VALUE})`, "gi"),
-  new RegExp(`${NAME}(\\\\?["']?:(?:[ \\t]+|(?=["'])))(${VALUE})`, "gi"),
+  new RegExp(`${NAME}(${String.raw`\\*["']?:(?:[ \t]+|(?=\\*["']))`})(${VALUE})`, "gi"),
+  new RegExp(`${NAME}(${SPACED})(${QUOTED})`, "gi"),
   new RegExp(`(?<![\\w.-])(?=--[\\w-]*?${KEY})(--[\\w-]+)([ \\t]+)(?!-)(${VALUE})`, "gi"),
 ];
 
-// The password in `scheme://user:password@host`.
-const URL_CREDS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s/?#:@"'`]*:)([^\s/?#"'`]+)(?=@)/gi;
-// `-u user:password` and `--user user:password`. `1000:1000` (docker) and `+%H:%M` (date) are no login.
-const USER_FLAG = new RegExp(`(?<!\\S)((?:-u|--user)(?:[ \\t]+|=)?["']?)([^\\s:"'\`$+%/=-][^\\s:"'\`/=]*:)(${BARE})`, "g");
+// The password in `scheme://user:password@host`; the user may be an email address.
+const URL_CREDS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s/?#:"'`]*:)([^\s/?#"'`]+)(?=@)/gi;
+// `-u user:password` and `--user user:password`: the whole login quoted (the password runs to the closing quote,
+// spaces and all), else the password quoted or bare. `1000:1000` (docker) and `+%H:%M` (date) are no login.
+const USER_PRE = String.raw`(?<!\S)(?:-u|--user)(?:[ \t]+|=)?`;
+const USER = "[^\\s:\"'`$+%/=-][^\\s:\"'`/=]*:";
+const USER_FLAGS = [
+  new RegExp(`(${USER_PRE}")(${USER})(${String.raw`(?:\\.|[^"\\\r\n])+`})`, "g"),
+  new RegExp(`(${USER_PRE}')(${USER})([^'\\r\\n]+)`, "g"),
+  new RegExp(`(${USER_PRE})(${USER})(${VALUE})`, "g"),
+];
 
 export function redact(text: string): string {
   let out = text;
@@ -75,7 +90,12 @@ export function redact(text: string): string {
     return isRef(value) ? all : `${head}${scheme}${REDACTED}`;
   });
   out = out.replace(URL_CREDS, (all, head, pw) => (isRef(pw) ? all : `${head}${REDACTED}`));
-  out = out.replace(USER_FLAG, (all, flag, user, pw) => (isRef(pw) || /^\d+:\d+$/.test(user + pw) ? all : `${flag}${user}${REDACTED}`));
+  for (const re of USER_FLAGS) {
+    out = out.replace(re, (all, flag: string, user, pw) => {
+      const literal = flag.endsWith("'"); // the shell expands nothing in single quotes
+      return (!literal && isRef(pw)) || /^\d+:\d+$/.test(user + pw) ? all : `${flag}${user}${hide(pw)}`;
+    });
+  }
   for (const re of ASSIGNS) {
     out = out.replace(re, (all, name, sep, value) => (!secretName(name) || keepValue(name, value) ? all : `${name}${sep}${hide(value)}`));
   }
