@@ -75,7 +75,7 @@ describe("removalBlockers", () => {
     r.squad("old", { status: "closed" });
     r.member("old", "builder", { suffix: "a", wt: r.absent("a"), status: "gone" });
     r.worker(r.absent("a"));
-    expect(r.blockers()).toMatchObject([{ kind: "live-member", squad: "old", clear: "ds want member acme/old/builder/a archived" }]);
+    expect(r.blockers()).toMatchObject([{ kind: "live-member", squad: "old", clear: `ds want member ${r.s.get("members", { project: P, squad: "old" })!.id} archived` }]);
   });
 
   test("a closed squad with no folder on disk does not block", () => {

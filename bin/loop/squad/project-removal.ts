@@ -165,16 +165,17 @@ export function removalBlockers(store: Store, label: string): Blocker[] {
   }
 
   // A live worker whose folder is on disk is named above; an open squad's members, by their squad.
-  const named = new Set<string>();
+  const named = new Set<string>(), studioWt = store.get("projects", { label })?.studio_wt;
   for (const m of rows(store, `SELECT * FROM members WHERE project = ? AND squad != '${STUDIO}' AND role != 'studio' AND wt IS NOT NULL ORDER BY id`, label)) {
     const wt = String(m.wt), squad = String(m.squad), path = folder(wt);
     if (named.has(wt) || openTopics.has(squad) || (path && disk.has(path)) || !liveWorker(store, label, wt)) continue;
     // The Studio's own worktree never blocks, whatever other row names it.
-    if (wt === store.get("projects", { label })?.studio_wt) continue;
+    if (wt === studioWt) continue;
     named.add(wt);
     const who = [m.role, m.suffix].filter(Boolean).join("/");
     out.push({ kind: "live-member", squad, ...(path ? { path } : {}), text: `member ${who} of squad '${squad}' still has a live worker (${wt})`,
-      clear: `ds want member ${label}/${squad}/${who} archived` });
+      // By row id: the slot form does not find a row whose status is `gone`.
+      clear: `ds want member ${m.id} archived` });
   }
   return out;
 }
