@@ -103,6 +103,7 @@ async function add(name: string, opt: Record<string, string>, wait: boolean): Pr
     const by = opt.by ?? process.env.DS_WHO ?? "cli";
     const id = Number(s.requestAny("account-add", { agent, name, ...(project ? { project } : {}), ...(dir ? { dir } : {}), by }, { by, project: project ?? null }).row.id);
     console.log(`Filed the add of ${agent}:${name} (request ${id})${dir ? ` on ${dir}` : ""}.`);
+    for (const v of kind.keyEnv ?? []) if (process.env[v]) console.error(`ds account add: warning: ${v} is set here; where ${agent} sees it, it can use that key instead of this account's login`);
     return wait ? await follow(s, id) : 0;
   } finally { s.close(); }
 }
