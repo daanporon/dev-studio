@@ -204,6 +204,27 @@ project on its own runner (`core/actuator.ts` `contracted`). A spawn picks it on
 5. Anything it needs from the agents' host beyond these ops is a local read: list it in
    `docs/backends/local-reads.md`.
 
+### A backend on another host (`bin/backend/remote.ts`)
+
+A member on a side host (`members.host` not `local`; side-loop-host, issue #127) runs its terminals on that host,
+on the squad's own backend there (tmux, herdr or orca-lite). Main reaches it through the remote adapter, which
+runs no terminal itself: each op goes down that host's link on the `contract` channel
+(`bin/link/channels/contract.ts`) as `{backend, project, envelope: {op, req}}`, the side makes that backend
+under its own state root (`squad/contracts.ts` `makeContract`) and answers the envelope with `handle()`, and
+main checks the answer (`checked()`), so one outside its op's type throws on main.
+
+- **Who builds it:** the loop's resolver (`contracts()(store, name, project, host)`) and the role-side maker
+  (`bin/lib/contract-roles.ts` `makeBackend(root)(name, project, host)`) give the remote adapter for any host
+  but `local`. Both reach the host through the link server's unix socket (`bin/link/request.ts`), so it works
+  from the loop and from any CLI process on main. Its capabilities are the named backend's, read on main.
+- **Ids:** a terminal id on main is `<host>:<id>` (as the replica's handles); a request's id loses the prefix
+  going down. An id without this host's prefix answers `not_found` (a close `closed:false`) without a round
+  trip. Folders (`cwd`, `parent`) are the side host's own paths and pass through unchanged.
+- **Failures:** no link server, a host not linked, a backend the side has no adapter for, a project that is not
+  a name, or a side that failed answers `failed`, naming the host; the adapter never throws.
+- **Conformance:** `tests/loop/backend-remote.test.ts` runs the whole suite through a real link against the
+  side's fake in every capability mix.
+
 ### The herdr backend (`bin/backend/herdr.ts`)
 
 The first v2 backend (orca-backend-alternatives U15). [herdr](https://github.com/herdrdev/herdr) is a
