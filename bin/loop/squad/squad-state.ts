@@ -28,7 +28,7 @@ import { intents, pause, type Prerequisite } from "../pause/pause.ts";
 import { senderAt, sendMessage } from "../messages/messages.ts";
 import { rowsMayBeBehind } from "../db/reconcile-mark.ts";
 import { approvedCopyPath } from "../../lib/plan-plain.ts";
-import { PlanLineError, UNIT_LINE, parsePlanLine, type PlanUnit, type UnitText } from "./plan-lines.ts";
+import { PlanLineError, UNIT_LINE, linksProblem, parsePlanLine, type PlanUnit, type UnitText } from "./plan-lines.ts";
 
 const DEFAULT = '{"task_id":null,"run_id":null,"lead_wt":null,"members":[],"worktrees":[],"units":[],"leftovers":[],"devenv":null,"cleanup":[],"assignments":[],"repo":null,"host":null,"framing":null,"start":null,"type":"feature","autonomy":"checkpoints","status":"running","waiting_on_you":[],"lfg_assumptions":[],"approved_plans":[],"proposed_squads":[]}';
 
@@ -46,7 +46,7 @@ const USAGE = `usage: squad-state.sh <file> <command> [args]
   mark-member-restarting <file> <wt>   (restart-role.sh, before it stops the member: its stop is no crash)
   set-member-wait <file> <wt> <epoch>   (a stopped member waiting for a restart pick)
   add-worktree     <file> <worktree_id>    (legacy; prefer add-member)
-  add-unit         <file> <slug> [builder_worktree_id] [plan] [deps] [--hold] [--tier standard|hard] [--about <text>] [--ext-dep <squad>/<slug>]...   (--about = what the unit does, shown in the board overlay; deps = comma-separated unit slugs it waits on; --hold = minor follow-up, never auto-dispatched; --tier = the Thinker's Builder tier; --ext-dep = another squad's unit it waits on)
+  add-unit         <file> <slug> [builder_worktree_id] [plan] [deps] [--hold] [--tier standard|hard] [--about <text>] [--link <url>]... [--ext-dep <squad>/<slug>]...   (--link = an http(s) page with more on the unit; --about = what the unit does, shown in the board overlay; deps = comma-separated unit slugs it waits on; --hold = minor follow-up, never auto-dispatched; --tier = the Thinker's Builder tier; --ext-dep = another squad's unit it waits on)
   register-plan    <file> <plan>    (a relative <plan> that exists from the current directory is read there; register every unit line of an approved plan — \`U<n> — <title> — deps: U<m>… | none — Tier: standard|hard [— ext-deps: <squad>/<slug>[, …]] [— Lane: light|normal [(rule: <id>)]] [— HELD]\` —
                    with plan, deps as slugs, tier; all-or-nothing (exit 1 names the bad line, writes nothing); idempotent.
                    A unit keeps its slug across re-runs (matched by plan + U<n>); a new one's slug is a backticked \`u<n>-…\` in the
@@ -388,11 +388,17 @@ const waitOff = (us: J[], slug: string, dep: string): J[] => us.map((x) => {
 const squash = (t: string, cap: number) => { const x = t.replace(/\s+/g, " ").trim(); return x.length > cap ? x.slice(0, cap - 1) + "…" : x; };
 // A unit's text is its block: the lines after the unit line up to the next unit line, a heading or `---`.
 // A label may be indented, flush or a bullet, bold or plain (`  Done: x`, `Done: x`, `- **Done:** x`, `**Done:** x`).
-// What/Goal/What it does fill about (the first wins), Done and Check fill theirs; any other label ends the
-// current one and is not stored. A label's continuation lines run until a blank line, another label or bullet.
+// What/Goal/What it does fill about (the first wins), Done and Check fill theirs, every Link adds to links (URLs
+// split on spaces or commas; anything else refuses the plan); any other label ends the current one and is not stored. A label's continuation lines run until a blank line, another label or bullet.
 const LABEL = /^\s*(?:[-*]\s+)?(?:\*\*)?([A-Z][A-Za-z0-9\/-]*(?: [A-Za-z0-9\/-]+){0,5}?)(?::\*\*|\*\*:|:)\s?(.*)$/;
 function unitText(lines: string[], at: number): UnitText {
   const parts: Record<string, string[]> = {};
+  const links: string[] = [];
+  const addLinks = (n: number, text: string) => {
+    for (const x of text.split(/[\s,]+/).filter(Boolean)) if (!links.includes(x)) links.push(x);
+    const bad = linksProblem(links);
+    if (bad) planError(`line ${n}: ${bad}`);
+  };
   let cur: string | null = null;
   for (let i = at + 1; i < lines.length; i++) {
     const l = lines[i];
@@ -401,17 +407,21 @@ function unitText(lines: string[], at: number): UnitText {
     const m = l.match(LABEL);
     if (m) {
       const k = m[1].toLowerCase();
-      const key = k === "what" || k === "goal" || k === "what it does" ? "what" : k === "done" || k === "check" ? k : null;
+      const key = k === "what" || k === "goal" || k === "what it does" ? "what" : k === "done" || k === "check" || k === "link" ? k : null;
       if (key === null || (key === "what" && parts.what)) { cur = null; continue; }
       cur = key;
-      (parts[cur] ??= []).push(m[2].replace(/^\*\*\s*/, ""));
+      const rest = m[2].replace(/^\*\*\s*/, "");
+      if (cur === "link") addLinks(i + 1, rest);
+      else (parts[cur] ??= []).push(rest);
     } else if (/^\s*[-*]\s+/.test(l)) cur = null;
+    else if (cur === "link") addLinks(i + 1, l);
     else if (cur) parts[cur].push(l);
   }
   const t: UnitText = {};
   if (parts.what) t.about = squash(parts.what.join(" "), 1200);
   if (parts.done) t.done = squash(parts.done.join(" "), 400);
   if (parts.check) t.check = squash(parts.check.join(" "), 400);
+  if (links.length) t.links = links;
   return t;
 }
 const pfx = (id: string) => lower(id) + "-";
@@ -430,9 +440,9 @@ function autoslug(id: string, title: string): string {
 
 const laneFields = (p: PlanUnit) => (p.lane === null ? {} : { lane: p.lane, ...(p.laneRule === null ? {} : { lane_rule: p.laneRule }) });
 function withoutLane(u: J): J { const { lane: _l, lane_rule: _r, ...rest } = u; return rest; }
-// title/about/done/check follow the plan line on every re-registration; a field the plan no longer carries is dropped.
+// title/about/done/check/links follow the plan line on every re-registration; a field the plan no longer carries is dropped.
 const textFields = (p: PlanUnit) => ({ title: p.title, ...p.text });
-function withoutText(u: J): J { const { title: _t, about: _a, done: _d, check: _c, ...rest } = u; return rest; }
+function withoutText(u: J): J { const { title: _t, about: _a, done: _d, check: _c, links: _l, ...rest } = u; return rest; }
 
 // Upsert one unit per unit line of the plan; returns the printed rows and the notes for stderr.
 function registerPlan(st: Doc, planText: string, P: string): { rows: string[]; notes: string[]; ext: { slug: string; ref: string }[] } {
@@ -713,16 +723,20 @@ function main(argv: string[]): void {
       let hold = false, tier = "", slug = "", about = "";
       const pos: string[] = [];
       let ext: string[] = [];
+      const links: string[] = [];
       for (let i = 0; i < a.length; i++) {
         if (a[i] === "--hold") hold = true;
         else if (a[i] === "--tier") tier = value(i++, "squad-state: --tier needs a value (standard|hard)");
         else if (a[i] === "--about") about = squash(value(i++, "squad-state: --about needs a value (what the unit does)"), 1200);
+        else if (a[i] === "--link") { const x = value(i++, "squad-state: --link needs a value (an http(s) URL)"); if (!links.includes(x)) links.push(x); }
         else if (a[i] === "--ext-dep") { const x = value(i++, "squad-state: --ext-dep needs a value (<squad>/<slug>)"); needExtRef(x); ext = unique([...ext, x]); }
         else if (slug === "") slug = a[i];
         else pos.push(a[i]);
       }
       if (slug === "") usage();
       if (!["", "standard", "hard"].includes(tier)) die(2, `squad-state: invalid tier '${tier}' (standard|hard)`);
+      const badLink = linksProblem(links);
+      if (badLink) die(2, `squad-state: add-unit: ${badLink}`);
       // A plan's units go through register-plan; these nudge an ad-hoc add-unit that drops a field.
       if (tier === "") warn(`squad-state: warning: no --tier, unit '${slug}' reads as hard`);
       if (!pos[1] && !hold) warn(`squad-state: warning: no plan for '${slug}' — plan-approved will read it as ad-hoc`);
@@ -732,7 +746,7 @@ function main(argv: string[]): void {
       const reopened = set((d) => {
         const us = unitsOf(d);
         d.units = us.some((u) => u?.slug === slug) ? us : [...us, { slug, status: "planned", builder_wt: pos[0] ?? "", plan: planArg === "" ? "" : cliPlanPath(planArg),
-          deps: (pos[2] ?? "").split(",").filter((x) => x !== ""), hold, ...(tier === "" ? {} : { tier }), ...(about === "" ? {} : { about }), ...(ext.length ? { ext_deps: ext } : {}) }];
+          deps: (pos[2] ?? "").split(",").filter((x) => x !== ""), hold, ...(tier === "" ? {} : { tier }), ...(about === "" ? {} : { about }), ...(links.length ? { links } : {}), ...(ext.length ? { ext_deps: ext } : {}) }];
         return reopenDone(d);
       });
       return reopenNote(reopened);
