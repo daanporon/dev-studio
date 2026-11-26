@@ -38,6 +38,9 @@ export type AccountKind = {
   loginId(folder: string, system: boolean, env: Env): string | null;
   /** The login command, null until its unit lands it (Claude U5, Codex U11, Muse U12). */
   login: KindLogin | null;
+  /** What a freshly logged-in folder still needs before the agent starts in it without questions (Claude: the
+   *  onboarding keys of the system login's `.claude.json`). Never touches the credentials. */
+  afterLogin?(folder: string, env: Env): void;
   /** Whether usage figures and free resets can be read for an account. */
   usage: boolean;
   resets: boolean;
