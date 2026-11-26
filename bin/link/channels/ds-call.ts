@@ -47,7 +47,7 @@ export function dsCall(store: Store, root: string, host: string, body: unknown):
   const stdin = typeof b.stdin === "string" ? b.stdin.slice(0, STDIN_MAX) : "";
   const c = checkCall(store, host, { argv, member: String(b.member ?? ""), gen: String(b.gen ?? "") });
   const result: Promise<DsResult> = c.ok
-    ? runDs(root, argv, c.env, stdin).catch((e) => ({ code: 1, stdout: "", stderr: `ds: main could not run the call: ${(e as Error).message}\n` }))
+    ? runDs(root, c.argv, c.env, stdin).catch((e) => ({ code: 1, stdout: "", stderr: `ds: main could not run the call: ${(e as Error).message}\n` }))
     : Promise.resolve({ code: c.code, stdout: "", stderr: `ds: refused on main: ${c.why}\n` });
   if (id) kept.set(key, { at: now, result });
   return result;

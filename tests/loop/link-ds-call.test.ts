@@ -6,7 +6,7 @@
 // outside the member's own unit are refused; a resent request id runs once; a link that stays down gives
 // "main unreachable" and the retryable exit code.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
@@ -69,6 +69,8 @@ async function mainUp(): Promise<Main> {
   const root = temp(), store = open(root);
   stores.push(store);
   writeFileSync(join(root, ".loop-migrated"), "");
+  mkdirSync(join(root, "realp", "squads"), { recursive: true });
+  writeFileSync(join(root, "realp", "squads", "sq.json"), JSON.stringify({ topic: "sq", status: "active", members: [{ role: "lead", suffix: "", wt: "/w/lead" }] }));   // the phone book's squad
   seedMain(store);
   const srv = await startLinkServer({ root, store, binds: "127.0.0.1", port: 0 });
   servers.push(srv);
@@ -142,11 +144,10 @@ describe("a pure loop.db command runs on main", () => {
       const a = await fwd(side, argv), b = await direct(m, argv);
       expect({ argv, ...a }).toEqual({ argv, ...b });
     }
-    // send-role-ts on main: the same row the direct call would write, once (the second call finds the first).
-    const s1 = await fwd(side, ["send-role-ts", "sq", "lead", "sr", "send-role body"]);
-    const s2 = await direct(m, ["send-role-ts", "sq", "lead", "sr", "send-role body"]);
-    expect(s1.code).toBe(s2.code);
-    expect(all(m.store, "SELECT from_role, from_suffix FROM messages WHERE subject = 'sr'")).toEqual(s1.code === 0 ? [{ from_role: "builder", from_suffix: "u1" }] : []);
+    // send-role-ts as a worker calls it, without --project: main runs it in its own project and writes one row.
+    const sr = await fwd(side, ["send-role-ts", "sq", "lead", "sr", "send-role body"]);
+    expect({ code: sr.code, stderr: sr.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(all(m.store, "SELECT project, to_role, from_role, from_suffix FROM messages WHERE subject = 'sr'")).toEqual([{ project: "realp", to_role: "lead", from_role: "builder", from_suffix: "u1" }]);
   }, 60_000);
 });
 
@@ -185,6 +186,14 @@ describe("refusals", () => {
     expect(why(["notes-ts", "realp", "lead", "add", "x", "y"])).toContain("only realp builder");
     expect(why(["notes-ts", "otherp", "builder", "print"])).toContain("only realp builder");
     expect(why(["finish", "u2", "--outcome", "ok", "--body", "b"])).toContain("own unit");
+    // A Tester or Researcher reports on a unit of its own squad, never on one elsewhere.
+    expect(why(["finish", "u1", "--outcome", "verdict", "--body", "pass"], T1, "g2")).toBe("ok");
+    expect(why(["finish", "u9", "--outcome", "verdict", "--body", "pass"], T1, "g2")).toContain("own unit");
+    // finish list stays in the member's own project and squad (main adds --project when it is left out).
+    expect(why(["finish", "list", "--member", "otherp/quiet/builder"])).toContain("--member");
+    expect(why(["finish", "list", "--squad", "quiet"])).toContain("--squad");
+    const listed = checkCall(s, "s1", { argv: ["finish", "list"], member: B1, gen: "g1" });
+    expect(listed.ok && listed.argv).toEqual(["finish", "list", "--project", "realp"]);
     // Allowed: own targets, own project named, a message body that looks like a flag, the Tester's own notes.
     expect(why(["finish", "u1", "--outcome", "ok", "--body", "--as"])).toBe("ok");
     expect(why(["finish", "-", "--outcome", "no-pr", "--body", "b", "--project", "realp"])).toBe("ok");

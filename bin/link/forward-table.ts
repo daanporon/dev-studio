@@ -49,7 +49,7 @@ const VALUED: Record<string, string[]> = {
 const IDENTITY_FLAGS = ["as", "from"];
 
 export type Call = { argv: string[]; member: string; gen: string };
-export type Checked = { ok: true; member: Row; env: Record<string, string> } | { ok: false; code: number; why: string };
+export type Checked = { ok: true; member: Row; env: Record<string, string>; argv: string[] } | { ok: false; code: number; why: string };
 
 const refuse = (why: string, code: number = EXIT.refused): Checked => ({ ok: false, code, why });
 
@@ -61,8 +61,10 @@ export function memberRow(s: Store, member: string): Row | null {
     .get(id.project, id.squad, id.role, id.suffix) as Row | null;
 }
 
-/** A member's own unit: a Builder's suffix, or a unit whose builder worktree is the member's. */
-function ownUnit(s: Store, m: Row, unit: string): boolean {
+/** A member's own unit: a Builder's suffix, or a unit whose builder worktree is the member's. A Tester or Researcher
+ *  reports on another member's unit (roles/tester.md), so for them it is any unit of their own squad. */
+function ownUnit(s: Store, m: Row, role: string, unit: string): boolean {
+  if (role !== "builder") return !!s.db.query("SELECT 1 FROM units WHERE project = ? AND squad = ? AND slug = ?").get(m.project, m.squad, unit);
   if (unit === String(m.suffix ?? "")) return true;
   return !!m.wt && !!s.db.query("SELECT 1 FROM units WHERE project = ? AND squad = ? AND slug = ? AND builder_wt = ?").get(m.project, m.squad, unit, m.wt);
 }
@@ -87,6 +89,7 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
   // Flags: skip each valued flag's value; an identity flag or another project is refused.
   const valued = VALUED[cmd] ?? [];
   const pos: string[] = [];
+  let named = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (!a.startsWith("--") || a === "--") { pos.push(a); continue; }
@@ -94,6 +97,9 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
     if (IDENTITY_FLAGS.includes(name)) return refuse(`--${name} is not allowed from a side host: the caller is the member row`);
     const value = inline ?? (valued.includes(name) ? args[++i] : undefined);
     if (name === "project" && (value === undefined || dsLabel(value) !== project)) return refuse(`--project names another project than ${project}`);
+    if (name === "squad" && value !== squad) return refuse(`--squad names another squad than ${squad}`);
+    if (name === "member" && !String(value ?? "").startsWith(`${project}/${squad}/`)) return refuse(`--member names a member outside ${project}/${squad}`);
+    if (name === "project") named = true;
   }
   // Positional targets.
   if (cmd === "journal-ts") {
@@ -105,10 +111,14 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
     if (p !== undefined && (dsLabel(p) !== project || r !== role)) return refuse(`notes from a side host are only ${project} ${role}`);
   } else if (cmd === "finish") {
     const unit = pos[0];
-    if (unit !== undefined && unit !== "list" && unit !== "-" && !ownUnit(s, m, unit)) return refuse(`a finish from a side host is only for this member's own unit, not '${unit}'`);
+    if (unit !== undefined && unit !== "list" && unit !== "-" && !ownUnit(s, m, role, unit)) return refuse(`a finish from a side host is only for this member's own unit, not '${unit}'`);
   }
   const env: Record<string, string> = { DS_MEMBER: call.member, DS_GEN: String(m.gen) };
   const wt = wtPath(m.wt);
   if (wt) env.DS_WT = wt;
-  return { ok: true, member: m, env };
+  // Main's cwd is its state root, so a command that finds its project from the caller's worktree is told it:
+  // the member's own project, the only one it may name.
+  const scoped = cmd === "send-role-ts" || (cmd === "finish" && pos[0] === "list");
+  const argv = scoped && !named ? [...call.argv, "--project", project] : call.argv;
+  return { ok: true, member: m, env, argv };
 }
