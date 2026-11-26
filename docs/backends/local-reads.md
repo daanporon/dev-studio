@@ -48,7 +48,7 @@ Main's own observers read and prune only `host = 'local'` rows, so they never to
 |---|---|
 | `bin/loop/io/wt-probe.ts` | Is a worktree safe to remove: `git status --porcelain --untracked-files=all` and commits on HEAD that no remote has. Used by close, the leftover-worktree fulfiller and tidy. |
 | `bin/loop/fulfil/worktree.ts` | The checks and the `git worktree` calls around removing a leftover worktree. |
-| `bin/loop/fulfil/cancel.ts` | A worktree's HEAD, read and set back (`rev-parse`, `update-ref`) when a unit is cancelled. |
+| `bin/loop/fulfil/cancel.ts` | A worktree's HEAD, read and set back (`rev-parse`, `update-ref`) when a unit is cancelled. A member on a side host: through its host jobs (below). |
 | `bin/loop/io/rescue.ts` | The untracked and ignored files in a worktree, copied into `state/<label>/pages/…` before the worktree is removed. |
 | `bin/loop/io/git-dir.ts`, `bin/loop/observers/reviews.ts` | A Builder worktree's git dir and the review-unit files kept there (`ds-review`, `ds-review-log`, `ds-review-stop`, `ds-review-start`). |
 | `bin/loop/reconcilers/liveness.ts` | A worktree's HEAD (`git rev-parse HEAD`). |
@@ -56,6 +56,18 @@ Main's own observers read and prune only `host = 'local'` rows, so they never to
 | `bin/loop/squad/exposed.ts` | The worktree a `ds expose` runs in (`git rev-parse --show-toplevel`). Runs in the role's own shell, on the agents' host. |
 | `bin/loop/settings/projects.ts` | A project clone's `origin` URL. |
 | `bin/loop/observers/update.ts`, `bin/loop/main.ts`, `bin/loop/settings/settings.ts` | The dev-studio checkout: HEAD, upstream fetch, `rev-list`, `log`, `status`. **Loop host.** |
+
+### On a side host: host jobs (side-loop-host U5)
+
+A worktree on a side host is not on main's disk, so main asks that host to run the git and folder work through
+`bin/link/host-jobs.ts`, one checked request and answer each on the `host-jobs` channel (`bin/link/channels/host-jobs.ts`,
+answered on the side): `clone`, `worktree.add`, `worktree.remove` (the provider's create and remove), `probe`
+(`wt-probe.ts`), `rescue` (`rescue.ts`'s plan; files up to `DS_LINK_RESCUE_UPLOAD_MB`, 2 MB, travel up and the
+rest stay in the side's own `rescued/` folder, recorded as `host_dest`/`host_files`), `ref.read`, `ref.set` and
+`push` (never forced). Host `local` runs the same code in place, as before. Both ends check every argument (absolute
+paths, names, refs, shas; nothing git could read as an option); main checks each answer's shape, and before it
+writes a rescued file each path must be relative with no `.`/`..` segment and no NUL, resolve under that member's
+`rescued/<role>/` folder through real folders and land on a regular file or nothing, or the whole answer is refused.
 
 ## Account folders
 
