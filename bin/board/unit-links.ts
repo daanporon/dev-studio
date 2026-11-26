@@ -1,6 +1,6 @@
 // unit-info-link U2: a unit's http(s) links and their short labels, as the board shows them.
-// The unit doc carries `links: string[]`; anything else never reaches the page (defence in depth: register-plan checks them too).
-import { ticketUrlProblem } from "../loop/squad/plan-lines.ts";
+// The unit doc carries `links: string[]`; anything else, or a URL with a login, never reaches the page (defence in depth: register-plan checks them too).
+import { hasLogin, ticketUrlProblem } from "../loop/squad/plan-lines.ts";
 
 export type UnitLink = { url: string; label: string };
 
@@ -33,7 +33,7 @@ export function ticketLink(title: unknown, template: string | null): UnitLink | 
 /** The chips of one unit: the ticket link first, then the plan's links, without a second copy of its URL. */
 export function unitLinks(links: unknown, ticket: UnitLink | null = null): UnitLink[] {
   const own = !Array.isArray(links) ? [] : links.flatMap((url) =>
-    typeof url === "string" && /^https?:\/\//i.test(url) && URL.canParse(url) ? [{ url, label: linkLabel(url) }] : []);
+    typeof url === "string" && /^https?:\/\//i.test(url) && URL.canParse(url) && !hasLogin(url) ? [{ url, label: linkLabel(url) }] : []);
   if (!ticket) return own;
   const href = new URL(ticket.url).href;
   return [ticket, ...own.filter((l) => new URL(l.url).href !== href)];
