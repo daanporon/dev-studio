@@ -97,8 +97,11 @@ function tableRows(root: string): AccountRow[] {
 export const listAccounts = (root: string, agent: string, env: Env = process.env): AccountRow[] =>
   listFromRows(tableRows(root), agent, env);
 
-/** The default account of `agent`: the row marked default when it is listed, else the system row. */
-export function defaultAccount(root: string, agent: string, env: Env = process.env): AccountRow {
-  const list = listAccounts(root, agent, env);
+/** The default account of `agent` from table rows: the row marked default when it is listed, else the system row. */
+export function defaultFromRows(rows: AccountRow[], agent: string, env: Env = process.env): AccountRow {
+  const list = listFromRows(rows, agent, env);
   return list.find((r) => r.is_default) ?? list.find(isSystem) ?? systemRow(agent);
 }
+
+export const defaultAccount = (root: string, agent: string, env: Env = process.env): AccountRow =>
+  defaultFromRows(tableRows(root), agent, env);
