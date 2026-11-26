@@ -1648,6 +1648,20 @@ has "permission U1: the text board says where to answer" "$perm_text" "answer it
 has "permission U1: the text board draws the command, a line each" "$perm_text" '      │ echo start
       │ rm -- "$HOME/.ds-none"'
 
+# permission-prompt-needs-you U4: a password never shows on a permission card, even on an entry queued with it
+# still in the command, and such a card is answered in the terminal.
+cat > "$SD/pw-sq.json" <<'JSON'
+{"run_id":"pw","status":"waiting-on-you","type":"feature","members":[],"units":[],"waiting_on_you":[{"id":"picker-00004444","asker":"builder-u4","blocking":true,"source":"picker","picker_kind":"permission","tool":"Bash","picker_answerable":true,"tool_use_id":"toolu_new00004444","title":"builder-u4 asks: run this command?","shown":"PGPASSWORD=zzhunter2 psql -h db\ncurl -u admin:zzhunter2 https://bob:zzhunter2@example.com","question":"```\nPGPASSWORD=zzhunter2 psql -h db\ncurl -u admin:zzhunter2 https://bob:zzhunter2@example.com\n```","choices":[{"label":"Yes","does":"let it run this once"},{"label":"No","does":"refuse it"}],"since":"2026-01-01T00:00:00Z"}]}
+JSON
+mkdb "$LBL"
+render "$LBL" --json > "$TMP/pw.json"
+jt "permission U4: the command shows with each secret redacted, answered in the terminal" "$TMP/pw.json" '.needs_you[] | select(.id=="picker-00004444") | .picker_answerable==false and .shown=="PGPASSWORD=[redacted] psql -h db\ncurl -u admin:[redacted] https://bob:[redacted]@example.com" and (.text|contains("PGPASSWORD=[redacted]"))'
+eq "permission U4: no secret anywhere in the JSON board" "$(grep -c zzhunter2 "$TMP/pw.json" || true)" "0"
+pw_text="$(render "$LBL" 2>/dev/null)"
+has "permission U4: the text board draws it redacted" "$pw_text" '      │ PGPASSWORD=[redacted] psql -h db'
+eq "permission U4: no secret in the text board" "$(grep -c zzhunter2 <<<"$pw_text" || true)" "0"
+rm -f "$SD/pw-sq.json"
+
 # permission-prompt-needs-you U3: the card for a prompt the screen shows, as the loop files it on a squad: in
 # Needs-you at once, naming the role, with the prompt lines, and the member whose chat it opens.
 cat > "$SD/perm-sq.json" <<'JSON'

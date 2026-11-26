@@ -83,8 +83,10 @@ Orca brief says — you stay running between turns and report through `ds` and `
    `Link:` line in the unit block (`conventions/plan-shape.md` step e).
    **Before asking for approval, prove the unit lines parse** — a format error must show up
    here, not at the Lead's handoff. Copy the state to a scratch file and run the same
-   command the Lead will run (`<state>` is the `state=` path in your spec):
-   `S=$(mktemp); cp <state> "$S" && bin/role/squad-state.sh "$S" register-plan <plan-path>; rc=$?; rm -f "$S"; echo "exit: $rc"`.
+   command the Lead will run (`<state>` is the `state=` path in your spec). `<scratch>` is your
+   scratch folder, written out as a literal path:
+   `cp <state> <scratch>/register-plan-check.json && bin/role/squad-state.sh <scratch>/register-plan-check.json register-plan <plan-path>; echo "exit: $?"`.
+   Then remove the copy as its own command: `rm -f <scratch>/register-plan-check.json`.
    `exit: 0` with one tab-separated row per unit means the lines parse — the `not approved
    yet` note on stderr is expected (approval comes later). Anything else names the bad
    line: fix it and re-run; only ask once it registers cleanly.

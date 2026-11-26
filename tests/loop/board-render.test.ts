@@ -1029,3 +1029,15 @@ test("accounts: with no accounts the section and its Manage button are still the
     expect(r.errors).toEqual([]);
   } finally { await r.window.happyDOM.close(); }
 });
+
+// issue #125 U8: a moved account (source ds) whose login is still in Orca's folder: the warning says dev-studio uses
+// its own copy, names the token-rotation risk and how to end it.
+test("accounts: a moved account's duplicate warning names its own copy and the rotation risk", async () => {
+  const r = await mount({ ...board, accounts: [account({ account: "u-m1", label: "moved@example.com", tag: "Orca + ds", strip: true, default: true,
+    folder: "/x/ds/claude/u-m1", source: "ds", login_short: "abcd1234", dup_folders: ["/x/ds/claude/u-m1", "/x/orca"] })], account_folders: [] });
+  try {
+    expect(texts(r.root.querySelector("#accounts")!, ".arow .awarn")).toEqual(["same login in two or more folders: /x/ds/claude/u-m1 and /x/orca"
+      + " · dev-studio uses its own copy (/x/ds/claude/u-m1); the first copy to refresh the token logs the other out · remove the account in Orca to end this"]);
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
