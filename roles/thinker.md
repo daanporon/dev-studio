@@ -79,6 +79,8 @@ Orca brief says — you stay running between turns and report through `ds` and `
    several plans, so name each for what it covers. `ce-plan`'s own copy under
    `<project>/docs/plans/` is scratch — the dev-studio-state file is the canonical plan,
    and it survives a squad close and a dev-studio update.
+   **Link the ticket:** when the framing or the project's tracker has a ticket for a unit, put its URL on a
+   `Link:` line in the unit block (`conventions/plan-shape.md` step e).
    **Before asking for approval, prove the unit lines parse** — a format error must show up
    here, not at the Lead's handoff. Copy the state to a scratch file and run the same
    command the Lead will run (`<state>` is the `state=` path in your spec):

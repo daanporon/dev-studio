@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mount as mountPage, type Run } from "./board-mount";
 import { BACKEND_NAMES } from "../../bin/backend/registry.ts";
+import { unitLinks } from "../../bin/board/unit-links.ts";
 
 const root = join(import.meta.dir, "../..");
 const page = readFileSync(join(root, "web/board.html"), "utf8");
@@ -839,6 +840,57 @@ test("a safety-check prompt shows its command as a code block and says to answer
     expect(body.querySelector("pre.qcmd").textContent).toBe(shown);
     expect(body.textContent).toContain("Answer it in builder-u1's terminal — Claude stopped at a safety check");
     expect(body.querySelectorAll("button.opt").length).toBe(0); // read-only: nothing to send
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
+// ---- unit-info-link U2: a unit's links as a chip in its Work units row and a "More info" row in its window.
+test("a unit's links: a chip and +N in its row, More info in its window, nothing for a unit without links", async () => {
+  const urls = ["https://linear.app/acme/issue/ABC-1/x", "https://example.org/page"];
+  const links = unitLinks([...urls, "javascript:alert(1)"]);
+  const sq = { ...udBoard.squads[0], units: [
+    udUnit("u1-linked", { state: "working", links, check_text: "tests/x.sh" }),
+    udUnit("u2-plain", { links: [] }),
+    udUnit("u3-done", { state: "done", links }),
+  ] };
+  const r = await mount({ ...board, squads: [sq] }, false);
+  const w = r.window, doc = w.document;
+  const wait = () => new Promise((x) => setTimeout(x, 30));
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true, cancelable: true })); await wait(); };
+  const row = (slug: string) => doc.querySelector(`.detail .u .un[title="${slug}"]`) as any;
+  try {
+    const st = doc.createElement("style"); st.textContent = page.match(/<style>([\s\S]*?)<\/style>/)![1]; doc.head.appendChild(st);
+    doc.getElementById("squads").open = true;
+    await wait();
+    await click(doc.querySelector(".row.squad"));
+    const un = row("u1-linked"), a = un.querySelector("a.ulink");
+    expect(a.textContent).toBe("ABC-1");
+    expect(a.getAttribute("href")).toBe(urls[0]);
+    expect([a.getAttribute("target"), a.getAttribute("rel")]).toEqual(["_blank", "noopener noreferrer"]);
+    expect([a.getAttribute("title"), a.getAttribute("aria-label")]).toEqual(["Open ABC-1 in a new tab", "Open ABC-1 in a new tab"]);
+    expect(un.querySelector(".ulinks").textContent).toBe("ABC-1 +1");
+    expect(un.querySelector(".ulink-more").getAttribute("title")).toBe("example.org");
+    // a sibling after the title button, never inside it; it keeps its width while the title is cut
+    expect(un.querySelector(".unit-open a")).toBeNull();
+    expect(!!(un.querySelector(".unit-open").compareDocumentPosition(a) & 4)).toBe(true);
+    expect(w.getComputedStyle(un.querySelector(".ulinks")).flexShrink).toBe("0");
+    expect(row("u2-plain").innerHTML).toBe('<button class="unit-open" aria-haspopup="dialog">u2-plain</button>');
+    a.addEventListener("click", (e: any) => e.preventDefault()); // happy-dom would otherwise navigate
+    await click(a);
+    expect(doc.querySelector(".ud")).toBeNull();
+    await click(un.querySelector(".unit-open"));
+    expect([...doc.querySelectorAll(".ud dd")].map((d: any) => d.className).slice(0, 2)).toEqual(["ud-check", "ud-links"]);
+    expect([...doc.querySelectorAll(".ud dt")][1].textContent).toBe("More info");
+    expect([...doc.querySelectorAll(".ud-links a")].map((x: any) => [x.textContent, x.getAttribute("href"), x.getAttribute("title"), x.getAttribute("target"), x.getAttribute("rel")]))
+      .toEqual([["ABC-1", urls[0], urls[0], "_blank", "noopener noreferrer"], ["example.org", urls[1], urls[1], "_blank", "noopener noreferrer"]]);
+    expect(doc.body.innerHTML).not.toContain("javascript:alert");
+    await click(doc.querySelector(".ud-close"));
+    await click(row("u2-plain").querySelector(".unit-open"));
+    expect(doc.querySelector(".ud-links")).toBeNull();
+    await click(doc.querySelector(".ud-close"));
+    // a finished unit's chip is dimmed
+    await click(doc.querySelector(".box.units .gtog"));
+    expect(Number(w.getComputedStyle(row("u3-done").querySelector(".ulinks")).opacity)).toBeLessThan(1);
     expect(r.errors).toEqual([]);
   } finally { await w.happyDOM.close(); }
 });

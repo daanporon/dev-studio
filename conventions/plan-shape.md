@@ -118,6 +118,14 @@ before a unit's block, and `Goal:` / `What it does:` for the unit's About (the f
 continuation lines are kept until a blank line, another label or another bullet. Other labels (`Files:`, `Linear:`)
 are not stored. The indented example above is the one to copy.
 
+**Link the unit to its ticket** when it has one: a `Link:` line in the block, one or more URLs separated by spaces or
+commas (a tracker issue, a GitHub issue, any page with more context):
+`  Link: https://tracker.example/issue/ABC-1, https://github.com/acme/app/issues/7`
+`register-plan` stores them as the unit's `links`, and they follow the plan on every re-registration (drop the line,
+drop the links). `Link:` is a reserved label: only `http://` and `https://` URLs, at most 5 per unit and 500 characters
+each, and anything else refuses the whole plan naming the line. Put notes under another label (e.g. `Files:`).
+`Links:` is not read.
+
 **A unit that touches the board needs a board Check.** If a unit changes what the board
 shows (`bin/board/board-data.ts`, `web/board.html`, a board row or status), its Check must render
 the board on real squad state and look at the affected rows — unit tests alone don't count.
