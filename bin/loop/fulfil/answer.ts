@@ -13,6 +13,7 @@ import type { Action } from "../core/plugins.ts";
 import { askState, expectedChecks, headOf, humanCheckNames, prQuestionKey } from "../squad/pr-ready.ts";
 import { reopen } from "../messages/questions.ts";
 import { permissionKey } from "../chat/permission.ts";
+import { toolUseInput } from "../../lib/permission-prompt.ts";
 import type { Seat } from "../drivers/types.ts";
 import type { Row } from "../core/store.ts";
 import type { Store } from "../core/store.ts";
@@ -53,7 +54,10 @@ async function permission(a: Action, x: Parameters<Fulfiller["exec"]>[1], p: P, 
   if (closed(p)) return refuse("the prompt is already answered (or its transcript is unreadable)");
   const o = await seat.send("screen-tail", [wt]);
   if (o.code !== 0) return refuse("the screen could not be read");
-  const k = permissionKey(o.out, { tool: String(e.tool ?? ""), shown: String(e.shown ?? "") }, p.answer);
+  // The call's own command (the screen shows it unredacted) and description, read back by its tool_use_id.
+  const input = toolUseInput(p.transcript, p.tool_use_id) ?? {};
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  const k = permissionKey(o.out, { tool: String(e.tool ?? ""), shown: String(e.shown ?? ""), command: str(input.command), description: str(input.description) }, p.answer);
   if ("why" in k) return refuse(k.why);
   if (closed(p)) return refuse("the prompt was answered meanwhile");
   const r = await seat.send("keys", [wt, String(k.digit)]);

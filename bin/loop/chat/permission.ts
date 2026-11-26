@@ -28,20 +28,37 @@ export function checkable(tool: string, input: any, shown: string): boolean {
 
 // Whitespace and box-drawing characters go on both sides: the dialog wraps and indents a long command.
 const squash = (s: string) => s.replace(/[\s─-╿]+/g, "");
-export const NEEDLE = 80;
+
+/** Does the dialog show exactly this command? It must fill whole lines from the dialog's first or second
+ *  non-blank line (the one under its " Bash command" header) and the next non-blank line must start the call's
+ *  description, so neither a longer command (`git push --force` for `git push`) nor a second line after it
+ *  (`git push` then `rm -rf x`) passes. Without a description the command's end can't be told: false. */
+export function showsCommand(dialog: string, command: string, description: string): boolean {
+  const cmd = squash(command), desc = squash(description);
+  if (!cmd || !desc) return false;
+  const lines = dialog.split("\n").map(squash);
+  const starts = lines.flatMap((l, i) => (l ? [i] : [])).slice(0, 2);
+  return starts.some((s) => {
+    let acc = "", i = s;
+    for (; i < lines.length && acc.length < cmd.length; i++) acc += lines[i];
+    if (acc !== cmd) return false;
+    return lines.slice(i).join("").startsWith(desc);
+  });
+}
 
 /** The digit to press for `answer` ("Yes" or "No") on this screen, or why nothing may be pressed: the screen must
- *  show Claude's "Do you want to …?" menu, its dialog must show the entry's command (the first NEEDLE characters
- *  of its first line, whitespace and borders dropped) or, for a file change, the question line the file's name,
- *  and exactly one option must read exactly `answer`. Never any other option ("Yes, and don't ask again"). */
-export function permissionKey(screen: string, entry: { tool: string; shown: string }, answer: string): { digit: number } | { why: string } {
+ *  show Claude's "Do you want to …?" menu, its dialog must show the call's whole command, then its description
+ *  (showsCommand; `command` and `description` come from the transcript's tool_use, else `shown`) or, for a file
+ *  change, the question line the file's name, and exactly one option must read exactly `answer`. Never any
+ *  other option ("Yes, and don't ask again"). */
+export function permissionKey(screen: string, entry: { tool: string; shown: string; command?: string; description?: string }, answer: string): { digit: number } | { why: string } {
   if (answer !== "Yes" && answer !== "No") return { why: "only Yes or No is pressed on a permission prompt" };
   if (isCut(entry.shown)) return { why: "the command was too long to show in full" };
   const p = claudePrompt(screen);
   if (!p) return { why: "the screen shows no permission prompt" };
   if (entry.tool === "Bash") {
-    const needle = squash(Array.from(entry.shown.split("\n")[0]).slice(0, NEEDLE).join(""));
-    if (!needle || p.dialog === null || !squash(p.dialog).includes(needle)) return { why: "the screen shows a different command" };
+    if (!entry.description?.trim()) return { why: "the tool call has no description to tell where its command ends" };
+    if (p.dialog === null || !showsCommand(p.dialog, entry.command ?? entry.shown, entry.description)) return { why: "the screen shows a different command" };
   } else {
     const name = base(shownPath(entry.tool, entry.shown));
     if (!name || !p.question.includes(name)) return { why: "the screen asks about a different file" };

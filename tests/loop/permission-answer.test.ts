@@ -29,7 +29,7 @@ const screen = (cmd: string[], opts = ["Yes", "No"], question = "Do you want to 
 const PUSH = screen(["git push origin work"]);
 
 describe("permissionKey (the screen check)", () => {
-  const bash = { tool: "Bash", shown: "git push origin work" };
+  const bash = { tool: "Bash", shown: "git push origin work", description: "Push the branch" };
   test("Yes and No press their own digit", () => {
     expect(permissionKey(PUSH, bash, "Yes")).toEqual({ digit: 1 });
     expect(permissionKey(PUSH, bash, "No")).toEqual({ digit: 2 });
@@ -42,7 +42,7 @@ describe("permissionKey (the screen check)", () => {
   });
   test("a different command, a cut command or no prompt presses nothing", () => {
     expect(permissionKey(screen(["git push --force origin main"]), bash, "Yes")).toHaveProperty("why");
-    expect(permissionKey(PUSH, { tool: "Bash", shown: "git push origin work\n… (cut)" }, "Yes")).toHaveProperty("why");
+    expect(permissionKey(PUSH, { ...bash, shown: "git push origin work\n… (cut)" }, "Yes")).toHaveProperty("why");
     expect(permissionKey("$ ls\n❯ 1. Yes\n  2. No", bash, "Yes")).toHaveProperty("why");
     expect(permissionKey("", bash, "Yes")).toHaveProperty("why");
   });
@@ -50,10 +50,24 @@ describe("permissionKey (the screen check)", () => {
     const s = screen(["rm -rf build"], ["Yes", "No"], "Do you want to proceed?", "● Bash(git push origin work)\n  ⎿  Waiting…");
     expect(permissionKey(s, bash, "Yes")).toHaveProperty("why");
   });
-  test("a long command the dialog wraps still matches on its first 80 characters", () => {
+  test("a long command the dialog wraps matches as a whole", () => {
     const long = `for f in $(ls ./build); do echo "$f" | sed -e 's/a/b/g' -e 's/c/d/g' >> ./out/list-of-every-file.txt; done`;
     const wrapped = screen([long.slice(0, 50), long.slice(50)]);
-    expect(permissionKey(wrapped, { tool: "Bash", shown: long }, "Yes")).toEqual({ digit: 1 });
+    expect(permissionKey(wrapped, { ...bash, shown: long }, "Yes")).toEqual({ digit: 1 });
+  });
+  test("a command sharing a long prefix, a longer command or a second line after it presses nothing", () => {
+    const cd = "cd /home/user/orca/workspaces/demo/ds-dev-studio-builder-demo-with-a-long-worktree-name && ";
+    const mine = { ...bash, shown: `${cd}npm test` };
+    expect(permissionKey(screen([`${cd}npm test`]), mine, "Yes")).toEqual({ digit: 1 });
+    expect(permissionKey(screen([`${cd}git push --force origin main`]), mine, "Yes")).toHaveProperty("why");
+    expect(permissionKey(screen(["git push origin work --force"]), bash, "Yes")).toHaveProperty("why");
+    expect(permissionKey(screen(["git push origin", "work --force"]), bash, "Yes")).toHaveProperty("why");
+    expect(permissionKey(screen(["git push origin work", "rm -rf ./build"]), bash, "Yes")).toHaveProperty("why");
+  });
+  test("the call's own command and description decide, and no description presses nothing", () => {
+    expect(permissionKey(PUSH, { tool: "Bash", shown: "git push origin work" }, "Yes")).toHaveProperty("why");
+    expect(permissionKey(PUSH, { ...bash, description: "Delete the build" }, "Yes")).toHaveProperty("why");
+    expect(permissionKey(screen(["TOKEN=abc123 git push origin work"]), { ...bash, shown: "TOKEN=[redacted] git push origin work", command: "TOKEN=abc123 git push origin work" }, "Yes")).toEqual({ digit: 1 });
   });
   test("a file change matches on its file's name in the question", () => {
     const edit = screen(["(diff)"], ["Yes", "No"], "Do you want to make this edit to notes.md?");
@@ -97,7 +111,7 @@ async function press(ans: string, tail: string, over: Row = {}, answered = false
   loop.boot(T);
   const t = join(s.root, "t.jsonl"), tid = String(over.tool_use_id ?? "toolu_01perm");
   const line = (c: unknown) => `${JSON.stringify(c)}\n`;
-  writeFileSync(t, line({ type: "assistant", message: { content: [{ type: "tool_use", id: tid, name: "Bash", input: { command: "git push origin work" } }] } })
+  writeFileSync(t, line({ type: "assistant", message: { content: [{ type: "tool_use", id: tid, name: "Bash", input: { command: "git push origin work", description: "Push the branch" } }] } })
     + (answered ? line({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: tid, content: "ok" }] } }) : ""));
   const entry = { id: "picker-perm0001", asker: "builder-u1", blocking: true, question: "run this command?", since: "2026-11-26T15:00:00Z",
     source: "picker", picker_kind: "permission", picker_answerable: true, tool: "Bash", shown: "git push origin work",
