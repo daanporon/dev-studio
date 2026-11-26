@@ -1,6 +1,7 @@
 // exposed.ts — an exposed entry ends when what it pointed at is gone (expose-hosted-services U2, R7,
 // KTD3). For each open `exposed` row of the project, the first reason that holds ends it (gone_at +
-// gone_why with one `unexposed` event, bin/loop/squad/exposed.ts endExposed); rows are never deleted:
+// gone_why with one `unexposed` event, bin/loop/squad/exposed.ts endExposed). Ending keeps the row; only `ds remove-project` deletes it, into the
+// project's archive:
 //   squad-closed      its squad's row says closed or gone, is wished gone, or there is no squad row
 //   squad-done        its squad's row says done (exposed-cleanup U2): a done squad hosts nothing
 //   owner-gone        scope member: no live members row has the owner's worktree (nor is it the squad's lead_wt)

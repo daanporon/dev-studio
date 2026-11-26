@@ -674,6 +674,103 @@ is no Dispatcher to hand off to). So when a squad finishes, its Lead marks it `d
 **pings you**; you close it from the **Studio** (close-squad refuses to run from inside
 the squad).
 
+## Remove a project
+
+When you no longer work on a project, remove it. Removing **archives**: the project leaves the board, nothing
+runs or is ticked for it, its history stays readable under `state/.removed/`, and its label is free again.
+It is your command, from a host shell or the board.
+
+```sh
+bin/ds remove-project your-app --dry-run    # what blocks it, or what it would stop, move and keep; changes nothing
+bin/ds remove-project your-app              # remove it: prints each step, then the archive path
+bin/ds remove-project your-app --no-wait    # file the request and return
+```
+
+The command takes the project's label and asks for no second confirmation, so run `--dry-run` first. On the
+project's board, **Remove project** sits beside the pause controls. It lists what blocks the removal; with
+nothing in the way, **Remove** is enabled once you type the label exactly.
+
+The running loop does the work. With the loop down, the command refuses and changes nothing. While a removal
+is open, `ds up` and new squads for that label are refused, and running `ds remove-project <label>` again
+joins the open removal.
+
+### What blocks a removal
+
+A removal is refused, with nothing changed, while any of these holds. The refusal and `--dry-run` name each
+item with the way to clear it.
+
+| Blocker | How to clear it |
+|---|---|
+| The project is paused | `bin/ds resume project <label>` |
+| A squad that is not `closed` or `gone` (a `done`, `failed` or paused one counts) | [close it](#closing-a-squad) (`bin/ds close-squad <label> <topic>`); a squad with no state file takes `bin/ds want squad <label>/<topic> gone` |
+| A worktree folder of the project, other than the Studio's, is still on disk | for a squad's leftover, the board's leftover **Remove** (it saves the changes first); else `bin/ds worktree rm <path>`. Where the loop has no record of the worktree's repo, check it for unsaved work, then `git worktree remove <path>` |
+| A member outside the Studio still has a live worker | the command the refusal prints for it |
+
+A squad that never started does not block, and neither do the old member rows of closed squads: both go with
+the project. The repo clone does not block either.
+
+### What it does
+
+The project's exposed services are stopped through their stop commands. The Studio's terminals are closed and
+its worktree removed, after its changes are saved. Then the board server stops, `state/<label>/` moves to the
+archive, and the project's `loop.db` rows are copied into the archive and deleted from `loop.db`. Its settings
+are among those rows. A board page you removed the project from ends on **This board has stopped**, with the
+archive's location and the command that prints the result once the removal is done.
+
+If a removal stops part-way, the command prints why (the board shows it while its server runs), and another
+project, when there is one, gets a "Project removal stopped" card. Fix the cause and run
+`bin/ds remove-project <label>` again. Do this even when the folder is already archived, and **finish it
+before you run `ds up` with that label**: a failed removal no longer holds `ds up` back, and the old rows may
+still be in `loop.db`. A removal that failed after it began deleting rows can leave them in two archive
+folders: the first keeps what it copied, and the next run puts what was left in a new one.
+
+### The archive
+
+The archive is `state/.removed/<label>-<YYYY-MM-DD>/`, with `-2`, `-3` and so on when that name is taken. It is
+the old `state/<label>/` folder (squad files, plans, notes, journals, pages) plus:
+
+- `loop-rows.db`: the project's `loop.db` rows, in tables of the same names. Its `removed_meta` table records
+  the label, the time and the row count of each table.
+- `removed.json`: the record, written when the removal finishes: rows per table, the Studio's old and new
+  branch names, and where its changes were saved.
+- `pages/_studio/leftovers/<worktree>/`: the Studio worktree's saved changes, `changes.patch` (uncommitted
+  changes to tracked files) and, when there were any, `untracked.tar`. Its last commit is also kept in the repo
+  as `refs/ds-leftovers/<worktree folder name>`.
+- Now and then `after-move/` (files written at the old path after the move) or `loop-rows.partial-<n>.db` or
+  `loop-rows.stale-<n>.db` (an unfinished or a finished copy that was set aside and redone).
+
+Read `loop-rows.db` with any SQLite tool, for example:
+
+```sh
+sqlite3 -readonly state/.removed/your-app-2026-11-26/loop-rows.db ".tables"
+sqlite3 -readonly state/.removed/your-app-2026-11-26/loop-rows.db \
+  "SELECT datetime(at, 'unixepoch'), squad, kind, payload FROM events ORDER BY at DESC LIMIT 20"
+```
+
+### What stays
+
+- The repo clone `repos/<label>` (when `ds up` made one) and the Orca repo registration.
+- The Studio's branch, renamed to `<branch>-removed-<YYYY-MM-DD>`.
+- Feedback notes and drafts, which stay in `loop.db`.
+- The `loop.db` tables that belong to no project, such as the accounts. Two things tied to the project do not
+  stay as they were: the health rows of its exposed services go into the archive, and open model or account
+  pins that name it are closed, with a copy in the archive.
+
+### Bring a project back
+
+There is no restore command. Run `ds up` again with the URL or selector you used the first time, plus
+`--label <label>` when the label is not the repo's name. A project that did not run on the defaults needs its
+`--backend` (and `--worktree`) again, else it comes up on `orca`:
+
+```sh
+bin/ds up https://github.com/you/your-app
+```
+
+This is a new project under the old label, with no old squads, settings or events. A URL reuses the kept
+clone. The Studio gets a new branch with the usual name, `ds-<label>-studio`; the old one stays under its
+archived name. The archive is for reading: set again any settings you want, and take saved work from the old
+branch, ref or patch.
+
 ## Updating, and reloading running squads
 
 Update the host checkout with `/ds-update` in the Studio (pull, relink, and do
@@ -767,6 +864,9 @@ describes. A project then starts on it with `ds up <project> --backend <name>`, 
 Convenience slash-commands live in `.claude/commands/` (all `ds-` prefixed to
 avoid collisions; installed into `~/.claude/commands/` by `bin/host/install.sh` so
 they work in every worktree):
+
+There is no `/ds-remove-project`: these commands are typed in an agent's terminal, mostly the Studio's, and a
+removal closes the Studio. Use `bin/ds remove-project` or the board ([Remove a project](#remove-a-project)).
 
 - `/ds-update [<project>]` — bring everything to the latest dev-studio: pull, relink, then (`update-squads.sh <project> --auto`) restart, reload or leave the squads alone, by what the new commits touch (skills / instructions / code). Each project records the commit its squads run (`state/<project>/squads-rev.json`), so a project the shared checkout moved ahead of is refreshed by its next `/ds-update` even when the checkout is current.
 - `/ds-board [<project>]` — run `bin/board/board.sh` and show the overview (one project, or all).

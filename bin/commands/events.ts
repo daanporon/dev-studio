@@ -1,4 +1,4 @@
-// ds events — the append-only event log, oldest first.
+// ds events — the append-only event log, oldest first (only `ds remove-project` takes a project's rows out).
 import { open } from "../loop/core/store.ts";
 import { parse, print, shape } from "../loop/core/cli.ts";
 

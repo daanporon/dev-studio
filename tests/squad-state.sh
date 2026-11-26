@@ -530,6 +530,23 @@ check "..and a refused plan writes nothing" "$before" "$("$SS" "$ul" get | jq -S
 check "add-unit --link stores the links" '["https://tracker.example/issue/ABC-2","https://example.org/page"]' "$("$SS" "$ul" get | jq -c '.units[] | select(.slug=="linked") | .links')"
 "$SS" "$ul" add-unit badlink "" "" "" --tier standard --link 'javascript:alert(1)' >/dev/null 2>&1
 check "add-unit --link refuses a non-web URL and adds nothing" "2 0" "$? $("$SS" "$ul" get | jq '[.units[] | select(.slug=="badlink")] | length')"
+# A URL with a login is refused, and the password never shows in the refusal.
+before="$("$SS" "$ul" get | jq -Sc .units)"
+printf 'U1 — First — deps: none — Tier: standard\n  Done: changed.\n  Link: https://user:s3cretpw@tracker.example/issue/ABC-1\n' > "$lp"
+err="$("$SS" "$ul" register-plan "$lp" 2>&1 >/dev/null)"; rc=$?
+check "register-plan refuses a Link: with a login, naming the line" "1 yes" "$rc $(case "$err" in *s3cretpw*) echo "$err" ;; *"line 3: Link: a URL must not carry a login"*) echo yes ;; *) echo "$err" ;; esac)"
+check "..and writes nothing" "$before" "$("$SS" "$ul" get | jq -Sc .units)"
+for pw in 's3cretpw,tail' 's3cretpw tail'; do
+  printf 'U1 — First — deps: none — Tier: standard\n  Done: changed.\n  Link: https://user:%s@tracker.example/x\n' "$pw" > "$lp"
+  err="$("$SS" "$ul" register-plan "$lp" 2>&1 >/dev/null)"; rc=$?
+  check "a password split on a comma or space is not quoted ($pw)" "1 yes" "$rc $(case "$err" in *s3cretpw*) echo "$err" ;; *"line 3: Link:"*) echo yes ;; *) echo "$err" ;; esac)"
+done
+err="$("$SS" "$ul" add-unit loginlink "" "" "" --tier standard --link https://user@tracker.example/x 2>&1 >/dev/null)"; rc=$?
+check "add-unit --link refuses a login and adds nothing" "2 yes 0" "$rc $(case "$err" in *"must not carry a login"*) echo yes ;; *) echo "$err" ;; esac) $("$SS" "$ul" get | jq '[.units[] | select(.slug=="loginlink")] | length')"
+for bad in 'ftp://user:s3cretpw@tracker.example/x' 'https://user:s3cretpw@tracker.example:bad/x' 'user:s3cretpw@tracker.example'; do
+  err="$("$SS" "$ul" add-unit loginlink "" "" "" --tier standard --link "$bad" 2>&1 >/dev/null)"; rc=$?
+  check "a refused non-web value does not show its login (${bad%%:*})" "2 yes" "$rc $(case "$err" in *s3cretpw*) echo "$err" ;; *"takes http(s) URLs"*) echo yes ;; *) echo "$err" ;; esac)"
+done
 
 # U1 (adaptive-builder-capacity). Lane: light|normal [(rule: <id>)] on a unit line -> lane / lane_rule on the unit.
 ln="$(tmp)"
@@ -1520,6 +1537,21 @@ check "no temp file is left behind"             "0" "$(find "$AC" -name '*tmp-*'
 check "a missing plan path still records the approval" "yes" "$("$SS" "$af" plan-approved "$AC/missing-plan.md")"
 check "..and writes no copy"                    "no" "$([ -e "$AC/missing-plan.approved.md" ] && echo yes || echo no)"
 rm -rf "$AC"
+
+# U5 (retest1 fixes). register-plan takes only <file> and <plan>: anything after <plan> exits 2 and writes nothing.
+x="$(tmp)"; xp="$(tmp)"; "$SS" "$x" init >/dev/null 2>&1
+printf 'U1 — Extra args — deps: none — Tier: standard\n' > "$xp"
+cp "$x" "$x.before"
+"$SS" "$x" register-plan "$xp" --dry-run >/dev/null 2>"$x.err"; rc=$?
+check "register-plan --dry-run exits 2" "2" "$rc"
+check "..and leaves the state file unchanged" "same" "$(cmp -s "$x" "$x.before" && echo same)"
+check "..names the argument and points at a scratch copy" "1 1" "$(grep -c -- 'extra argument.*--dry-run' "$x.err") $(grep -c 'no dry run.*scratch copy' "$x.err")"
+"$SS" "$x" register-plan "$xp" extra more >/dev/null 2>"$x.err"; rc=$?
+check "register-plan with extra arguments exits 2" "2" "$rc"
+check "..and leaves the state file unchanged" "same" "$(cmp -s "$x" "$x.before" && echo same)"
+check "..names them, with no dry-run hint" "1 0" "$(grep -c 'extra argument.*extra more' "$x.err") $(grep -c 'dry run' "$x.err")"
+"$SS" "$x" register-plan "$xp" >/dev/null 2>&1; rc=$?
+check "register-plan with only <plan> still registers" "0 u1-extra-args" "$rc $("$SS" "$x" get | jq -r '.units[].slug')"
 
 echo "squad-state: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
