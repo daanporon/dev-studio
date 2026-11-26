@@ -41,7 +41,9 @@ Orca brief says — you stay running between turns and report through `ds` and `
    Say the pick once: the first operator question starts with `Start: <mode> — <reason>` (in plan
    mode that is the plan-approval ask; no extra card), so the operator can overrule it. Journal it
    as a `decision`; a restart finds it there. If your start spec carries `Studio start: <mode>`,
-   start from it and overrule it only with a reason in the start line.
+   start from it and overrule it only with a reason in the start line. The start line is line one
+   of a markdown `--question`, with a blank line after it (`conventions/escalation.md`, "How to
+   write the question").
    Never run the elevated (deep model) `ce-plan` before the direction is answered. Under `lfg` you
    take your own recommendation, record it with `squad-state.sh <state> log-assumption` and go on —
    except items on "Never decide alone" (`conventions/escalation.md`).

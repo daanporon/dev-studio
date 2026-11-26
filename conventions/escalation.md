@@ -64,20 +64,43 @@ for the answer:
   questions do not pause that Builder. A hold or wait must be recorded, not left only
   in the Lead's terminal.
 - **How to write the question** (the board lists every question as one row — its title — and
-  opens it in an overlay with numbered option buttons): `--title` is the decision itself in
+  opens it as a card with numbered option buttons): `--title` is the decision itself in
   about 8 words, 80 characters at most ("Let directory readers see multisig wallets?", not "PR3
-  is blocked on…"). `--question` is the 2–3 plain sentences the operator needs to decide — no
-  file dumps, no option list (the options go in `--option`). Give 2–4 `--option "<label>" "<what
-  happens>"`: a short label (it is typed into your terminal as the answer, so no `|`) and one
-  line saying what you will do if it's picked. `--recommend` names one of them (its number or
-  label) and `--why` says why in one line. The old form `"<q>" "<suggestion>" "<why>"` still
-  works but prints a nudge; use the flags.
+  is blocked on…"). `--question` is markdown, which the board renders. Explain it as simply as
+  you can, and give enough context to decide without opening Chat. In this order, with a blank
+  line between blocks (without the blank line, the bold ask lands inside the list):
+  - a `Start: <mode> — <reason>` line, when there is one, as line one;
+  - one plain sentence on what needs deciding and why it matters;
+  - 2–5 bullets of context in everyday words — no file dumps, nothing the operator must look up;
+  - the question itself in bold.
+
+  Write links bare or as `[text](url)`. No option list in the text (the options go in
+  `--option`). Pass several lines with a heredoc:
+
+  ```bash
+  --question "$(cat <<'EOF'
+  The nightly export fails on large accounts, so some customers get no report.
+
+  - It stops after 10 minutes; the biggest accounts need about 25.
+  - A longer limit is a one-line change. Splitting the export takes about a day.
+
+  **Raise the limit now, or split the export?**
+  EOF
+  )"
+  ```
+
+  Give 2–4 `--option "<label>" "<what happens>"`: name each label in 1–3 words, never a single
+  letter or digit (`ask-operator.sh` refuses one: "A" says nothing on the card; a `--picker`
+  mirror keeps the terminal picker's labels). The label is typed into your terminal as the
+  answer, so no `|`. The second part is one line saying what you will do if it's picked.
+  `--recommend` names one of them (its number or label) and `--why` says why in one line. The
+  old form `"<q>" "<suggestion>" "<why>"` still works but prints a nudge; use the flags.
 - **Storing something for later, or anywhere outside this squad** — a held unit, a Linear
   ticket, a GitHub issue, a PR outside the squad: `~/.dev-studio/bin/role/ask-operator.sh <state>
-  <id> <asker> false --title "[follow-up] <what>" --question "<what + why>" --option "file it" "<…>"
+  <id> <asker> false --title "[follow-up] <what>" --question "<markdown: what + why>" --option "file it" "<…>"
   --option "fix it now" "<…>" --option "drop it" "<…>" --recommend <n> --why "<why>"`. Nothing gets recorded or filed before the answer.
 - **A scope change** — growing or cutting what the squad (or a unit) delivers versus the
-  approved plan: `ask-operator.sh … --title "[scope] <change>" --question "<change + why>" --option yes "<…>" --option no "<…>" --recommend <n> --why "<why>"`.
+  approved plan: `ask-operator.sh … --title "[scope] <change>" --question "<markdown: change + why>" --option yes "<…>" --option no "<…>" --recommend <n> --why "<why>"`.
 
 Both are usually **non-blocking** (`false`): ask, then **carry on** with your current work —
 the squad stays `running` and the question waits on the board. When the operator answers, the
@@ -90,7 +113,7 @@ can't continue without the answer (e.g. a scope cut that removes the thing you'r
    `jq -r '.waiting_on_you[]? | "\(.id): \(.question)"' <state>`. If the same decision is
    there, re-ask under **that id** — it replaces the old entry (new text, new blocking), so
    the board shows it once; a new id would show both. Then run
-   `~/.dev-studio/bin/role/ask-operator.sh <state> <id> <asker> true --title "<~8 words>" --question "<2-3 sentences>" --option "<label>" "<what happens>" --option "<label>" "<what happens>" --recommend <n> --why "<one line>"` (status + queue + card-note ping +
+   `~/.dev-studio/bin/role/ask-operator.sh <state> <id> <asker> true --title "<~8 words>" --question "<markdown>" --option "<label>" "<what happens>" --option "<label>" "<what happens>" --recommend <n> --why "<one line>"` (status + queue + card-note ping +
    an `ON BOARD` receipt; add `--doc <path>` to link one `.md` in `state/<label>/squads/` or `archive/` so the board
    offers Open doc — a `plan-*` question links its plan by the id rule or `--doc`, and the plan must carry
    `## In plain words`, see `conventions/plan-shape.md`) and **end the turn** — never `AskUserQuestion` (it holds the turn open so the rewake
@@ -152,7 +175,7 @@ carry on.
 A question that isn't about this squad at all (a cross-topic call, a scope, ownership,
 or policy call) goes to the operator **through the board**, not by message — except for
 technical peer clarification, which has its own path (Peer clarification, below). The Lead runs
-`~/.dev-studio/bin/role/ask-operator.sh <state> <id> <asker> <true|false> --title "[cross-squad] <decision>" --question "<q>" --option … --recommend <n> --why "<why>"`
+`~/.dev-studio/bin/role/ask-operator.sh <state> <id> <asker> <true|false> --title "[cross-squad] <decision>" --question "<markdown>" --option … --recommend <n> --why "<why>"`
 (same receipt-checked path as (c) above). The operator decides at the Studio; the Studio
 sends the decision down with `send <squad-run> answer "msg_id=<id> <answer>"` (and, if it
 concerns another squad, `send <that-squad-run> …` to that squad's Lead), which wakes the

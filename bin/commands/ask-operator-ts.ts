@@ -9,9 +9,9 @@ import { squadContract } from "../lib/contract-roles.ts";
 import { alt, interp, truthy } from "./watch-ts";
 import { LABEL_FORM, PLAIN_HEADING, PLAIN_LABELS, REVISION_LABELS, approvedCopyPath, planRevisions, plainSection } from "../lib/plan-plain";
 
-export const help = `<state-file> <id> <asker> <true|false> --title "<~8 words>" --question "<q>" --option "<label>" "<what happens>" … --recommend <n|label> --why "<why>" [--unit <slug>] [--pr <n>] [--doc <path>] — raise a question to the operator (ask-operator.sh)`;
+export const help = `<state-file> <id> <asker> <true|false> --title "<~8 words>" --question "<markdown>" --option "<label>" "<what happens>" … --recommend <n|label> --why "<why>" [--unit <slug>] [--pr <n>] [--doc <path>] — raise a question to the operator (ask-operator.sh)`;
 
-const USAGE = 'usage: ask-operator.sh <state-file> <id> <asker> <true|false> --title "<~8 words>" --question "<q>" --option "<label>" "<what happens>" --option … --recommend <n|label> --why "<why>" [--unit <slug>] [--pr <n>] [--doc <path>] [--picker <tool_use_id> <transcript_path> <true|false>]';
+const USAGE = 'usage: ask-operator.sh <state-file> <id> <asker> <true|false> --title "<~8 words>" --question "<markdown>" --option "<label>" "<what happens>" --option … --recommend <n|label> --why "<why>" [--unit <slug>] [--pr <n>] [--doc <path>] [--picker <tool_use_id> <transcript_path> <true|false>]';
 
 const arr = (v: any): any[] => (Array.isArray(v) ? v : []);
 const isLeadOrBuilder = (a: string): boolean => a === "lead" || a === "builder" || a.startsWith("builder-");
@@ -82,6 +82,9 @@ async function main(argv: string[]): Promise<number> {
     if (!(TITLE !== "" && codepoints(TITLE) <= 80)) bad("--title is required, 80 characters at most (it is the board's one-line row)");
     if (!Q) bad("--question is required");
     if (labels.length < 2) bad("give at least 2 --option");
+    // A mirrored picker keeps its own labels: the board's answer is pressed as that label, and a refusal would bury the question.
+    const bare = PICKER_TID ? undefined : labels.find((l) => /^[\p{L}\p{N}]$/u.test(l.trim()));
+    if (bare !== undefined) bad(`name the option: \`${bare}\` says nothing on the card — use 1–3 words`);
     if (!WHY) bad("--why is required");
     if (/^[0-9]+$/.test(REC)) {
       const n = Number(REC);
@@ -89,6 +92,7 @@ async function main(argv: string[]): Promise<number> {
     } else for (const l of labels) if (l === REC) SUG = l;
     if (!SUG) bad(`--recommend must name one of the options (1-${labels.length} or its label)`);
     OPTS = labels.join("|");
+    if (codepoints(Q) > 300 && !Q.includes("\n")) writeErr("ask-operator: write it as markdown: a plain lead, bullets, the ask last (conventions/escalation.md)\n");
   } else {
     if (!((rest.length === 3 || rest.length === 4) && rest[1] !== "" && rest[2] !== "")) bad("suggestion and why are required");
     [Q, SUG, WHY] = rest; OPTS = rest[3] ?? "";

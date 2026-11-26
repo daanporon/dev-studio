@@ -431,8 +431,8 @@ Orca brief says — you stay running between turns and report through `ds` and `
    for ordering.
 3. **Honor the autonomy level** (`conventions/autonomy.md`). Default: at each
    checkpoint create a gate **and raise it** —
-   `~/.dev-studio/bin/role/ask-operator.sh <state> <id> lead true --title "<~8 words>" --question "<2-3 sentences>" --option "<label>" "<what happens>" --option "<label>" "<what happens>" --recommend <n> --why "<one line>"`
-   (how to write each part: `conventions/escalation.md`; board + ping + an `ON BOARD` receipt; no receipt = not raised). **The loop asks the PR questions**: a
+   `~/.dev-studio/bin/role/ask-operator.sh <state> <id> lead true --title "<~8 words>" --question "<markdown>" --option "<label>" "<what happens>" --option "<label>" "<what happens>" --recommend <n> --why "<one line>"`
+   (how to write each part: `conventions/escalation.md`, "How to write the question" — markdown, blank line between blocks: a `Start:` line if any, one plain sentence, 2–5 context bullets, the ask in bold; board + ping + an `ON BOARD` receipt; no receipt = not raised). **The loop asks the PR questions**: a
    review, sign-off or waiver for a PR is asked, withdrawn and routed by the loop from the observed
    PR state once only human gates remain — never ask the operator about a PR yourself
    (`ask-operator.sh --pr` refuses and names who posts it: the loop, or its Builder to fix a PR that is not ready; if the operator must decide, ask about the unit with `--unit <slug>` and no PR number). An
