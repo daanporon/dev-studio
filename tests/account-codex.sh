@@ -21,7 +21,7 @@ bun="$(command -v bun 2>/dev/null || true)"; [ -n "$bun" ] || bun="$HOME/.bun/bi
 
 TMP="$(mktemp -d)"
 driver=""
-trap '[ -z "$driver" ] || kill "$driver" 2>/dev/null || true; rm -rf "$TMP"' EXIT
+state_root_on_exit '[ -z "$driver" ] || kill "$driver" 2>/dev/null || true; rm -rf "$TMP"'
 export HOME="$TMP/home" FAKE_DIR="$TMP" CODEX_LOG="$TMP/codex.log" ORCA_LOG="$TMP/orca.log"
 export DS_ORCA_DATA="$TMP/orcadata" DS_CLAUDE_HOME="$TMP/home/.claude" DS_USAGE_CACHE="$TMP/usage"
 export DS_PROC="$TMP/proc"
@@ -86,10 +86,10 @@ const f = accountAdd({ refresh: () => {}, terminals: {
 const act = new LoopActuator({ orca: new FakeBackend(), fulfillers: [f] });
 const loop = new Loop(s, { observers: [], reconcilers: [f] }, act, { projects: () => ["fx"] });
 loop.boot(now());
-for (let i = 0; i < 600; i++) {
+for (;;) {                                  // until the test kills it
   s.db.run("INSERT INTO health (id, pid, started_at, tick_at, progress_at) VALUES (1, 1, ?1, ?1, ?1) ON CONFLICT(id) DO UPDATE SET tick_at = ?1, progress_at = ?1", [now()]);
   s.db.run("INSERT OR IGNORE INTO projects (label, studio_wt, observed_at) VALUES ('fx', 'wt-fx', ?1)", [now()]);
-  s.db.run("INSERT OR IGNORE INTO members (project, squad, role, suffix, handle, observed_at, updated_at) VALUES ('fx', '_studio', 'studio', '', 'term-fx', ?1, ?1)", [now()]);
+  s.db.run("INSERT OR IGNORE INTO members (project, squad, role, suffix, handle, observed_at, updated_at) SELECT 'fx', '_studio', 'studio', '', 'term-fx', ?1, ?1 WHERE NOT EXISTS (SELECT 1 FROM members)", [now()]);
   await loop.tick(now()); await act.drain();
   await Bun.sleep(100);
 }
@@ -97,7 +97,7 @@ TS
 "$bun" "$TMP/driver.ts" > "$TMP/driver.log" 2>&1 & driver=$!
 sql() { "$bun" -e 'const { Database } = require("bun:sqlite"); const d = new Database(process.argv[1], { readonly: true });
   const r = d.query(process.argv[2]).all(); if (r.length) console.log(r.map((x) => Object.values(x).join("|")).join("\n"))' "$S/loop.db" "$1"; }
-for _ in $(seq 100); do [ "$(sql "SELECT COUNT(*) FROM members" 2>/dev/null || echo 0)" = 1 ] && break; sleep 0.1; done
+for _ in $(seq 100); do [ "$(sql "SELECT COUNT(*) FROM members" 2>/dev/null || echo 0)" -ge 1 ] && break; sleep 0.1; done
 
 FOLDER="$S/accounts/codex/work"
 ( rc=0; OPENAI_API_KEY=made-up-key "$ROOT/bin/ds" account add work --agent codex > "$TMP/add.out" 2>&1 || rc=$?; echo "$rc" > "$TMP/add.rc" ) & adding=$!
