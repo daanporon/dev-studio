@@ -202,6 +202,23 @@ describe("settings module", () => {
     expect(historyOf(s, P)).toEqual([]);
   });
 
+  test("limits.conf ticket_url: an http(s) URL holding {id}, or -; other keys still refuse slashes", () => {
+    const { s, o } = fixture();
+    for (const ok of ["https://linear.app/acme/issue/{id}", "http://tracker.example:8080/?a=1&key={id}", "https://tracker.example/#/issue/{id}", "-"]) {
+      set(s, P, "limits.conf", "ticket_url", ok, "ds", o);
+      expect(row(s, "limits.conf", "ticket_url")).toBe(ok);
+      const text = exportSections(exportText(s, P))["limits.conf"]!;
+      const file = join(tmp(), "limits.conf");
+      writeFileSync(file, text);
+      expect(confRows(P, "limits.conf", file).map((r) => r.set.value)).toEqual([ok]);
+    }
+    for (const bad of ["https://tracker.example/issue/", "{id}", "tracker.example/{id}", "ftp://tracker.example/{id}", "javascript:alert({id})", "https:///{id}",
+      "https://tracker.example/{id} x", "https://tracker.example/{id}\"x", "https://tracker.example/{id}'", "https://tracker.example/{id}$(x)", "https://tracker.example/{id}<b>",
+      "https://tracker.example/{other}/{id}", "https://user:pw@tracker.example/{id}", `https://tracker.example/${"a".repeat(500)}/{id}`, ""])
+      refused(() => set(s, P, "limits.conf", "ticket_url", bad, "ds", o), /ticket_url must be an http\(s\) URL holding \{id\}/);
+    refused(() => set(s, P, "limits.conf", "auto_merge", "https://tracker.example/{id}", "ds", o), /bad value/);
+  });
+
   test("export -> confRows reads back the same rows, comments too; the backup file is rewritten on each change", () => {
     const { s, o } = fixture();
     set(s, P, "limits.conf", "auto_merge", "squash", "ds", o);

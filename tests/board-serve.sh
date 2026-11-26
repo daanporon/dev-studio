@@ -456,6 +456,12 @@ eq "limits: risk globs accepted" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LB
 ff
 eq "limits: loop writes risk globs" "$(lim review_risk_paths)" 'contracts/*.sol,src/auth/* override'
 eq "limits: risk empty element refused" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"review_risk_paths\",\"value\":\"a,,b\"}" "$LU")" "400"
+jt "limits: ticket_url uses a text input" "$TMP/lim.json" '.limits[] | select(.key=="ticket_url") | (.hint|contains("{id}")) and .value=="-" and .group=="Board & machine"'
+eq "limits: a ticket address is accepted" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"ticket_url\",\"value\":\"https://tracker.example/issue/{id}\"}" "$LU")" "202"
+ff
+eq "limits: loop writes the ticket address" "$(lim ticket_url)" 'https://tracker.example/issue/{id} override'
+eq "limits: a ticket address without {id} is 400" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"ticket_url\",\"value\":\"https://tracker.example/issue/\"}" "$LU")" "400"
+has "limits: ... says why" "$(cat "$TMP/post.out")" "holding {id}"
 jt "limits: skipped lenses use text input" "$TMP/lim.json" '.limits[] | select(.key=="review_skip_lenses") | .list==true and .value=="-"'
 eq "limits: skipped lenses accepted" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"review_skip_lenses\",\"value\":\"security,learnings\"}" "$LU")" "202"
 ff
