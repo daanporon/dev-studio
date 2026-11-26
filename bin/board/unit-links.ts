@@ -1,5 +1,5 @@
-// unit-info-link U2: a unit's links as the board shows them. The unit doc carries `links: string[]`; only http(s)
-// values reach the page (defence in depth: register-plan checks them too).
+// unit-info-link U2: a unit's http(s) links and their short labels, as the board shows them.
+// The unit doc carries `links: string[]`; anything else never reaches the page (defence in depth: register-plan checks them too).
 export type UnitLink = { url: string; label: string };
 
 const KEY = /\/(?:issue|browse)\/([A-Za-z][A-Za-z0-9_]*-[0-9]+)(?:\/|$)/; // Linear /issue/<ID>, Jira /browse/<KEY>
