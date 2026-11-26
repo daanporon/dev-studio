@@ -18,6 +18,7 @@ import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pr
 import { basename, dirname, join, resolve } from "node:path";
 import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
+import { unitLinks } from "./unit-links.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { debriefTopic } from "./card-place.ts";
 import { placeAlert, questionsCount, shownStatus, doneWaits, shortTitle, prNumber } from "./needs-rules.ts";
@@ -120,6 +121,19 @@ const unlockFacts = (store: Store, label: string, squad: string, slug: string, s
 
 // The shell's '…' quoting, for commands the operator copies (an agent-written id/topic can't inject).
 const shq = (v: unknown) => (typeof v === "string" ? `'${v.replace(/'/g, `'\\''`)}'` : String(v));
+
+// progress-legend-colors U1: started, but nobody is on it (the bar's `stopped` segment; web/board.html's STOPPED).
+const STOPPED_STATES = ["paused", "pausing", "resuming", "suspended", "gone"];
+
+// Parked work waits on the operator: a not-started unit that is held or whose plan is not approved (`held`), and
+// the not-started units that wait on one, directly or through other units (`behind`). A started unit is never
+// parked; an external dep passes nothing on.
+export function parkedUnits(units: any[], roots: Set<string>, notStarted: Set<string>): Map<string, "held" | "behind"> {
+  const out = new Map<string, "held" | "behind">();
+  for (const r of roots) for (const d of openDependents(units, r)) if (notStarted.has(d)) out.set(d, "behind");
+  for (const r of roots) out.set(r, "held");
+  return out;
+}
 
 // Minutes since an ISO "YYYY-MM-DDTHH:MM:SS[.fff]Z" time; null when it isn't one.
 // The open (not done, not cancelled) units that depend on `slug`, directly or through other units, in plan order.
@@ -1357,6 +1371,14 @@ function headerSummary(db: Db | null, label: string, squads: any[], needs: any[]
   const units = active.flatMap((s) => arr(s.units));
   const open = units.filter((u: any) => u.state !== "done" && u.state !== "cancelled");
   const ready = open.filter((u: any) => u.state === "ready").length;
+  // The Units left detail without a Flow, from the units the tile counts; a unit blocked on live work is not named.
+  const left = { units_working: 0, units_ready: 0, units_parked: 0, units_stopped: 0 };
+  for (const u of open as any[]) {
+    if (u.parked) left.units_parked++;
+    else if (STOPPED_STATES.includes(u.state)) left.units_stopped++;
+    else if (u.state === "ready") left.units_ready++;
+    else if (u.state !== "blocked") left.units_working++;
+  }
   const prs = squads.flatMap((s) => arr(s.prs)).filter((p: any) => p.status !== "merged" && p.status !== "closed");
   const maxB = db ? dsLimit(db, label, "max_builders") : null;
   const working = active.flatMap((s) => arr(s.members)).filter((m: any) => m.role === "builder" && m.state === "working").length;
@@ -1405,7 +1427,7 @@ function headerSummary(db: Db | null, label: string, squads: any[], needs: any[]
     needs: needs.length, blocking: needs.filter((n) => n.kind === "blocking").length,
     quiet: squads.filter((s) => s.lead && s.lead.silent).length,
     builders_working: working, builders_of: maxB ?? ready, builders_of_kind: maxB != null ? "max" : "ready",
-    units_left: open.length, squads_active: active.filter((s) => arr(s.units).some((u: any) => u.state !== "done" && u.state !== "cancelled")).length, ready_units: ready,
+    units_left: open.length, squads_active: active.filter((s) => arr(s.units).some((u: any) => u.state !== "done" && u.state !== "cancelled")).length, ready_units: ready, ...left,
     prs_open: prs.length, ci_running: prs.filter((p: any) => p.status === "running").length,
     ci_failing: prs.filter((p: any) => p.status === "failing").length, drafts: prs.filter((p: any) => p.status === "draft").length,
     tick_age_s: loop?.age_s ?? null,
@@ -1732,6 +1754,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
   const displayNote = retest ? `Retest due: ${retest.units.map((x) => (x.pr ? `${x.slug} #${x.pr}` : x.slug)).join(", ")} merged since the last test pass; the last one ${ago(retest.lastAt)} ago.` : null;
   const picks = builderPicks(db, label), repo = slug;
   const flowUnits: (FlowUnit & { order: number })[] = [];
+  const parkRoots = new Set<string>(), notStarted = new Set<string>();
   const exposed = exposedFor(db, label, topic, st);
   const out = {
     limits: { context_warn: dsLimit(db, label, "context_warn") ?? 100000, context_compact: dsLimit(db, label, "context_compact") ?? 150000 },
@@ -1827,13 +1850,25 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
       // A dep-ready planned unit whose plan the operator has not approved reads `ready, plan not
       // approved` (the loop's ready_unapproved event is the alert) instead of plain planned.
       const planBlocked = us === "planned" && depReady && !approvedPlans(db.s.root, st.approved_plans, x?.plan ?? null);
+      const state = us === "done" ? "done"
+        : us === "cancelled" ? "cancelled"
+        : !inactive && bm?.pause && bm.pause.state !== "active" ? bm.pause.state
+        : waitTitle ? "waiting"
+        : heldPlanned ? "held"
+        : us === "planned" ? (depReady ? "ready" : "blocked")
+        : us === "dispatched" ? unitPhase(wst(x.builder_wt), pr?.status, pr != null, h, !!x?.builder_wt)
+        : us;
+      if (us === "planned" && !STOPPED_STATES.includes(state)) {
+        notStarted.add(String(slug));
+        if (x.hold || !approvedPlans(db.s.root, st.approved_plans, x?.plan ?? null)) parkRoots.add(String(slug));
+      }
       if (us !== "done" && us !== "cancelled") {
         // The Flow's view of this open unit (bin/board/flow.ts): what it needs beyond the rows above.
         const ask = waiting ?? (pr ? unitWaits.find((e) => e.pr != null && e.pr !== false && String(e.pr) !== "" && prNumber(e.pr) === pr.num) ?? null : null);
         const askAt = ask ? Date.parse(String(ask.since ?? "")) : NaN;
         const b = wst(x?.builder_wt);
         flowUnits.push({
-          project: label, squad: topic, slug, tier: tier || null, tier_key: x?.tier ? String(x.tier) : null, status: us, order: ukey(slug),
+          project: label, squad: topic, slug, stopped: STOPPED_STATES.includes(state), tier: tier || null, tier_key: x?.tier ? String(x.tier) : null, status: us, order: ukey(slug),
           active_at: activeAt(db, label, topic, slug, x?.builder_wt, b === "working", reasons, pr?.status, pr ? null : promptOf(db, label, topic).bySlug.get(slug) ?? null),
           hold: !!x?.hold, hold_reason: x?.hold_reason ?? null, plan_blocked: planBlocked,
           // `resuming` is a member waiting for a seat, not a pause (it queues like any unit)
@@ -1857,22 +1892,17 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
         waiting_on: waiting ? { id: waiting.id, title: waitTitle } : null,
         wait_until: null, wait_label: waitTitle ? `waiting · ${waitTitle}` : heldPlanned ? (x.hold_reason ? `held · ${x.hold_reason}` : "held") : planBlocked ? "ready, plan not approved" : null,
         reasons,
-        state: us === "done" ? "done"
-          : us === "cancelled" ? "cancelled"
-          : !inactive && bm?.pause && bm.pause.state !== "active" ? bm.pause.state
-          : waitTitle ? "waiting"
-          : heldPlanned ? "held"
-          : us === "planned" ? (depReady ? "ready" : "blocked")
-          : us === "dispatched" ? unitPhase(wst(x.builder_wt), pr?.status, pr != null, h, !!x?.builder_wt)
-          : us,
+        state,
         blocked_by: us === "planned" ? deps.filter((d) => !satisfied(d, slug)).map(blockedNote) : [],
         superseded_by: x?.superseded_by ?? null, into_merged: x?.into_merged ?? null, cancel_reason: x?.cancel_reason ?? null,
         // U5: what the ⋯ menu needs. `held` is the unit's own hold (Release shows for it only); `dependents` are
         // the open units that depend on it, directly or through others (the Cancel confirm lists them).
         held: !!x?.hold && us !== "done" && us !== "cancelled",
         dependents: openDependents(u, slug),
+        parked: null as "held" | "behind" | null,
         // U6: what the details overlay shows. The text comes from the plan's unit block (register-plan) or add-unit --about.
         title: x?.title ?? null, about: x?.about ?? null, done_text: x?.done ?? null, check_text: x?.check ?? null,
+        links: unitLinks(x?.links),
         plan: x?.plan ? String(x.plan) : null, plan_unit: x?.plan_unit ?? null,
         // When the loop marked the unit done on its PR's merge (units.done_at); the window's `merged <age>`.
         done_at: us === "done" ? ((db.s.get("units", { project: label, squad: topic, slug }) as any)?.done_at ?? null) : null,
@@ -1913,6 +1943,10 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
     // files, why it was kept, what it waits on. The sweep removes them when provably safe.
     leftovers: leftoverRows(db, label, st.leftovers, st.units),
   };
+  // progress-legend-colors U1: computed once here; the page's bar and tile and the Flow cards all read it.
+  const parked = parkedUnits(u, parkRoots, notStarted);
+  for (const x of out.units) x.parked = parked.get(String(x.slug)) ?? null;
+  for (const f of flowUnits) f.parked = parked.get(String(f.slug)) ?? null;
   flowUnitsOf.set(out, flowUnits.sort((a, b) => a.order - b.order).map(({ order, ...f }) => f));
   return out;
 }
