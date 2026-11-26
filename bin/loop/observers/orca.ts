@@ -390,14 +390,13 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
       const subs = read ? subAgents(ps, read) : null;
 
       const tails: string[] = [];
-      // A member with a board chat queued (fulfil/chat.ts) is re-read like the Studio below: once its
-      // output moved past the last read and rested STUDIO_SETTLE_S, so memberReady() sees the prompt it settled on.
-      const chatting = new Set((store.db.query("SELECT DISTINCT member FROM requests WHERE project = ? AND kind = 'chat' AND done_at IS NULL AND member IS NOT NULL").all(project) as Row[]).map((r) => String(r.member)));
       // U19: a member the board pressed keys at within KEYS_STALE_S, or one whose chat panel shows its screen
       // (observed_chat source 'screen'), is re-read once its output moved past the last read, at most every SCREEN_EVERY_S,
-      // so the panel's screen view follows a menu as it changes.
+      // so the panel's screen view follows a menu as it changes. So is one whose permission menu is being timed or
+      // carded (episodes permission-screen): an answered one must leave the tail while its command still prints.
       const watched = new Set((store.db.query(`SELECT member AS wt FROM requests WHERE project = ? AND kind = 'keys' AND member IS NOT NULL AND created_at >= ?
-        UNION SELECT wt FROM observed_chat WHERE project = ? AND source = 'screen' AND gone_at IS NULL`).all(project, now - KEYS_STALE_S, project) as Row[]).map((r) => String(r.wt)));
+        UNION SELECT wt FROM observed_chat WHERE project = ? AND source = 'screen' AND gone_at IS NULL
+        UNION SELECT subject FROM episodes WHERE project = ? AND kind = 'permission-screen'`).all(project, now - KEYS_STALE_S, project, project) as Row[]).map((r) => String(r.wt)));
       store.tx(() => {
         for (const w of mine) {
           const path = pathOf(w), d = byWt.get(w.worktreeId), state = workerState(w);
@@ -411,7 +410,9 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
           const prev = store.get("observed_workers", { project, wt: w.worktreeId });
           const out = secs(w.lastOutputAt) ?? 0;
           if (!prev || prev.tail_at == null || prev.gone_at != null || prev.state !== state || prev.tokens !== tokens || prev.suspect
-            || (chatting.has(w.worktreeId) && out >= Number(prev.tail_at) && now - out >= STUDIO_SETTLE_S)
+            // Output moved past the last read and then rested STUDIO_SETTLE_S: the screen it settled on. A board
+            // chat needs it for memberReady(), and a permission prompt can come with no state or token change.
+            || (out >= Number(prev.tail_at) && now - out >= STUDIO_SETTLE_S)
             || (watched.has(w.worktreeId) && out > Number(prev.tail_at) && now - Number(prev.tail_at) >= SCREEN_EVERY_S)) tails.push(w.worktreeId);
           // The main agent (U149) and its sub-agents refresh on the walk's cadence and are kept when a
           // read fails; sub_agents is NULL once none are live, so a sub line never overwrites `account`.

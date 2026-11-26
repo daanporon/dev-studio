@@ -2834,8 +2834,8 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
         ${acts.some((a) => a.key === "show") && html`<button class="btn qsec" onClick=${() => { onClose(); onShow(n.label, n.card_squad || n.squad); }}>Show squad</button>`}
         ${openAct && html`<button class="btn qsec" data-ev="open-debrief" onClick=${() => onDebrief(n)}>Open debrief</button>`}
         ${acts.some((a) => a.key === "act") && html`<${ActBtn} n=${n} toast=${toast} />`}
-        ${n.squad !== "_studio" && n.chat_wt && html`<button class="btn chat-btn" title="Read this member's recent turns and type it one line"
-          onClick=${() => setChat({ project: n.label, topic: n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead" })}>Chat with ${n.chat_label || "the Lead"}</button>`}
+        ${(n.squad !== "_studio" && n.chat_wt || n.card_squad && n.chat_wt) && html`<button class="btn chat-btn" title="Read this member's recent turns and type it one line"
+          onClick=${() => setChat({ project: n.label, topic: n.card_squad || n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead" })}>Chat with ${n.chat_label || "the Lead"}</button>`}
         <span class="sp"></span>
         ${st.err && html`<span class="err">not sent: ${st.err}</span>`}
         ${sent && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
