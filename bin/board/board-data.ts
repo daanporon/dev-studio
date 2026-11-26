@@ -542,20 +542,27 @@ function revisionOf(db: Db, label: string, path: string, markdown: string, units
 
 // R6: the document a question links, from the documents rows: its `doc_path` (relative to the state root, as the
 // rows are keyed), else for a `plan-<short>` id the plan `<topic>-<short>-plan.md` beside the squad's state.
+function docPath(label: string, topic: string, x: any): string {
+  const id = String(x?.id ?? "");
+  return typeof x?.doc_path === "string" && x.doc_path ? x.doc_path : id.startsWith("plan-") && id.length > 5 ? `${label}/squads/${topic}-${id.slice(5)}-plan.md` : "";
+}
+function linkedDoc(db: Db, label: string, topic: string, x: any): { name: string; markdown: string } | null {
+  try {
+    const path = docPath(label, topic, x);
+    if (!path) return null;
+    const row = db.one("SELECT body FROM documents WHERE project = ? AND path = ?", label, path);
+    return row ? { name: basename(path), markdown: String(row.body ?? "") } : null;
+  } catch { return null; }
+}
 // `plain`, `plain_from` and `facts` are for plan-* questions only; each is null when it cannot be made, never an error.
 function questionDoc(db: Db, label: string, topic: string, x: any, units: any[] = []) {
   const none = { doc: null, plain: null, plain_from: null, facts: null, revision: null, changes: null };
   try {
-    const id = String(x?.id ?? "");
-    const isPlan = id.startsWith("plan-");
-    const path = typeof x?.doc_path === "string" && x.doc_path ? x.doc_path : isPlan && id.length > 5 ? `${label}/squads/${topic}-${id.slice(5)}-plan.md` : "";
-    if (!path) return none;
-    const row = db.one("SELECT body FROM documents WHERE project = ? AND path = ?", label, path);
-    if (!row) return none;
-    const markdown = String(row.body ?? "");
-    const doc = { name: basename(path), markdown };
-    if (!isPlan) return { ...none, doc };
-    return { doc, ...planPlain(markdown), facts: planUnitFacts(markdown), ...revisionOf(db, label, path, markdown, units) };
+    const doc = linkedDoc(db, label, topic, x);
+    if (!doc) return none;
+    if (!String(x?.id ?? "").startsWith("plan-")) return { ...none, doc };
+    const markdown = doc.markdown;
+    return { doc, ...planPlain(markdown), facts: planUnitFacts(markdown), ...revisionOf(db, label, docPath(label, topic, x), markdown, units) };
   } catch { return none; }
 }
 
@@ -3228,12 +3235,16 @@ function chatQuestionsAll(db: Db, project: string, topic: string) {
   try { st = squadDoc(db.s, project, topic); } catch { return []; }
   if (!st || typeof st !== "object") return [];
   const leadWt = arr(st.members).find((m: any) => m?.role === "lead")?.wt ?? null;
+  const slug = repoSlug(db, project, String(st.repo ?? "")) || null;
   return arr(st.waiting_on_you).map((x: any) => ({
       wt: (typeof x.card_wt === "string" && x.card_wt) || (typeof st.lead_wt === "string" && st.lead_wt) || leadWt || null,
       id: x.id ?? null, title: String(x.title ?? shortTitle(String(x.question ?? ""), x.id ?? null)), question: redact(String(x.question ?? "")),
       choices: (arr(x.choices).length ? arr(x.choices) : (arr(x.options).length ? arr(x.options) : x.suggestion ? [x.suggestion] : []).map((l: any) => ({ label: String(l), does: null })))
         .map((c: any) => ({ label: redact(String(c?.label ?? "")), does: c?.does ? redact(String(c.does)) : null })),
       since: x.since ?? null, blocking: x.blocking === true, source: x.source ?? null, answerable: !(x.source === "picker" && x.picker_answerable !== true),
+      // The suggestion is redacted as the labels are, so the Question view can match it to its option.
+      suggestion: x.suggestion == null ? null : redact(String(x.suggestion)), why: x.why == null ? null : redact(String(x.why)),
+      repo_slug: slug, doc: linkedDoc(db, project, topic, x),
     })).sort((a: any, b: any) => (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1) || String(a.since ?? "").localeCompare(String(b.since ?? "")));
 }
 function chatQuestions(db: Db, project: string, topic: string, wt: string) {

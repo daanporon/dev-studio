@@ -231,7 +231,7 @@ eq "unit details: Escape and the backdrop close it" "$(printf '%s' "$ud_fn" | gr
 ub_fn=$(sed -n '/^function UnitsBox(/,/^}/p' "$ROOT/web/board.html")
 eq "unit details: a row click opens it, a button, link or the menu does not" "$(printf '%s' "$ub_fn" | grep -cF 'e.target.closest("a,button,.acts")')" "1"
 eq "unit details: the slug is a keyboard-reachable button, and the menu has Details" "$(printf '%s' "$ub_fn" | grep -cF 'class="unit-open"')$(sed -n '/^function UnitActions(/,/^}/p' "$ROOT/web/board.html" | grep -cF 'unit-details')" "11"
-eq "unit details: both callers pass onPlan" "$(grep -cF 'onPlan=${setPlan} onClose=${() => setFlowUnit(null)}' "$ROOT/web/board.html")$(grep -cF 'onShow=${showCrewRow} onPlan=${onPlan}' "$ROOT/web/board.html")" "11"
+eq "unit details: both callers pass onPlan" "$(grep -cF 'onPlan=${setPlan} planOpen=${!!plan} onClose=${() => setFlowUnit(null)}' "$ROOT/web/board.html")$(grep -cF 'onShow=${showCrewRow} onPlan=${onPlan}' "$ROOT/web/board.html")" "11"
 rm -rf "$DS_STATE_ROOT/zzdet_$$"
 
 # ext_deps: a unit waiting on another squad's unit (resolved from sibling states + archive).
@@ -770,7 +770,7 @@ eq "U2 page: the question text and Why fold under Details for the record" "$(pri
 eq "U2 page: no plain summary keeps today's question text" "$(printf '%s' "$ask_fn" | grep -cF '${!n.plain && n.text !== n.title')" "1"
 eq "U2 page: the button reads Open plan on plan-* and Open doc otherwise" "$(grep -cF '/^plan-/.test(n.id || "") ? "Open plan" : "Open doc"' "$BP")" "1"
 eq "U2 page: the Needs-you row gets the doc button and the What you get detail line" "$(grep -cF 'if (n.doc) out.push({ key: "open-doc"' "$BP")$(grep -cF 'l.label === "What you get"' "$BP")" "11"
-eq "U2 page: while a plan is open the overlay ignores every key" "$(printf '%s' "$ask_fn" | grep -c 'if (planOpen || chat) return;')$(grep -cF 'planOpen=${!!plan}' "$BP")" "11"
+eq "U2 page: while a plan is open the overlay ignores every key" "$(printf '%s' "$ask_fn" | grep -c 'if (planOpen || chat) return;')$(grep -cF 'toast=${setToast} onPlan=${setPlan} planOpen=${!!plan}' "$BP")" "11"
 eq "U2 page: the plan modal is rendered after the overlay so it paints on top" "$(awk '/<\$\{AskOverlay\}/{a=NR} /\$\{plan && html`<div class="modal"/{p=NR} END{print (a && p > a) ? "after" : "before"}' "$BP")" "after"
 
 # crew-terminal-access U3: the chat panel opens from a crew row and from a question card.

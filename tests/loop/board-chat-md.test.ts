@@ -12,7 +12,7 @@ import { mount } from "./board-mount";
 const root = join(import.meta.dir, "../..");
 const page = readFileSync(join(root, "web/board.html"), "utf8");
 const cut = (name: string) => { const i = page.indexOf(`function ${name}(`); return page.slice(i, page.indexOf("\n}\n", i) + 2); };
-const mdToHtml: (src: string, soft?: boolean) => string = new Function(`${cut("esc")} ${cut("mdToHtml")} return mdToHtml;`)();
+const mdToHtml: (src: string, soft?: boolean) => string = new Function(`${cut("esc")} ${cut("urlTail")} ${cut("mdToHtml")} return mdToHtml;`)();
 
 const A = (href: string, text: string) => `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 const p = (s: string) => `<p>${s}</p>`;
