@@ -12,6 +12,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { JOIN_MAX_BYTES } from "./host-keys.ts";
+import type { Store } from "../loop/core/store.ts";
 
 export const LINK_VERSION = "1";
 export const MAX_FRAME_BYTES = 4 * 1024 * 1024;
@@ -39,8 +40,8 @@ export function parseFrame(raw: string | Buffer | ArrayBuffer | Uint8Array, max:
 
 // ---------------------------------------------------------------- channels (KTD3)
 
-/** What a channel handler gets: the host at the other end of the link, and the end it runs on. */
-export type ChannelCtx = { host: string; end: "main" | "side"; root: string };
+/** What a channel handler gets: the host at the other end of the link, the end it runs on, and that end's store when it has one open. */
+export type ChannelCtx = { host: string; end: "main" | "side"; root: string; store?: Store };
 export type Channel = {
   name: string;
   /** The end(s) that answer this channel; the other end only sends on it. */

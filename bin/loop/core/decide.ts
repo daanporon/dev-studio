@@ -238,7 +238,7 @@ function clearSignal(store: Store, m: Row): string | null {
   if (m.agent === "codex") {
     const cwd = wtDir(wt);
     if (!cwd) return null;
-    return (store.db.query(`SELECT path FROM observed_rollouts WHERE cwd = ?
+    return (store.db.query(`SELECT path FROM observed_rollouts WHERE cwd = ? AND host = 'local'
       AND COALESCE(originator, '') NOT IN (SELECT value FROM json_each(?)) ORDER BY mtime DESC LIMIT 1`)
       .get(cwd, JSON.stringify([...HEADLESS])) as { path: string } | null)?.path ?? null;
   }

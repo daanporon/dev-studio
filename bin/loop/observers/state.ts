@@ -253,7 +253,8 @@ export function stateObserver(opts: StateOpts = {}): Observer {
   // Each member's own transcript; one that did not move keeps its last model unread.
   function transcripts(store: Store, at: number, project: string) {
     const dir = opts.tokenDir ?? process.env.DS_TOKEN_DIR ?? join(process.env.HOME || "", ".claude", "projects");
-    const members = store.db.query("SELECT wt FROM members WHERE project = ? AND wt IS NOT NULL AND COALESCE(status, '') != 'gone'").all(project) as { wt: string }[];
+    // side-loop-host U6: a side host's members' transcripts come up the link (host != local); this reads main's own.
+    const members = store.db.query("SELECT wt FROM members WHERE project = ? AND wt IS NOT NULL AND COALESCE(status, '') != 'gone' AND COALESCE(host, '') NOT IN (SELECT name FROM hosts)").all(project) as { wt: string }[];
     const rows: FactRow[] = [];
     for (const { wt } of members) {
       const t = memberTranscript(join(dir, mangle(pathOf(wt))), store);
@@ -267,7 +268,7 @@ export function stateObserver(opts: StateOpts = {}): Observer {
       rows.push({ table: "observed_transcripts", key: { path: t.path }, set: { project, wt, mtime: t.mtime, size: t.size, last_model: last?.model ?? null,
         model_at: last?.at ?? null, last_effort: effort, entrypoint: t.entrypoint, observed_at: at } });
     }
-    store.tx(() => replace(store, rows, at, [["observed_transcripts", { project }]]));
+    store.tx(() => replace(store, rows, at, [["observed_transcripts", { project, host: "local" }]]));
   }
 
   // Beats move every few seconds, so no gate: one readdir + stat per squad each tick. A beat file

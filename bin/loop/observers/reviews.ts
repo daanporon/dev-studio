@@ -84,7 +84,8 @@ export function reviewsObserver(proc = "/proc"): Observer {
     scope: "host",
     every: envInt("DS_LOOP_REVIEWS_S", 30),
     run({ store, now }) {
-      const units = store.db.query("SELECT project, squad, slug, builder_wt FROM units WHERE status = 'dispatched' AND COALESCE(builder_wt, '') != ''").all() as Unit[];
+      const units = store.db.query(`SELECT project, squad, slug, builder_wt FROM units WHERE status = 'dispatched' AND COALESCE(builder_wt, '') != ''
+        AND builder_wt NOT IN (SELECT wt FROM members WHERE wt IS NOT NULL AND host IN (SELECT name FROM hosts))`).all() as Unit[];
       const alerts = stoppedAlerts(store);
       const seen = new Map<string, Review & { wt: string }>();
       for (const u of units) {
@@ -101,9 +102,9 @@ export function reviewsObserver(proc = "/proc"): Observer {
           store.upsert("observed_reviews", { project, squad, slug }, { wt: r.wt, state: r.state, since: r.since, kind: r.kind, round: r.round,
             findings: r.findings, head: r.head, observed_at: now });
         }
-        for (const r of store.db.query("SELECT project, squad, slug FROM observed_reviews").all() as Row[]) {
+        for (const r of store.db.query("SELECT project, squad, slug FROM observed_reviews WHERE host = 'local'").all() as Row[]) {
           if (!seen.has(`${r.project}\0${r.squad}\0${r.slug}`))
-            store.db.run("DELETE FROM observed_reviews WHERE project = ? AND squad = ? AND slug = ?", [r.project, r.squad, r.slug]);
+            store.db.run("DELETE FROM observed_reviews WHERE project = ? AND squad = ? AND slug = ? AND host = 'local'", [r.project, r.squad, r.slug]);
         }
       });
     },

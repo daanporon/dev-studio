@@ -19,6 +19,21 @@ export const wtFolder = (wt: string | null | undefined): string | null => {
   const i = wt ? wt.indexOf("::") : -1;
   return wt && i >= 0 && wt.charAt(i + 2) === "/" ? wt.slice(i + 2) : null;
 };
+// side-loop-host U6 (KTD9): on main a side member's worktree id is `<host>::<path>` and its terminal handle
+// `<host>:<handle>`; on the side host they are `local::<path>` and `<handle>`. The link rewrites them at the
+// boundary (bin/link/replica.ts), so the side's observers run unchanged. Each returns null for an id of another form.
+export const hostWt = (host: string, path: string): string => `${host}::${path}`;
+/** `local::<path>` (the side's view) → `<host>::<path>` (main's view). */
+export const wtUp = (host: string, wt: string | null | undefined): string | null => {
+  const p = localPath(wt);
+  return p === null ? null : hostWt(host, p);
+};
+/** `<host>::<path>` (main's view) → `local::<path>` (the side's view). */
+export const wtDown = (host: string, wt: string | null | undefined): string | null =>
+  wt?.startsWith(`${host}::`) ? `${LOCAL}${wt.slice(host.length + 2)}` : null;
+export const handleUp = (host: string, handle: string): string => `${host}:${handle}`;
+export const handleDown = (host: string, handle: string | null | undefined): string | null =>
+  handle?.startsWith(`${host}:`) ? handle.slice(host.length + 1) : null;
 const isDir = (p: string) => { try { return statSync(p).isDirectory(); } catch { return false; } };
 
 // The account's config for the launch line and the folder its .claude.json is in: none or `-` is

@@ -46,7 +46,7 @@ type Live = { wt: string; agent: string | null; worker: Row };
 function liveMembers(store: Store, project: string): Live[] {
   const rs = store.db.query(`SELECT DISTINCT m.wt AS wt, COALESCE(w.agent, m.agent) AS agent FROM members m
     JOIN observed_workers w ON w.project = m.project AND w.wt = m.wt
-    WHERE m.project = ? AND m.wt IS NOT NULL AND COALESCE(m.status, '') != 'gone' AND w.gone_at IS NULL ORDER BY m.wt`)
+    WHERE m.project = ? AND m.wt IS NOT NULL AND COALESCE(m.status, '') != 'gone' AND w.gone_at IS NULL AND COALESCE(m.host, '') NOT IN (SELECT name FROM hosts) ORDER BY m.wt`)
     .all(project) as { wt: string; agent: string | null }[];
   const seen = new Set<string>();
   return rs.filter((r) => !seen.has(r.wt) && seen.add(r.wt))
@@ -130,7 +130,7 @@ export function chatObserver(opts: { log?: (line: string) => void; followMax?: n
           else write(store, project, m.wt, prev, at, { agent: m.agent, source: "screen", path: null, size: null, read_to: null, turns: screenTurns(m.worker) });
         }
         const keep = new Set(live.map((m) => m.wt));
-        const ended = store.db.query("SELECT wt FROM observed_chat WHERE project = ? AND gone_at IS NULL").all(project) as { wt: string }[];
+        const ended = store.db.query("SELECT wt FROM observed_chat WHERE project = ? AND gone_at IS NULL AND host = 'local'").all(project) as { wt: string }[];
         for (const { wt } of ended) if (!keep.has(wt)) store.upsert("observed_chat", { project, wt }, { gone_at: at, turns: "[]" });
       });
     },

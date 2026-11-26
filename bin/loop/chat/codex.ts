@@ -12,7 +12,7 @@ export const agent = "codex";
 
 export function pathFor(store: Store, project: string, wt: string): string | null {
   const w = store.get("observed_workers", { project, wt });
-  const r = store.db.query(`SELECT path FROM observed_rollouts WHERE cwd = ?
+  const r = store.db.query(`SELECT path FROM observed_rollouts WHERE cwd = ? AND host = 'local'
     AND COALESCE(originator, '') NOT IN (SELECT value FROM json_each(?)) AND mtime >= ? ORDER BY mtime DESC LIMIT 1`)
     .get(wtPath(wt) ?? wt, JSON.stringify([...HEADLESS]), Number(w?.started_at ?? 0)) as { path: string } | null;
   return r?.path ?? null;
