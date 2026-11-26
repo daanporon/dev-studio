@@ -41,6 +41,8 @@ export const REQUESTS = {
   "account-reset": obj({ agent: str, account: str, grant: str, key: str, ...THROUGH }),
   // `ds account add` (issue #125, U5): a new login folder and its login terminal, or a logged-in --dir folder.
   "account-add": obj({ agent: str, name: str, project: opt(str), dir: opt(str), by: opt(str), ...THROUGH }),
+  // `ds account move` (issue #125, U8): copy an Orca-folder account into the accounts root and repoint its row.
+  "account-move": obj({ agent: str, account: str, force: opt(bool), by: opt(str), ...THROUGH }),
   "leftover-remove": obj({ wt: str, fingerprint: opt(str), ...THROUGH }),   // archive-leftovers U4: the board's Remove
   "remove-project": obj({ label: str, by: opt(str), ...THROUGH }),   // remove-project U3: fulfil/remove-project.ts (project NULL)
   alert: obj({ id: opt(str), title: opt(str), text: opt(str), option: opt(str), why: opt(str), unit: opt(str), card: opt(str), reason: opt(str), fields: opt(rec) }),
