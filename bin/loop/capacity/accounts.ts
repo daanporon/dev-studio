@@ -21,7 +21,7 @@
 // (credits.ts clearCredits, one `account_credits_cleared` event), even when it was not disabled. So does
 // a live login hold (claude-login-ended U2: login.ts clearLogin, one `account_login_cleared` event).
 import { now, type FactRow, type Row, type Store } from "../core/store.ts";
-import { accountFolder } from "../../lib/account-dirs.ts";
+import { accountFolder, type AccountRow } from "../../lib/account-dirs.ts";
 import { findKind } from "../../lib/account-kinds/index.ts";
 import { clearCredits, creditsHold } from "./credits.ts";
 import { clearLogin, loginHold } from "./login.ts";
@@ -165,8 +165,8 @@ export function copyLoginIds(store: Store, env: Record<string, string | undefine
   const ids = new Map((store.db.query("SELECT dir, login_id FROM observed_account_folders WHERE login_id IS NOT NULL").all() as Row[])
     .map((r) => [String(r.dir), String(r.login_id)]));
   if (!ids.size) return;
-  for (const r of store.db.query("SELECT agent, account, config_dir, source, login_id FROM accounts").all() as Row[]) {
-    const id = ids.get(accountFolder(r as never, env));
+  for (const r of store.db.query("SELECT agent, account, config_dir, source, login_id FROM accounts").all() as AccountRow[]) {
+    const id = ids.get(accountFolder(r, env));
     if (id && id !== r.login_id) store.db.run("UPDATE accounts SET login_id = ? WHERE agent = ? AND account = ?", [id, r.agent, r.account]);
   }
 }
