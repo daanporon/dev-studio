@@ -3747,8 +3747,7 @@ export const VERBS: Record<string, Verb> = {
     await orca(ctx, ["repo", "add", "--path", a[0]], "drop");
     return 0;
   },
-  /** "<agent>\t<account_id>\t<label>" per account; the FIRST line per agent is its default login. Claude:
-   *  every host profile Orca manages plus the system login (`system`), default first. Muse/Codex: their one login. */
+  /** "<agent>\t<account_id>\t<label>" per row of loop.db's `accounts` table, each agent's default first. */
   async "account-list"(ctx) {
     ctx.out((await accountList(ctx)).map((l) => l + "\n").join(""));
     return 0;

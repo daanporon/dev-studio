@@ -43,6 +43,7 @@ function fakeTerms() {
     async open(_x, project, req) { opened.push({ project, ...req }); const h = `t${opened.length}`; screens.set(h, ""); return { via: "orca", handle: h, project }; },
     async read(_x, t: LoginTerm) { return screens.has(t.handle) ? screens.get(t.handle)! : null; },
     async close(_x, t: LoginTerm) { closed.push(t.handle); screens.delete(t.handle); },
+    async type() { return false; },
   };
   return { terms, opened, closed, screens };
 }
