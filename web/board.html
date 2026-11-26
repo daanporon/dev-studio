@@ -2620,7 +2620,11 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
       await post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t });
       store.del(chatDraftKey(project, topic, to));   // a send clears that member's whole draft
       held.current[to] = [];
-      if (cur.current === to) { setText(""); setFiles([]); setNote(""); grow(input.current); setPinned(true); load(); }
+      if (cur.current === to) {
+        setText(""); setFiles([]); setNote("");
+        if (input.current) { input.current.value = ""; grow(input.current); }   // setText has not rendered yet: empty the box before it is measured
+        setPinned(true); load();
+      }
     } catch (e) {
       const gone = /^image (\S+) is gone/.exec(String(e.message || ""));
       if (e.status === 409 && gone) putHeld(to, heldOf(to).filter((x) => x.id !== gone[1]));   // that thumbnail goes; the rest stay
