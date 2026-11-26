@@ -567,10 +567,10 @@ test("crew-terminal-access U5: the log follows the newest row, stays put once sc
 test("a squad question card opens the chat panel of the member its answer goes to; a Studio alert has none", () => {
   const h = hooks();
   const ChatPanel = () => null;
-  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions", "mdPlain", "QMd", "permChecking", "PermWhy", "CheckingLine",
+  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions", "mdPlain", "QMd", "PermWhy", "CheckingLine",
     `${cut("AskOverlay")} return AskOverlay;`);
   const AskOverlay = make(h.useState, h.useEffect, html, async () => {}, new Map(), (n: any) => n.label + "/" + n.squad + "/" + n.id,
-    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel, (v: any) => ({ current: v }), (n: any) => n.label + "/" + n.squad + "/" + n.id, () => "00:00:00", () => null, (t: any) => t, () => null, () => false, () => null, () => null);
+    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel, (v: any) => ({ current: v }), (n: any) => n.label + "/" + n.squad + "/" + n.id, () => "00:00:00", () => null, (t: any) => t, () => null, () => null, () => null);
   const q = { label: "p", squad: "one", id: "q1", kind: "blocking", from: "builder-x", chat_wt: "/w/bx", chat_label: "builder-x", title: "T", text: "T", choices: [], suggestion: null, source: "lead" };
   const cardActions = new Function("docLabel", cut("cardActions") + " return cardActions;")(() => "doc");
   const render = (n: any) => { h.reset(); return nodes(AskOverlay({ cardActions, data: { squads: [] }, items: [n], at: "p/one/q1", setAt: () => {}, onClose: () => {}, onShow: () => {}, toast: () => {} })); };
@@ -587,12 +587,11 @@ test("a squad question card opens the chat panel of the member its answer goes t
 test("U5: a safety-check card answered on the board stays, marked checking, with its options and Send disabled", () => {
   const h = hooks();
   const sentQ = new Map<string, string>(), akey = (n: any) => n.label + "/" + n.squad + "/" + n.id;
-  const permChecking = new Function("sentQ", "akey", `${lineOf("const permOnly = ")} ${lineOf("const permChecking = ")} return permChecking;`)(sentQ, akey);
   const CheckingLine = () => null, QOptions = () => null;
-  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions", "mdPlain", "QMd", "permChecking", "PermWhy", "CheckingLine",
+  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions", "mdPlain", "QMd", "PermWhy", "CheckingLine",
     `${cut("AskOverlay")} return AskOverlay;`);
   const AskOverlay = make(h.useState, h.useEffect, html, async () => {}, sentQ, akey, (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", () => null,
-    (v: any) => ({ current: v }), akey, () => "00:00:00", QOptions, (t: any) => t, () => null, permChecking, () => null, CheckingLine);
+    (v: any) => ({ current: v }), akey, () => "00:00:00", QOptions, (t: any) => t, () => null, () => null, CheckingLine);
   const cardActions = new Function("docLabel", cut("cardActions") + " return cardActions;")(() => "doc");
   const q = { label: "p", squad: "one", id: "q1", kind: "blocking", from: "builder-u1", title: "T", text: "T", choices: [{ label: "Yes" }, { label: "No" }], suggestion: null,
     source: "picker", picker_kind: "permission", picker_answerable: true };

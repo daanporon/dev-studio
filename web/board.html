@@ -2996,7 +2996,8 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
   const [chat, setChat] = useState(null);         // the asker's chat panel, open over this card
   const isPicker = !!n && n.source === "picker"; // a terminal-picker mirror: no recommendation, nothing pre-selected
   const termOnly = isPicker && n.picker_answerable !== true; // multi-question / multiSelect: the board can't answer it
-  const checking = !!n && permChecking(n); // U5: answered here, the loop is still checking the screen
+  // U5: a safety-check prompt answered here (or in another tab: `pending`) while the loop still checks the screen.
+  const checking = isPicker && n.picker_kind === "permission" && !termOnly && !!n.id && (n.pending === true || sentQ.has(akey(n)));
   const val = n ? (pick[akey(n)] ?? (isPicker ? "" : n.suggestion) ?? "") : "";
   const set = (v) => setPick((p) => ({ ...p, [akey(n)]: v }));
   // The asking first seen on each question while this overlay is open: a different `since` is the question asked again.
