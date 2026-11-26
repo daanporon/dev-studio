@@ -999,3 +999,116 @@ describe("override scopes", () => {
     for (const o of [ro, po]) expect(s.get("overrides", { id: o })?.cleared_at).toBeNull();
   });
 });
+
+// issue #125, U3: the picker counts each login once, from the accounts table's rows.
+describe("one login, one account (KTD12)", () => {
+  // A listed accounts row: its login id, and a folder that exists unless the case says otherwise.
+  const row = (s: Store, account: string, set: Row = {}) =>
+    s.upsert("accounts", { agent: "claude", account }, { source: "orca", config_dir: s.root, observed_at: T, ...set });
+  // acct-a and acct-b are two folders of one login; acct-c is another.
+  function twins(): Store {
+    const s = fixture();
+    row(s, "acct-a", { login_id: "L1" });
+    row(s, "acct-b", { login_id: "L1" });
+    row(s, "acct-c", { login_id: "L2" });
+    return s;
+  }
+  const full = (s: Store, account: string) => acct(s, account, { session_pct: "96" });
+
+  test("a duplicate login is offered once", () => {
+    const s = twins();
+    expect(ok(builder(s)).account).toBe("acct-a");
+    full(s, "acct-a");                                // acct-b, the same login, is not a second chance
+    const p = ok(builder(s));
+    expect(p.account).toBe("acct-c");
+    expect(p.why).not.toContain("acct-b");
+  });
+
+  test("the login's row is the default, then an Orca-listed one, then the oldest", () => {
+    const s = twins();
+    s.upsert("accounts", { agent: "claude", account: "acct-b" }, { orca_listed: 1 });
+    expect(ok(builder(s)).account).toBe("acct-b");
+    s.upsert("accounts", { agent: "claude", account: "acct-a" }, { is_default: 1 });
+    expect(ok(builder(s)).account).toBe("acct-a");
+  });
+
+  test("the login's load counts once, whichever folder its members run on", () => {
+    const s = twins();
+    running(s, "acct-a");
+    running(s, "acct-b");                             // 50 % + 40 + 20: no room on the login
+    expect(ok(builder(s)).account).toBe("acct-c");
+  });
+
+  test("a limit or a credits hold on one folder holds the login", () => {
+    const s = twins();
+    acct(s, "acct-b", { limited_until: String(T + 600) });
+    expect(ok(builder(s)).account).toBe("acct-c");
+    expect(accountBlock(s, "claude", "acct-a", T)).toBe("limited");
+    const c = twins();
+    holdCredits(c, { agent: "claude", account: "acct-b", until: T + 600, from: "screen", project: "fx", notice: "credit balance" }, T);
+    expect(accountBlock(c, "claude", "acct-a", T)).toBe("credits");
+  });
+
+  test("an ended login is the folder's own, and a named duplicate keeps its row", () => {
+    const s = twins();
+    holdLogin(s, { agent: "claude", account: "acct-b", from: "screen", project: "fx", notice: "login ended" }, T);
+    expect(accountBlock(s, "claude", "acct-a", T)).toBeNull();
+    expect(accountBlock(s, "claude", "acct-b", T)).toBe("login");
+    const d = twins();
+    expect(accountBlock(d, "claude", "acct-b", T)).toBeNull();   // listed: not `gone`
+    expect(ok(builder(d, { account: "acct-b" })).account).toBe("acct-b");
+  });
+
+  // "Not this folder", as the limits reconciler says it about a member it moves off one.
+  for (const [name, spoil] of [
+    ["removed", (s: Store) => { s.upsert("accounts", { agent: "claude", account: "acct-b" }, { removed_at: T - 1 }); }],
+    ["switched off", (s: Store) => { setAccountEnabled(s, { agent: "claude", account: "acct-b", enabled: false, by: "test" }, T); }],
+    ["logged out", (s: Store) => { holdLogin(s, { agent: "claude", account: "acct-b", from: "screen", project: "fx", notice: "login ended" }, T); }],
+    ["unlisted", (s: Store) => { s.db.run("DELETE FROM observed_accounts WHERE account = 'acct-b'"); }],
+  ] as [string, (s: Store) => void][]) {
+    test(`excluding a ${name} folder leaves the login's other folder free`, () => {
+      const s = twins();
+      spoil(s);
+      const m = running(s, "acct-b");
+      s.db.run("UPDATE members SET limited_until = ?, placed_at = ? WHERE id = ?", [T + 600, T - 9999, m]);
+      expect(accountBlock(s, "claude", "acct-a", T)).toBeNull();
+      expect(accountBlock(s, "claude", "acct-a", T, [`claude:acct-b=${T + 600}`])).toBeNull();
+      expect(ok(builder(s, { limited: [`claude:acct-b=${T + 600}`] })).account).toBe("acct-a");
+    });
+  }
+
+  test("a member's stamp on a working folder, or a usage limit on a removed one, holds the login", () => {
+    const s = twins();
+    expect(accountBlock(s, "claude", "acct-a", T, [`claude:acct-b=${T + 600}`])).toBe("limited");
+    s.upsert("accounts", { agent: "claude", account: "acct-b" }, { removed_at: T - 1 });
+    acct(s, "acct-b", { limited_until: String(T + 600) });
+    expect(accountBlock(s, "claude", "acct-a", T)).toBe("limited");
+  });
+
+  test("switching the login's row off leaves the login out; its other folder does not stand in", () => {
+    const s = twins();
+    setAccountEnabled(s, { agent: "claude", account: "acct-a", enabled: false, by: "test" }, T);
+    expect(ok(builder(s)).account).toBe("acct-c");
+  });
+
+  for (const [name, set] of [["removed", { removed_at: T - 1 }], ["without its folder", { config_dir: "/nonexistent/zz-login" }]] as [string, Row][]) {
+    test(`an account ${name} is gone and never picked, also when named`, () => {
+      const s = twins();
+      s.upsert("accounts", { agent: "claude", account: "acct-a" }, set);
+      expect(accountBlock(s, "claude", "acct-a", T)).toBe("gone");
+      expect(accountBlock(s, "claude", "acct-a", T + 3600)).toBe("gone");   // also with a stale list
+      expect(ok(builder(s)).account).toBe("acct-b");                         // the login's other folder
+      const w = builder(s, { account: "acct-a" }) as Waiting;
+      expect(w.reason).toContain("account gone (acct-a)");
+    });
+  }
+
+  test("the system login alone is a list: another account's old row is not offered", () => {
+    const s = fixture();
+    s.db.run("DELETE FROM observed_accounts");
+    s.upsert("observed_accounts", { agent: "claude", account: "system" }, { session_pct: "10", updated: String(T), observed_at: T });
+    s.upsert("accounts", { agent: "claude", account: "system" }, { source: "system", observed_at: T });
+    expect(ok(builder(s)).account).toBe("system");
+    expect(accountBlock(s, "claude", "acct-a", T)).toBe("gone");
+  });
+});

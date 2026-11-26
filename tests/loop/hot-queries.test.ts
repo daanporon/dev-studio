@@ -27,7 +27,7 @@ const HOT: { from: string; sql: string; args: unknown[]; probe?: string }[] = [
   { from: "bin/loop/fulfil/rebind.ts", sql: "SELECT 1 FROM events WHERE kind = 'member_rebound' AND member = ? AND payload LIKE ?", args: ["w", "%x%"] },
   // loop-tick-8s U1: the episodes, observed_prs and requests lookups of the tick (migration 0056).
   { from: "bin/loop/capacity/pick.ts", sql: "WHERE e.kind = ? AND e.state = 'reserved' AND e.ended_at > ?", args: ["fallback-reserve", 1], probe: "SELECT e.*, m.id AS mid FROM episodes e JOIN members m ON 'member:' || m.id = e.subject WHERE e.kind = ? AND e.state = 'reserved' AND e.ended_at > ?" },
-  { from: "bin/loop/capacity/pick.ts", sql: "SELECT state, ended_at FROM episodes WHERE kind = 'account' AND ended_at > ?", args: [1] },
+  { from: "bin/loop/capacity/pick.ts", sql: "SELECT subject, state, ended_at FROM episodes WHERE kind = 'account' AND ended_at > ?", args: [1] },
   { from: "bin/loop/observers/github.ts", sql: "SELECT * FROM episodes WHERE kind = ? AND ended_at IS NULL ORDER BY id", args: ["read-failing"] },
   { from: "bin/loop/observers/disk-usage.ts", sql: "SELECT 1 FROM episodes WHERE kind = ? AND ended_at IS NULL LIMIT 1", args: ["disk-pressure"] },
   { from: "bin/loop/reconcilers/lifecycle.ts", sql: "SELECT 1 FROM observed_prs WHERE project = ? AND repo = ? AND head = ? AND state = 'MERGED'", args: ["p", "r", "h"] },
