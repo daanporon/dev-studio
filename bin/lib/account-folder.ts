@@ -9,9 +9,10 @@
 //   loginLine(kind, folder)                  `exec env <ENV>=<folder> DS_LOGIN_DIR=<folder> BROWSER=true sh -c '<login>; echo $? > …'`
 //   loginExit(folder)                        the login command's exit code once it ended, else null
 //   copyAccountFolder(from, to, id, creds)   `ds account move`'s copy, links kept (U8)
+//   removeMovedCopy(to, id)                  drop that copy, only when its marker names request id (a refusal after it)
 //
 // No other code path removes a folder: a failed add keeps its folder, and a folder an add did not make (a
-// --dir folder, an Orca profile) is never touched. The move removes only its own staging folder.
+// --dir folder, an Orca profile) is never touched. The move removes only its own staging folder and copy.
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { accountsRoot } from "./account-dirs.ts";
@@ -112,4 +113,12 @@ export async function copyAccountFolder(from: string, to: string, id: number | s
   writeFileSync(join(stage, MOVE_MARKER), `${id}\n`, { mode: 0o600 });
   renameSync(stage, to);
   return null;
+}
+
+/** Remove the copy at `to` when request `id` made it (its marker), so a move refused after copying leaves nothing
+ *  that would block the next move. Any other folder is left alone. True when it removed it. */
+export function removeMovedCopy(to: string, id: number | string): boolean {
+  if (!movedBy(to, id)) return false;
+  rmSync(to, { recursive: true, force: true });
+  return true;
 }

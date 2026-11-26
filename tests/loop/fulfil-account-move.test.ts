@@ -191,6 +191,29 @@ test("refuses what is not an Orca row of Claude: the system login, another agent
   expect(existsSync(join(r.state, "accounts"))).toBe(false);
 });
 
+test("refused on the re-check after the copy: its own copy is removed, and the next move goes through", async () => {
+  // A live member lands on the account while the copy runs (here: during the live-process read, just before it).
+  let land = true;
+  const r = rig({ live: async () => {
+    if (land) {
+      land = false;
+      r.s.db.run("INSERT INTO members (project, squad, role, suffix, wt, handle, account, observed_at, updated_at) VALUES ('fx', 'sq', 'builder', 'u1', 'wt-1', 'term-1', ?, ?, ?)", [ID, T, T]);
+      r.s.db.run("INSERT INTO observed_workers (project, wt, observed_at) VALUES ('fx', 'wt-1', ?)", [T]);
+    }
+    return [];
+  } });
+  const a = r.file();
+  await r.tick(T + 1);
+  expect(r.req(a).error).toContain("in use by fx/sq/builder-u1");
+  expect(existsSync(r.target)).toBe(false);
+  expect(r.row()).toMatchObject({ source: "orca", config_dir: r.prof });
+  r.s.db.run("UPDATE observed_workers SET gone_at = ?", [T + 1]);
+  const b = r.file({ by: "again" });
+  await r.tick(T + 2);
+  expect(r.req(b)).toMatchObject({ done: true, ok: true });
+  expect(r.row()).toMatchObject({ source: "ds", config_dir: r.target });
+});
+
 test("a loop restart mid-move: a half copy is replaced, a finished copy is kept, and the move ends once", async () => {
   const r = rig();
   const id = r.file();

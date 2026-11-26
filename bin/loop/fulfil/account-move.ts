@@ -14,7 +14,8 @@
 //             is scanned (account-skills scan): a plugin installPath that no longer resolves, or one recorded through
 //             Orca's folder (it breaks when that goes), is reported in the result. One forced accounts refresh.
 // The copy runs in the background; a loop restart runs the request again, and a run that finds its own finished
-// copy at the target keeps it (its marker), so a restart never copies twice or leaves a half copy in place.
+// copy at the target keeps it (its marker), so a restart never copies twice or leaves a half copy in place. A
+// refusal on the re-check after the copy removes that copy (its own marker only), so it never blocks the next move.
 import { finishRequest, failRequest, requestActions, type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
 import { payloadOf } from "../core/kinds.ts";
 import type { Row } from "../core/store.ts";
@@ -22,7 +23,7 @@ import { moveAccountRow, moveProblem, ROTATION } from "../capacity/accounts.ts";
 import { parseAgentAccounts } from "../observers/orca.ts";
 import { refreshAccounts } from "./account-reset.ts";
 import { accountFolder, type AccountRow } from "../../lib/account-dirs.ts";
-import { accountDir, copyAccountFolder } from "../../lib/account-folder.ts";
+import { accountDir, copyAccountFolder, removeMovedCopy } from "../../lib/account-folder.ts";
 import { accountSkillsScan, registryRows } from "../../lib/account-skills.ts";
 import { join } from "node:path";
 import { errOf } from "../io/orca.ts";
@@ -76,7 +77,7 @@ export function accountMove(opts: { live?: LiveRead; refresh?: (root: string) =>
           if (why) return fail(why);
           // Re-read the table: the copy took a while, and the row may have changed under it.
           const still = moveProblem(x.store, p.agent, p.account, force, env);
-          if (still) return fail(`${still} (the copy stays at ${to})`);
+          if (still) { removeMovedCopy(to, id); return fail(still); }
           moveAccountRow(x.store, { agent: p.agent, account: p.account, from, folder: to, force, by });
           const { dead, viaOld } = pluginPathFaults(to, from);
           const text = `moved ${p.agent}:${p.account} to ${to}; Orca's folder ${from} is left as it is`
