@@ -665,7 +665,7 @@ other out at that copy's next refresh.
 > `orca account remove`.** Orca's own account remove deletes the profile folder, and with it the login
 > dev-studio runs on. `orca account remove` cannot remove a Claude account at all (it takes only
 > `--agent opencode|devin`). This applies while dev-studio uses Orca's folder. After `ds account move`,
-> removing the account in Orca is safe and ends the board's duplicate-login warning.
+> removing the account in Orca is safe and ends the board's duplicate-login warning, unless the move's result names a plugin path that still runs through Orca's folder (reinstall that plugin first).
 
 A Codex account other than `default` starts only on the `orca` backend.
 
