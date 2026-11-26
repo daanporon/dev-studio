@@ -44,7 +44,7 @@ import { startedOn, wtName, type ContractSeat, type Driver, type Member, type Se
 import { contract as contractDriver, localPath } from "../drivers/contract.ts";
 import { claudeSettings } from "../drivers/claude-launch.ts";
 import type { Backend, Terminal } from "../../backend/contract.ts";
-import { contracts, sharedContracts, type Contracted } from "../squad/contracts.ts";
+import { contracts, sharedContracts, type Contracted, type Resolve } from "../squad/contracts.ts";
 import { createWorktree } from "../io/worktrees.ts";
 import { allSkills, deniedMcpServers, disabledPlugins, isProjectSkill, mcpLevels, pluginLevels, projectRules, shippedRules, skillOverrides } from "../settings/skills.ts";
 import { errOf, inDoubt, shell, spawn, type Orca, type Out } from "../io/orca.ts";
@@ -161,7 +161,7 @@ export class LoopActuator implements Actuator {
   private unseated = new Map<string, string>();            // squad -> why its last rebind failed
   private seatSeen = new Map<string, { sig: string; at: number }>(); // squad -> its seat as last checked with Orca (U244)
   private seatFailed = new Set<string>();                  // squads whose start or send failed on the seat (U244)
-  private contracts: (store: Store, name: string, project: string) => Contracted; // U11: its contract backend per name and project
+  private contracts: Resolve; // U11: its contract backend per name and project (and host, side-loop-host U4)
   private inFlight = new Set<string>();                    // U11: contract calls running now, by retry id
   private relayPeekAt = new Map<string, number>();         // squad -> when its Run's inbox was last peeked (U244)
   private unrelayed = new Map<string, string>();           // squad -> why its last relay failed
@@ -723,7 +723,7 @@ export class LoopActuator implements Actuator {
 
   // U11: the contract backend `name` for a project's squads (squad/contracts.ts: tmux, or orca-lite on this
   // actuator's Orca runner; a test passes its fake through `backends`).
-  private contracted(store: Store, name: string, project: string): Contracted { return this.contracts(store, name, project); }
+  private contracted(store: Store, name: string, project: string, host?: string): Contracted { return this.contracts(store, name, project, host); }
 
   // U11: the seat of a squad on a contract backend. Its Orca ops refuse: such a squad has no Run,
   // sender pane or coordinator, and nothing it does reaches Orca.

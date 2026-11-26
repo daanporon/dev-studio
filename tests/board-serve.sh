@@ -1587,7 +1587,7 @@ stop_own "$SPID"; SPID=""
 # re-runs itself on the new code — same pid, same pidfile, still answering.
 P5=$((PORT + 5))
 # Runs against a COPY of the server (never touch $ROOT/bin/board/board-server.ts: live boards watch it).
-mkdir -p "$TMP/srvcopy/bin/board"; cp "$ROOT"/bin/board/*.ts "$TMP/srvcopy/bin/board/"; cp -r "$ROOT/bin/loop" "$TMP/srvcopy/bin/loop"; cp -r "$ROOT/bin/lib" "$TMP/srvcopy/bin/lib"; cp -r "$ROOT/bin/backend" "$TMP/srvcopy/bin/backend"; mkdir -p "$TMP/srvcopy/web"; cp "$ROOT/web/board.html" "$TMP/srvcopy/web/"
+mkdir -p "$TMP/srvcopy/bin/board"; cp "$ROOT"/bin/board/*.ts "$TMP/srvcopy/bin/board/"; cp -r "$ROOT/bin/loop" "$TMP/srvcopy/bin/loop"; cp -r "$ROOT/bin/lib" "$TMP/srvcopy/bin/lib"; cp -r "$ROOT/bin/backend" "$TMP/srvcopy/bin/backend"; cp -r "$ROOT/bin/link" "$TMP/srvcopy/bin/link"; mkdir -p "$TMP/srvcopy/web"; cp "$ROOT/web/board.html" "$TMP/srvcopy/web/"
 DS_BOARD_SERVER="$TMP/srvcopy/bin/board/board-server.ts" PATH="$TMP/tsbin:$PATH" DS_BIND=127.0.0.1 BACKEND="$TMP/fakeb" "$ROOT/bin/board/board.sh" "$LBL" --serve-fg "$P5" >"$TMP/serve5.log" 2>&1 &
 SPID=$!
 # A loaded host starts Bun (cold-loading bin/loop) slowly: wait up to 60 s, stopping as soon as the line is there.

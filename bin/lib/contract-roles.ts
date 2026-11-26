@@ -13,6 +13,8 @@ import { checked, type Backend } from "../backend/contract.ts";
 import { projectTmux } from "../backend/tmux.ts";
 import { orcaLite } from "../backend/orca-lite.ts";
 import { projectHerdr } from "../backend/herdr.ts";
+import { remoteBackend } from "../backend/remote.ts";
+import { isBackend, LOCAL_HOST } from "../backend/registry.ts";
 import { projectContracts } from "./contract-here.ts";
 
 export const LOCAL = "local::";   // as bin/loop/drivers/contract.ts, without its imports
@@ -21,9 +23,11 @@ export const isLocalWt = (wt: string | null | undefined): boolean => !!wt && wt.
 /** The contract backend `name` of a project, as the loop makes it (core/actuator.ts contracted,
  *  squad/contracts.ts): tmux, herdr, and orca-lite on the adapter with the loop's facts file (U16a),
  *  read-only (only the loop writes that file). A read never starts a server (tmux and herdr start one on
- *  create only). */
-export type MakeBackend = (name: string, project: string) => Backend | null;
-export const makeBackend = (root: string): MakeBackend => (name, project) => {
+ *  create only). For a member on a side host (`host` not `local`, side-loop-host U4) it is the remote adapter
+ *  (bin/backend/remote.ts): the op goes down that host's link through main's link server and the side answers it. */
+export type MakeBackend = (name: string, project: string, host?: string) => Backend | null;
+export const makeBackend = (root: string): MakeBackend => (name, project, host = LOCAL_HOST) => {
+  if (host !== LOCAL_HOST) return isBackend(name) && name !== "orca" ? checked(remoteBackend({ root, host, backend: name, project })) : null;
   if (name === "tmux") return checked(projectTmux(project, { stateRoot: root }));
   if (name === "herdr") return checked(projectHerdr(project, { stateRoot: root }));
   if (name === "orca-lite") return checked(orcaLite({ keep: join(root, project, "loop", "orca-lite-terminals.json"), readOnly: true }));
