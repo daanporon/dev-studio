@@ -7,11 +7,14 @@
 // `choices`, the answer is poked as the board's message. Once it landed, the asker's "NEEDS YOU" card
 // note (ask-operator.sh) on card_wt is cleared unless another open question sits on that card: the board already
 // closed the question, so the agent's resolve-question no longer finds the card to clear.
-import { failRequest, finishRequest, memberAt, requestActions, type Fulfiller } from "../core/actuator.ts";
+import { failRequest, finishRequest, memberAt, requestActions, type Fulfiller, type Result } from "../core/actuator.ts";
 import { pickerClosed } from "../observers/state.ts";
 import type { Action } from "../core/plugins.ts";
 import { askState, expectedChecks, headOf, humanCheckNames, prQuestionKey } from "../squad/pr-ready.ts";
 import { reopen } from "../messages/questions.ts";
+import { permissionKey } from "../chat/permission.ts";
+import { toolUseInput } from "../../lib/permission-prompt.ts";
+import type { Seat } from "../drivers/types.ts";
 import type { Row } from "../core/store.ts";
 import type { Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
@@ -27,6 +30,42 @@ const closed = (p: P) => pickerClosed(p.transcript, p.tool_use_id) !== false;
 // A `local::` worktree (a squad off Orca, U11b) has no card note to clear: the question was its card.
 const cardFree = (store: Store, a: Action, wt: string | undefined): wt is string =>
   !!wt && !wt.startsWith("local::") && !store.db.query("SELECT 1 FROM questions WHERE project = ? AND card_wt = ? AND status = 'open'").get(a.project, wt);
+
+// The question's entry as the board answered it (its row by seq, else the newest asking of the id).
+function entryOf(store: Store, project: string, squad: string, id: string, seq?: number): Row {
+  const q = store.db.query("SELECT doc FROM questions WHERE project = ? AND squad = ? AND id = ? AND (?4 IS NULL OR seq = ?4) ORDER BY seq DESC LIMIT 1")
+    .get(project, squad, id, seq ?? null) as Row | null;
+  try { return (JSON.parse(String(q?.doc ?? "{}")) as Row) ?? {}; } catch { return {}; }
+}
+
+// permission-prompt-needs-you U2: Yes or No on a Claude safety-check prompt. A wrong key runs a command the
+// operator did not approve, so the screen is read fresh and one digit is pressed only when it still shows this
+// prompt (chat/permission.ts permissionKey) and the transcript has not answered it. Otherwise nothing is typed:
+// the request ends `prompt_changed`, the question reopens, and the board offers only "answer it in the terminal"
+// for this prompt from then on (questions.ts pressRefused). A press that failed is never tried again later.
+async function permission(a: Action, x: Parameters<Fulfiller["exec"]>[1], p: P, e: Row, wt: string, seat: Seat): Promise<Result> {
+  const refuse = (why: string): Result => {
+    const error = `not pressed: ${why} — answer it in the terminal`;
+    finishRequest(x.store, a, { ok: false, error, why, prompt_changed: true }, x.now);
+    if (p.via === "board" && a.squad) reopen(x.store, a.project, a.squad, p.id, p.seq);
+    return { done: true, result: error };
+  };
+  if (e.picker_answerable !== true || !p.tool_use_id || p.tool_use_id.startsWith("permission-")) return refuse("the board can't tie this prompt to its tool call");
+  if (closed(p)) return refuse("the prompt is already answered (or its transcript is unreadable)");
+  const o = await seat.send("screen-tail", [wt]);
+  if (o.code !== 0) return refuse("the screen could not be read");
+  // The call's own command (the screen shows it unredacted) and description, read back by its tool_use_id.
+  const input = toolUseInput(p.transcript, p.tool_use_id) ?? {};
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  const k = permissionKey(o.out, { tool: String(e.tool ?? ""), shown: String(e.shown ?? ""), command: str(input.command), description: str(input.description) }, p.answer);
+  if ("why" in k) return refuse(k.why);
+  if (closed(p)) return refuse("the prompt was answered meanwhile");
+  const r = await seat.send("keys", [wt, String(k.digit)]);
+  if (r.code !== 0) return { failed: `not pressed: ${(r.err || r.out).trim() || "keys failed"}` };
+  if (cardFree(x.store, a, p.card_wt)) await seat.send("ping", [p.card_wt, ""]);
+  finishRequest(x.store, a, { ok: true, picked: k.digit, option: p.answer }, x.now);
+  return { done: true, result: k.digit };
+}
 
 const answer: Fulfiller = {
   name: "answer",
@@ -95,6 +134,8 @@ const answer: Fulfiller = {
       finishRequest(x.store, a, { ok: true, delivered: r }, x.now);
       return { done: true, result: r };
     }
+    const entry = a.squad ? entryOf(x.store, a.project, a.squad, p.id, p.seq) : {};
+    if (entry.picker_kind === "permission") return permission(a, x, p, entry, wt, seat);
     const labels = p.choices.map((c) => String((c as { label?: unknown })?.label ?? c));
     const i = labels.indexOf(ans), digit = i >= 0 ? i + 1 : labels.length + 1;
     if (digit > 9) return { failed: "the picker has too many options to answer by keystroke" };
