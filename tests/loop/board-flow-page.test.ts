@@ -257,8 +257,8 @@ test("U279. a squad row with one slow and one stuck card shows 1 slow in amber a
   const f = { squads: { "p/s": { stuck: 1, slow: 1, longest_stuck_s: 600, needs_you: 0, last_merge_at: null } },
     cards: [{ project: "p", squad: "s", slug: "a", stuck: true }, { project: "p", squad: "s", slug: "b", slow: true }] };
   const st = rl.flowStats({ label: "p", topic: "s" }, f, [{ slug: "a", state: "working" }, { slug: "b", state: "working" }]);
-  expect(st).toMatchObject({ stuck: 1, slow: 1, barStuck: 1 });
-  const v = rl.UnitsCell({ st: { total: 4, merged: 2, working: 2, ready: 0, blocked: 0, gone: 0, ...st } });
+  expect(st).toMatchObject({ stuck: 1, slow: 1 });
+  const v = rl.UnitsCell({ st: { total: 4, merged: 2, seg: { merged: 2, working: 1, stuck: 1 }, ...st } });
   const bits = nodes(v).filter((n) => n.str.includes('class="bad"') || n.str.includes('class="warn"'));
   expect(bits.map((n) => [n.str.includes("bad") ? "red" : "amber", text(n).replace(/<[^>]+>/g, "")])).toEqual([["red", "1 stuck 10m"], ["amber", "1 slow"]]);
 });

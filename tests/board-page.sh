@@ -332,7 +332,7 @@ jt "dep on unmerged-into PR is blocked" "$TMP/cx2.json" "$CX | .units[] | select
 rm -f "$SD/cx-sq.json"
 eq "web board: cancelled counts as finished" "$(grep -cF 'u.state === "cancelled" || (u.state === "done"' "$ROOT/web/board.html")" "1"
 eq "board-data: open units exclude cancelled" "$(grep -cF 'u.state !== "done" && u.state !== "cancelled"' "$ROOT/bin/board/board-data.ts")" "2"
-eq "web board: units total excludes cancelled" "$(grep -cF 'total: n((x) => x.state !== "cancelled")' "$ROOT/web/board.html")" "1"
+eq "web board: units total excludes cancelled" "$(grep -cF 'total: u.filter((x) => x.state !== "cancelled").length' "$ROOT/web/board.html")" "1"
 eq "web board: LeftoversBox under UnitsBox" "$(grep -cF "<\${LeftoversBox} s=" "$ROOT/web/board.html")" "1"
 eq "web board: leftover files in a title tooltip" "$(grep -cF '(c.differ || []).join("\n")' "$ROOT/web/board.html")" "1"
 eq "web board: cancelled dot + state styles" "$(grep -cF '.dot.cancelled' "$ROOT/web/board.html")$(grep -cF '.ust.cancelled' "$ROOT/web/board.html")" "11"
