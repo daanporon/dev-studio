@@ -390,8 +390,18 @@ button.fchip,button.gtog{display:inline-flex;align-items:center;justify-content:
 .flow-sec .fhead b{color:var(--fg)} .flow-sec .fchips{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px}
 .flow-sec .fchip{font:12px var(--mono);border:1px solid var(--line);border-radius:12px;padding:1px 9px;color:var(--mut);background:none;cursor:pointer}
 .flow-sec .fchip.on{background:#283040;color:var(--fg);border-color:#3a4458}
-.flow-bars{display:flex;align-items:flex-end;gap:4px;height:60px;margin:4px 0 2px}
-.flow-bars .fbar{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end}
+/* The top 14px is the label row: bar heights are percent of the 60px below it, so the tallest bar's number fits. */
+.flow-bars{display:flex;align-items:flex-end;gap:4px;height:74px;padding-top:14px;box-sizing:border-box;margin:4px 0 2px}
+.flow-bars .fbar{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;position:relative;container-type:inline-size;cursor:pointer}
+.flow-bars .fbar.sel{outline:1px solid var(--fg);outline-offset:1px}
+.flow-bars .fnum{position:absolute;left:50%;transform:translateX(-50%);white-space:nowrap;font:10px/14px var(--mono);color:var(--fg);pointer-events:none}
+.flow-bars .fnum.z{color:var(--dim)} .flow-bars .fnum em{font-style:normal;color:var(--blue)}
+@container (max-width:12.5px){.flow-bars.w2 .fnum{display:none}}
+@container (max-width:18.5px){.flow-bars.w3 .fnum{display:none}}
+@container (max-width:24.5px){.flow-bars.w4 .fnum{display:none}}
+@container (max-width:30.5px){.flow-bars.w5 .fnum{display:none}}
+@container (max-width:36.5px){.flow-bars.w6 .fnum{display:none}}
+@container (max-width:42.5px){.flow-bars.w7 .fnum{display:none}}
 .flow-bars .fbar i{display:block;border-radius:2px 2px 0 0;min-height:0}
 .flow-bars .m{background:var(--purple);opacity:.8} .flow-bars .c{background:var(--blue)}
 .flow-bars .fbar.today .m{opacity:1}
@@ -1250,15 +1260,22 @@ function FlowCardDetails({ card, now, onAsk, onClose }) {
 function FlowColumn({ stage, title, count, paused, children }) {
   return html`<div class=${"flow-col" + (count === 0 && !paused ? " empty" : "")} id=${"flow-col-" + stage}><h4>${title}<span>${count}${paused ? " · " + paused + " paused" : ""}</span></h4>${children}</div>`;
 }
-function MergedChart({ flow, days, onDays }) {
+function MergedChart({ flow, days, onDays, sel, onSel }) {
   const bars = dayBars(flow.per_day, days, flow.counts.open_prs);
   const today = bars.length ? bars[bars.length - 1] : { merged: 0 };
   const med = flow.median_total_s;
-  return html`<div class="flow-chart"><div class="fhead"><b>Merged per day</b><span>today ${today.merged} merged + ${flow.counts.open_prs} PRs open · median dispatch → merge ${flowDur(med)}</span>
+  const picked = bars.find((b) => b.day === sel);
+  const head = picked && !picked.today ? picked.day.slice(5) + ": " + picked.merged + " merged" : "today " + today.merged + " merged + " + flow.counts.open_prs + " PRs open";
+  // One width class for the whole view, from its longest number (2 to 7 characters): all numbers show or hide together.
+  const wide = Math.min(7, Math.max(2, ...bars.map((b) => String(b.merged).length + (b.cap ? String(b.cap).length + 1 : 0))));
+  const pick = (day) => onSel(sel === day ? null : day);
+  return html`<div class="flow-chart"><div class="fhead"><b>Merged per day</b><span>${head} · median dispatch → merge ${flowDur(med)}</span>
       <span style=${{ flex: 1 }}></span>
       ${[8, 30].map((n) => html`<button key=${n} class=${"fchip" + (days === n ? " on" : "")} onClick=${() => onDays(n)}>${n} days</button>`)}</div>
-    <div class="flow-bars">${bars.map((b) => html`<div key=${b.day} class=${"fbar" + (b.today ? " today" : "")} title=${b.day + ": " + b.merged + " merged" + (b.cap ? " + " + b.cap + " PRs open" : "")}>
-      <i class="c" style=${{ height: b.ch + "%" }}></i><i class="m" style=${{ height: b.mh + "%" }}></i></div>`)}</div>
+    <div class=${"flow-bars w" + wide}>${bars.map((b) => { const tip = b.day + ": " + b.merged + " merged" + (b.cap ? " + " + b.cap + " PRs open" : "");
+      return html`<div key=${b.day} class=${"fbar" + (b.today ? " today" : "") + (sel === b.day ? " sel" : "")} title=${tip}
+        role="button" tabIndex="0" aria-pressed=${sel === b.day} aria-label=${tip} onClick=${() => pick(b.day)} onKeyDown=${(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(b.day); } }}>
+      <span class=${"fnum" + (b.merged + b.cap === 0 ? " z" : "")} style=${{ bottom: b.mh + b.ch + "%" }}>${b.merged}${b.cap ? html`<em>+${b.cap}</em>` : ""}</span><i class="c" style=${{ height: b.ch + "%" }}></i><i class="m" style=${{ height: b.mh + "%" }}></i></div>`; })}</div>
     <div class="flow-barl">${bars.map((b, i) => html`<span key=${b.day}>${days <= 8 || i % 5 === bars.length % 5 ? b.day.slice(5) : ""}</span>`)}</div></div>`;
 }
 // The Resource utilization card (U7): one bar per resource split into this project (a segment per project in the
@@ -1312,6 +1329,7 @@ function FlowSection({ flow, lstore, focus, onOpen, now, showProject }) {
   const [days, setDays] = useState(() => lstore.get("b:flow:days", 8));
   const [win, setWin] = useState(() => lstore.get("b:flow:merged", "24h"));
   const [squad, setSquad] = useState("all");
+  const [selDay, setSelDay] = useState(null);   // the tapped bar's day; not saved
   const [allMerged, setAllMerged] = useState(false);
   const [allNext, setAllNext] = useState(false);
   const [, bump] = useState(0);
@@ -1370,7 +1388,7 @@ function FlowSection({ flow, lstore, focus, onOpen, now, showProject }) {
   };
   return html`<details class="flow-sec" id="flow" open=${open} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== open) { setOpen(o); lstore.set("b:flow", o); } }}>
     <summary>Flow<small>${flowSummary(flow.counts)}</small></summary>
-    ${cards.length === 0 && (flow.merged || []).length === 0 ? html`<div class="empty">nothing in flight — units show here once a plan is approved</div>` : html`${MergedChart({ flow, days, onDays: (n) => { setDays(n); lstore.set("b:flow:days", n); } })}
+    ${cards.length === 0 && (flow.merged || []).length === 0 ? html`<div class="empty">nothing in flight — units show here once a plan is approved</div>` : html`${MergedChart({ flow, days, onDays: (n) => { setSelDay(null); setDays(n); lstore.set("b:flow:days", n); }, sel: selDay, onSel: setSelDay })}
     <div class="fchips">${[["all", "All squads"], ...squads.map((c) => [sqKey(c), c.squad])].map(([k, l]) => html`<button key=${k} class=${"fchip" + (squad === k ? " on" : "")} onClick=${() => setSquad(k)}>${l}</button>`)}</div>
     <div class="flow-cols">${FLOW_STAGES.map(([st, title]) => column(st, title))}</div>`}</details>`;
 }
