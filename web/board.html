@@ -2289,7 +2289,9 @@ const askingKey = (k, since) => (k && since ? k + "@" + since : k);
 const closingQ = new Set();
 const closeKey = (n) => n.label + "/" + n.squad;
 const pruneSent = (data) => { // drop the marks of askings no longer on the board (Needs-you items and loop notes)
-  const live = new Set([...(data.needs_you || []).map(akey), ...(data.loop_notes || []).map((n) => n.project + "/_studio/" + n.id)]);
+  // U5: a safety-check card whose press was refused is live again, terminal-only: its mark goes, so nothing says "pressed".
+  const live = new Set([...(data.needs_you || []).filter((n) => !(n.source === "picker" && n.picker_kind === "permission" && n.picker_answerable !== true)).map(akey),
+    ...(data.loop_notes || []).map((n) => n.project + "/_studio/" + n.id)]);
   for (const k of [...sentQ.keys()]) if (!live.has(k)) sentQ.delete(k);
   const rows = new Set((data.needs_you || []).filter((n) => n.kind === "done").map(closeKey));
   for (const k of [...closingQ]) if (!rows.has(k)) closingQ.delete(k);

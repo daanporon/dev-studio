@@ -77,6 +77,16 @@ test("an answer that left the board and came back as the same asking shows open"
   expect(r.sent).toBe(false); expect(r.tabs[0]).toContain("□");
 });
 
+test("pruneSent drops a refused safety-check press's mark: the card is live again, terminal-only (U5)", () => {
+  const { api, q } = rig();
+  const perm = (answerable: boolean, pending = false) => ({ ...q("picker-p1", A1), source: "picker", picker_kind: "permission", picker_answerable: answerable, pending });
+  api.sentQ.set(api.akey(perm(true)), "10:00");
+  api.pruneSent({ needs_you: [perm(true, true)] });   // still checking the screen: the mark stays
+  expect(api.sentQ.size).toBe(1);
+  api.pruneSent({ needs_you: [perm(false)] });        // refused: listed again, answered in the terminal
+  expect(api.sentQ.size).toBe(0);
+});
+
 test("pruneSent keeps a Studio note's mark while the note is listed", () => {
   const { api } = rig();
   api.sentQ.set("p/_studio/n1", "10:00"); api.sentQ.set("p/_studio/gone", "10:00");
