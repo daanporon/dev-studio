@@ -114,6 +114,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .crew .m.hl{background:var(--amber-bg);outline:2px solid var(--amber);outline-offset:-2px;transition:background .3s}
 .crew .m .ovr .badge.pin{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .u.openable{cursor:pointer} .u.openable:hover{background:rgba(255,255,255,.03)} .unit-open{background:none;border:0;padding:0;color:inherit;font:inherit;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .unit-open:hover{text-decoration:underline}
+.ulinks{flex:none;display:inline-flex;align-items:center;gap:4px;margin-left:6px;font-size:11px} .ulinks.fin{opacity:.6} .ulink{display:inline-flex;align-items:center} .ulink>span{padding:0 7px;border:1px solid var(--line);border-radius:10px;max-width:14em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .ulink-more{color:var(--mut)}
 .ud dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0} .ud dt{color:var(--muted,#8a93a3)} .ud dd{margin:0;overflow-wrap:anywhere} .ud .none{color:var(--muted,#8a93a3);font-style:italic} .ud-head{display:flex;flex-direction:column;gap:2px;min-width:0} .ud-title{font-weight:600} .ud-slug{font-size:11px} .ud-status{margin-bottom:10px} .ud-list{margin:0;padding-left:16px} .ud-list .ok{color:var(--ok,#57d38c)} .ud-bar{gap:6px}
 .acts{display:inline-flex;flex:none} .acts-btn{padding:1px 8px;line-height:1.3}
 .amenu{position:fixed;z-index:60;display:flex;flex-direction:column;align-items:stretch;gap:2px;min-width:170px;padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.45);white-space:normal;text-align:left}
@@ -370,6 +371,7 @@ html:has(.modal) .modal,html:has(.modal) .toast{visibility:visible}
 .units .u::after{content:"";order:4;flex:1 1 100%;height:0}
 .units .u>:nth-child(n+3):not(.acts){order:5;flex:0 1 auto;min-width:0;max-width:100%;font-size:12px} .units .u>.tier{margin-left:24px}
 .units .u .unit-open,.acts-btn{min-height:44px;min-width:44px}
+.units .u .ulink{min-height:44px;min-width:44px;justify-content:center} .units .u .ulink>span{max-width:9em}
 .ev{grid-template-columns:auto auto minmax(0,1fr);gap:0 10px;padding:6px 12px}
 .ev>.s,.ev.msg>.s{grid-column:1/-1;white-space:normal;overflow-wrap:anywhere}
 .ev.msg .sl{white-space:normal;overflow-wrap:anywhere}
@@ -1227,6 +1229,13 @@ function BrakeBanner({ br }) {
 function UnitMarks({ u }) {
   return html`${u.urgent && html`<span class="umark urgent" title="urgent: starts next, even over the limit">⚡</span> `}${u.focus === "on" && html`<span class="umark focus" title="focus squad: goes first inside the limit">★</span> `}${u.focus === "held" && html`<span class="umark focus held" title="focus squad holds its share: waits by age now">★</span> `}${u.focus === "muted" && html`<span class="umark focus held" title=${u.status === "done" || u.state === "done" || u.merged ? "focus squad" : "focus squad: not next in line for a seat"}> ★</span>`}${u.unlocks > 0 && html`<span class=${"umark unlock" + (u.unlock === "on" ? "" : " held")} title=${"unlocks " + u.unlocks + " waiting unit" + (u.unlocks === 1 ? "" : "s") + (u.unlock === "on" ? ": goes first inside the limit" : ": not ranked first now")}>⬆${u.unlocks}</span> `}`;
 }
+// A unit's links in its Work units row: the first as a chip that opens it, the rest as a `+N` badge (the details window links them all).
+function UnitLinkChip({ u }) {
+  const [first, ...more] = u.links || [];
+  if (!first) return null;
+  const tip = "Open " + first.label + " in a new tab";
+  return html`<span class=${"ulinks" + (finished(u) ? " fin" : "")}><a class="ulink" href=${first.url} target="_blank" rel="noopener noreferrer" title=${tip} aria-label=${tip}><span>${first.label}</span></a>${more.length > 0 && html` <span class="ulink-more" title=${more.map((l) => l.label).join(", ")}>+${more.length}</span>`}</span>`;
+}
 // The `Runs on` row of both details windows (squad-priority U5): tier and model as tierLabel says them, the lane, and what puts the unit first.
 const runsOn = (u) => {
   const tier = String(u.tier || "").replace(/ ⚠\S+$/, "").replace(/·/g, " · ").replace(/^std\b/, "standard"), out = [tier || "hard?"];
@@ -1640,7 +1649,7 @@ function UnitsBox({ s, flow, toast, onPlan }) {
   return html`<div class="box units"><h3>Work units <span>spent, 7 days · ${stats(s).merged} of ${stats(s).total} merged</span>${nDone > 0 && html` <button class="gtog" onClick=${toggle}>${showDone ? "hide" : "show"} ${nDone} finished</button>`}</h3>
     <div class="u head"><span></span><span>Unit</span><span>Tier</span><span class="num">Spent</span><span class="num" title="CPU-hours its Builders used, reaped child processes included">CPU-h</span><span>State</span><span>PR</span><span></span></div>
     ${shown.length === 0 && html`<div class="tier">all ${nDone} units finished</div>`}
-    ${shown.map((u) => html`<div key=${u.slug} class="u openable" onClick=${(e) => { if (!e.target.closest("a,button,.acts")) setDet(u.slug); }}><span class=${"dot " + u.state.replace(" ", "") + (u.busy ? " spin" : "")} title=${u.busy ? "Builder is working" : ""}></span><span class="un" title=${u.slug}><${UnitMarks} u=${u} /><button class="unit-open" aria-haspopup="dialog" onClick=${() => setDet(u.slug)}>${u.slug}</button></span>
+    ${shown.map((u) => html`<div key=${u.slug} class="u openable" onClick=${(e) => { if (!e.target.closest("a,button,.acts")) setDet(u.slug); }}><span class=${"dot " + u.state.replace(" ", "") + (u.busy ? " spin" : "")} title=${u.busy ? "Builder is working" : ""}></span><span class="un" title=${u.slug}><${UnitMarks} u=${u} /><button class="unit-open" aria-haspopup="dialog" onClick=${() => setDet(u.slug)}>${u.slug}</button><${UnitLinkChip} u=${u} /></span>
       <span class="tier" title=${u.tier && u.tier.indexOf("hard?") === 0 ? "no tier recorded — read as hard" : (u.tier || "")}>${(u.tier || "").replace(/ ⚠\S+$/, "")}<${Mism} m=${u.builder} /></span>${u.lane && u.lane !== "normal" && html`<span class=${"lane " + u.lane} title=${u.lane === "moved" ? "Lane: moved to normal at " + u.lane_cpu_h + " CPU-h (light_lane_cpu_h " + u.lane_limit_h + ")" + (u.lane_rule ? " · rule: " + u.lane_rule : "") : "Lane: light" + (u.lane_rule ? " (rule: " + u.lane_rule + ")" : "") + " · " + u.lane_cpu_h + " of " + u.lane_limit_h + " CPU-h"}> ${u.lane === "moved" ? "light→normal" : "light"}</span>`}
       <span class="num tok" title=${u.tokens ? tokTip(u.tokens) : ""}>${u.tokens ? "≈" + fmtTok(u.tokens.spent) : ""}${u.review_tokens ? html`<span class="muted" title="its headless review session and sub-agents"> +review ≈${fmtTok(u.review_tokens.spent)}</span>` : ""}</span>
       <span class="num cpuh" title=${u.cpu ? "CPU-hours its Builders used (reaped child processes included) · peak " + (u.cpu.peak_cpu_pct == null ? "?" : Math.round(u.cpu.peak_cpu_pct) + "%") + " CPU · peak " + kbText(u.cpu.peak_rss_kb) + " RAM" : ""}>${cpuH(u.cpu)}</span>
@@ -2935,6 +2944,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, card })
     u.about && ["ud-about", done ? "What it did" : "What it does", u.about],
     u.done_text && ["ud-done", "Done when", u.done_text],
     u.check_text && ["ud-check", "Check", u.check_text],
+    (u.links || []).length > 0 && ["ud-links", "More info", html`<ul class="ud-list">${u.links.map((l, i) => html`<li key=${i}><a href=${l.url} target="_blank" rel="noopener noreferrer" title=${l.url}>${l.label}</a></li>`)}</ul>`],
     u.held && ["ud-hold", "Hold", u.hold_kind + (u.hold_reason ? ": " + u.hold_reason : "")],
     needs.length > 0 && ["ud-waits", "Needs", html`<ul class="ud-list">${needs.map(depLine)}</ul>`],
     unblocks.length > 0 && ["ud-dependents", "Unblocks", html`<ul class="ud-list">${unblocks.map(depLine)}</ul>`],

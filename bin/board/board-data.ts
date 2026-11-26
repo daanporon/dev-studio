@@ -17,6 +17,7 @@ import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pr
 import { basename, dirname, join, resolve } from "node:path";
 import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
+import { unitLinks } from "./unit-links.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { debriefTopic } from "./card-place.ts";
 import { placeAlert, questionsCount, shownStatus, doneWaits, shortTitle, prNumber } from "./needs-rules.ts";
@@ -1900,6 +1901,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
         parked: null as "held" | "behind" | null,
         // U6: what the details overlay shows. The text comes from the plan's unit block (register-plan) or add-unit --about.
         title: x?.title ?? null, about: x?.about ?? null, done_text: x?.done ?? null, check_text: x?.check ?? null,
+        links: unitLinks(x?.links),
         plan: x?.plan ? String(x.plan) : null, plan_unit: x?.plan_unit ?? null,
         // When the loop marked the unit done on its PR's merge (units.done_at); the window's `merged <age>`.
         done_at: us === "done" ? ((db.s.get("units", { project: label, squad: topic, slug }) as any)?.done_at ?? null) : null,
