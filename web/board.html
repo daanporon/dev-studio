@@ -165,10 +165,13 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .arow.users{cursor:pointer} .arow.users:hover{background:#181d25} .arow.open{border-left-color:var(--blue);background:#171c25} .arow.limited{border-left-color:#5a2a26}
 .arow>*{min-width:0} .arow .al{display:flex;align-items:center;gap:6px;color:var(--fg);min-width:0} .arow .al .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto}
 .arow.off>*{opacity:.5} .arow .bdg.off{background:#2a2d33;color:var(--fg);opacity:1}
+.arow .lu.awarn,.mrow .lu.awarn{color:var(--amber);white-space:normal;overflow-wrap:anywhere} .arow .al{flex-wrap:wrap} .arow .al .t{max-width:100%} .afacts{margin:-4px 0 10px;font-size:11px;color:var(--dim);overflow-wrap:anywhere}
+.acc-sec .amanage{margin-left:8px}
+.mrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font:12px var(--mono);color:var(--mut)} .mrow:first-child{border-top:0} .mrow .al{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--fg);min-width:0} .mrow .al .t{overflow-wrap:anywhere} .mrow .mark{flex:none;font-size:10px;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue)} .mrow .bdg{flex:none;font-size:10px;padding:1px 6px;border-radius:4px;background:#23272f;color:var(--mut)}
 .arow .mark{flex:none;font-size:10px;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue)}
 .arow .bdg{flex:none;font-size:10px;padding:1px 6px;border-radius:4px;background:#23272f;color:var(--mut)} .arow .bdg.plan{margin-left:6px} .arow .bdg.limited{background:var(--red-bg);color:var(--red)}
 .arow .lr{display:flex;justify-content:space-between} .arow .track{height:6px;border-radius:3px;background:#23272f;margin:3px 0;overflow:hidden} .arow .fill{height:100%;border-radius:3px}
-.adetail .ainfo{padding:2px 0 6px;color:var(--mut)} .adetail .ai-sec{padding:2px 0} .adetail .ai-h{font:500 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:2px} .adetail .ai-line{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.2fr) 80px minmax(0,1fr) 60px;gap:10px;align-items:center;padding:2px 0} .adetail .ai-line:not(.grant){grid-template-columns:90px minmax(0,1fr) auto} .adetail .ai-line .gl{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .adetail .rbtn{font-size:11px;padding:0 6px;cursor:pointer;background:#23272f;color:var(--fg);border:1px solid #333a45;border-radius:4px;justify-self:start} .adetail .abtn{min-width:68px;white-space:nowrap;font-size:11px;padding:1px 8px;cursor:pointer;background:#23272f;color:var(--fg);border:1px solid #333a45;border-radius:4px} .adetail .rlast{font-size:11px;color:var(--dim)} .adetail .rlast.bad{color:var(--red)}
+.adetail .ainfo{padding:2px 0 6px;color:var(--mut)} .adetail .ai-sec{padding:2px 0} .adetail .ai-h{font:500 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:2px} .adetail .ai-line{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.2fr) 80px minmax(0,1fr) 60px;gap:10px;align-items:center;padding:2px 0} .adetail .ai-line:not(.grant){grid-template-columns:90px minmax(0,1fr) auto} .adetail .ai-line .gl{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .adetail .rbtn{font-size:11px;padding:0 6px;cursor:pointer;background:#23272f;color:var(--fg);border:1px solid #333a45;border-radius:4px;justify-self:start} .adetail .abtn,.mrow .abtn{min-width:68px;white-space:nowrap;font-size:11px;padding:1px 8px;cursor:pointer;background:#23272f;color:var(--fg);border:1px solid #333a45;border-radius:4px} .adetail .rlast{font-size:11px;color:var(--dim)} .adetail .rlast.bad{color:var(--red)}
 .arow .frs{cursor:default} .arow .rlast{font-size:11px;color:var(--dim)} .arow .rlast.bad{color:var(--red)} .arow .rs{font-size:11px;color:var(--dim)} .arow .unk{color:var(--dim)} .arow .unk.wide{grid-column:span 2} .arow .lu{color:var(--red);font-size:11px} .arow .lu.stale{color:var(--amber)} .arow .bdg.sk{background:var(--amber-bg);color:var(--amber)} .arow .bdg.sk.broken{background:var(--red-bg);color:var(--red)}
 .mm{color:var(--amber);font-weight:600;margin-left:4px;cursor:help} .cfgd{opacity:.55}
 .adetail .ainfo .box{background:#1d232d} .adetail .ainfo .dbar{margin:4px 0 10px} .adetail .ainfo .explain{margin-bottom:10px} .adetail .ai-line.head{font:500 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
@@ -250,6 +253,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .md.qmd{padding:0;overflow:visible;overflow-wrap:anywhere;min-width:0;max-width:100%} .md.qmd>:first-child{margin-top:0} .md.qmd>:last-child{margin-bottom:0}
 .md.qmd ul,.md.qmd ol{margin:4px 0;padding-left:20px} .md.qmd :is(h3,h4,h5,h6){margin:8px 0 4px;font-size:inherit;font-weight:700}
 .qbody h3,.chat-q h3,.opt,.sugg{overflow-wrap:anywhere}
+.qcmd{margin:0;padding:8px 10px;flex:none;max-height:40vh;overflow:auto;background:#0f1115;color:#e6e8ee;border:1px solid #2b303a;border-radius:8px;font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere} .qnote .qcmd{max-height:9.5em;margin-top:4px}
 .qbody .prline{display:flex;align-items:center;font-size:13px;color:var(--mut)} .qbody .prline .prchip{margin-left:0}
 .opts{display:flex;flex-direction:column;gap:6px}
 .pnote{font-size:13px;color:var(--amber);background:var(--amber-bg);border:1px solid #4a3a1e;border-radius:7px;padding:9px 12px}
@@ -1460,14 +1464,23 @@ function ResetsCell({ a }) {
   return html`<div class="frs"><span title=${tip}>${resetsSummary(r)}</span>${mark}</div>`;
 }
 // U8: the opened account is laid out like an opened squad: action bar, state line, then boxes (Free resets, Roles).
+// issue #125 U7: an account's on/off button and its login's warnings (the strip row, its detail and the Manage panel).
+// A plain function, not a component, so tests/board-page.sh renders it as part of AccountDetail.
+function accountSwitch(a, all, project, toast) {
+  return html`<button class="abtn" title=${a.disabled ? "Let picks use this account again" : "No pick uses this account until it is enabled again"} onClick=${(e) => { e.stopPropagation(); switchAccount(a, all, project, toast); }} onKeyDown=${(e) => { if (e.key !== "Escape") e.stopPropagation(); }}>${a.disabled ? "Enable" : "Disable"}</button>`;
+}
+function acctWarnings(a) {
+  return html`${a.dup_folders && html`<div class="lu awarn">same login in two or more folders: ${a.dup_folders.join(" and ")}</div>`}${a.folder_missing && html`<div class="lu awarn">folder missing: ${a.folder} · picks skip this account</div>`}`;
+}
 function AccountDetail({ a, all, project, toast, isDefault }) {
   const r = a.resets, grants = r && r.state === "reported" ? (r.grants || []) : [], last = a.reset_last, g = groupUsers(a.users, project);
   const stop = { onClick: (e) => e.stopPropagation(), onKeyDown: (e) => e.stopPropagation() };
   const summary = grants.length ? resetsSummary(r) : "";
   return html`<div class="ainfo" ...${stop}>
-    <div class="dbar"><button class="abtn" title=${a.disabled ? "Let picks use this account again" : "No pick uses this account until it is enabled again"} onClick=${(e) => { e.stopPropagation(); switchAccount(a, all, project, toast); }} onKeyDown=${(e) => e.stopPropagation()}>${a.disabled ? "Enable" : "Disable"}</button>
+    <div class="dbar">${accountSwitch(a, all, project, toast)}
       <span>${[a.agent, a.plan, isDefault ? "default" : null].filter(Boolean).join(" · ")}</span></div>
     <div class="explain">${a.disabled ? "disabled: no pick uses it; running roles keep going until their next restart" : "enabled: picks can use this account"}</div>
+    ${(a.folder || a.login_short) && html`<div class="afacts">${[a.account, a.folder && "folder " + a.folder, a.source && "source " + a.source, a.login_short && "login " + a.login_short].filter(Boolean).join(" · ")}</div>`}
     ${(grants.length > 0 || last || a.reset_pending) && html`<div class="box"><h3>Free resets<span>${summary}</span></h3>
       ${grants.length > 0 && html`<div class="ai-line grant head"><span>Grant</span><span>Refills</span><span>Left</span><span>Use by</span><span></span></div>`}
       ${grants.map((g) => html`<div key=${g.id} class="ai-line grant"><span class="gl" title=${g.label}>${g.label}</span><span>${refillsOf(g)}</span><span>${g.left ?? "?"}/${g.total ?? "?"} left</span>
@@ -1514,8 +1527,9 @@ function AccountRow({ a, all, isDefault, project, open, onToggle, toast }) {
   return html`<${React.Fragment}>
     <div class=${"arow" + (can ? " users" : "") + (isOpen ? " open" : "") + (a.limited || a.credits || a.login ? " limited" : "") + (a.disabled ? " off" : "")} role=${can ? "button" : undefined} tabindex=${can ? 0 : undefined} aria-expanded=${can ? isOpen : undefined} onClick=${can ? onToggle : undefined} onKeyDown=${key}>
       <span class="caret">${can ? "›" : ""}</span>
-      <div><div class="al"><span class="mark">${a.agent}</span><span class="t" title=${a.label || a.account}>${a.label || a.account}</span>${a.plan && html`<span class="bdg plan" title="the account's plan">${a.plan}</span>`}
+      <div><div class="al"><span class="mark">${a.agent}</span><span class="t" title=${a.label || a.account}>${a.label || a.account}</span>${a.tag && html`<span class="bdg where" title="where this login is listed">${a.tag}</span>`}${a.plan && html`<span class="bdg plan" title="the account's plan">${a.plan}</span>`}
         ${a.disabled && html`<span class="bdg off" title="no pick uses this account; running roles keep going until their next restart">disabled</span>`}${a.credits ? html`<span class="bdg limited">out of credits</span>` : a.login ? html`<span class="bdg limited">login ended</span>` : a.limited ? html`<span class="bdg limited">limited</span>` : isDefault && html`<span class="bdg">default</span>`}${a.skills && html`<span class=${"bdg sk" + (/^broken/.test(a.skills) ? " broken" : "")} title=${"skills " + a.skills + " — bin/host/install-skills.sh --check names the path and the repair"} aria-label=${"skills " + a.skills}>${/^broken/.test(a.skills) ? "skills broken" : "skills warn"}</span>`}</div>
+        ${acctWarnings(a)}
         ${staleNote && html`<div class="lu stale" title=${staleNote}>${staleNote}</div>`}
         ${a.credits ? html`<div class="lu">out of credits${a.credits.notice ? html` · <span title=${a.credits.notice}>${a.credits.notice.slice(0, 80)}</span>` : ""}${a.credits.link ? html` · <a href=${a.credits.link} target="_blank" rel="noopener noreferrer" onClick=${(e) => e.stopPropagation()}>fix the billing</a>` : ""}</div>`
           : a.login ? html`<div class="lu">login ended · run /login in a terminal on this account</div>`
@@ -1527,6 +1541,20 @@ function AccountRow({ a, all, isDefault, project, open, onToggle, toast }) {
     </div>
     ${isOpen && html`<div class="adetail"><${AccountDetail} a=${a} all=${all} project=${project} toast=${toast} isDefault=${isDefault} /></div>`}
   </${React.Fragment}>`;
+}
+// issue #125 U7: every account, the disabled and folder-only ones the strip hides included. A folder-only login
+// is not an account, so it has no switch.
+function AccountsPanel({ accounts, folderOnly, project, toast, onClose }) {
+  useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k); }, []);
+  return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="mbox acct-panel" style=${{ width: "min(720px,100%)" }} role="dialog" aria-label="Manage accounts">
+      <div class="mhd">Manage accounts<span class="sp"></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
+      <div class="md">${accounts.length + folderOnly.length === 0 && html`<div class="mut">no accounts yet</div>`}
+        ${accounts.map((a) => html`<div class="mrow" key=${a.agent + "/" + a.account}><div><div class="al"><span class="mark">${a.agent}</span><span class="t" title=${a.account}>${a.label || a.account}</span>${a.tag && html`<span class="bdg where">${a.tag}</span>`}${a.default && html`<span class="bdg">default</span>`}${a.disabled && html`<span class="bdg">disabled</span>`}</div>
+          ${acctWarnings(a)}${a.merged_into && html`<div class="lu">same login as ${a.merged_into}: the Accounts section shows them as one row</div>`}</div>${accountSwitch(a, accounts, project, toast)}</div>`)}
+        ${folderOnly.map((f) => html`<div class="mrow" key=${f.agent + "/" + f.folder}><div><div class="al"><span class="mark">${f.agent}</span><span class="t" title=${f.folder}>${f.folder}</span><span class="bdg where">${f.tag}</span></div>
+          <div class="lu">a login folder no account uses${f.login_short ? " · login " + f.login_short : ""}</div>${acctWarnings(f)}</div></div>`)}</div>
+    </div></div>`;
 }
 // The ⚠ badge for a role whose real model/account differs from its configured one.
 const cfgText = (m) => "configured " + (m.model || "?") + " @" + (m.account_cfg_label || m.account_cfg || m.account_label || m.account || "default") + " — running " + (m.model_label || "?") + " @" + (m.account_real_label || m.account_real || "?");
@@ -2025,6 +2053,71 @@ function UpdateCommits({ u, onClose }) {
       <div class="md"><ul class="ucommits">${(u.commits || []).map((c) => html`<li key=${c.sha}>${c.title}${(c.classes || []).map((k) => html`<span class="utag">${k}</span>`)}</li>`)}${u.behind > (u.commits || []).length && html`<li class="muted">and ${u.behind - u.commits.length} more</li>`}</ul></div>
     </div></div>`;
 }
+// remove-project U4: "Remove project". Opening it asks what blocks the removal; with nothing in the way it
+// files the request once the project's name is typed exactly.
+function RemoveProject({ label, onClose, onFiled }) {
+  const [info, setInfo] = useState(null), [typed, setTyped] = useState(""), [err, setErr] = useState(""), [sending, setSending] = useState(false);
+  const field = useRef(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("api/remove-project?project=" + encodeURIComponent(label), { cache: "no-store" });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(b.error || "HTTP " + r.status);
+        if (alive) setInfo(b);
+      } catch (e) { if (alive) setErr("the blockers could not be read: " + (e.message || e)); }
+    })();
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; addEventListener("keydown", k); return () => removeEventListener("keydown", k); }, []);
+  const blockers = (info && info.blockers) || [], clear = !!info && !blockers.length && info.removing == null;
+  const ok = clear && typed === label && !sending;
+  useEffect(() => { if (clear && field.current) field.current.focus(); }, [clear]);
+  const go = async (e) => {
+    e.preventDefault();
+    if (!ok) return;
+    setSending(true); setErr("");
+    try { const b = await post("api/remove-project", { project: label, confirm: typed }); onFiled(b.id, info); }
+    catch (x) { setErr(x.message || String(x)); setSending(false); }
+  };
+  return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <form class="mbox rmproj" style=${{ width: "min(560px,100%)" }} role="dialog" aria-modal="true" aria-label=${"Remove project " + label} onSubmit=${go}>
+      <div class="mhd">Remove project ${label}<span class="sp"></span><button type="button" class="btn sm mclose" onClick=${onClose}>✕</button></div>
+      <div class="qbody">
+        <p>Its Studio, board and services are stopped, and its folder and database rows are archived. The repo clone stays.</p>
+        ${!info && !err && html`<p class="mut">Checking what blocks it…</p>`}
+        ${info && info.removing != null && html`<p class="rm-already">It is already being removed (request ${info.removing}).</p>`}
+        ${blockers.length > 0 && html`<p><b>It cannot be removed yet:</b></p>
+          <ul class="rm-blockers">${blockers.map((b, i) => html`<li key=${i}>${b.text}${b.clear && html`<div>clear: <code>${b.clear}</code></div>`}</li>`)}</ul>`}
+        ${clear && html`<label>Type <b>${label}</b> to confirm<br/><input ref=${field} class="rm-confirm" type="text" style=${{ width: "100%" }} autocomplete="off" autocapitalize="off" spellcheck="false" value=${typed} onInput=${(e) => setTyped(e.target.value)} /></label>`}
+      </div>
+      <div class="qfoot"><span class="err" role="alert">${err}</span><span class="sp"></span>
+        <button type="button" class="btn sm" onClick=${onClose}>Cancel</button>
+        <button type="submit" class="btn sm pri rm-go" disabled=${!ok}>Remove</button></div>
+    </form></div>`;
+}
+
+// A removal's step while it runs, or what stopped it. The live region is there before the text changes.
+function RemovalBanner({ removal }) {
+  const failed = removal && removal.state === "failed";
+  return html`<div aria-live="polite" id="removal-live">${removal && removal.state !== "removed" && html`<div class=${"banner " + (failed ? "err" : "info")} id="removal"><span>${failed ? "⚠" : "…"}</span><div class="t">
+    <b>${failed ? "Removing " + removal.label + " failed." : "Removing " + removal.label + "."}</b> ${removal.text}
+    ${failed && html`<div class="mono">${removal.error}</div><div>Once that is fixed, press Remove project again or run <code>${removal.command}</code>.</div>`}</div></div>`}</div>`;
+}
+
+// The last view of a page that saw its project's removal and then lost its server (KTD10): drawn from what it holds.
+function BoardStopped({ removal }) {
+  const boards = removal.boards || [];
+  return html`<div class="wrap"><div class="hdr"><h1>dev-studio</h1></div>
+    <div class="banner info" id="board-stopped" role="status"><div class="t">
+      <p><b>This board has stopped.</b> ${removal.label} is being removed, and the removal is finishing without it. Last step seen: ${removal.text}.</p>
+      <p>Archive: <code>${removal.archive || removal.archive_hint}</code></p>
+      ${boards.length > 0 && html`<p>Other boards: ${boards.map((b) => html`<a key=${b.port} style=${{ marginRight: "10px" }} href=${location.protocol + "//" + location.hostname + ":" + b.port + "/"}>${b.project || "all projects"}</a>`)}</p>`}
+      <p>This prints the result once it is done: <code>${removal.record_cmd}</code></p>
+    </div></div></div>`;
+}
+
 function UpdateBanner({ data, toast }) {
   const u = data.update, [show, setShow] = useState(false);
   if (!u) return null;
@@ -2220,6 +2313,13 @@ const sqName = (n) => n.squad === "_studio" ? "Studio" : n.squad;
 // what a sent mark, a draft and the Send guards belong to.
 const nkey = (n) => n.id ? n.label + "/" + n.squad + "/" + n.id : "appr:" + n.label + "/" + n.squad + "/" + n.text;
 const akey = (n) => n.id ? askingKey(nkey(n), n.since) : nkey(n);
+
+// ShownText: the command or change a prompt in a terminal is about (an entry with `shown`), as a code block.
+function ShownText({ n }) {
+  return html`<pre class="qcmd">${n.shown}</pre>${n.cwd && html`<div class="lndet">in ${n.cwd}</div>`}`;
+}
+// Where a safety-check prompt is answered, and who raised it.
+const promptWhere = (n, who) => "Answer it in " + who + "'s terminal" + (n.agent ? " (its helper agent " + n.agent + " asks)" : "");
 
 // AskOverlay: one question at a time, tabs for the rest of the inbox. Numbered options (the
 // recommended one pre-selected) plus free text; 1-9 picks, ←/→ switch tabs, Esc closes.
@@ -2620,7 +2720,11 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
       await post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t });
       store.del(chatDraftKey(project, topic, to));   // a send clears that member's whole draft
       held.current[to] = [];
-      if (cur.current === to) { setText(""); setFiles([]); setNote(""); grow(input.current); setPinned(true); load(); }
+      if (cur.current === to) {
+        setText(""); setFiles([]); setNote("");
+        if (input.current) { input.current.value = ""; grow(input.current); }   // setText has not rendered yet: empty the box before it is measured
+        setPinned(true); load();
+      }
     } catch (e) {
       const gone = /^image (\S+) is gone/.exec(String(e.message || ""));
       if (e.status === 409 && gone) putHeld(to, heldOf(to).filter((x) => x.id !== gone[1]));   // that thumbnail goes; the rest stay
@@ -2729,7 +2833,7 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
             ${qCur.options.map((o, i) => html`<button key=${i} type="button" class="btn chat-qopt" disabled=${pressing === shown.wt} onClick=${() => pressOpt(i)}>${i + 1}. ${o}</button>`)}
             <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(() => goView("chat"))}>Esc · leave the menu</button>`
           : html`<h3>${linkedQ(qCur.title, qCur.repo_slug)}</h3>${qCur.doc && onPlan && html`<div><button type="button" class="btn sm" data-ev="open-doc" onClick=${() => onPlan(qCur.doc)}>${docLabel(qCur)}</button></div>`}
-            ${qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
+            ${qCur.shown ? html`<${ShownText} n=${qCur} />${qCur.picker_kind === "permission" && !qCur.answerable && html`<div class="chat-qprompt">${promptWhere(qCur, qCur.asker || shown.label)}</div>`}` : qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
             ${qCur.answerable
               ? html`<${QOptions} n=${qCur} rec=${qRec} onPick=${(l) => answerQ(qCur, l)} />
                 ${qRec && !qCur.choices.some((c) => c.label === qRec) && html`<div class="sugg"><b>Suggested:</b> ${qRec}${qCur.why ? html` — ${linkedQ(qCur.why, qCur.repo_slug)}` : ""}</div>`}
@@ -2840,10 +2944,11 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           <div>${n.changes && html`<button class="btn sm" data-ev="what-changed" onClick=${() => onPlan({ ...n.doc, view: "changes", changes: n.changes })}>What changed</button> `}<button class="btn sm" data-ev="open-doc" onClick=${() => onPlan({ ...n.doc, view: "full", changes: n.changes })}>${docLabel(n)}</button></div></div>`}
         ${n.plain && !n.revision && n.facts && html`<div class="qfacts">${[n.facts.steps + " steps", n.facts.hard + " hard", n.facts.start_now + " start now"].map((t) => html`<span key=${t} class="qfact">${t}</span>`)}</div>`}
         ${n.plain && !n.revision && html`<ul class="qplain">${n.plain.map((l) => html`<li key=${l.label}><b>${l.label}</b>${l.text}</li>`)}</ul>`}
-        ${!n.plain && n.text !== n.title && html`<${QMd} cls="qtxt" text=${n.text} slug=${n.repo_slug} />`}
+        ${n.shown ? html`<${ShownText} n=${n} />` : null}
+        ${!n.plain && n.text !== n.title && !n.shown && html`<${QMd} cls="qtxt" text=${n.text} slug=${n.repo_slug} />`}
         ${n.id && isPicker && !termOnly && html`<div class="pnote">This mirrors the live picker in ${n.from}'s terminal: your pick is pressed there as its option, and the entry clears once the picker records it.</div>`}
         ${n.id && (termOnly
-          ? html`<div class="pnote">Answer it in ${n.from}'s terminal — this picker has several questions or allows several picks, so the board can't answer it. It clears once it is answered.</div>
+          ? html`<div class="pnote">${n.picker_kind === "permission" ? promptWhere(n, n.from) + " — Claude stopped at a safety check, and the board can't answer this prompt." : "Answer it in " + n.from + "'s terminal — this picker has several questions or allows several picks, so the board can't answer it."} It clears once it is answered.</div>
             <${QOptions} n=${n} termOnly=${true} />`
           : html`${studioCard && n.when && html`<div class="when mut">When done: ${n.when}</div>`}
             ${!(studioCard && one !== null) && html`<${QOptions} n=${n} val=${val} rec=${rec} onPick=${set} />`}
@@ -4164,7 +4269,9 @@ function SkillsTab({ project, toast }) {
 
 function App() {
   const [data, setData] = useState(null);
-  const [err, setErr] = useState(null);         // {msg, since} while /board.json fails
+  const [err, setErr] = useState(null);         // {msg, since, lost} while /board.json fails; lost: no answer at all
+  // The removal this page saw of its own project (its own 202, or board.json's open one): losing the server after that is expected.
+  const removalSeen = useRef(null), [removeOpen, setRemoveOpen] = useState(false);
   const [stale, setStale] = useState(false);        // the server's page code changed since this tab loaded
   const [lastOk, setLastOk] = useState(null);
   const [open, setOpen] = useState(() => new Set(store.get("b:open", [])));
@@ -4173,6 +4280,7 @@ function App() {
   const [acctOpen, setAcctOpen] = useState(() => new Set(store.get("b:acctOpen", [])));
   const toggleAcct = (k) => setAcctOpen((o) => { const n = new Set(o); n.has(k) ? n.delete(k) : n.add(k); store.set("b:acctOpen", [...n]); return n; });
   const [accOpen, setAccOpen] = useState(() => lstore.get("b:accts", true));
+  const [manage, setManage] = useState(false);
   const [machOpen, setMachOpen] = useState(() => lstore.get("b:machine", true));
   const [sqOpen, setSqOpen] = useState(() => lstore.get("b:squads", true));
   const [flowFocus, setFlowFocus] = useState(null);   // { stage, n }: a tile asks the Flow to open at that column
@@ -4191,15 +4299,23 @@ function App() {
       if (busy) { again = true; return; }
       busy = true; clearTimeout(timer);
       if (!document.hidden) {
+        let answered = false;
         try {
           const r = await fetch("board.json", { cache: "no-store" });
+          answered = true;
           const body = await r.json().catch(() => ({ error: "bad JSON (HTTP " + r.status + ")" }));
           if (!r.ok || body.error) throw new Error(body.error || "HTTP " + r.status);
+          const seen = removalSeen.current, rm = body.removal;
+          // Another project's board took the port: ours is gone.
+          if (seen && body.project !== seen.label) { answered = false; throw new Error("another board answers here"); }
+          if (rm && rm.state === "removing") removalSeen.current = rm;
+          // An older failed request (a cached render) does not end the one just filed.
+          else if (rm && rm.state === "failed" && seen && rm.id >= seen.id) removalSeen.current = null;
           if (alive) { setData(body); setErr(null); setLastOk(new Date()); }
           // The server's page code changed since this tab loaded it: offer a reload (never drop what is typed).
           const mv = document.querySelector('meta[name="page-version"]');
           if (alive && mv && body.page_version && mv.content && body.page_version !== mv.content) setStale(true);
-        } catch (e) { if (alive) setErr((prev) => ({ msg: String(e.message || e).trim(), since: prev ? prev.since : new Date() })); }
+        } catch (e) { if (alive) setErr((prev) => ({ msg: String(e.message || e).trim(), since: prev ? prev.since : new Date(), lost: !answered })); }
       }
       busy = false;
       if (!alive) return;
@@ -4248,6 +4364,17 @@ function App() {
   const showMember = (sq, m) => { show(sq.label, sq.topic); markCrewRow(sq, m); };
   useEffect(() => { const f = (e) => showMember(e.detail.s, e.detail.m); bus.addEventListener("show-crew", f); return () => bus.removeEventListener("show-crew", f); });
   if (!data) return html`<div class="wrap"><div class="hdr"><h1>dev-studio</h1><span class="meta">${err ? "board.json failed: " + err.msg : "loading…"}</span></div></div>`;
+
+  const seen = removalSeen.current;
+  if (seen && err && err.lost) return html`<${BoardStopped} removal=${seen} />`;
+  // Just filed and not yet in board.json (or only an earlier one is): show our own.
+  const removal = seen && !(data.removal && data.removal.id >= seen.id) ? seen : data.removal;
+  const removing = !!removal && removal.state === "removing";
+  const filedRemoval = (id, info) => {
+    removalSeen.current = { id, label: data.project, state: "removing", text: "Waiting for the loop", command: "ds remove-project " + data.project,
+      archive: null, archive_hint: info.archive_hint, record_cmd: info.record_cmd, boards: info.boards };
+    setRemoveOpen(false);
+  };
 
   // The Needs-you items still to show: one acted on (answered, marked read, close accepted) is gone at once.
   const needsShown = data.needs_you.filter((n) => !cardGone(n));
@@ -4352,7 +4479,8 @@ function App() {
     ${data.loop && data.loop.restarts_24h > 0 && html`<div class="muted" id="loop-restarts" style=${{ fontSize: 12, margin: "4px 0" }}>Loop restarted ${data.loop.restarts_24h}× in 24 h (last ${hhmmss(new Date(data.loop.last_restart_at * 1000))})</div>`}
     ${(data.orca_warning ?? data.backend_ok === false) && !(data.loop && data.loop.down) && html`<div class="banner err"><span>⚠</span><div class="t"><b>The backend (Orca) isn't answering.</b> Worker states show as "unknown" until it's back — this is not every Builder being gone.</div></div>`}
     ${html`<${UpdateBanner} data=${data} toast=${setToast} />`}
-    ${err && html`<div class="banner err"><span>⚠</span><div class="t"><b>Board data stale since ${hhmmss(err.since)}.</b> The last render failed: <span class="mono">${err.msg.slice(0, 400)}</span></div></div>`}
+    <${RemovalBanner} removal=${removal} />
+    ${err && html`<div class="banner err"><span>⚠</span><div class="t"><b>Board data stale since ${hhmmss(err.since)}.</b> ${err.lost ? "Lost contact with the board" : "The last render failed"}: <span class="mono">${err.msg.slice(0, 400)}</span>${err.lost && data.removal_record_cmd && html`<div id="removal-lost">If ${data.project} was being removed, this prints the result once it is done: <code>${data.removal_record_cmd}</code></div>`}</div></div>`}
     ${stale && html`<div class="banner err reloadbar" role="status"><span>⚠</span><div class="t"><b>The board page was updated.</b> Reload to get the new version.</div><button class="btn sm" onClick=${() => location.reload()}>Reload</button></div>`}
 
 
@@ -4396,11 +4524,13 @@ function App() {
         <div class="l2">${linkedQ(n.title, n.repo_slug)}</div>
         ${debrief ? (n.text && n.text !== n.title && html`<div class="lndet dbr">${linkedQ(n.text, n.repo_slug)}</div>`)
           : n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
+          : n.shown ? html`<${ShownText} n=${n} />${n.picker_kind === "permission" && n.picker_answerable !== true && html`<div class="lndet">${promptWhere(n, n.from)}</div>`}`
           : n.text && !textInTitle(n) && html`<div class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}</div>`}
         ${n.why && html`<div class="lndet">Why: ${linkedQ(mdPlain(n.why), n.repo_slug)}</div>`}</div>`;
     })}</div>`}
     <${LoopNotes} notes=${data.loop_notes || []} open=${notesOpen} setOpen=${(o) => { setNotesOpen(o); lstore.set("b:notes", o); }} sq=${notesSq} setSq=${(v) => { setNotesSq(v); lstore.set("b:notes-sq", v); }} toast=${setToast} onShow=${show} />
     ${startOpen && data.project && html`<${StartSquad} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setStartOpen(false)} />`}
+    ${removeOpen && data.project && html`<${RemoveProject} label=${data.project} onClose=${() => setRemoveOpen(false)} onFiled=${filedRemoval} />`}
 
     ${(data.requests || []).length > 0 && html`<h2>Waiting<small>the Studio runs its requests on its next tick and the loop starts squads itself; then they disappear</small></h2>
       <div class="live-list">${data.requests.map((r) => html`<div key=${r.label + "/" + r.file}>${r.text.replace(/^board: the operator asks you to run: /, "")} <span class="mut">· ${fmtAge(r.age_min)} ago${data.project ? "" : " · " + r.label}</span></div>`)}</div>`}
@@ -4411,7 +4541,8 @@ function App() {
       <div class="sqctl">
         ${data.project && html`<button class="btn sm" onClick=${() => setStartOpen(true)}>Start squad</button>
           <button class="btn sm" title="Reload dev-studio instructions in every squad (the Studio when it is idle)" onClick=${() => studio({ project: data.project, action: "reload" }, setToast, "Reload instructions in every squad of " + data.project + "?")}>Reload all</button>
-          ${data.project_controls && html`<${PauseControls} target=${{ scope: "project", project: data.project }} pause=${(data.projects || []).find((p) => p.label === data.project)?.pause} label=${"project " + data.project} toast=${setToast} all=${true} />`}`}
+          ${data.project_controls && html`<${PauseControls} target=${{ scope: "project", project: data.project }} pause=${(data.projects || []).find((p) => p.label === data.project)?.pause} label=${"project " + data.project} toast=${setToast} all=${true} />`}
+          ${data.project_controls && html`<button class="btn sm rm-project" title=${"Stop " + data.project + " and archive it"} disabled=${removing} onClick=${() => setRemoveOpen(true)}>Remove project</button>`}`}
         ${Object.entries(filters).map(([k, [lbl, f]]) => html`<button key=${k} class=${"chip" + (filter === k ? " on" : "")} onClick=${() => setFilter(k)}>${lbl}<b>${squads.filter(f).length}</b></button>`)}
       </div></div>
     <div class="tbl">
@@ -4460,10 +4591,14 @@ function App() {
     ${flowUnit && (() => { const sq = squads.find((x) => x.label === flowUnit.label && x.topic === flowUnit.topic), un = sq && (sq.units || []).find((x) => x.slug === flowUnit.slug);
       return un ? html`<${UnitDetails} s=${sq} u=${un} toast=${setToast} ask=${flowUnit.ask} onAsk=${setAsk} onShow=${showMember} card=${flowUnit.card} onPlan=${setPlan} planOpen=${!!plan} onClose=${() => setFlowUnit(null)} />`
         : html`<${FlowCardDetails} card=${flowUnit.card} now=${Date.now() / 1000} onAsk=${setAsk} onClose=${() => setFlowUnit(null)} />`; })()}
-    ${(data.accounts || []).length > 0 && html`<details class="acc-sec" id="accounts" open=${accOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== accOpen) { setAccOpen(o); lstore.set("b:accts", o); } }}>
-      <summary>Accounts<small>${data.accounts.length} · 5-hour and 7-day usage left</small><span class="asof">${asOf(data.as_of && data.as_of.accounts)}</span></summary>
-      <div class="acct-tbl tbl"><div class="arow head"><span></span><span>Account</span><span>5-hour</span><span>7-day</span><span>Free resets</span><span>In use</span></div>
-        ${data.accounts.map((a, i, all) => { const k = a.agent + "/" + a.account; return html`<${AccountRow} key=${k} a=${a} all=${all} toast=${setToast} project=${data.project} isDefault=${all.findIndex((x) => x.agent === a.agent) === i} open=${acctOpen.has(k)} onToggle=${() => toggleAcct(k)} />`; })}</div></details>`}
+    ${data.accounts && (() => {
+      // The strip: enabled logins, and a disabled account while a role still runs on it (`strip`); the rest is in the Manage panel.
+      const rows = data.accounts.filter((a) => a.strip !== false), hidden = data.accounts.filter((a) => a.strip === false && !a.merged_into).length + (data.account_folders || []).length;
+      return html`<details class="acc-sec" id="accounts" open=${accOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== accOpen) { setAccOpen(o); lstore.set("b:accts", o); } }}>
+      <summary>Accounts<small>${rows.length} · 5-hour and 7-day usage left${hidden > 0 ? " · " + hidden + " hidden" : ""}</small><span class="asof">${asOf(data.as_of && data.as_of.accounts)}</span><button class="btn sm amanage" onClick=${(e) => { e.preventDefault(); e.stopPropagation(); setManage(true); }}>Manage</button></summary>
+      ${rows.length > 0 && html`<div class="acct-tbl tbl"><div class="arow head"><span></span><span>Account</span><span>5-hour</span><span>7-day</span><span>Free resets</span><span>In use</span></div>
+        ${rows.map((a) => { const k = a.agent + "/" + a.account; return html`<${AccountRow} key=${k} a=${a} all=${data.accounts} toast=${setToast} project=${data.project} isDefault=${!!a.default} open=${acctOpen.has(k)} onToggle=${() => toggleAcct(k)} />`; })}</div>`}</details>`; })()}
+    ${manage && html`<${AccountsPanel} accounts=${data.accounts || []} folderOnly=${data.account_folders || []} project=${data.project} toast=${setToast} onClose=${() => setManage(false)} />`}
 
     ${M && html`<details class="mach-sec" id="machine" open=${machOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== machOpen) { setMachOpen(o); lstore.set("b:machine", o); } }}>
       <summary>Machine<small><span class=${M.load.level}>load ${M.load.x != null ? M.load.x + "× cores" : "?"}</span> · <span class=${M.mem.level}>mem ${M.mem.pct ?? "?"}%</span> · ${M.swap.total_kb ? html`<span class=${M.swap.level}>swap ${M.swap.pct}%${M.swap.level === "crit" ? " ✖" : M.swap.level === "warn" ? " ⚠" : ""}</span>` : "no swap"}${M.disk && html` · <span class=${M.disk.level}>disk ${M.disk.free_pct}% free</span>`}</small><span class="asof" style=${M.stale ? { color: "var(--amber)" } : {}} title=${M.stale ? "older than 3 × the sampling cadence" : ""}>${asOf(data.as_of && data.as_of.machine)}</span></summary>

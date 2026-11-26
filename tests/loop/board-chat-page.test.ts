@@ -169,6 +169,20 @@ test("Send posts one chat request with the trimmed line and clears the input; an
   expect(p.h.states[2]).toBe("");
 });
 
+test("a send shrinks the input back to its empty height without waiting for typing", async () => {
+  const p = panel();
+  p.render();
+  const el: any = { value: "", style: {} as any, get scrollHeight() { return this.value ? 120 : 24; } };
+  // The stub renderer does not attach refs, so the textarea's ref gets the element here.
+  attrAfter(p.render(), 'class="chat-in"', "ref").current = el;
+  el.value = "one\ntwo\nthree";
+  attrAfter(p.render(), 'class="chat-in"', "onInput")({ target: el });
+  expect(el.style.height).toBe("122px");
+  await attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
+  expect(p.posts.length).toBe(1);
+  expect(el.style.height).toBe("26px");
+});
+
 test("each send not yet in the transcript shows at the bottom where it is: queued with why, sent, turn started, not taken, failed", () => {
   const p = panel();
   p.render();

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# picker-hook.sh <pre|post> <state> <role> <wt> — mirror a terminal AskUserQuestion picker
-# onto the board (and clear it when answered there).
+# picker-hook.sh <pre|post|permission> <state> <role> <wt> — mirror a picker or safety prompt
+# onto the board: an AskUserQuestion picker (cleared when answered there) or a Claude safety-check prompt.
 #
 # Armed per role worktree by bin/hooks/arm-picker.sh (like the rewake Stop hook): PreToolUse with
 # matcher AskUserQuestion runs `pre`, PostToolUse runs `post`. Reads the hook JSON from stdin.
@@ -21,6 +21,11 @@
 # the answer, so pre checks the tombstone before and after enqueueing and stands down when
 # the picker already closed (a dismissed picker or a dead agent never runs post — the sweep
 # reaps those).
+# permission (PermissionRequest, matcher *): detached like pre; returns no decision. Queues a
+# blocking picker-… entry with picker_kind "permission" and the command or change the prompt is
+# about, not answerable from the board, and writes one permission_asked event. AskUserQuestion and
+# ExitPlanMode are ignored, and pre's two dedup rules don't apply. The sweep clears the entry once
+# the transcript shows the call's result, or the role stops waiting.
 set -euo pipefail
 # U193: the work runs in TypeScript (bin/commands/picker-hook-ts.ts); this path stays because worktree settings name it.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

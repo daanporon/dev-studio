@@ -819,6 +819,31 @@ test("update banner: Show commits opens a dialog with each commit and Esc closes
   } finally { await r.window.happyDOM.close(); }
 });
 
+// permission-prompt-needs-you U1: the command is a code block on the row and in the card, and both say it is answered in the role's terminal.
+test("a safety-check prompt shows its command as a code block and says to answer it in the role's terminal", async () => {
+  const shown = 'echo start\nrm -- "$HOME/.ds-none"';
+  const card = { squad: "sq", label: "fixture", kind: "blocking", id: "picker-00002222", since: "2026-11-20T10:00:00Z", from: "builder-u1", title: "builder-u1 asks: run this command?", titled: true,
+    text: "```\n" + shown + "\n```", source: "picker", picker_kind: "permission", picker_answerable: false, shown, cwd: "/tmp/wt-builder",
+    choices: [{ label: "Yes", does: "let it run this once" }, { label: "No", does: "refuse it" }], options: ["Yes", "No"], age_min: 1 };
+  const r = await mount({ ...board, needs_you: [card] }, false);
+  const w = r.window, doc = w.document;
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && !doc.querySelector(".qnote"); k++) await wait(25);
+    const note = doc.querySelector(".qnote");
+    expect(note.querySelector("pre.qcmd").textContent).toBe(shown);
+    expect(note.textContent).toContain("Answer it in builder-u1's terminal");
+    expect(note.textContent).not.toContain("```");
+    note.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    const body = doc.querySelector(".qbody");
+    expect(body.querySelector("pre.qcmd").textContent).toBe(shown);
+    expect(body.textContent).toContain("Answer it in builder-u1's terminal — Claude stopped at a safety check");
+    expect(body.querySelectorAll("button.opt").length).toBe(0); // read-only: nothing to send
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
 // ---- unit-info-link U2: a unit's links as a chip in its Work units row and a "More info" row in its window.
 test("a unit's links: a chip and +N in its row, More info in its window, nothing for a unit without links", async () => {
   const urls = ["https://linear.app/acme/issue/ABC-1/x", "https://example.org/page"];
@@ -868,4 +893,57 @@ test("a unit's links: a chip and +N in its row, More info in its window, nothing
     expect(Number(w.getComputedStyle(row("u3-done").querySelector(".ulinks")).opacity)).toBeLessThan(1);
     expect(r.errors).toEqual([]);
   } finally { await w.happyDOM.close(); }
+});
+
+// issue #125 U7: the strip is the rows marked `strip`; the Manage panel lists every account and folder-only login.
+const u7Board = {
+  ...board,
+  accounts: [
+    account({ account: "system", label: "Own", tag: "system", strip: true, default: false }),
+    account({ account: "u-o1", label: "orca@example.com", tag: "Orca + ds", strip: true, default: true, folder: "/x/orca", source: "orca", login_short: "abcd1234", dup_folders: ["/x/orca", "/x/orca2"] }),
+    account({ account: "gone", label: "Gone", tag: "ds only", strip: true, folder: "/x/gone", folder_missing: true }),
+    account({ account: "idle", label: "Idle", tag: "ds only", disabled: true, strip: false }),
+    account({ account: "busy", label: "Busy", tag: "ds only", disabled: true, strip: true, users_other: 1 }),
+  ],
+  account_folders: [{ agent: "claude", tag: "folder only", folder: "/x/lone", login_short: "ffff0000", dup_folders: null }],
+};
+const texts = (el: any, sel: string) => [...el.querySelectorAll(sel)].map((n: any) => n.textContent.trim());
+
+test("accounts: the strip's tags, warnings, default chip and hidden count; Manage lists every account with its switch", async () => {
+  const r = await mount(u7Board);
+  try {
+    const sec = r.root.querySelector("#accounts")!;
+    expect(texts(sec, ".arow:not(.head) .al .t")).toEqual(["Own", "orca@example.com", "Gone", "Busy"]);
+    expect(texts(sec, ".arow .bdg.where")).toEqual(["system", "Orca + ds", "ds only", "ds only"]);
+    const defaults = [...sec.querySelectorAll(".arow .al")].filter((al: any) => [...al.querySelectorAll(".bdg")].some((b: any) => b.textContent === "default"));
+    expect(defaults).toHaveLength(1);
+    expect((defaults[0] as any).textContent).toContain("orca@example.com");
+    expect(texts(sec, ".arow .awarn")).toEqual(["same login in two or more folders: /x/orca and /x/orca2", "folder missing: /x/gone · picks skip this account"]);
+    expect(sec.querySelector("summary small")!.textContent).toBe("4 · 5-hour and 7-day usage left · 2 hidden");
+    expect(texts(sec, ".afacts")).toContain("u-o1 · folder /x/orca · source orca · login abcd1234");
+    sec.querySelector(".amanage")!.dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((res) => setTimeout(res, 30));
+    const panel = r.root.querySelector(".acct-panel")!;
+    expect(texts(panel, ".mrow .al .t")).toEqual(["Own", "orca@example.com", "Gone", "Idle", "Busy", "/x/lone"]);
+    expect(texts(panel, ".mrow .bdg.where")).toEqual(["system", "Orca + ds", "ds only", "ds only", "ds only", "folder only"]);
+    expect([...panel.querySelectorAll(".mrow")].map((m: any) => m.querySelector(".abtn")?.textContent ?? null)).toEqual(["Disable", "Disable", "Disable", "Enable", "Enable", null]);
+    expect(texts(panel, ".awarn")).toHaveLength(2);
+    panel.querySelector(".abtn")!.dispatchEvent(new r.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise((res) => setTimeout(res, 30));
+    expect(r.root.querySelector(".acct-panel")).toBeNull();
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+test("accounts: with no accounts the section and its Manage button are still there", async () => {
+  const r = await mount({ ...board, accounts: [], account_folders: [] });
+  try {
+    const sec = r.root.querySelector("#accounts")!;
+    expect(sec.querySelector(".amanage")).not.toBeNull();
+    expect(sec.querySelector(".acct-tbl")).toBeNull();
+    sec.querySelector(".amanage")!.dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((res) => setTimeout(res, 30));
+    expect(r.root.querySelector(".acct-panel")!.textContent).toContain("no accounts yet");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
 });
