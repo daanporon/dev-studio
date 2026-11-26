@@ -10,14 +10,17 @@ import type { Row, Store } from "../core/store.ts";
 import type { Out } from "../io/orca.ts";
 import { removeWorktree, worktreeAt } from "../io/worktrees.ts";
 import { LOCAL } from "../drivers/contract.ts";
-import { onContract } from "./backend.ts";
+import { onContract, studioContract } from "./backend.ts";
+import { STUDIO_SQUAD } from "./studio.ts";
 import { gateBlock, type ActivityGate } from "../pause/pause.ts";
 
 export type Where = { project: string; squad: string | null | undefined; wt: string; path: string };
 const OK: Out = { code: 0, out: "", err: "" };
 
-/** Whether this worktree's removal is the contract's: its squad is on a backend other than `orca`. */
-export const byContract = (store: Store, w: Pick<Where, "project" | "squad">): boolean => !!w.squad && onContract(store, w.project, w.squad);
+/** Whether this worktree's removal is the contract's: its squad is on a backend other than `orca` (the Studio,
+ *  which has no squads row: its project's studio_backend, remove-project U3). */
+export const byContract = (store: Store, w: Pick<Where, "project" | "squad">): boolean =>
+  w.squad === STUDIO_SQUAD ? !!studioContract(store, w.project) : !!w.squad && onContract(store, w.project, w.squad);
 
 /** The live `worktrees` row at `path` when a provider made it for a squad on a contract backend. */
 export function contractTree(store: Store, path: string | null | undefined): Row | null {

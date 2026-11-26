@@ -8,6 +8,7 @@ import { openReadOnly, dbPath } from "../loop/core/store";
 import { noLaunchLine } from "../backend/launch-lines";
 import { whoAmI } from "../loop/core/whoami.ts";
 import { squadWish } from "../loop/squad/squad-wish.ts";
+import { openRemoval } from "../loop/squad/project-removal.ts";
 
 export const help = `--repo <selector> --topic <slug> [--type t] [--autonomy a] [--host h] [--backend b] [--framing f | --framing-file path] [--start s] — write a squad's running wish (spawn-squad.sh)`;
 
@@ -38,6 +39,12 @@ export async function run(raw: string[]): Promise<number> {
   if (topic.startsWith(".") || /[^A-Za-z0-9._-]/.test(topic)) { writeErr("spawn-squad: --topic must be [A-Za-z0-9._-] and not start with '.'\n"); return 2; }
 
   const label = dsLabel(repo);
+  if (existsSync(dbPath(stateRoot()))) {
+    const ro = openReadOnly();
+    let removing: number | null;
+    try { removing = openRemoval(ro, label); } finally { ro.close(); }
+    if (removing !== null) { writeErr(`spawn-squad: '${label}' is being removed (request ${removing}); no squad starts in it\n`); return 1; }
+  }
   const word = (key: string) => String(readGet(label, "limits.conf", key, settingsAt()).value ?? "").trim().split(/\s+/)[0];
   // board-actions-as-wishes U6: the wish itself is squad-wish.ts's, shared with the loop's board Start.
   const w = squadWish({
