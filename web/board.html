@@ -2666,13 +2666,17 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
     ...((data && data.questions) || []).filter((q) => q.id && !sentQ.has(askOf(q))).map((q) => ({ ...q, key: "q:" + q.id + "@" + q.since }))];
   const blockKey = (qItems.find((x) => x.menu || x.blocking) || {}).key || "";
   // It opens by itself once per new blocking item; a pick of the operator's holds until the next one.
-  const qNamed = typeof qAt === "string" ? qItems.findIndex((x) => x.id === qAt) : -1;   // opened for a question: it shows, blocking or not
+  // Opened for a question: it shows, blocking or not, until a blocking item that was not there at the opening arrives.
+  const openKey = useRef(null);
+  if (data && openKey.current === null) openKey.current = blockKey;
+  const qNamed = typeof qAt === "string" && (!blockKey || blockKey === openKey.current) ? qItems.findIndex((x) => x.id === qAt) : -1;
   const qView = qItems.length > 0 && (qOn && qOn.wt === shown.wt && qOn.key === blockKey ? qOn.on : blockKey !== "" || qNamed >= 0);
   const showScreen = !qView && !!scr && (screenOn == null ? data.source === "screen" : screenOn);
   const view = qView ? "question" : showScreen ? "screen" : "chat";
   const goView = (v) => { setQOn({ wt: shown.wt, key: blockKey, on: v === "question" }); if (v !== "question") setScreenOn(v === "screen"); };
   const qIdx = typeof qAt === "string" ? Math.max(qNamed, 0) : Math.min(qAt, qItems.length - 1);
   const qCur = qItems[qIdx] || null;
+  const pageQ = (i) => { goView("question"); setQAt(i); };   // paging keeps the view open when nothing blocks
   const qRec = qCur && qCur.source !== "picker" ? qCur.suggestion : null;   // a picker's option 1 is only first, not recommended
   // A tap on a choice is the card's own answer: sendAnswer posts api/answer with the question's `since`.
   const answerQ = async (q, answer) => {
@@ -2719,8 +2723,8 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
         aria-selected=${m.wt === shown.wt ? "true" : "false"} tabindex=${m.wt === shown.wt ? 0 : -1} title=${m.label} aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))}
         onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label.length > 14 ? m.label.slice(0, 13) + "…" : m.label}</span>${badge(mail(m), chatMailTip(m))}${ask(m)}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}
       <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${qView && qCur
-        ? html`<div class="chat-q" data-chat-question>${qItems.length > 1 && html`<div class="chat-qnav"><button type="button" class="btn sm" aria-label="Previous question" disabled=${qIdx <= 0} onClick=${() => setQAt(Math.max(0, qIdx - 1))}>‹</button>
-            <span>${qIdx + 1} of ${qItems.length}</span><button type="button" class="btn sm" aria-label="Next question" disabled=${qIdx >= qItems.length - 1} onClick=${() => setQAt(Math.min(qItems.length - 1, qIdx + 1))}>›</button></div>`}
+        ? html`<div class="chat-q" data-chat-question>${qItems.length > 1 && html`<div class="chat-qnav"><button type="button" class="btn sm" aria-label="Previous question" disabled=${qIdx <= 0} onClick=${() => pageQ(Math.max(0, qIdx - 1))}>‹</button>
+            <span>${qIdx + 1} of ${qItems.length}</span><button type="button" class="btn sm" aria-label="Next question" disabled=${qIdx >= qItems.length - 1} onClick=${() => pageQ(Math.min(qItems.length - 1, qIdx + 1))}>›</button></div>`}
           ${qCur.menu ? html`<div class="chat-qprompt">${qCur.prompt.join("\n") || shown.label + "'s screen shows a menu"}</div>
             ${qCur.options.map((o, i) => html`<button key=${i} type="button" class="btn chat-qopt" disabled=${pressing === shown.wt} onClick=${() => pressOpt(i)}>${i + 1}. ${o}</button>`)}
             <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(() => goView("chat"))}>Esc · leave the menu</button>`

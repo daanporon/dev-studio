@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mount } from "./board-mount";
+import { shortTitle } from "../../bin/board/needs-rules.ts";
 
 const root = join(import.meta.dir, "../..");
 const page = readFileSync(join(root, "web/board.html"), "utf8");
@@ -110,8 +111,10 @@ test("a table reads as `a · b` in its list row, and an untitled question's row 
   const table = "Which layout?\n\n| Column one | Column two |\n|---|:---:|\n| x \\| y | z |\n\nPick one.";
   const legacy = "Ship /srv/app/run.log now?\nThe checks passed.";
   const untitled = (id: string, text: string, title: string) => need(id, { text, title, titled: false, why: null });
+  const long = "Should the board keep the old layout for every squad that has not yet moved\nto the new one this week?";
+  expect(shortTitle(long).endsWith("…")).toBe(true);
   const t = await open([need("t1", { text: table, why: null }), untitled("t2", legacy, "Ship run.log now?"),
-    untitled("t3", "**Keep** the\nold one", "**Keep** the old one"), need("t4", { text: "Same ask, then more.", title: "Same ask", why: null })], []);
+    untitled("t3", "**Keep** the\nold one", "**Keep** the old one"), untitled("t5", long, shortTitle(long)), need("t4", { text: "Same ask, then more.", title: "Same ask", why: null })], []);
   try {
     const rows = [...t.d.querySelectorAll(".qnote")] as any[];
     const row = (title: string) => rows.find((r) => r.querySelector(".l2").textContent === title);
@@ -120,6 +123,7 @@ test("a table reads as `a · b` in its list row, and an untitled question's row 
     expect(det).not.toContain("---");
     expect(row("Ship run.log now?").querySelector(".lndet")).toBeNull();
     expect(row("**Keep** the old one").querySelector(".lndet")).toBeNull();
+    expect(row(shortTitle(long)).querySelector(".lndet")).toBeNull();
     // a title the asker wrote keeps the text under it, even when the text starts with it
     expect(row("Same ask").querySelector(".lndet").textContent).toBe("Same ask, then more.");
     expect(t.r.errors).toEqual([]);

@@ -695,10 +695,17 @@ test("U3: opened for a question id, the Question view starts there, blocking or 
   const unknown = open("gone");
   expect(flat(questionView(unknown.root))).toContain("1 of 2");
   expect(flat(questionView(unknown.root))).toContain("Question q1?");
-  // Paging still works from the named question.
-  const { p, root } = open("q2");
-  fnIn(nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Previous question"'))!)();
-  expect(flat(questionView(p.render()))).toContain("1 of 2");
+  // Paging still works from the named question, and keeps the view open when nothing blocks.
+  for (const blocking of [true, false]) {
+    const { p, root } = open("q2", blocking);
+    nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Previous question"'))!.values.filter((v: any) => typeof v === "function")[0]();
+    expect(flat(questionView(p.render()))).toContain("1 of 2");
+  }
+  // A menu that comes up later shows first, over the named question.
+  const { p, root } = open("q2", false);
+  fnIn(segBtn(root, "chat"))();
+  p.setData({ ...idle, questions: [bq("q1", { blocking: false }), bq("q2", { blocking: false })], screen: { tail: menuTail, menu: 2, prompt: ["Proceed now?"], options: ["Yes", "No"], at: T, age_s: 1 } });
+  expect(flat(questionView(p.render()))).toContain("Proceed now?");
 });
 
 test("U2: a terminal-only picker shows its text and Open Screen to answer, no answer buttons", () => {
