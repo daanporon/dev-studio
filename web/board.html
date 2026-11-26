@@ -2330,7 +2330,7 @@ const promptWhere = (n, who) => "Answer it in " + who + "'s terminal" + (n.agent
 // recommended one pre-selected) plus free text; 1-9 picks, ←/→ switch tabs, Esc closes.
 // planOpen: the plan modal is stacked over this overlay, so every key belongs to it (Esc closes the plan only).
 const docLabel = (n) => /^plan-/.test(n.id || "") ? "Open plan" : "Open doc";
-// The answer list of one question, shared by the card (AskOverlay: a tap picks, Send sends) and the chat's Question view
+// The answer list of one question, shared by the card (AskOverlay: a tap picks, Send sends) and the chat's docked question card
 // (a tap answers). termOnly: a terminal-only picker, shown read-only.
 function QOptions({ n, val, rec, termOnly, onPick, disabled }) {
   return html`<div class="opts">${n.choices.map((c, j) => termOnly
