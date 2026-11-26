@@ -384,7 +384,15 @@ const questionView = (root: any) => nodes(root).find((n) => n.strings.includes("
 const dockBtn = (root: any, cls: string) => nodes(root).find((n) => n.strings.includes(cls) && n.strings.startsWith("<div class=\"chat-dhd\""));
 const hasKeyRow = (root: any) => nodes(root).some((n) => n.strings.includes('class="chat-keys"'));
 const menuTail = "❯ 1. Yes\n  2. No\n  3. Other";
-const scrToggle = (root: any) => nodes(root).find((n) => n.strings.includes('class="btn sm chat-scrtog"'));
+const scrToggle = (root: any) => nodes(root).find((n) => n.strings.includes('class="btn chat-round chat-scrtog"'));
+// The toggle's icon names where a press goes: [aria-label and title, the drawn path].
+const MONITOR = "M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM12 17v4M8 21h8", BUBBLE = "M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.8A8.4 8.4 0 1 1 21 11.5z";
+const expectIcon = (t: any, label: string, path: string) => {
+  expect(t.values.filter((v: any) => typeof v !== "function")).toEqual([label, label, path]);
+  const markup = t.strings.split('class="btn chat-round chat-scrtog"')[1].split("</button>")[0];
+  expect(markup).not.toContain("aria-pressed");
+  expect(markup.slice(markup.indexOf("<svg")).replace(/<[^>]*>|\u0000/g, "").trim()).toBe("");   // no visible text
+};
 // The card's header buttons, in order: [‹, ›,] ⤢, ▾ (functions of the one header template).
 const headFns = (root: any) => {
   const n = nodes(root).find((x) => x.strings.includes('class="chat-dhd"'))!;
@@ -396,10 +404,10 @@ const navFns = (root: any) => nodes(root).find((x) => x.strings.includes('aria-l
 // What the panel draws between the .mhd opening and the log: the header and the member tabs.
 const headerText = (root: any) => flat(root).split('class="mhd"')[1].split('class="chat-wrap"')[0];
 // Switch the panel to Screen with the message box's toggle.
-const toScreen = (p: any) => { const t = scrToggle(p.render()); if (!t.values.includes("true")) fnIn(t)(); };
+const toScreen = (p: any) => { const t = scrToggle(p.render()); if (t.values.includes("Show the live screen")) fnIn(t)(); };
 const idle = { agent: "claude", source: "transcript", sends: [], turns: [], working: false };
 
-test("chat-view-switcher U1: the header has no view switch; on a phone the Screen toggle is a bare ▭ in the message box row; none without a screen", () => {
+test("chat-view-switcher U1: the header has no view switch; on a phone the screen toggle is an icon in the message box row; none without a screen", () => {
   const had = (globalThis as any).matchMedia;
   (globalThis as any).matchMedia = (q: string) => ({ matches: q === "(max-width:600px)" });
   try {
@@ -412,8 +420,7 @@ test("chat-view-switcher U1: the header has no view switch; on a phone the Scree
     expect(headerText(root)).not.toMatch(/chat-seg|chat-scr|Question|Screen/);
     const row = nodes(root).find((n) => n.strings.includes('class="chat-row"'));
     expect(row.values).toContain(scrToggle(root));
-    expect(scrToggle(root).values).toContain("▭");
-    expect(scrToggle(root).values).toContain("Screen");   // the aria-label of the bare glyph
+    expectIcon(scrToggle(root), "Show the live screen", MONITOR);
     fnIn(scrToggle(root))();
     root = p.render();
     expect(hasKeyRow(root)).toBe(true);
@@ -510,7 +517,7 @@ test("U19: a member with no transcript shows its live screen; a toggle switches 
   let root = p.render();
   expect(screenOf(root).values).toContain("Pick one:\n❯ 1. Yes\n  2. No");
   expect(screenOf(root).values).toContain("read 4 s ago");
-  expect(toggle(root).values).toContain("▭ Chat");
+  expectIcon(toggle(root), "Back to the chat", BUBBLE);
   // The toggle sits in the message box row, not in the header.
   expect(nodes(root).find((n) => n.strings.includes('class="chat-row"')).values).toContain(toggle(root));
   expect(headerText(root)).not.toMatch(/chat-seg|chat-scr|<button[^>]*>(Chat|Screen)/);
@@ -524,7 +531,7 @@ test("U19: a member with no transcript shows its live screen; a toggle switches 
   q.setData({ agent: "claude", source: "transcript", sends: [], turns: [{ role: "assistant", text: "hi", at: T }], screen: { tail: "x", at: T, age_s: 90 } });
   root = q.render();
   expect(screenOf(root)).toBeUndefined();
-  expect(toggle(root).values).toContain("▭ Screen");
+  expectIcon(toggle(root), "Show the live screen", MONITOR);
   fnIn(toggle(root))();
   expect(screenOf(q.render()).values).toContain("read 2 min ago");
   // No screen read: no toggle.
