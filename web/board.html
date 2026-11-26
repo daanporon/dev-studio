@@ -3801,7 +3801,7 @@ function Settings({ project, projects, toast, onClose }) {
   const box = useRef(null);
   // Not on a phone: focusing there pops the keyboard over the window.
   useEffect(() => { if (window.matchMedia && window.matchMedia("(pointer: fine)").matches) box.current?.focus(); }, []);
-  const searched = tab === "limits";
+  const searched = tab !== "pins";
   const clearSearch = () => { setQuery(""); box.current?.focus(); };
   // Esc with text only clears: stopping it here keeps it from the window's Esc listener, which closes Settings.
   const searchKey = (e) => { if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); clearSearch(); } };
@@ -3812,7 +3812,7 @@ function Settings({ project, projects, toast, onClose }) {
       <button class="btn sm mclose" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
       <div class="set-note set-backend" style=${{ margin: "8px 16px 0" }}>Backend: <b class="mono">${backend}</b> — the Studio's; new squads start on it. To change it run <code>ds up ${project} --backend ${"<name>"}</code>; squads already running keep theirs.</div>
       ${importing ? html`<div class="set-body"><${ImportPane} project=${project} toast=${toast} onBack=${() => setImporting(false)} onApplied=${() => setRev((n) => n + 1)} /></div>` : html`<div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
-      <div class="set-body set-searched" key=${rev}><div class="set-search"><input ref=${box} type="search" aria-label="Search settings" placeholder="Search settings" value=${query} disabled=${!searched} title=${searched ? undefined : "This tab is not searched"} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${searchKey} />${searched && query && html`<button class="btn sm set-clear" aria-label="Clear search" title="Clear search" onClick=${clearSearch}>✕</button>`}</div>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}</div>`}</div></div>`;
+      <div class="set-body set-searched" key=${rev}><div class="set-search"><input ref=${box} type="search" aria-label="Search settings" placeholder="Search settings" value=${query} disabled=${!searched} title=${searched ? undefined : "This tab is not searched"} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${searchKey} />${searched && query && html`<button class="btn sm set-clear" aria-label="Clear search" title="Clear search" onClick=${clearSearch}>✕</button>`}</div>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}</div>`}</div></div>`;
 }
 
 // Import in Settings: a source (a file, pasted export text, or another project on this host) -> the plan
@@ -3894,6 +3894,22 @@ function settingMatch(query, ...texts) {
   return settingWords(query).split(/\s+/).every((w) => hay.includes(w));
 }
 
+// While searching, a shown group or role is open; a hand fold lasts until the next keystroke, apart from the
+// folds the tab keeps outside a search. `folds` is name -> open for this query.
+function useSearchFold(query) {
+  const [state, setState] = useState({ query, open: {} });
+  if (state.query !== query) setState({ query, open: {} });
+  return { searching: settingWords(query).trim() !== "", folds: state.open, setFold: (k, o) => setState((f) => ({ query, open: { ...f.open, [k]: o } })) };
+}
+// The line under a tab's search box when nothing matches, and the one by Save when the search hides an edit.
+// The status element stays mounted so a screen reader hears the line appear.
+function NoMatch({ show, query }) {
+  return html`<div role="status">${show ? html`<p class="set-note">No setting matches "${query}"</p>` : null}</div>`;
+}
+function HiddenEdits({ n, errors, noun, onShowAll }) {
+  return n > 0 && html`<span class="set-hidden">${n + " edited " + noun + (n === 1 ? " is" : "s are") + " hidden by the search" + (errors ? " · " + errors + " with an error" : "")} <button class="btn sm set-showall" onClick=${onShowAll}>Show all</button></span>`;
+}
+
 // A category's folded line: "<Name> · <n> settings" (while searching, "<Name> · <m> of <n> match"), then
 // only when non-zero overridden / unsaved / error. Env rows are never "unsaved" (the same filter as Save's dirtyKeys).
 function limitGroupSummary(name, rows, draft, msg, matched) {
@@ -3909,17 +3925,14 @@ function LimitsPane({ project, toast, query = "", onShowAll }) {
   const [groups, setGroups] = useState([]);
   const [open, setOpen] = useState({});       // group -> true/false once toggled; otherwise the stored state
   const [forced, setForced] = useState({});   // group -> opened by a refused save (not stored)
-  // While searching, a shown group is open; a hand fold lasts until the next keystroke and is never stored.
-  const searching = settingWords(query).trim() !== "";
-  const [searchFold, setSearchFold] = useState({ query, open: {} });
-  if (searchFold.query !== query) setSearchFold({ query, open: {} });
-  const isOpen = (g) => forced[g] || (searching ? searchFold.open[g] ?? true : open[g] ?? lstore.get("set:limits:" + g, false));
+  const { searching, folds, setFold } = useSearchFold(query);   // a search's folds are never stored
+  const isOpen = (g) => forced[g] || (searching ? folds[g] ?? true : open[g] ?? lstore.get("set:limits:" + g, false));
   const toggled = (g, el) => {
     const o = el.open;
     if (o === isOpen(g)) return;
     if (searching) {
       if (forced[g]) el.open = true;
-      else setSearchFold((f) => ({ query, open: { ...f.open, [g]: o } }));
+      else setFold(g, o);
       return;
     }
     setOpen((m) => ({ ...m, [g]: o })); setForced((f) => ({ ...f, [g]: false })); lstore.set("set:limits:" + g, o);
@@ -3982,7 +3995,7 @@ function LimitsPane({ project, toast, query = "", onShowAll }) {
   return html`<div>
     <p class="set-note">Limits for ${project} · applies on the next sweep minute</p>
     ${msg._ && html`<div class="err">${msg._}</div>`}
-    <div role="status">${rows && searching && !shown.length ? html`<p class="set-note">No setting matches "${query}"</p>` : null}</div>
+    <${NoMatch} show=${rows && searching && !shown.length} query=${query} />
     ${rows && html`<div>${shown.map(({ g, all, hit }) => html`<details class="set-cat" key=${g} open=${isOpen(g)} onToggle=${(e) => toggled(g, e.currentTarget)}>
       <summary>${limitGroupSummary(g, all, draft, msg, searching ? hit.length : undefined)}</summary>
       <table class="lim"><thead><tr><th>Key</th><th>Value</th><th>Source</th><th>Meaning</th></tr></thead><tbody>
@@ -4003,7 +4016,7 @@ function LimitsPane({ project, toast, query = "", onShowAll }) {
           <td class=${"src " + l.source}>${env ? "env — set by env var " + l.env : l.source}</td>
           <td class="mean">${l.comment}${l.key.startsWith("auto_compact_") ? " (applies at the agent's next restart)" : ""}</td></tr>`; })}
       </tbody></table></details>`)}
-    <div style=${{ marginTop: "12px" }}><button class="btn pri" disabled=${dirtyKeys.length === 0} onClick=${saveAll}>${dirtyKeys.length ? "Save " + dirtyKeys.length + " change" + (dirtyKeys.length > 1 ? "s" : "") : "Save"}</button>${hidden.length > 0 && html`<span class="set-hidden">${hidden.length + " edited setting" + (hidden.length === 1 ? " is" : "s are") + " hidden by the search" + (hiddenErrors ? " · " + hiddenErrors + " with an error" : "")} <button class="btn sm set-showall" onClick=${onShowAll}>Show all</button></span>`}</div></div>`}</div>`;
+    <div style=${{ marginTop: "12px" }}><button class="btn pri" disabled=${dirtyKeys.length === 0} onClick=${saveAll}>${dirtyKeys.length ? "Save " + dirtyKeys.length + " change" + (dirtyKeys.length > 1 ? "s" : "") : "Save"}</button><${HiddenEdits} n=${hidden.length} errors=${hiddenErrors} noun="setting" onShowAll=${onShowAll} /></div></div>`}</div>`;
 }
 
 // Roles tab of Settings (GET/POST api/roles -> roles.sh). Self-contained: renders only its own
@@ -4073,7 +4086,7 @@ async function saveRoleRows(rows, postOne, refusal, onRow) {
 }
 
 const ROLE_GROUPS = [["Coordinate", ["studio", "lead"]], ["Think", ["thinker", "thinker-deep"]], ["Build", ["builder", "builder-standard", "builder-hard-babysit", "builder-standard-babysit"]], ["Review", ["builder-review", "builder-review-standard", "review-leaf", "reviewer"]], ["Test and research", ["tester", "researcher"]]];
-function RolesTab({ project, toast }) {
+function RolesTab({ project, toast, query = "", onShowAll }) {
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState({});     // role -> edited fields not yet saved
   const [msg, setMsg] = useState({});         // role -> error text
@@ -4130,6 +4143,11 @@ function RolesTab({ project, toast }) {
     } finally { savingRef.current = false; setSaving(false); setBusy({}); }
   };
   const [open, setOpen] = useState({});     // role -> true when the operator opened it
+  const { searching, folds, setFold } = useSearchFold(query);
+  // The saved row, not the draft: a role must not vanish while its model is being edited.
+  const matches = (x) => !searching || settingMatch(query, x.role, x.agent, x.model, ...fbRows(x.fallbacks).map((r) => r.model));
+  const shown = present.filter(matches);
+  const hidden = present.filter((x) => (draft[x.role] || msg[x.role]) && !matches(x));
   const nameOf = (r) => { const c = data.catalog.find((y) => y.agent === r.agent && y.model === r.model); return c ? c.label : r.agent + ":" + r.model; };
   const sumOf = (steps) => steps.map((r) => nameOf(r) + (r.effort && r.effort !== "default" ? " " + r.effort : "") + (r.plan ? " [" + r.plan + "]" : "")).join(" → ");
   const roleBlock = (x, action) => {
@@ -4153,11 +4171,11 @@ function RolesTab({ project, toast }) {
     const bad = steps.some((r) => !r.model);
     const summary = sumOf(steps);
     const dirty = !!draft[x.role];
-    const isOpen = dirty || !!msg[x.role] || !!open[x.role];
+    const isOpen = dirty || !!msg[x.role] || (searching ? folds[x.role] ?? true : !!open[x.role]);
     const planSet = (i, v) => setSteps(steps.map((y, k) => k === i ? { ...y, plan: v } : y));
     return html`<div class=${"role-block" + (dirty ? " dirty" : "")} key=${x.role}>
       <div class="role-head">
-        <button class="role-name" aria-expanded=${isOpen} title=${x.role} onClick=${() => setOpen((o) => ({ ...o, [x.role]: !isOpen }))}>${x.role}</button>
+        <button class="role-name" aria-expanded=${isOpen} title=${x.role} onClick=${() => searching ? setFold(x.role, !isOpen) : setOpen((o) => ({ ...o, [x.role]: !isOpen }))}>${x.role}</button>
         <select class="sp" title="spawn" value=${d.spawn} onChange=${(e) => set("spawn", e.target.value)}>${["always", "ondemand", "elevate"].map((a) => html`<option key=${a}>${a}</option>`)}</select>
         <span class="role-sum" title=${summary}>${summary}</span>
         <span class="role-act">${canBack && backUp && html`<span class="tag back-up" title="moves back up when there is room">↑</span>`}${busy[x.role] && html`<span class="tag">saving…</span>`}${dirty && html`<span class="tag dirty">edited</span>`}${!dirty && html`<span class="tag" title=${x.source === "project" ? "this project's own row" : "follows the default row; saving an edit gives this project its own row"}>${x.source === "project" ? "custom" : "default"}</span>`}${action}</span></div>
@@ -4200,9 +4218,10 @@ function RolesTab({ project, toast }) {
       <li><b>Move back up when there is room</b> restarts the agent once, when it is idle, on its stronger model; a row without its own setting follows the default (then its base role).</li>
       <li><code>builder</code> = hard units, <code>builder-standard</code> = standard units.</li></ul></details>
     ${msg._ && html`<div class="err">${msg._}</div>`}
-    ${data && html`<div>${grouped(present, resetBtn)}
+    <${NoMatch} show=${data && searching && !shown.length} query=${query} />
+    ${data && html`<div>${grouped(shown, resetBtn)}
     <div class="rt-save"><button class="btn pri" disabled=${dirtyRoles.length === 0 || anyBad || saving} onClick=${saveAll}>${saving ? "Saving…" : dirtyRoles.length ? "Save " + dirtyRoles.length + " change" + (dirtyRoles.length > 1 ? "s" : "") : "Save"}</button>
-    ${anyBad && html`<span class="err">a step is invalid: every model needs an agent and a model</span>`}</div></div>`}</div>`;
+    ${anyBad && html`<span class="err">a step is invalid: every model needs an agent and a model</span>`}<${HiddenEdits} n=${hidden.length} errors=${hidden.filter((x) => msg[x.role]).length} noun="role" onShowAll=${onShowAll} /></div></div>`}</div>`;
 }
 
 // Skills tab of Settings (GET/POST api/skills -> the `skills` request, U230). Same shape as the Roles
@@ -4221,13 +4240,14 @@ function skillSetOf(role, draft) {
   return set;
 }
 const SKILL_ROLE_GROUPS = [["Coordinate", ["lead", "studio"]], ["Think", ["thinker"]], ["Build", ["builder"]], ["Review", ["reviewer", "review"]], ["Test and research", ["tester", "researcher"]]];
-function SkillsTab({ project, toast }) {
+function SkillsTab({ project, toast, query = "", onShowAll }) {
   const [data, setData] = useState(null);
   const [members, setMembers] = useState([]);
   const [draft, setDraft] = useState({});     // role -> {name: level} not yet saved
   const [msg, setMsg] = useState({});
   const [busy, setBusy] = useState({});
   const [open, setOpen] = useState({});
+  const { searching, folds, setFold } = useSearchFold(query);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const load = async () => {
@@ -4294,33 +4314,52 @@ function SkillsTab({ project, toast }) {
     <span class=${"nm" + ((draft[x.role] || {})[it.name] ? " ed" : "")} title=${it.name}>${it.name}${it.is_new && html`<span class="new" title="found on this host; no rule names it">new</span>`}</span>
     <span class="ds" title=${it.description || ""}>${it.required ? html`<span class="lock">🔒 ${it.reason}</span>` : it.description}</span>
     ${it.required ? html`<span class="lock" title=${it.reason}>🔒 ${it.level}</span>` : picker(x, it.name, it)}</${React.Fragment}>`;
-  const roleBlock = (x) => {
-    const dirty = !!(draft[x.role] && Object.keys(draft[x.role]).length), isOpen = dirty || !!msg[x.role] || !!open[x.role];
+  // What the search leaves of a role: all of it (no search, or its name matches), only its matching rows, or
+  // nothing (null).
+  const partOf = (x) => {
+    const all = { x, whole: true, skills: x.skills, hooks: x.hooks, mcp: x.mcp || [] };
+    if (!searching || settingMatch(query, x.role)) return all;
+    const hit = (it) => settingMatch(query, it.name, it.description);
+    const part = { x, whole: false, skills: all.skills.filter(hit), hooks: all.hooks.filter(hit), mcp: all.mcp.filter(hit) };
+    return part.skills.length || part.hooks.length || part.mcp.length ? part : null;
+  };
+  // The roles the tab lists, in its groups.
+  const listed = SKILL_ROLE_GROUPS.map(([title, names]) => {
+    const roles = data ? data.roles.filter((x) => names.includes(x.role)) : [];
+    return { title, roles, parts: roles.map(partOf).filter(Boolean) };
+  });
+  const shown = listed.flatMap((g) => g.parts);
+  // A shown role can still hide an edited row (or its "Other skills" pick), so edits are counted one by one.
+  let hidden = 0, hiddenErrors = 0;
+  for (const x of listed.flatMap((g) => g.roles)) {
+    const part = shown.find((p) => p.x === x);
+    if (part && part.whole) continue;
+    const visible = new Set(part ? [...part.skills, ...part.hooks, ...part.mcp].map((it) => it.name) : []);
+    const edits = Object.keys(draft[x.role] || {}).filter((name) => !visible.has(name)).length;
+    const failed = !part && !!msg[x.role];
+    hidden += edits || (failed ? 1 : 0);
+    if (failed) hiddenErrors++;
+  }
+  const roleBlock = ({ x, whole, skills, hooks, mcp }) => {
+    const dirty = !!(draft[x.role] && Object.keys(draft[x.role]).length), isOpen = dirty || !!msg[x.role] || (searching ? folds[x.role] ?? true : !!open[x.role]);
     const running = members.filter((m) => m.role === x.role).length;
     const otherCur = (draft[x.role] || {})["*"] || x.other.level;
     return html`<div class=${"role-block" + (dirty ? " dirty" : "")} key=${x.role}>
       <div class="role-head" style=${{ gridTemplateColumns: "140px minmax(0,1fr) auto" }}>
-        <button class="role-name" aria-expanded=${isOpen} title=${x.role} onClick=${() => setOpen((o) => ({ ...o, [x.role]: !isOpen }))}>${x.role}</button>
+        <button class="role-name" aria-expanded=${isOpen} title=${x.role} onClick=${() => searching ? setFold(x.role, !isOpen) : setOpen((o) => ({ ...o, [x.role]: !isOpen }))}>${x.role}</button>
         <span class="role-sum" title=${skillSummary(x.summary)}>${skillSummary(x.summary)}</span>
         <span class="role-act">${busy[x.role] && html`<span class="tag">saving…</span>`}${dirty && html`<span class="tag dirty">edited</span>`}${x.override && !dirty && html`<span class="tag" title="this project differs from the shipped defaults">override</span>`}${x.override && html`<button class="btn sm" title="drop this project's edits for the role" disabled=${saving} onClick=${() => resetOne(x.role)}>reset</button>`}</span></div>
       ${isOpen && html`<div>
-        <div class="sk-top"><span>Other skills (no rule names them):</span>
+        ${whole && html`<div class="sk-top"><span>Other skills (no rule names them):</span>
           <select aria-label="other skills level" value=${otherCur} onChange=${(e) => setLevel(x, "*", x.other.level, e.target.value)}>${SKILL_PICK.map((l) => html`<option key=${l}>${l}</option>`)}</select>
           <span>This applies at ${x.role}'s next start.</span>
-          ${running > 0 && html`<button class="btn sm" title="stop and start the running ones fresh" onClick=${() => restartRole(x.role)}>Restart ${running} running</button>`}</div>
-        ${data.groups.map((g) => { const items = x.skills.filter((it) => it.group === g); return items.length > 0 && html`<${React.Fragment} key=${g}><div class="sk-grp" style=${{ paddingLeft: "18px" }}>${g}</div><div class="sk-table">${items.map((it) => row(x, it, false))}</div></${React.Fragment}>`; })}
-        ${x.hooks.length > 0 && html`<div class="sk-grp" style=${{ paddingLeft: "18px" }}>Start hooks</div><div class="sk-table">${x.hooks.map((it) => row(x, it, true))}</div>`}
-        ${(x.mcp || []).length > 0 && html`<div class="sk-grp" style=${{ paddingLeft: "18px" }} title="MCP servers this role's sessions load; applies at its next start">MCP servers</div><div class="sk-table">${x.mcp.map((it) => row(x, it, true))}</div>`}</div>`}
+          ${running > 0 && html`<button class="btn sm" title="stop and start the running ones fresh" onClick=${() => restartRole(x.role)}>Restart ${running} running</button>`}</div>`}
+        ${data.groups.map((g) => { const items = skills.filter((it) => it.group === g); return items.length > 0 && html`<${React.Fragment} key=${g}><div class="sk-grp" style=${{ paddingLeft: "18px" }}>${g}</div><div class="sk-table">${items.map((it) => row(x, it, false))}</div></${React.Fragment}>`; })}
+        ${hooks.length > 0 && html`<div class="sk-grp" style=${{ paddingLeft: "18px" }}>Start hooks</div><div class="sk-table">${hooks.map((it) => row(x, it, true))}</div>`}
+        ${mcp.length > 0 && html`<div class="sk-grp" style=${{ paddingLeft: "18px" }} title="MCP servers this role's sessions load; applies at its next start">MCP servers</div><div class="sk-table">${mcp.map((it) => row(x, it, true))}</div>`}</div>`}
       ${msg[x.role] && html`<div class="err">${msg[x.role]}</div>`}</div>`;
   };
-  const grouped = () => {
-    const out = [];
-    for (const g of SKILL_ROLE_GROUPS) {
-      const rs = data.roles.filter((x) => g[1].includes(x.role));
-      if (rs.length) out.push(html`<div class="rt-grp" key=${g[0]}>${g[0]}</div>`, ...rs.map(roleBlock));
-    }
-    return out;
-  };
+  const grouped = () => listed.flatMap((g) => g.parts.length ? [html`<div class="rt-grp" key=${g.title}>${g.title}</div>`, ...g.parts.map(roleBlock)] : []);
   return html`<div class="roles-tab">
     <details class="rt-help"><summary>How this works</summary><ul>
       <li>A change applies to the <b>next start</b> of that role; a running agent keeps the skills it started with until restarted.</li>
@@ -4329,8 +4368,9 @@ function SkillsTab({ project, toast }) {
       <li>"Other skills" is the level of every skill no rule names; a skill found on this host that no rule names is marked <b>new</b>.</li>
       <li>"tokens saved" is roughly the characters of descriptions not listed, compared with everything on (4 characters per token).</li></ul></details>
     ${msg._ && html`<div class="err">${msg._}</div>`}
+    <${NoMatch} show=${data && searching && !shown.length} query=${query} />
     ${data && html`<div>${grouped()}
-    <div class="rt-save"><button class="btn pri" disabled=${dirtyRoles.length === 0 || saving} onClick=${saveAll}>${saving ? "Saving…" : dirtyRoles.length ? "Save " + dirtyRoles.length + " change" + (dirtyRoles.length > 1 ? "s" : "") : "Save"}</button></div></div>`}</div>`;
+    <div class="rt-save"><button class="btn pri" disabled=${dirtyRoles.length === 0 || saving} onClick=${saveAll}>${saving ? "Saving…" : dirtyRoles.length ? "Save " + dirtyRoles.length + " change" + (dirtyRoles.length > 1 ? "s" : "") : "Save"}</button><${HiddenEdits} n=${hidden} errors=${hiddenErrors} noun="setting" onShowAll=${onShowAll} /></div></div>`}</div>`;
 }
 
 function App() {
