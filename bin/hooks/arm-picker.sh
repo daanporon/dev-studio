@@ -3,7 +3,8 @@
 # role's worktree, so a terminal AskUserQuestion picker also lands on the board (and clears
 # when answered there). Writes <worktree>/.claude/settings.local.json (MERGING into any
 # existing settings, idempotent): a PreToolUse + PostToolUse pair with matcher AskUserQuestion
-# each (timeout 15). Only its own matcher entries are replaced — the rewake Stop hook and any
+# each (timeout 15), and a PermissionRequest entry (matcher *, timeout 15) for safety-check
+# prompts. Only its own entries are replaced — the rewake Stop hook and any
 # other hooks stay untouched. Needs the worktree's local filesystem path (from ps); a
 # remote-host worktree can't be armed from here (prints a notice, exits 0).
 #

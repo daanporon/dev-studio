@@ -146,6 +146,10 @@ only processes you started, by a PID you recorded or with `ds stop-mine <pattern
 (signals only matches under your own worktree). A guard hook in each role worktree that
 `reassert-roles.sh` has armed blocks the broad forms; see `roles/builder.md` and `conventions/wake.md`.
 
+**No safety-check prompts:** write commands bash and zsh read the same way. A command that removes anything takes
+literal paths only (no `$(…)`, backticks, `eval` or computed paths), holds one removal, and stays out of a long
+pipeline or loop. Never edit `.claude/` settings files by hand. The same goes for a prompt you give a helper agent.
+
 **Large files:** read a large file in parts (Read with `offset`/`limit`, or `ctx_execute` with
 `file`): context-mode turns whole-file reads of big files into snippets. Check that a file
 exists with `test -f <path>` on its own, because context-mode can cut a combined output down to snippets.
