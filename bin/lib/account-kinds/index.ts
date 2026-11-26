@@ -41,6 +41,9 @@ export type AccountKind = {
   /** The agent's own launch line, as Orca types it for a worker: an Orca tab on a non-system account runs it
    *  with the kind's env (KTD17). Absent for Claude, whose line is bin/loop/drivers/claude-launch.ts. */
   command?(model: string, effort: string): string[];
+  /** What a freshly logged-in folder still needs before the agent starts in it without questions (Claude: the
+   *  onboarding keys of the system login's `.claude.json`). Never touches the credentials. */
+  afterLogin?(folder: string, env: Env): void;
   /** Whether usage figures and free resets can be read for an account. */
   usage: boolean;
   resets: boolean;
