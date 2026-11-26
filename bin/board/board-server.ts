@@ -1032,6 +1032,7 @@ async function accountAddPost(req: Request) {
     const open = one(s, "SELECT id FROM requests WHERE kind = 'account-add' AND done_at IS NULL AND json_extract(payload, '$.agent') = ? AND json_extract(payload, '$.name') = ?", agent, name);
     if (open) no(409, `an add of ${agent}:${name} is already in progress (request #${open.id})`);
     const row = board(s, "account-add", { agent, name, project, ...(dir ? { dir } : {}), by: "board" }, { project });
+    cache.at = 0; // the open add shows on the next board read, not ~2s later
     return paused(s, { project }) ? json(202, { ok: true, id: Number(row.id), queued: true }) : row;
   });
 }
@@ -1048,7 +1049,9 @@ async function accountMovePost(req: Request) {
     if (bad) no(409, bad);
     const open = one(s, "SELECT id FROM requests WHERE kind = 'account-move' AND done_at IS NULL AND json_extract(payload, '$.agent') = ? AND json_extract(payload, '$.account') = ?", agent, account);
     if (open) no(409, `a move of ${agent}:${account} is already in progress (request #${open.id})`);
-    return s.requestAny("account-move", { agent, account, ...(force ? { force: true } : {}), by: "board" }, { by: "board", project: null }).row;
+    const row = s.requestAny("account-move", { agent, account, ...(force ? { force: true } : {}), by: "board" }, { by: "board", project: null }).row;
+    cache.at = 0;
+    return row;
   });
 }
 
