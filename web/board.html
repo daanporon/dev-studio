@@ -263,7 +263,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .msg .sj{font-weight:600;color:var(--fg)} .msg .bd{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin-top:4px} .msg .due{color:var(--red)} .msg .un{color:var(--amber)}
 .start-err{font-size:12px} .start-count{font-size:12px;margin-top:2px} .bad{color:var(--red)}
 @media (max-width:600px){.startsq{padding:0} .startsq .mbox{width:100%!important;height:100%;max-height:none;border:0;border-radius:0}}
-.chat-modal{z-index:55} .mbox.chat{width:min(760px,100%);height:85vh} .chat-wrap{flex:1;min-height:120px;position:relative;display:flex;flex-direction:column}
+.chat-modal{z-index:55} .doc-modal{z-index:57} .mbox.chat{width:min(760px,100%);height:85vh} .chat-wrap{flex:1;min-height:120px;position:relative;display:flex;flex-direction:column}
 .chat-log{flex:1;min-height:0;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:10px}
 .chat-turn{display:flex;flex-direction:column;font-size:13px;line-height:1.5;min-width:0} .chat-time{font:11px var(--mono);color:var(--dim);margin-top:3px}
 .chat-turn.op{align-items:flex-end} .chat-turn.op .bubble{max-width:80%;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:8px 12px;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -4389,7 +4389,7 @@ function App() {
     ${settingsOpen && data.project && html`<${Settings} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setSettings(false)} />`}
 
     ${ask && html`<${AskOverlay} cardActions=${cardActions} data=${data} onDebrief=${openDebriefOf} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}
-    ${plan && html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) setPlan(null); }}>
+    ${plan && html`<div class="modal doc-modal" onClick=${(e) => { if (e.target === e.currentTarget) setPlan(null); }}>
       <div class="mbox"><div class="mhd"><span>${plan.name}</span><span class="sp"></span>${plan.changes && html`<button class="btn sm" data-ev="plan-switch" onClick=${() => setPlan({ ...plan, view: plan.view === "changes" ? "full" : "changes" })}>${plan.view === "changes" ? "Show full plan" : "What changed"}</button> `}<button class="btn sm mclose" onClick=${() => setPlan(null)}>✕</button></div>
         ${plan.changes && plan.view === "changes"
           ? html`<div class="md pdiff" data-ev="plan-diff">${plan.changes.diff.length ? plan.changes.diff.map((d, di, all) => html`<div key=${di}>${(di === 0 || all[di - 1].heading !== d.heading) && html`<h4>${d.heading}</h4>`}${d.unit && html`<h5 class="pdiff-unit" data-ev="plan-diff-unit">${d.unit}</h5>`}${d.lines.map((l, k) => html`<div key=${k} class=${"dl " + (l.t === "+" ? "add" : "del")}>${(l.t === "+" ? "+ " : "- ") + l.text}</div>`)}</div>`) : html`<p class="mut">No lines differ from the approved copy.</p>`}

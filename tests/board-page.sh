@@ -771,7 +771,7 @@ eq "U2 page: no plain summary keeps today's question text" "$(printf '%s' "$ask_
 eq "U2 page: the button reads Open plan on plan-* and Open doc otherwise" "$(grep -cF '/^plan-/.test(n.id || "") ? "Open plan" : "Open doc"' "$BP")" "1"
 eq "U2 page: the Needs-you row gets the doc button and the What you get detail line" "$(grep -cF 'if (n.doc) out.push({ key: "open-doc"' "$BP")$(grep -cF 'l.label === "What you get"' "$BP")" "11"
 eq "U2 page: while a plan is open the overlay ignores every key" "$(printf '%s' "$ask_fn" | grep -c 'if (planOpen || chat) return;')$(grep -cF 'toast=${setToast} onPlan=${setPlan} planOpen=${!!plan}' "$BP")" "11"
-eq "U2 page: the plan modal is rendered after the overlay so it paints on top" "$(awk '/<\$\{AskOverlay\}/{a=NR} /\$\{plan && html`<div class="modal"/{p=NR} END{print (a && p > a) ? "after" : "before"}' "$BP")" "after"
+eq "U2 page: the plan modal is rendered after the overlay so it paints on top" "$(awk '/<\$\{AskOverlay\}/{a=NR} /\$\{plan && html`<div class="modal doc-modal"/{p=NR} END{print (a && p > a) ? "after" : "before"}' "$BP")" "after"
 
 # crew-terminal-access U3: the chat panel opens from a crew row and from a question card.
 chat_fn=$(sed -n '/^function ChatPanel(/,/^}/p' "$BP")

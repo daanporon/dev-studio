@@ -78,6 +78,10 @@ test("Needs-you and the chat's Question view draw the question's markdown, links
 
     await click(view.querySelector('[data-ev="open-doc"]'));
     await until(() => d.body.textContent.includes("The linked plan"), "the doc modal");
+    // a chat opened from a squad menu is no child of a modal: only z-index paints the doc above it (happy-dom paints nothing)
+    const layer = (cls: string) => Number(new RegExp(`\\.${cls}\\{z-index:(\\d+)\\}`).exec(page)?.[1]);
+    expect(d.querySelector(".doc-modal")?.textContent).toContain("The linked plan");
+    expect(layer("doc-modal")).toBeGreaterThan(layer("chat-modal"));
     await esc();
     expect(d.body.textContent).not.toContain("The linked plan");
     expect(d.querySelector(".chat-modal")).toBeTruthy();
