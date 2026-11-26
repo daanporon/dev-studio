@@ -36,6 +36,8 @@ export type Rescued = {
   ok: boolean; why?: string; dest: string;
   count: number; bytes: number; same: number; capped: number; listed: boolean; files: string[];
   secured: string[];
+  /** side-loop-host U5: a rescue on a side host leaves the files over the upload cap there, in this folder. */
+  host_dest?: string; host_files?: string[];
 };
 
 export const rescueDest = (root: string, project: string, squad: string, label: string): string =>
@@ -73,7 +75,11 @@ async function others(path: string, dirs: string[]): Promise<string[] | null> {
 
 /** Copy one file without overwriting: "same" when its content is already at `dst` or a numbered twin. */
 async function place(src: string, dst: string): Promise<"copied" | "same"> {
-  const body = await readFile(src);
+  return placeBody(await readFile(src), dst);
+}
+
+/** Write `body` at `dst` without overwriting (side-loop-host U5: also the bytes a side host uploaded). */
+export async function placeBody(body: Buffer, dst: string): Promise<"copied" | "same"> {
   const ext = extname(dst), base = dst.slice(0, dst.length - ext.length);
   await mkdir(dirname(dst), { recursive: true });
   for (let n = 0; ; n++) {
@@ -89,13 +95,13 @@ async function place(src: string, dst: string): Promise<"copied" | "same"> {
   }
 }
 
-export async function rescuePages(store: Store, project: string, squad: string, label: string, path: string): Promise<Rescued> {
-  const dest = rescueDest(store.root, project, squad, label);
-  const out: Rescued = { ok: true, dest, count: 0, bytes: 0, same: 0, capped: 0, listed: true, files: [], secured: [] };
-  const pages = sessionFiles(store, path);
+/** What a rescue of the tree at `path` copies: the files in order with their sizes, the paths left out by a cap, and
+ *  whether git could list the untracked files (side-loop-host U5: a side host plans its own trees the same way). */
+export type RescuePlan = { plan: { rel: string; size: number }[]; capped: number; listed: boolean };
+
+export async function planRescue(path: string, pages: string[]): Promise<RescuePlan> {
   const folders = [...new Set(pages.map(folderOf))];
   const listed = await others(path, [...NOTE_DIRS, ...folders]);
-  if (!listed) out.listed = false;
   const loose = listed ?? [];
   // The plan: per page folder the page itself always, then its untracked neighbours while under the cap.
   const plan: { rel: string; size: number }[] = [], seen = new Set<string>(), capped = new Set<string>(), cap = capBytes();
@@ -130,8 +136,18 @@ export async function rescuePages(store: Store, project: string, squad: string, 
     if (size > left) { capped.add(rel); continue; }
     capped.delete(rel); seen.add(rel); plan.push({ rel, size }); left -= size;
   }
-  out.capped = capped.size;
-  const securable = (rel: string) => SCRATCH_DIRS.some((d) => under(rel, d));
+  return { plan, capped: capped.size, listed: listed != null };
+}
+
+/** A path under `.scratch/` or `.lavish/`: once its bytes are copied out, wt-probe.ts counts it as ours. */
+export const securable = (rel: string): boolean => SCRATCH_DIRS.some((d) => under(rel, d));
+
+export async function rescuePages(store: Store, project: string, squad: string, label: string, path: string): Promise<Rescued> {
+  const dest = rescueDest(store.root, project, squad, label);
+  const out: Rescued = { ok: true, dest, count: 0, bytes: 0, same: 0, capped: 0, listed: true, files: [], secured: [] };
+  const { plan, capped, listed } = await planRescue(path, sessionFiles(store, path));
+  out.capped = capped;
+  out.listed = listed;
   for (const { rel, size } of plan) {
     try {
       if (await place(join(path, rel), join(dest, rel)) === "same") { out.same++; if (securable(rel)) out.secured.push(rel); continue; }

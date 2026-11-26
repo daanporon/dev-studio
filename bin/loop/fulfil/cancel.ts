@@ -2,7 +2,9 @@ import { existsSync } from "node:fs";
 import { CANCEL_KINDS, unitOfCancellation, cancellationReality, cancellationRepository, sharedBuilder, sharedPr, prNumber } from "../squad/cancel.ts";
 import type { Action } from "../core/plugins.ts";
 import { alert, type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
-import { errOf, spawn } from "../io/orca.ts";
+import { errOf } from "../io/orca.ts";
+import { hostOfWt, readRefOn, setRefOn } from "../../link/host-jobs.ts";
+import { LOCAL_HOST } from "../../link/host-keys.ts";
 import type { Row } from "../core/store.ts";
 import { closeTidy } from "../io/tidy.ts";
 import { byContract, contractCloseTerminals, contractRemoveTree } from "../squad/removal.ts";
@@ -10,14 +12,20 @@ import { byContract, contractCloseTerminals, contractRemoveTree } from "../squad
 async function cleanup(a: Action, x: Exec): Promise<Result> {
   const p = a.payload as Row, wt = String(p.wt ?? "");
   if (cancel.stale!(a, x)) return { dropped: "cancellation target changed" };
-  if (a.kind === "cancel.remove" && existsSync(String(p.path))) {
+  // side-loop-host U5: a member on a side host has its tree there; the ref jobs go down its link (host-jobs.ts).
+  const host = a.kind === "cancel.remove" ? hostOfWt(x.store, a.project, wt) : LOCAL_HOST;
+  if (a.kind === "cancel.remove" && (host !== LOCAL_HOST || existsSync(String(p.path)))) {
     // Orca may delete a branch it considers merged. Detach first, at the same
     // commit, so both merged and unmerged branches survive a crash or rm.
-    const sha = await spawn(["git", "-C", String(p.path), "rev-parse", "HEAD"], {}, 30_000);
-    if (sha.code !== 0) return { retry: errOf(sha, "read cancelled worktree HEAD") };
-    if (cancel.stale!(a, x)) return { dropped: "cancellation target changed" };
-    const o = await spawn(["git", "-C", String(p.path), "update-ref", "--no-deref", "HEAD", sha.out.trim()], {}, 30_000);
-    if (o.code !== 0) return { retry: errOf(o, "detach cancelled worktree") };
+    let sha;
+    try { sha = await readRefOn(host, String(p.path), "HEAD", { root: x.store.root }); } catch (e) { return { retry: `read cancelled worktree HEAD: ${(e as Error).message}` }; }
+    if (!sha.missing) {
+      if (sha.code !== 0) return { retry: errOf(sha, "read cancelled worktree HEAD") };
+      if (cancel.stale!(a, x)) return { dropped: "cancellation target changed" };
+      let o;
+      try { o = await setRefOn(host, String(p.path), "HEAD", sha.out.trim(), true, { root: x.store.root }); } catch (e) { return { retry: `detach cancelled worktree: ${(e as Error).message}` }; }
+      if (o.code !== 0) return { retry: errOf(o, "detach cancelled worktree") };
+    }
   }
   if (cancel.stale!(a, x)) return { dropped: "cancellation target changed" };
   // U1: the close-time tidy around the forced removal. Best effort: the command's result never stops

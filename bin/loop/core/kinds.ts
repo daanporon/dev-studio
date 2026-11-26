@@ -196,8 +196,8 @@ export const FACTS = {
   message_replied: obj({ id: num, reply: opt(num), request: opt(num) }),
   message_sent: obj({ key: str, to: str, from: str, kind: str, subject: str }),
   finish_recorded: obj({ key: str, member: str, unit: opt(str), outcome: str, gen: opt(str) }),
-  worktree_created: obj({ path: str, provider: str, branch: str, adopted: bool, parent: opt(str) }),
-  worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str) }),
+  worktree_created: obj({ path: str, provider: str, branch: str, adopted: bool, parent: opt(str), host: opt(str) }),
+  worktree_removed: obj({ path: str, provider: str, branch: str, already: bool, why: opt(str), host: opt(str) }),
   worktree_gone: obj({ path: str, provider: str, why: str }),
   // U10 (squad/shadow.ts): the shadow signals.
   // chat-multiline-send-fails U1 (core/code-watch.ts): the checkout's HEAD moved loop code; the loop exits 75.
