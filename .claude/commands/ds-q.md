@@ -24,7 +24,8 @@ its text starts "PR #… waits on:") is answered by resolving it here with the o
 
 **Leave `picker-…` entries alone.** An entry whose id starts with `picker-` mirrors a live
 terminal picker in the asker's session (`source:"picker"`): answer it in `<asker>`'s
-terminal or on the board (which presses the option there by keystroke). Never fold it into your picker,
+terminal or on the board (which presses the option there by keystroke; a permission entry is pressed from
+the board only when its card offers Yes and No, otherwise it is answered in the asker's terminal). Never fold it into your picker,
 never `reply` to it (an `orch.sh reply` can't reach a picker) and never resolve it — that
 would hide a picker that is still open. Just list each one as "open picker in `<asker>`'s
 terminal — answer it there".

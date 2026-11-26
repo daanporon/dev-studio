@@ -463,8 +463,9 @@ Orca brief says — you stay running between turns and report through `ds` and `
    fire another picker right after on the same turn until the queue is clear. **Start each
    picker question with the entry's `title`** (then its text), so the picker-mirror hook
    knows the picker restates a queued question. **Leave `picker-…` entries out**: they mirror
-   a live picker in the asker's terminal — answer them there (or on the board, which presses the
-   option there by keystroke). Never fold them into your picker, never `reply` to them, never resolve
+   a live picker in the asker's terminal — answer them there, or on the board, which presses the
+   option there by keystroke (a permission entry only when its card offers Yes and No; otherwise it
+   is answered in the asker's terminal). Never fold them into your picker, never `reply` to them, never resolve
    them; list each as "open picker in `<asker>`'s terminal — answer it there". For each pick,
    `reply` it down to the asker (`ds msg reply <row id> "<answer>"` where the loop holds your Run)
    and clear that question's `waiting-on-you`. The picker blocks

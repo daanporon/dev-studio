@@ -95,6 +95,7 @@ import { isTestProject } from "../loop/settings/projects.ts";
 import { BACKEND_NAMES, squadBackendRule } from "../backend/registry.ts";
 import { studioBackend } from "../loop/squad/studio.ts";
 import { chatProblem } from "../loop/chat/limits.ts";
+import { isHidden } from "../loop/chat/permission.ts";
 import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
 import { ticketUrlProblem } from "../loop/squad/plan-lines.ts";
@@ -1151,6 +1152,7 @@ async function answer(req: Request) {
     // permission-prompt-needs-you U2: a safety-check prompt takes Yes or No only, and none once the loop
     // refused to press for it (the screen no longer matched): the fulfiller reads the screen before each key.
     if (picker && e.picker_kind === "permission") {
+      if (isHidden(String(e.shown ?? ""))) no(409, "the card hides a secret — answer it in the terminal");
       if (ans !== "Yes" && ans !== "No") no(409, "a permission prompt takes Yes or No — answer it in the terminal");
       if (pressRefused(s, project, topic, id, e.tool_use_id)) no(409, "the prompt changed — answer it in the terminal");
     }
