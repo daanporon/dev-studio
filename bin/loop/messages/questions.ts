@@ -62,6 +62,17 @@ export function waiting(store: Store, project: string, squad: string): Row[] {
     ORDER BY q.seq`).all(project, squad) as Row[];
 }
 
+// The safety-check prompts the board answered whose press is still unfinished (permission-prompt-needs-you U5): the
+// board keeps their cards on Needs you as "checking the screen" until the answer request ends. Driven from the
+// squad's open answer requests (few), each tied to its asking by the payload's seq.
+export function pressing(store: Store, project: string, squad: string): Row[] {
+  return store.db.query(`SELECT q.* FROM requests r JOIN questions q ON q.seq = json_extract(r.payload, '$.seq')
+    WHERE r.project = ?1 AND r.squad = ?2 AND r.kind = 'answer' AND r.done_at IS NULL
+      AND q.project = ?1 AND q.squad = ?2 AND q.id = json_extract(r.payload, '$.id') AND q.status = 'answered' AND q.answered_via = 'board'
+      AND json_extract(q.doc, '$.picker_kind') = 'permission'
+    ORDER BY q.seq`).all(project, squad) as Row[];
+}
+
 // An open row as its waiting_on_you entry: every row keeps the entry it was written from.
 export const entryOf = (r: Row): unknown => JSON.parse(String(r.doc));
 

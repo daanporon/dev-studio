@@ -221,7 +221,7 @@ export async function run(argv: string[]): Promise<number> {
     // Answerable from the board only when shown in full and tied to its tool call (D5); the answer fulfiller
     // also reads the screen again before it presses anything (bin/loop/chat/permission.ts).
     const answerable = found !== "" && checkable(tool, h.tool_input, shown);
-    const rc = await askOperator(id, ["--title", promptTitle(ROLE, tool), "--question", promptQuestion(shown, text("cwd")),
+    const rc = await askOperator(id, ["--title", promptTitle(ROLE, tool, agent), "--question", promptQuestion(shown, text("cwd")),
       "--option", "Yes", "let it run this once", "--option", "No", "refuse it; the role is told no",
       "--recommend", "No", "--why", "a Claude safety check stopped here — no recommendation; read it before you answer",
       "--picker", tid, tpath || "(none)", String(answerable), "--permission", tool, agent, shown, text("cwd")]);

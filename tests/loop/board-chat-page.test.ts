@@ -1,11 +1,12 @@
 // crew-terminal-access U3: the board's chat panel (web/board.html ChatPanel) and its entry on a question card,
 // rendered with stub hooks in the board-pause-page.test.ts style: htm's tagged template becomes {strings, values}.
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const page = readFileSync(join(import.meta.dir, "../../web/board.html"), "utf8");
 const cut = (name: string) => { const i = page.indexOf(`function ${name}(`); return page.slice(i, page.indexOf("\n}\n", i) + 2); };
+const lineOf = (start: string) => { const i = page.indexOf(start); return page.slice(i, page.indexOf("\n", i) + 1); };
 // CHAT_MAX, chatTone, chatTurn and ChatPanel sit together, from the panel's comment to ChatPanel's closing brace.
 const chatSrc = (() => { const i = page.indexOf("const CHAT_MAX = "); const j = page.indexOf("function ChatPanel("); return page.slice(i, page.indexOf("\n}\n", j) + 2); })();
 const html = (strings: TemplateStringsArray, ...values: any[]) => ({ strings: strings.join("\u0000"), values });
@@ -43,7 +44,7 @@ function panel(reply: any = { agent: "claude", source: "transcript", turns: [], 
   const fetchStub = async (url: string) => { fetches.push(url); return { ok: !goneUrls.has(url), status: goneUrls.has(url) ? 404 : 200, json: async () => reply }; };
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
   const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store", "sendAnswer", "sentQ", "askingKey",
-    `${cut("urlTail")} ${cut("linkedQ")} ${cut("QMd")} ${cut("QOptions")} const docLabel = () => "Open doc"; ${chatSrc} return { QOptions, ChatPanel, ChatCtl, ChatFailCtl, chatCount, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
+    `${cut("urlTail")} ${cut("linkedQ")} ${cut("QMd")} ${cut("QOptions")} ${cut("ShownText")} ${cut("PermWhy")} ${lineOf("const promptWhere = ")} const docLabel = () => "Open doc"; ${chatSrc} return { QOptions, PermWhy, ChatPanel, ChatCtl, ChatFailCtl, chatCount, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
   const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); if (postGate) await postGate; return { ok: true, id: 7 }; }, fetchStub,
     (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub,
     async (...a: any[]) => { answers.push(a); sentQ.set(askingKey(a[0] + "/" + a[1] + "/" + a[2], a[4]), "12:00"); }, sentQ, askingKey);
@@ -566,10 +567,10 @@ test("crew-terminal-access U5: the log follows the newest row, stays put once sc
 test("a squad question card opens the chat panel of the member its answer goes to; a Studio alert has none", () => {
   const h = hooks();
   const ChatPanel = () => null;
-  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions", "mdPlain", "QMd",
+  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions", "mdPlain", "QMd", "PermWhy", "CheckingLine",
     `${cut("AskOverlay")} return AskOverlay;`);
   const AskOverlay = make(h.useState, h.useEffect, html, async () => {}, new Map(), (n: any) => n.label + "/" + n.squad + "/" + n.id,
-    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel, (v: any) => ({ current: v }), (n: any) => n.label + "/" + n.squad + "/" + n.id, () => "00:00:00", () => null, (t: any) => t, () => null);
+    (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", ChatPanel, (v: any) => ({ current: v }), (n: any) => n.label + "/" + n.squad + "/" + n.id, () => "00:00:00", () => null, (t: any) => t, () => null, () => null, () => null);
   const q = { label: "p", squad: "one", id: "q1", kind: "blocking", from: "builder-x", chat_wt: "/w/bx", chat_label: "builder-x", title: "T", text: "T", choices: [], suggestion: null, source: "lead" };
   const cardActions = new Function("docLabel", cut("cardActions") + " return cardActions;")(() => "doc");
   const render = (n: any) => { h.reset(); return nodes(AskOverlay({ cardActions, data: { squads: [] }, items: [n], at: "p/one/q1", setAt: () => {}, onClose: () => {}, onShow: () => {}, toast: () => {} })); };
@@ -581,6 +582,36 @@ test("a squad question card opens the chat panel of the member its answer goes t
   // A card with no worktree of its own (a loop PR gate) is answered at the Lead, so it chats with the Lead.
   expect(render({ ...q, from: "loop", chat_wt: "/w/lead", chat_label: "the Lead" }).find((n) => n.strings.includes('class="btn chat-btn"'))!.values).toContain("the Lead");
   expect(render({ ...q, squad: "_studio", chat_wt: null }).some((n) => n.strings.includes("chat-btn"))).toBe(false);
+});
+
+test("U5: a safety-check card answered on the board stays, marked checking, with its options and Send disabled", () => {
+  const h = hooks();
+  const sentQ = new Map<string, string>(), akey = (n: any) => n.label + "/" + n.squad + "/" + n.id;
+  const CheckingLine = () => null, QOptions = () => null;
+  const make = new Function("useState", "useEffect", "html", "sendAnswer", "sentQ", "nkey", "sqName", "fmtAge", "QPr", "linkedQ", "ActBtn", "copy", "docLabel", "ChatPanel", "useRef", "akey", "hhmmss", "QOptions", "mdPlain", "QMd", "PermWhy", "CheckingLine",
+    `${cut("AskOverlay")} return AskOverlay;`);
+  const AskOverlay = make(h.useState, h.useEffect, html, async () => {}, sentQ, akey, (n: any) => n.squad, () => "1m", () => null, (t: any) => t, () => null, () => {}, () => "", () => null,
+    (v: any) => ({ current: v }), akey, () => "00:00:00", QOptions, (t: any) => t, () => null, () => null, CheckingLine);
+  const cardActions = new Function("docLabel", cut("cardActions") + " return cardActions;")(() => "doc");
+  const q = { label: "p", squad: "one", id: "q1", kind: "blocking", from: "builder-u1", title: "T", text: "T", choices: [{ label: "Yes" }, { label: "No" }], suggestion: null,
+    source: "picker", picker_kind: "permission", picker_answerable: true };
+  const render = (n: any) => { h.reset(); return nodes(AskOverlay({ cardActions, data: { squads: [] }, items: [n], at: "p/one/q1", setAt: () => {}, onClose: () => {}, onShow: () => {}, toast: () => {} })); };
+  const disabledOpts = (ns: any[]) => { const n = ns.find((x) => x.values[0] === QOptions)!; return n.values[n.strings.split("\u0000").findIndex((seg: string) => /disabled=$/.test(seg))]; };
+  const sendBtn = (ns: any[]) => ns.find((n) => n.strings.includes('class="btn pri"') && n.strings.includes("disabled="))!;
+  let ns = render(q);
+  expect(ns.some((n) => n.values[0] === CheckingLine)).toBe(false);
+  expect(disabledOpts(ns)).toBe(false);
+  // The server lists it pending (another tab, or after a reload): checking, nothing pressable.
+  for (const n of [{ ...q, pending: true }, q]) {
+    if (n === q) sentQ.set("p/one/q1", "10:00");   // this tab just sent it
+    ns = render(n);
+    expect(ns.some((x) => x.values[0] === CheckingLine)).toBe(true);
+    expect(disabledOpts(ns)).toBe(true);
+    expect(sendBtn(ns).values).toContain(true);
+  }
+  // A refused press turns it terminal-only: no checking line any more.
+  ns = render({ ...q, picker_answerable: false, picker_refused: "the screen shows a different command" });
+  expect(ns.some((x) => x.values[0] === CheckingLine)).toBe(false);
 });
 
 test("crew-terminal-access U8: each send claims its own turn, the earlier of two identical sends scrolls out with its turn", () => {
@@ -731,13 +762,15 @@ const flat = (v: any): string => Array.isArray(v) ? v.map(flat).join("") : v?.st
   ? v.strings.split("\u0000").map((x: string, i: number) => x + (i < v.values.length ? flat(v.values[i]) : "")).join("") : typeof v === "function" || v == null || v === false ? "" : String(v);
 const btnWith = (root: any, text: string) => nodes(root).find((n) => n.strings.includes(text) && n.values.some((v: any) => typeof v === "function"))!;
 // The rendered QOptions of the question card (the stub html leaves a component as a node): its props come from the attributes.
-const qoptions = (p: any, root: any) => {
-  const n = nodes(root).find((x) => x.values[0] === p.mod.QOptions)!;
+const component = (fn: any, root: any) => {
+  const n = nodes(root).find((x) => x.values[0] === fn);
+  if (!n) return null;
   const names = n.strings.split("\u0000").map((seg: string) => /(\w+)=$/.exec(seg)?.[1]);
   const props: any = {};
   names.forEach((k: string | undefined, i: number) => { if (k) props[k] = n.values[i]; });
-  return p.mod.QOptions(props);
+  return fn(props);
 };
+const qoptions = (p: any, root: any) => component(p.mod.QOptions, root);
 const optBtns = (root: any) => nodes(root).filter((n) => n.strings.startsWith("<button key=") && n.strings.includes("<span class=\"n\">"));
 const qopts = (root: any) => nodes(root).filter((n) => n.strings.includes("chat-qopt") || n.values.some((v: any) => typeof v === "string" && v.includes("chat-qopt")));
 
@@ -868,6 +901,39 @@ test("U2: a terminal-only picker shows its text and Open Screen to answer, no an
   btnWith(questionView(root), "Open Screen to answer").values.filter((v: any) => typeof v === "function").pop()();
   expect(hasKeyRow(p.render())).toBe(true);
   expect(dockOf(p.render())).toBe("open");   // the card stays open over the screen
+});
+
+describe("U5: a safety-check prompt the board can't press doesn't look pressable", () => {
+  const perm = (over: any) => bq("q7", { source: "picker", picker_kind: "permission", shown: "git push origin work", asker: "builder-u1", ...over });
+  const view = (q: any) => {
+    const p = panel();
+    p.render();
+    p.setData({ ...idle, questions: [q], screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
+    return { p, root: questionView(p.render()) };
+  };
+  test("a refused card says why, where to answer it and the screen's options as text; Open Screen is its only button", () => {
+    const { p, root } = view(perm({ answerable: false, picker_refused: "the screen shows a different command" }));
+    const why = flat(component(p.mod.PermWhy, root));
+    expect(why).toContain("The board didn't press it: the screen shows a different command.");
+    expect(why).toContain("Answer it in builder-u1's terminal");
+    expect(why).toContain("On the screen: 1. Yes · 2. No");
+    expect(nodes(root).some((n) => n.values[0] === p.mod.QOptions)).toBe(false);   // no choice tiles
+    const btns = qopts(root);
+    expect(btns).toHaveLength(1);
+    expect(flat(btns[0])).toContain("Open Screen to answer");
+  });
+  test("a card never answerable says the board can't check this command", () => {
+    const { p, root } = view(perm({ answerable: false }));
+    expect(flat(component(p.mod.PermWhy, root))).toContain("The board can't check this command.");
+    expect(qopts(root)).toHaveLength(1);
+  });
+  test("an answerable card still shows Yes and No as buttons", () => {
+    const { p, root } = view(perm({ answerable: true }));
+    expect(component(p.mod.PermWhy, root)).toBeNull();
+    const list = nodes(qoptions(p, root)).filter((n) => n.strings.startsWith("<button"));
+    expect(list.map(flat).join(" ")).toContain("Yes");
+    expect(list).toHaveLength(2);
+  });
 });
 
 test("U2: a screen menu with no board question has one button per option that posts api/keys with its digit, and Esc leaves the menu", async () => {
