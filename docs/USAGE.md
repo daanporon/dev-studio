@@ -469,6 +469,17 @@ twice and then asks for a restart), `⚠LEAD-HUNG(Nm)` (working with no output f
 step open, and its last turn neither ended nor stopped with Esc) and `⚠LEAD-UNREACHABLE` (Run mail the loop cannot deliver to it). The web board shows the
 same words in red. A Lead that is idle with nothing waiting shows nothing however long it has been idle.
 
+**Flow cards.** The web board's Flow draws one card per open unit. A red card counts in the header's **stuck** number and means
+nobody is moving the unit; an amber one counts as **slow**. A card well past the typical time for its stage is stuck when its
+Builder has shown no sign of work for `flow_quiet_min` (20 minutes), else slow; a ready PR still waiting for `finish-unit.sh` past
+`flow_stuck_floor_min` is stuck. A PR that is blocked (red checks, review threads, conflicts, behind, draft) is judged by its
+Builder instead, and the card says which it is: `fixing · <reasons> · output 3m ago` while the Builder works (a normal card);
+`slow fix · red 20h · output 1m ago` (amber) once it has been red longer than the larger of twice the typical time and
+`flow_stuck_floor_min`, the Builder still working; `stuck · Builder idle 45m · red 4h` (red) once the Builder is quiet past
+`flow_quiet_min`. A unit whose Builder is gone reads `stuck · no Builder`. A card whose red-since time is unknown measures from
+when the PR opened and leaves `red <age>` out. The unit rows and the text board call a blocked PR `red PR`. This changes only what
+the board shows and counts, not the loop's pokes (`pr_stale_min`).
+
 On the web board each squad has two dropdowns: **work units** (the list above, with
 each unit's live status and PR chip); with the light lane on (`max_light_builders` > 0) a light unit also carries a `light` chip next to its Tier (`light→normal` once its CPU passed `light_lane_cpu_h`; the tooltip names the rule and CPU-hours), and the Builders tile reads `normal x/max_builders · light y/max_light_builders` and **pipeline graph** (the unit dependency graph,
 drawn with Mermaid — an add-on that needs internet to render; offline it degrades to the
