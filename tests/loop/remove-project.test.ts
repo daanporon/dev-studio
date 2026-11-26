@@ -4,7 +4,7 @@
 // of the label left; a blocked one fails with nothing moved; a folder back after the move goes into the archive;
 // a squad start is refused while the removal is open.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -22,7 +22,7 @@ import { copyRows, deleteRows } from "../../bin/loop/db/project-rows.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const T = 1_800_000_000, DAY = new Date(T * 1000).toISOString().slice(0, 10);
-const ENV = ["DS_CLOSE_ROLE", "BACKEND", "FAKE_LOG", "DS_NOW"];
+const ENV = ["DS_CLOSE_ROLE", "BACKEND", "FAKE_LOG", "DS_NOW", "DS_LOOP_REMOVE_BATCH_ROWS", "DS_LOOP_REMOVE_SLICE_MS"];
 const temps: string[] = [], stores: Store[] = [];
 const saved = new Map(ENV.map((k) => [k, process.env[k]]));
 afterEach(() => {
@@ -86,8 +86,10 @@ function rig(opts: { running?: boolean; studio?: string; off?: ReturnType<typeof
   Object.assign(process.env, { DS_CLOSE_ROLE: join(t, "bin", "close-role.sh"), BACKEND: fake, FAKE_LOG: join(t, "backend.log") });
   const orca = new FakeOrca();
   const off = opts.off;
-  const act = new LoopActuator({ orca, fulfillers: fulfillers.filter((f) => f.kinds), ...(off ? { backends: () => ({ backend: off, caps: off.caps }) } : {}) });
-  const loop = new Loop(s, { observers: [], reconcilers: [...fulfillers] }, act, { projects: () => ["fx", "other"].filter((p) => existsSync(join(S, p))) });
+  const newActuator = () => new LoopActuator({ orca, fulfillers: fulfillers.filter((f) => f.kinds), ...(off ? { backends: () => ({ backend: off, caps: off.caps }) } : {}) });
+  let act = newActuator();
+  const newLoop = () => new Loop(s, { observers: [], reconcilers: [...fulfillers] }, act, { projects: () => ["fx", "other"].filter((p) => existsSync(join(S, p))) });
+  let loop = newLoop();
   loop.boot(T);
   let at = T;
   const tick = async () => { at += 2; process.env.DS_NOW = String(at); await loop.tick(at); await act.drain(); };
@@ -100,7 +102,14 @@ function rig(opts: { running?: boolean; studio?: string; off?: ReturnType<typeof
     for (let i = 0; i < 40 && req(id).done_at == null && !until?.(); i++) await tick();
     return result(id);
   };
-  return { s, S, orca, file, run, result, step, tick };
+  // The loop that ran so far is dropped and a new one boots on the same loop.db.
+  const restart = async () => {
+    act = newActuator();
+    loop = newLoop();
+    loop.boot(at);
+    await act.boot(s, at);
+  };
+  return { s, S, orca, file, run, result, step, tick, restart };
 }
 const labelRows = (s: Store) => (s.db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Row[])
   .map((r) => String(r.name))
@@ -260,5 +269,85 @@ describe("ds remove-project through the loop (remove-project U3)", () => {
     expect(res.error).toContain("kept changing");
     expect(existsSync(join(p.archive, "loop-rows.db"))).toBe(true);
     expect(labelRows(r.s)).toContain("events");
+  }, 60_000);
+
+  // U6: the log tables go in batches. Small ones here, and with no slice left one batch a tick.
+  function logRows(r: ReturnType<typeof rig>, n: number) {
+    for (let i = 0; i < n; i++) {
+      r.s.event("note", { project: "fx", payload: { i } });
+      r.s.event("note", { project: "other", payload: { i } });
+      r.s.db.run(`INSERT INTO orca_calls (retry_id, key, op, project, at, state, settled_at) VALUES ('rt-${i}', 'k', 'op', 'fx', ${T}, 'completed', ${T})`);
+      r.s.db.run(`INSERT INTO relayed (msg_id, project, squad, run_id, seen_at, forwarded_at) VALUES ('msg-${i}', 'fx', 't1', 'run-fx', ${T}, ${T})`);
+    }
+  }
+  const archived = (archive: string, table: string) => {
+    const a = new Database(join(archive, "loop-rows.db"), { readonly: true });
+    try { return (a.query(`SELECT COUNT(*) AS n FROM ${table} WHERE project = 'fx'`).get() as { n: number }).n; } finally { a.close(); }
+  };
+  const left = (r: ReturnType<typeof rig>, table: string, project = "fx") =>
+    (r.s.db.query(`SELECT COUNT(*) AS n FROM ${table} WHERE project = ?`).get(project) as { n: number }).n;
+
+  test("more log rows than one batch: all gone, the archive whole, batches and the longest hold reported", async () => {
+    process.env.DS_LOOP_REMOVE_BATCH_ROWS = "4";
+    const r = rig();
+    logRows(r, 10);
+    const other = left(r, "events", "other");
+    const res = await r.run(r.file());
+    expect(res.ok).toBe(true);
+    expect(labelRows(r.s)).toEqual([]);
+    expect(archived(res.archive, "orca_calls")).toBe(10);
+    expect(archived(res.archive, "relayed")).toBe(10);
+    expect(archived(res.archive, "events")).toBe(res.counts.events);
+    expect(res.batches).toBeGreaterThanOrEqual(3 + 3 + 3);
+    expect(res.held_ms).toBeGreaterThanOrEqual(0);
+    expect(plan(r).log.deleted).toBe(res.counts.events + 20);
+    expect(JSON.parse(readFileSync(join(res.archive, "removed.json"), "utf8"))).toMatchObject({ batches: res.batches, held_ms: res.held_ms });
+    expect(left(r, "events", "other")).toBeGreaterThanOrEqual(other);
+    expect(events(r.s, "project_removed").map((e) => JSON.parse(String(e.payload)).batches)).toEqual([res.batches]);
+  }, 60_000);
+
+  test("a loop restarted between batches goes on: no row twice, the archive never set aside", async () => {
+    process.env.DS_LOOP_REMOVE_BATCH_ROWS = "4";
+    process.env.DS_LOOP_REMOVE_SLICE_MS = "1";
+    const r = rig();
+    logRows(r, 10);
+    const id = r.file();
+    await r.run(id, () => r.step() === "copied" && plan(r).log?.batches === 2);
+    const total = plan(r).copy.counts.events + 20;
+    expect(plan(r).log.deleted).toBe(8);
+    expect(JSON.parse(String(r.s.get("requests", { id })!.result)).text).toBe(`Moving the database rows (8 of ${total})`);
+    // As if the loop died before it saved where the batches got to.
+    const ep = r.s.get("episodes", planKey("fx"))!;
+    r.s.upsert("episodes", planKey("fx"), { result: JSON.stringify({ ...JSON.parse(String(ep.result)), log: { ...plan(r).log, after: {} } }) });
+    await r.restart();
+    const res = await r.run(id);
+    expect(res.ok).toBe(true);
+    expect(plan(r).copies).toBe(1);
+    expect(plan(r).log.deleted).toBe(total);
+    expect(readdirSync(res.archive).filter((n) => n.startsWith("loop-rows"))).toEqual(["loop-rows.db"]);
+    expect(archived(res.archive, "relayed")).toBe(10);
+    expect(labelRows(r.s)).toEqual([]);
+  }, 60_000);
+
+  test("an event written between batches is added to the same archive, then deleted", async () => {
+    process.env.DS_LOOP_REMOVE_BATCH_ROWS = "4";
+    process.env.DS_LOOP_REMOVE_SLICE_MS = "1";
+    const r = rig();
+    logRows(r, 10);
+    const id = r.file();
+    await r.run(id, () => r.step() === "copied" && plan(r).log?.batches === 1);
+    const first = plan(r).copy.counts.events;
+    r.s.event("late", { project: "fx", payload: {} });
+    const res = await r.run(id);
+    expect(res.ok).toBe(true);
+    expect(plan(r).copies).toBe(2);
+    expect(res.counts.events).toBe(first + 1);
+    expect(archived(res.archive, "events")).toBe(first + 1);
+    expect(archived(res.archive, "relayed")).toBe(10);
+    expect(readdirSync(res.archive).filter((n) => n.startsWith("loop-rows"))).toEqual(["loop-rows.db"]);
+    const a = new Database(join(res.archive, "loop-rows.db"), { readonly: true });
+    expect((a.query("SELECT COUNT(*) AS n FROM removed_meta").get() as { n: number }).n).toBe(2);
+    a.close();
+    expect(labelRows(r.s)).toEqual([]);
   }, 60_000);
 });

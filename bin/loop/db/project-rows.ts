@@ -15,6 +15,12 @@
 // and finishes it with a `removed_meta` row; deleteRows opens one immediate transaction on loop.db, counts
 // every table again against the archive's counts and deletes only when all match. Nothing here deletes a
 // file or reads stateRoot(): the caller names both paths.
+//
+// The big log tables (LOG_TABLES) would hold the write lock for seconds, so after the verified copy they are
+// deleted first, in short batches (U6): deleteLogBatch deletes only rows the archive holds identically at the
+// same rowid (a rowid bound is not enough: SQLite gives a deleted newest rowid to the next row), and
+// deleteRows then expects none of them. Once a batch ran, the archive holds rows loop.db no longer does, so it
+// is never rewritten: a later change is added to it with appendRows. Every copy keeps each row's rowid.
 import { Database } from "bun:sqlite";
 import { existsSync, renameSync } from "node:fs";
 import { now, type Store } from "../core/store.ts";
@@ -49,6 +55,12 @@ export const KEPT: Record<string, string> = {
   timers: "host-wide timers",
 };
 
+// The tables deleted in batches, each with the column that names a row across an update (null: never
+// updated), which is how appendRows tells a changed row from a new one on a reused rowid.
+export const LOG_TABLES = ["events", "orca_calls", "relayed"] as const;
+export type LogTable = (typeof LOG_TABLES)[number];
+const SAME_ROW: Record<LogTable, string | null> = { events: null, orca_calls: "retry_id", relayed: "msg_id" };
+
 export type Spec = {
   table: string;
   // `delete`: the rows go; `clear`: the rows stay with cleared_at set (overrides).
@@ -63,6 +75,24 @@ const tables = (db: Database, schema = "main"): string[] =>
     .map((r) => r.name);
 const columns = (db: Database, table: string, schema = "main"): string[] =>
   (db.query(`PRAGMA ${schema}.table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+
+const tableSql = (db: Database, table: string, schema: string) =>
+  (db.query(`SELECT sql FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`).get(table) as { sql: string }).sql;
+const migrationsOf = (db: Database, schema: string) =>
+  (db.query(`SELECT filename FROM ${schema}.schema_migrations ORDER BY filename`).all() as { filename: string }[]).map((r) => r.filename);
+
+// The columns a copy lists so each row keeps its rowid: an INTEGER PRIMARY KEY is the rowid already, any
+// other rowid table names it too (`SELECT *` would number the rows anew).
+function copyColumns(db: Database, table: string, schema: string): string[] {
+  const info = db.query(`PRAGMA ${schema}.table_info(${table})`).all() as { name: string; type: string; pk: number }[];
+  const names = info.map((c) => `"${c.name}"`);
+  const pk = info.filter((c) => c.pk);
+  const keyed = (pk.length === 1 && pk[0].type.toUpperCase() === "INTEGER") || /\bWITHOUT\s+ROWID\b/i.test(tableSql(db, table, schema));
+  return keyed ? names : ["rowid", ...names];
+}
+// Every column of rows `a` and `b` equal, NULLs too.
+const identical = (db: Database, table: string, schema: string, a: string, b: string) =>
+  columns(db, table, schema).map((c) => `${a}."${c}" IS ${b}."${c}"`).join(" AND ");
 
 // A pin names the project (scope project), one of its squads or roles (`<label>/…`), or one of its members
 // by id, worktree or `<label>/<squad>/<role>[/<suffix>]` (memberIds in store.ts, scopeTargets in pick.ts).
@@ -97,13 +127,13 @@ export function unclassified(db: Database): string[] {
 export type Counts = Record<string, number>;
 export type Meta = { label: string; removed_at: number; migrations: string[]; counts: Counts; finished_at: number };
 
-// The finish mark of an archive file, or null when the file holds none (an unfinished copy).
+// The (latest) finish mark of an archive file, or null when the file holds none (an unfinished copy).
 export function archiveMeta(path: string): Meta | null {
   if (!existsSync(path)) return null;
   const db = new Database(path, { readonly: true });
   try {
     if (!db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'removed_meta'").get()) return null;
-    const r = db.query("SELECT * FROM removed_meta WHERE finished_at IS NOT NULL LIMIT 1").get() as Record<string, unknown> | null;
+    const r = db.query("SELECT * FROM removed_meta WHERE finished_at IS NOT NULL ORDER BY rowid DESC LIMIT 1").get() as Record<string, unknown> | null;
     if (!r) return null;
     return { label: String(r.label), removed_at: Number(r.removed_at), migrations: JSON.parse(String(r.migrations)),
       counts: JSON.parse(String(r.counts)), finished_at: Number(r.finished_at) };
@@ -155,27 +185,130 @@ export function copyRows(dbPath: string, label: string, archivePath: string): Co
     arc.run("PRAGMA journal_mode = DELETE");
     arc.run("ATTACH DATABASE ? AS src", [dbPath]);
     const specs = projectTables(arc, "src");
-    const migrations = (arc.query("SELECT filename FROM src.schema_migrations ORDER BY filename").all() as { filename: string }[]).map((r) => r.filename);
+    const migrations = migrationsOf(arc, "src");
     const counts = arc.transaction(() => {
       const before = sourceCounts(arc, specs, label, "src.");
       for (const sp of specs) {
-        const sql = (arc.query("SELECT sql FROM src.sqlite_master WHERE type = 'table' AND name = ?").get(sp.table) as { sql: string }).sql;
-        arc.run(sql);
-        arc.query(`INSERT INTO main.${sp.table} SELECT * FROM src.${sp.table} WHERE ${sp.where("src.")}`).run(...sp.params(label));
+        arc.run(tableSql(arc, sp.table, "src"));
+        const cols = copyColumns(arc, sp.table, "src").join(", ");
+        arc.query(`INSERT INTO main.${sp.table} (${cols}) SELECT ${cols} FROM src.${sp.table} WHERE ${sp.where("src.")}`).run(...sp.params(label));
       }
       const after: Counts = {};
       for (const sp of specs) after[sp.table] = (arc.query(`SELECT COUNT(*) AS n FROM main.${sp.table}`).get() as { n: number }).n;
       if (!sameCounts(before, after)) throw new Error(`project-rows: archive counts ${JSON.stringify(after)} differ from the source's ${JSON.stringify(before)}`);
       arc.run("CREATE TABLE removed_meta (label TEXT NOT NULL, removed_at INTEGER NOT NULL, migrations TEXT NOT NULL, counts TEXT NOT NULL, finished_at INTEGER)");
-      const at = now();
-      arc.run("INSERT INTO removed_meta (label, removed_at, migrations, counts, finished_at) VALUES (?, ?, ?, ?, ?)",
-        [label, at, JSON.stringify(migrations), JSON.stringify(after), at]);
+      finishMark(arc, label, migrations, after);
       return after;
     })();
     arc.run("DETACH DATABASE src");
     return { archive: archivePath, counts, rows: Object.values(counts).reduce((a, b) => a + b, 0), set_aside: setAsideList };
   } finally {
     arc.close();
+  }
+}
+
+function finishMark(arc: Database, label: string, migrations: string[], counts: Counts): void {
+  const at = now();
+  arc.run("INSERT INTO removed_meta (label, removed_at, migrations, counts, finished_at) VALUES (?, ?, ?, ?, ?)",
+    [label, at, JSON.stringify(migrations), JSON.stringify(counts), at]);
+}
+
+export type AppendResult = { archive: string; counts: Counts; source: Counts; rows: number; added: number };
+
+// Adds to the label's finished archive every row of loop.db it does not hold identically, in one transaction
+// with a second `removed_meta` entry. A row changed since it was copied takes its newer version. No archived log
+// row is lost: one whose rowid loop.db gave to another row moves to a free rowid. Other tables, still whole in
+// loop.db, keep what they held except where a row there now has the same key or rowid.
+// `counts` are the archive's totals now, `source` loop.db's rows of the label in the same snapshot.
+export function appendRows(dbPath: string, label: string, archivePath: string): AppendResult {
+  if (!existsSync(archivePath)) throw new Error(`project-rows: no archive at ${archivePath} to add to`);
+  // Read and write, so a journal a crash left is rolled back before anything is read.
+  const arc = new Database(archivePath, { readwrite: true });
+  try {
+    arc.run("PRAGMA busy_timeout = 5000");
+    arc.run("PRAGMA foreign_keys = OFF");
+    const held = (arc.query("SELECT label FROM removed_meta WHERE finished_at IS NOT NULL LIMIT 1").get() as { label: string } | null)?.label;
+    if (held !== label) throw new Error(`project-rows: ${archivePath} is not a finished archive of '${label}'`);
+    arc.run("ATTACH DATABASE ? AS src", [dbPath]);
+    const specs = projectTables(arc, "src");
+    const migrations = migrationsOf(arc, "src");
+    const out = arc.transaction(() => {
+      const source = sourceCounts(arc, specs, label, "src.");
+      const counts: Counts = {};
+      let added = 0;
+      for (const sp of specs) {
+        const t = sp.table;
+        if (!tables(arc).includes(t)) arc.run(tableSql(arc, t, "src"));
+        const cols = copyColumns(arc, t, "src");
+        const missing = `${sp.where("src.")} AND NOT EXISTS (SELECT 1 FROM main.${t} AS a WHERE a.rowid = s.rowid AND ${identical(arc, t, "src", "a", "s")})`;
+        const strays = (arc.query(`SELECT s.rowid AS r FROM src.${t} AS s WHERE ${missing}`).all(...sp.params(label)) as { r: number }[]).map((x) => x.r);
+        if ((LOG_TABLES as readonly string[]).includes(t) && strays.length) {
+          const key = SAME_ROW[t as LogTable];
+          const taken = arc.query(`SELECT 1 FROM main.${t} AS a JOIN src.${t} AS s ON s.rowid = a.rowid WHERE a.rowid = ?${key ? ` AND a.${key} IS NOT s.${key}` : ""}`);
+          const top = arc.query(`SELECT MAX(COALESCE((SELECT MAX(rowid) FROM main.${t}), 0), COALESCE((SELECT MAX(rowid) FROM src.${t}), 0)) AS n`);
+          const move = arc.query(`UPDATE main.${t} SET rowid = ? WHERE rowid = ?`);
+          for (const r of strays) if (taken.get(r)) move.run((top.get() as { n: number }).n + 1, r);
+        }
+        const insert = arc.query(`INSERT OR REPLACE INTO main.${t} (${cols.join(", ")}) SELECT ${cols.join(", ")} FROM src.${t} WHERE rowid = ?`);
+        for (const r of strays) insert.run(r);
+        added += strays.length;
+        counts[t] = (arc.query(`SELECT COUNT(*) AS n FROM main.${t}`).get() as { n: number }).n;
+      }
+      finishMark(arc, label, migrations, counts);
+      return { counts, source, added };
+    })();
+    arc.run("DETACH DATABASE src");
+    return { archive: archivePath, ...out, rows: Object.values(out.counts).reduce((a, b) => a + b, 0) };
+  } finally {
+    arc.close();
+  }
+}
+
+// Runs one write transaction and times its write-lock hold. The automatic WAL checkpoint runs inside COMMIT's
+// call but after the lock is released, so it is held off and run by hand (the same passive one) afterwards.
+function timed<T>(db: Database, txn: () => T): { out: T; held_ms: number } {
+  const ckpt = (db.query("PRAGMA wal_autocheckpoint").get() as { wal_autocheckpoint: number }).wal_autocheckpoint;
+  db.run("PRAGMA wal_autocheckpoint = 0");
+  let out: T, held_ms = 0;
+  const t0 = performance.now();
+  try {
+    out = txn();
+    held_ms = Math.round((performance.now() - t0) * 10) / 10;
+  } finally {
+    db.run(`PRAGMA wal_autocheckpoint = ${Number(ckpt)}`);
+  }
+  if (ckpt > 0) db.query("PRAGMA main.wal_checkpoint(PASSIVE)").get();
+  return { out, held_ms };
+}
+
+export type Batch = { deleted: number; held_ms: number; next: number | null };
+
+// Deletes up to `limit` of the label's rows of one log table that the archive holds identically at the same
+// rowid, in one immediate transaction. The rows are picked before the lock is taken, walking the archive from
+// rowid `after`, and checked again inside it. `next` is the `after` of the following batch, null when the
+// archive has no further row to delete; starting again from 0 is safe and finds what is left.
+export function deleteLogBatch(store: Store, label: string, archivePath: string, table: LogTable, limit: number, after = 0): Batch {
+  const db = store.db;
+  if (db.inTransaction) throw new Error("project-rows: deleteLogBatch runs its own transaction, not inside another");
+  if (!(LOG_TABLES as readonly string[]).includes(table)) throw new Error(`project-rows: ${table} is not deleted in batches`);
+  // ATTACH would make a missing file.
+  if (!existsSync(archivePath)) throw new Error(`project-rows: no archive at ${archivePath}`);
+  db.run("ATTACH DATABASE ? AS arc", [archivePath]);
+  try {
+    const held = (db.query("SELECT label FROM arc.removed_meta WHERE finished_at IS NOT NULL LIMIT 1").get() as { label: string } | null)?.label;
+    if (held !== label) throw new Error(`project-rows: ${archivePath} is not a finished archive of '${label}'`);
+    const same = identical(db, table, "main", "a", "s");
+    // CROSS JOIN keeps the archive outer, so a batch costs its own rows, not a scan of the whole log.
+    const ids = (db.query(`SELECT a.rowid AS r FROM arc.${table} AS a CROSS JOIN main.${table} AS s ON s.rowid = a.rowid
+      WHERE a.rowid > ?1 AND s.project = ?2 AND ${same} ORDER BY a.rowid LIMIT ?3`).all(after, label, limit) as { r: number }[]).map((x) => x.r);
+    if (!ids.length) return { deleted: 0, held_ms: 0, next: null };
+    const del = db.query(`DELETE FROM main.${table} AS s WHERE s.rowid IN (SELECT value FROM json_each(?2)) AND s.project = ?1
+      AND EXISTS (SELECT 1 FROM arc.${table} AS a WHERE a.rowid = s.rowid AND ${same})`);
+    const txn = db.transaction(() => del.run(label, JSON.stringify(ids)).changes);
+    const r = timed(db, () => txn.immediate());
+    return { deleted: r.out, held_ms: r.held_ms, next: ids.length < limit ? null : ids[ids.length - 1] };
+  } finally {
+    db.run("DETACH DATABASE arc");
   }
 }
 
@@ -208,27 +341,20 @@ export function deleteRows(store: Store, label: string, counts: Counts): DeleteR
     let cleared_pins = 0;
     for (const sp of specs) {
       if (sp.mode === "clear") cleared_pins = db.query(`UPDATE ${sp.table} SET cleared_at = ${now()} WHERE ${sp.where("")}`).run(...sp.params(label)).changes;
-      else deleted[sp.table] = db.query(`DELETE FROM ${sp.table} WHERE ${sp.where("")}`).run(...sp.params(label)).changes;
+      // A table with no row of the label (the log tables, after their batches) is not scanned again.
+      else deleted[sp.table] = cur[sp.table] ? db.query(`DELETE FROM ${sp.table} WHERE ${sp.where("")}`).run(...sp.params(label)).changes : 0;
     }
     return { deleted, cleared_pins, cleared_links };
   });
-  // The automatic WAL checkpoint runs inside COMMIT's call but after the write lock is released, so it is
-  // held off for this transaction and run by hand (the same passive checkpoint) once held_ms is taken.
   const fk = (db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys;
-  const ckpt = (db.query("PRAGMA wal_autocheckpoint").get() as { wal_autocheckpoint: number }).wal_autocheckpoint;
   db.run("PRAGMA foreign_keys = OFF");
-  db.run("PRAGMA wal_autocheckpoint = 0");
-  const t0 = performance.now();
-  let out: ReturnType<typeof txn>;
-  let held_ms = 0;
+  let r: { out: ReturnType<typeof txn>; held_ms: number };
   try {
-    out = txn.immediate();
-    held_ms = Math.round((performance.now() - t0) * 10) / 10;
+    r = timed(db, () => txn.immediate());
   } finally {
     if (fk) db.run("PRAGMA foreign_keys = ON");
-    db.run(`PRAGMA wal_autocheckpoint = ${Number(ckpt)}`);
   }
-  if (ckpt > 0) db.query("PRAGMA wal_checkpoint(PASSIVE)").get();
+  const { out, held_ms } = r;
   if ("mismatch" in out) return { ok: false, mismatch: out.mismatch, held_ms };
   return { ok: true, ...out, rows: Object.values(out.deleted).reduce((a, b) => a + b, 0), held_ms };
 }
