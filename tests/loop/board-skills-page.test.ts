@@ -35,7 +35,7 @@ test("Save posts only the edited roles, each once", async () => {
 
 test("the Skills tab shows an MCP servers group with on/off toggles only (U283)", () => {
   expect(page).toContain('>MCP servers</div>');
-  expect(page).toContain("x.mcp.map((it) => row(x, it, true))");
+  expect(page).toContain("mcp.map((it) => row(x, it, true))");
   expect(page).toContain('/^(hook|mcp):/.test(name) ? ["on", "off"] : SKILL_PICK');
 });
 

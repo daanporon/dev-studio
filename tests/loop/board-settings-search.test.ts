@@ -19,9 +19,26 @@ const LIMITS = [
 ];
 const GROUPS = ["Context & compaction", "Review", "Machine"];
 
+const ROLES = {
+  catalog: [{ agent: "claude", model: "opus", label: "Opus", efforts: ["high"] }, { agent: "claude", model: "sonnet", label: "Sonnet", efforts: ["high"] }],
+  roles: [["lead", "sonnet", ""], ["thinker", "opus", ""], ["builder", "sonnet", "claude:opus"], ["tester", "sonnet", ""]]
+    .map(([role, model, fallbacks]) => ({ role, agent: "claude", model, effort: "", spawn: "always", fallbacks, source: "default" })),
+};
+const skill = (name: string, description: string, group = "Plan") => ({ name, description, group, level: "on", required: false });
+const skillRole = (role: string, skills: any[], hooks: any[] = [], mcp: any[] = []) =>
+  ({ role, skills, hooks, mcp, other: { level: "on" }, summary: { required: 0, on: skills.length, name_only: 0, off: 0, saved_tokens: 0 } });
+const SKILLS = {
+  groups: ["Plan", "Ship"],
+  roles: [
+    skillRole("lead", [skill("ce-plan", "write a plan"), skill("commit", "make a commit", "Ship")]),
+    skillRole("thinker", [skill("ce-plan", "write a plan")], [skill("hook:resume", "restores a session")]),
+    skillRole("builder", [skill("commit", "make a commit", "Ship")], [], [skill("mcp:browser", "drives a page")]),
+  ],
+};
+
 async function start() {
   const board = { ...JSON.parse(readFileSync(join(ROOT, "tests/fixtures/board-empty.json"), "utf8")), project: "p", page_version: "v1" };
-  const r = await mount(board, false, { "api/limits": { limits: LIMITS, groups: GROUPS }, "api/roles": { roles: [] }, "api/skills": { roles: [] } });
+  const r = await mount(board, false, { "api/limits": { limits: LIMITS, groups: GROUPS }, "api/roles": ROLES, "api/skills": SKILLS });
   const w = r.window, doc = w.document;
   const posts: { url: string; body: any }[] = [];
   const base = w.fetch;
@@ -50,7 +67,17 @@ async function start() {
   }));
   const opens = () => cats().map((d) => d.open);
   const stored = () => Object.keys(w.localStorage).filter((k) => k.includes("set:limits:"));
-  return { r, w, doc, posts, click, cats, box, type, setValue, esc, fold, view, opens, stored };
+  const tab = (name: string) => click([...doc.querySelectorAll(".set-tab")].find((b: any) => b.textContent === name));
+  const texts = (el: any, sel: string) => [...el.querySelectorAll(sel)].map((e: any) => e.textContent);
+  const blocks = () => [...doc.querySelectorAll("#settings .role-block")] as any[];
+  const roleView = () => blocks().map((b) => ({
+    role: b.querySelector(".role-name").textContent, open: b.querySelector(".role-name").getAttribute("aria-expanded") === "true",
+    heads: texts(b, ".sk-grp"), rows: texts(b, ".sk-table .nm"),
+  }));
+  const groups = () => texts(doc, "#settings .rt-grp");
+  const status = () => doc.querySelector('#settings [role="status"]').textContent;
+  const toggleRole = (name: string) => click(blocks().map((b) => b.querySelector(".role-name")).find((b: any) => b.textContent === name));
+  return { r, w, doc, posts, click, cats, box, type, setValue, esc, fold, view, opens, stored, tab, blocks, roleView, groups, status, toggleRole };
 }
 
 test("typing opens only matching groups and rows; Esc restores the folds and keeps the window", async () => {
@@ -123,20 +150,30 @@ test("an edit the search hides is announced and still saved", async () => {
   } finally { await p.w.happyDOM.close(); }
 });
 
-test("Show all clears the search; no match says so; the box is disabled with its text on other tabs", async () => {
+test("Show all clears the search; no match says so; the box is disabled with its text on Pins", async () => {
   const p = await start();
   try {
     expect(p.doc.querySelector(".set-backend").textContent).toContain("--backend <name>");
     await p.type("zzz");
     expect(p.cats().length).toBe(0);
     expect(p.doc.querySelector('#settings [role="status"]').textContent).toBe('No setting matches "zzz"');
-    for (const name of ["Roles", "Skills", "Pins"]) {
-      await p.click([...p.doc.querySelectorAll(".set-tab")].find((b: any) => b.textContent === name));
-      expect(p.box().disabled).toBe(true);
+    for (const name of ["Roles", "Skills"]) {
+      await p.tab(name);
+      expect(p.box().disabled).toBe(false);
       expect(p.box().value).toBe("zzz");
-      expect(p.box().getAttribute("title")).toBe("This tab is not searched");
+      expect(p.blocks()).toEqual([]);
+      expect(p.groups()).toEqual([]);
+      expect(p.status()).toBe('No setting matches "zzz"');
     }
-    await p.click([...p.doc.querySelectorAll(".set-tab")].find((b: any) => b.textContent === "Limits"));
+    await p.tab("Accounts");
+    expect(p.box().disabled).toBe(true);
+    expect(p.box().value).toBe("zzz");
+    await p.tab("Pins");
+    expect(p.box().disabled).toBe(true);
+    expect(p.box().value).toBe("zzz");
+    expect(p.box().getAttribute("title")).toBe("This tab is not searched");
+    expect(p.doc.querySelector('[aria-label="Clear search"]')).toBeNull();
+    await p.tab("Limits");
     expect(p.box().disabled).toBe(false);
     await p.type("");
     await p.fold(p.cats()[1], true);
@@ -146,5 +183,89 @@ test("Show all clears the search; no match says so; the box is disabled with its
     expect(p.box().value).toBe("");
     expect(p.cats().length).toBe(3);
     expect(p.doc.querySelector(".set-hidden")).toBeNull();
+  } finally { await p.w.happyDOM.close(); }
+});
+
+test("Skills shows the matching roles and rows, unfolded, and clearing gives the folds back", async () => {
+  const p = await start();
+  try {
+    await p.tab("Skills");
+    await p.toggleRole("builder");
+    const folds = () => p.roleView().map((v) => v.open);
+    expect(folds()).toEqual([false, false, true]);
+    await p.type("ce-plan");
+    expect(p.roleView()).toEqual([
+      { role: "lead", open: true, heads: ["Plan"], rows: ["ce-plan"] },
+      { role: "thinker", open: true, heads: ["Plan"], rows: ["ce-plan"] },
+    ]);
+    expect(p.groups()).toEqual(["Coordinate", "Think"]);
+    expect(p.doc.querySelector("#settings .sk-top")).toBeNull();
+    expect(p.status()).toBe("");
+    await p.toggleRole("lead");
+    expect(folds()).toEqual([false, true]);
+    await p.type("restores session"); // a start hook, by its description
+    expect(p.roleView()).toEqual([{ role: "thinker", open: true, heads: ["Start hooks"], rows: ["hook:resume"] }]);
+    await p.type("browser"); // an MCP server
+    expect(p.roleView()).toEqual([{ role: "builder", open: true, heads: ["MCP servers"], rows: ["mcp:browser"] }]);
+    await p.type("thinker"); // a role's name shows it whole
+    expect(p.roleView()).toEqual([{ role: "thinker", open: true, heads: ["Plan", "Start hooks"], rows: ["ce-plan", "hook:resume"] }]);
+    expect(p.doc.querySelector("#settings .sk-top")).not.toBeNull();
+    await p.esc();
+    expect(folds()).toEqual([false, false, true]);
+    expect(p.groups()).toEqual(["Coordinate", "Think", "Build"]);
+    expect(p.r.errors).toEqual([]);
+  } finally { await p.w.happyDOM.close(); }
+});
+
+test("Roles shows the roles on a model, keeps the word across tabs and gives the folds back", async () => {
+  const p = await start();
+  try {
+    await p.tab("Roles");
+    await p.toggleRole("tester");
+    const before = p.roleView().map((v) => v.open);
+    expect(before).toEqual([false, false, false, true]);
+    await p.type("opus"); // thinker's own model, builder's fallback step
+    expect(p.roleView().map((v) => [v.role, v.open])).toEqual([["thinker", true], ["builder", true]]);
+    expect(p.groups()).toEqual(["Think", "Build"]);
+    await p.toggleRole("thinker");
+    expect(p.roleView().map((v) => v.open)).toEqual([false, true]);
+    await p.type("");
+    expect(p.roleView().map((v) => v.open)).toEqual(before);
+    await p.type("opus");
+    for (const name of ["Skills", "Pins", "Limits", "Roles"]) {
+      await p.tab(name);
+      expect(p.box().value).toBe("opus");
+      expect(p.box().disabled).toBe(name === "Pins");
+    }
+    expect(p.blocks().length).toBe(2);
+  } finally { await p.w.happyDOM.close(); }
+});
+
+test("an edited role the search hides is announced and still saved; so is a hidden skill row", async () => {
+  const p = await start();
+  try {
+    const pick = async (el: any, value: string) => { el.value = value; el.dispatchEvent(new p.w.Event("change", { bubbles: true })); await tick(); };
+    const save = () => p.click([...p.doc.querySelectorAll("#settings button")].find((b: any) => b.textContent === "Save 1 change"));
+    const note = () => p.doc.querySelector("#settings .set-hidden")?.textContent;
+    await p.tab("Roles");
+    await pick(p.blocks()[0].querySelector('select[title="spawn"]'), "ondemand");
+    await p.type("opus");
+    expect(p.blocks().length).toBe(2);
+    expect(note()).toBe("1 edited role is hidden by the search Show all");
+    await save();
+    expect(p.posts.map((x) => [x.url, x.body.role, x.body.spawn])).toEqual([["api/roles", "lead", "ondemand"]]);
+
+    p.posts.length = 0;
+    await p.type("");
+    await p.tab("Skills");
+    await p.toggleRole("lead");
+    await pick(p.doc.querySelector('#settings select[aria-label="commit level"]'), "off");
+    await p.type("ce-plan"); // lead stays shown, its edited row does not
+    expect(note()).toBe("1 edited setting is hidden by the search Show all");
+    await p.type("thinker");
+    expect(note()).toBe("1 edited setting is hidden by the search Show all");
+    await save();
+    expect(p.posts).toEqual([{ url: "api/skills", body: { project: "p", role: "lead", set: { commit: "off" } } }]);
+    expect(p.r.errors).toEqual([]);
   } finally { await p.w.happyDOM.close(); }
 });
