@@ -45,7 +45,7 @@ export async function run(argv: string[]): Promise<number> {
     if (json) {
       const limits = rows.map(({ key, comment }) => {
         const [value, source] = limitSrc(label, key);
-        const hint = key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
+        const hint = key === "ticket_url" ? "https://tracker.example/issue/{id}, or -" : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
         return { key, value, source, env: limitEnvName(key), comment, allowed: allowedFor(key), hint,
           list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses" };
       });

@@ -18,7 +18,7 @@ import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pr
 import { basename, dirname, join, resolve } from "node:path";
 import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
-import { unitLinks } from "./unit-links.ts";
+import { ticketLink, unitLinks } from "./unit-links.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { debriefTopic } from "./card-place.ts";
 import { placeAlert, questionsCount, shownStatus, doneWaits, shortTitle, prNumber } from "./needs-rules.ts";
@@ -1710,6 +1710,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
   const lv = leadCheck && leadWt != null && st.run_id ? leadVerdict(db.s, label, String(leadWt), NOW()) : null;
   const limited = limitedFor(db, label);
   const health = prHealthFor(db, label);
+  const ticketUrl = limit(db.s, label, "ticket_url");
   const u = arr(st.units);
   const members = arr(st.members);
   // U1's dep rule, mirrored (squad-state.sh ready-units `satisfied`): a dep counts when done,
@@ -1909,7 +1910,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
         parked: null as "held" | "behind" | null,
         // U6: what the details overlay shows. The text comes from the plan's unit block (register-plan) or add-unit --about.
         title: x?.title ?? null, about: x?.about ?? null, done_text: x?.done ?? null, check_text: x?.check ?? null,
-        links: unitLinks(x?.links),
+        links: unitLinks(x?.links, ticketLink(x?.title, ticketUrl)),
         plan: x?.plan ? String(x.plan) : null, plan_unit: x?.plan_unit ?? null,
         // When the loop marked the unit done on its PR's merge (units.done_at); the window's `merged <age>`.
         done_at: us === "done" ? ((db.s.get("units", { project: label, squad: topic, slug }) as any)?.done_at ?? null) : null,
@@ -2705,7 +2706,7 @@ export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] 
   { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "debrief", "archive_debrief_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
-  { name: "Board & machine", keys: ["update_run_max_min", "board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
+  { name: "Board & machine", keys: ["ticket_url", "update_run_max_min", "board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
   { name: "Morning brief", prefixes: ["briefing_"] },
   { name: "Host tidy", keys: ["host_tidy"], prefixes: ["cleanup_", "disk_"] },
   { name: "Feedback", keys: ["feedback"], prefixes: ["feedback_"] },
@@ -2741,7 +2742,7 @@ export function limitsJson(project: string, root = stateRoot()) {
       const first = (v: unknown) => fileOnly ? String(v ?? "").trim() : String(v ?? "").trim().split(/\s+/)[0] ?? "";
       const [value, source] = process.env[env] ? [process.env[env]!, "env"]
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
-      const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
+      const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "ticket_url" ? "https://tracker.example/issue/{id}, or -" : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
       return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
