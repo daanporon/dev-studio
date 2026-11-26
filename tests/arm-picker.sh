@@ -29,6 +29,9 @@ cat > "$SET" <<'JSON'
 "PreToolUse":[{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"/other/lint.sh","timeout":5}]}]}}
 JSON
 "$ARM" wt1 /tmp/st/squads/t.json thinker-auth >/dev/null 2>&1; eq "arm exits 0" "$?" "0"
+eq "adds the PermissionRequest command, matcher *, timeout 15" \
+  "$(jq -r '.hooks.PermissionRequest[] | [.matcher, .hooks[0].command, .hooks[0].timeout] | join("|")' "$SET")" \
+  "*|$ROOT/bin/hooks/picker-hook.sh permission /tmp/st/squads/t.json thinker-auth wt1|15"
 eq "keeps the rewake Stop hook" "$(jq -r '.hooks.Stop[0].hooks[0].command' "$SET")" "/r/bin/hooks/rewake-hook.sh x"
 eq "keeps a foreign AskUserQuestion hook" "$(jq -r '[.hooks.PreToolUse[].hooks[].command] | join(",") | contains("/other/lint.sh")' "$SET")" "true"
 eq "adds the pre command with state+role+wt" \
@@ -42,10 +45,13 @@ eq "post carries timeout 15" \
   "$(jq -r '.hooks.PostToolUse[] | select(.matcher=="AskUserQuestion") | .hooks[] | select(.command | contains("picker-hook.sh")) | .timeout' "$SET")" "15"
 
 # Re-arming replaces the pair in place (new state path), never duplicates.
+jq '.hooks.PermissionRequest += [{"matcher":"Bash","hooks":[{"type":"command","command":"/other/perm.sh"}]}]' "$SET" > "$SET.new" && mv "$SET.new" "$SET"
 "$ARM" wt1 /tmp/st2/squads/t.json thinker-auth >/dev/null 2>&1
 eq "re-arm keeps foreign + own entries" "$(jq -r '[.hooks.PreToolUse[] | select(.matcher=="AskUserQuestion")] | length' "$SET")" "2"
 eq "re-arm keeps one own pre hook" \
   "$(jq -r '[.hooks.PreToolUse[] | select(.matcher=="AskUserQuestion") | .hooks[].command | select(contains("picker-hook.sh"))] | length' "$SET")" "1"
+eq "re-arm keeps a foreign PermissionRequest hook, one own" \
+  "$(jq -r '[.hooks.PermissionRequest[].hooks[].command | if contains("picker-hook.sh") then "own" else . end] | sort | join(",")' "$SET")" "/other/perm.sh,own"
 eq "re-arm drops the stale command" "$(grep -c '/tmp/st/squads' "$SET")" "0"
 eq "re-arm keeps one guard entry" \
   "$(jq -r '[.hooks.PreToolUse[] | select(.matcher=="Bash") | .hooks[].command | select(contains("no-broad-kill-hook.sh"))] | length' "$SET")" "1"

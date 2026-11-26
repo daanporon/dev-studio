@@ -1634,6 +1634,20 @@ render "$LBL" --json > "$TMP/lo.json"
 jt "leftover U3: the board JSON carries the check" "$TMP/lo.json" '.squads[] | select(.topic=="lo-sq") | .leftovers[0].check | .safe==false and (.commits|length)==2 and .differ==["a.ts"] and .n_differ==1'
 hasre "leftover U3: the text line says look first" "$(render "$LBL" 2>/dev/null)" '⚑ /tmp/wt-look  \(br-look\) — look first: 2 commits, 1 file not on main · checked '
 
+# permission-prompt-needs-you U1: a safety-check prompt's entry carries the command as its own field, so
+# the board draws it as a code block (line breaks kept) and says where it is answered.
+cat > "$SD/perm-sq.json" <<'JSON'
+{"run_id":"pm","status":"waiting-on-you","type":"feature","members":[],"units":[],"waiting_on_you":[{"id":"picker-00002222","asker":"builder-u1","blocking":true,"source":"picker","picker_kind":"permission","tool":"Bash","agent":"general-purpose","cwd":"/tmp/wt-builder","picker_answerable":false,"tool_use_id":"toolu_new00002222","title":"builder-u1 asks: run this command?","shown":"echo start\nrm -- \"$HOME/.ds-none\"","question":"```\necho start\nrm -- \"$HOME/.ds-none\"\n```\n\nin /tmp/wt-builder","choices":[{"label":"Yes","does":"let it run this once"},{"label":"No","does":"refuse it"}],"since":"2026-01-01T00:00:00Z"}]}
+JSON
+mkdb "$LBL"
+render "$LBL" --json > "$TMP/perm.json"
+jt "permission U1: the inbox entry carries the command, kind and agent" "$TMP/perm.json" '[.needs_you[] | select(.id=="picker-00002222")] | length == 1 and (.[0] | .picker_kind=="permission" and .picker_answerable==false and .shown=="echo start\nrm -- \"$HOME/.ds-none\"" and .agent=="general-purpose" and .cwd=="/tmp/wt-builder")'
+jt "permission U1: other entries carry no shown field" "$TMP/perm.json" '[.needs_you[] | select(.id!="picker-00002222") | has("shown")] | any | not'
+perm_text="$(render "$LBL" 2>/dev/null)"
+has "permission U1: the text board says where to answer" "$perm_text" "answer it in builder-u1's terminal"
+has "permission U1: the text board draws the command, a line each" "$perm_text" '      │ echo start
+      │ rm -- "$HOME/.ds-none"'
+
 # permission-prompt-needs-you U3: the card for a prompt the screen shows, as the loop files it on a squad: in
 # Needs-you at once, naming the role, with the prompt lines, and the member whose chat it opens.
 cat > "$SD/perm-sq.json" <<'JSON'
