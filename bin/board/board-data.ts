@@ -40,7 +40,8 @@ import { removeWaitS } from "../loop/squad/close-drift.ts";
 import { redact, redactDeep } from "../loop/chat/redact.ts";
 import { isHidden } from "../loop/chat/permission.ts";
 import { planUnitFacts } from "../loop/squad/plan-lines.ts";
-import { blockingForUnit, entryOf, list, pressRefused, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
+import { blockingForUnit, entryOf, list, pressing, pressRefused, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
+import { promptTitle } from "../lib/permission-prompt.ts";
 import { DEFAULTS as BRIEFING_DEFAULTS, gaveUp as briefingGaveUp, localDate, nextSlot, parseDays, parseTime, scheduleSince } from "../loop/reconcilers/briefing.ts";
 import { limit } from "../loop/settings/limits.ts";
 import { ANSWERED, ANSWERED_BY, ENDED, RECEIVER_RUNNING, UNREAD, WAITING } from "../loop/messages/messages.ts";
@@ -1938,21 +1939,23 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
     progress: progress(u),
     prs,
     // U4: a permission entry is redacted again here, so one an older hook queued shows no secret either.
-    questions: arr(st.waiting_on_you).map((x) => (x?.picker_kind === "permission" ? redactDeep(x) : x)).map((x) => ({
+    // U5: a safety-check prompt the board answered stays listed, pending, until its press ends (questions.ts pressing).
+    questions: [...arr(st.waiting_on_you), ...(db ? pressing(db.s, label, topic).map((r) => ({ ...(entryOf(r) as object), pending: true })) : [])]
+      .map((x) => (x?.picker_kind === "permission" ? redactDeep(x) : x)).map((x) => ({
       id: x.id ?? null, asker: x.asker ?? null, blocking: x.blocking === true, question: x.question ?? null,
       unit: questionUnit(x),
       // The member an answer is typed into (the card's worktree, else the Lead): the card's Chat opens its panel.
       chat_wt: (typeof x.card_wt === "string" && x.card_wt) || (typeof st.lead_wt === "string" && st.lead_wt) || leadWt || null,
       chat_label: typeof x.card_wt === "string" && x.card_wt ? String(x.asker ?? "the asker") : "the Lead",
       // titled: the asker wrote the one-line title; an older question gets its first sentence.
-      title: x.title ?? shortTitle(String(x.question ?? ""), x.id ?? null), titled: !!x.title,
+      title: permTitle(x) ?? x.title ?? shortTitle(String(x.question ?? ""), x.id ?? null), titled: !!x.title,
       suggestion: x.suggestion ?? null, why: x.why ?? null, options: arr(x.options),
       choices: arr(x.choices).length ? arr(x.choices)
         : (arr(x.options).length ? arr(x.options) : x.suggestion ? [x.suggestion] : []).map((l) => ({ label: String(l), does: null })),
       since: x.since ?? null, age_min: ageMin(x.since),
       // A terminal-picker mirror (bin/hooks/picker-hook.sh): the board answers it by keystroke when
       // picker_answerable (one single-select question); otherwise "answer it in the terminal".
-      source: x.source ?? null, ...pickerFields(db, label, topic, x), ...shownFields(x),
+      source: x.source ?? null, ...pickerFields(db, label, topic, x), ...shownFields(x), pending: x.pending === true,
       pr: qpr(x?.pr),
       ...questionDoc(db, label, topic, x, u),
     })).sort((a, b) => (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1) || (b.age_min ?? 0) - (a.age_min ?? 0)),
@@ -2473,7 +2476,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
         squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, since: q.since ?? null, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
         text: q.question, title: q.title, titled: q.titled, choices: q.choices,
         suggestion: q.suggestion, why: q.why, options: q.options, age_min: q.age_min, command: null,
-        source: q.source ?? null, picker_answerable: q.picker_answerable ?? null, picker_refused: q.picker_refused ?? null, ...shownFields(q),
+        source: q.source ?? null, picker_answerable: q.picker_answerable ?? null, picker_refused: q.picker_refused ?? null, ...shownFields(q), pending: q.pending === true,
         pr: q.pr ?? null, repo_slug: s.repo_slug ?? null,
         doc: q.doc ?? null, plain: q.plain ?? null, plain_from: q.plain_from ?? null, facts: q.facts ?? null, revision: q.revision ?? null, changes: q.changes ?? null,
       })),
@@ -2780,7 +2783,8 @@ export function renderText(b: Board): string {
       const ag = a == null || a < 0 ? "?" : a >= 60 ? `${Math.floor(a / 60)}h` : `${a}m`;
       const text = String(q.title ?? q.question ?? "").replace(/[\t\n]/g, " ");
       // A picker mirror lives in the asker's terminal (not the Lead's) and recommends nothing.
-      const where = q.source === "picker" ? `answer it in ${q.asker}'s terminal${q.picker_answerable === true ? " or on the web board" : ""}` : `answer at the ${s.topic} Lead`;
+      const where = q.pending ? `answered on the web board, checking ${q.asker}'s screen`
+        : q.source === "picker" ? `answer it in ${q.asker}'s terminal${q.picker_answerable === true ? " or on the web board" : ""}${q.picker_refused ? ` (the board did not press it: ${q.picker_refused})` : ""}` : `answer at the ${s.topic} Lead`;
       o.push(`   ${q.blocking ? "‼ BLOCKING" : "❗"} ${q.asker}: ${text.length > 100 ? text.slice(0, 100) + "…" : text} (${ag}) — ${where}`);
       if (q.shown) o.push(...String(q.shown).split("\n").map((l) => `      │ ${l}`));
       if (q.suggestion && q.source !== "picker") o.push(`      suggested: ${q.suggestion}${q.why ? " — " + q.why : ""}`.replace(/[\t\n]/g, " "));
@@ -3428,6 +3432,16 @@ function pickerFields(db: Db | null | undefined, project: string, topic: string,
   return { picker_answerable: refused || hidden ? false : x?.picker_answerable ?? null, picker_refused: refused };
 }
 
+// A helper agent's safety-check prompt says so in its title (U5), also for an entry an older hook queued.
+const permTitle = (x: any): string | null =>
+  x?.picker_kind === "permission" && typeof x.agent === "string" && x.agent && typeof x.tool === "string" ? promptTitle(String(x.asker ?? "an agent"), x.tool, x.agent) : null;
+// The chat's docked card: answerable, and for a refused safety-check prompt the reason the board did not press it.
+function chatPicker(db: Db, project: string, topic: string, x: any): { answerable: boolean; picker_refused?: string } {
+  if (x?.source !== "picker") return { answerable: true };
+  const f = pickerFields(db, project, topic, x);
+  return { answerable: f.picker_answerable === true, ...(f.picker_refused ? { picker_refused: f.picker_refused } : {}) };
+}
+
 // The open questions whose card opens a chat with this member (the cards' chat_wt rule in squad(): the card's
 // worktree, else the Lead's), as the Question view shows them. Blocking first, then oldest first. [] for the Studio.
 function chatQuestionsAll(db: Db, project: string, topic: string) {
@@ -3439,10 +3453,10 @@ function chatQuestionsAll(db: Db, project: string, topic: string) {
   const slug = repoSlug(db, project, String(st.repo ?? "")) || null;
   return arr(st.waiting_on_you).map((x: any) => ({
       wt: (typeof x.card_wt === "string" && x.card_wt) || (typeof st.lead_wt === "string" && st.lead_wt) || leadWt || null,
-      id: x.id ?? null, title: String(x.title ?? shortTitle(String(x.question ?? ""), x.id ?? null)), question: redact(String(x.question ?? "")),
+      id: x.id ?? null, title: String(permTitle(x) ?? x.title ?? shortTitle(String(x.question ?? ""), x.id ?? null)), question: redact(String(x.question ?? "")),
       choices: (arr(x.choices).length ? arr(x.choices) : (arr(x.options).length ? arr(x.options) : x.suggestion ? [x.suggestion] : []).map((l: any) => ({ label: String(l), does: null })))
         .map((c: any) => ({ label: redact(String(c?.label ?? "")), does: c?.does ? redact(String(c.does)) : null })),
-      since: x.since ?? null, blocking: x.blocking === true, source: x.source ?? null, answerable: !(x.source === "picker" && pickerFields(db, project, topic, x).picker_answerable !== true),
+      since: x.since ?? null, blocking: x.blocking === true, source: x.source ?? null, ...chatPicker(db, project, topic, x),
       // The suggestion is redacted as the labels are, so the Question view can match it to its option.
       suggestion: x.suggestion == null ? null : redact(String(x.suggestion)), why: x.why == null ? null : redact(String(x.why)),
       repo_slug: slug, doc: linkedDoc(db, project, topic, x),
