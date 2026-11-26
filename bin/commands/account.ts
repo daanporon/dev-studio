@@ -12,6 +12,14 @@
 //                                                       end. --dir adds a logged-in folder as it is, with no terminal.
 //                                                       Ctrl-C leaves the request running. Exit 0 added (or already
 //                                                       there), 1 failed or the loop down, 2 refused (nothing made).
+//   ds account move <account|label> [--force] [--no-wait]
+//                                                       copy a Claude account out of Orca's profile folder into the
+//                                                       accounts root (issue #125, U8): files an `account-move` request
+//                                                       (fulfil/account-move.ts) and follows it. The id stays; Orca's
+//                                                       folder is left alone. Refused (exit 2, nothing filed) while a
+//                                                       live member uses it, and while Orca still lists it unless
+//                                                       --force (two copies of one login rotate its token). Exit 0
+//                                                       moved, 1 failed (a live agent on it, the copy) or the loop down.
 // A name is an account id, else a unique accounts.tsv label (such as an email); an unknown or
 // ambiguous name is refused with exit 2. Disabling moves and restarts nobody: no pick puts a member
 // on the account any more, and members running on it switch at their next restart. Enabling an account
@@ -20,16 +28,17 @@ import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { open, type Row, type Store } from "../loop/core/store.ts";
 import { parse, print } from "../loop/core/cli.ts";
-import { knownAccounts, removeAccount, resolveAccount, setAccountEnabled, setDefaultAccount } from "../loop/capacity/accounts.ts";
+import { knownAccounts, moveProblem, removeAccount, resolveAccount, setAccountEnabled, setDefaultAccount } from "../loop/capacity/accounts.ts";
 import { STUDIO_SQUAD } from "../loop/squad/studio.ts";
 import { findKind } from "../lib/account-kinds/index.ts";
 import { nameProblem } from "../lib/account-folder.ts";
 
-export const help = "[list] | disable|enable <agent>:<account|label> [--by <who>] | default|remove <account|label> [--agent <agent>] [--by <who>] | add <name> [--agent <agent>] [--project <label>] [--dir <folder>] [--no-wait] — list accounts, switch one off/on for every pick, set the default, remove one, or add a login (a login terminal, or a logged-in --dir folder)";
+export const help = "[list] | disable|enable <agent>:<account|label> [--by <who>] | default|remove <account|label> [--agent <agent>] [--by <who>] | add <name> [--agent <agent>] [--project <label>] [--dir <folder>] [--no-wait] | move <account|label> [--force] [--no-wait] — list accounts, switch one off/on for every pick, set the default, remove one, add a login (a login terminal, or a logged-in --dir folder), or move an Orca-folder account into dev-studio's folder";
 export async function run(args: string[]): Promise<number> {
-  const { pos, opt, flag } = parse(args, ["by", "agent", "dir", "project"], ["no-wait"]);
+  const { pos, opt, flag } = parse(args, ["by", "agent", "dir", "project"], ["no-wait", "force"]);
   const [verb = "list", name] = pos;
   if (verb === "add" && name && pos.length === 2) return add(name, opt, !flag.has("no-wait"));
+  if (verb === "move" && name && pos.length === 2) return move(name, opt, flag.has("force"), !flag.has("no-wait"));
   if (!["list", "disable", "enable", "default", "remove"].includes(verb) || (verb === "list" ? pos.length > 1 : !name || pos.length > 2)) {
     console.error(`usage: ds account ${help}`);
     return 2;
@@ -99,8 +108,25 @@ async function add(name: string, opt: Record<string, string>, wait: boolean): Pr
   } finally { s.close(); }
 }
 
+async function move(name: string, opt: Record<string, string>, force: boolean, wait: boolean): Promise<number> {
+  const no = (why: string) => { console.error(`ds account move: ${why}. Nothing moved.`); return 2; };
+  const s = open();
+  try {
+    const r = resolveAccount(s, name.includes(":") ? name : `${opt.agent ?? "claude"}:${name}`);
+    if ("error" in r) return no(r.error);
+    const bad = moveProblem(s, r.agent, r.account, force);
+    if (bad) return no(bad);
+    const down = loopDown(s);
+    if (down) return no(`${down}; a move is carried out by the loop`);
+    const by = opt.by ?? process.env.DS_WHO ?? "cli";
+    const id = Number(s.requestAny("account-move", { agent: r.agent, account: r.account, ...(force ? { force: true } : {}), by }, { by, project: null }).row.id);
+    console.log(`Filed the move of ${r.agent}:${r.account} (request ${id}).`);
+    return wait ? await follow(s, id, "move") : 0;
+  } finally { s.close(); }
+}
+
 // Print each new line of the request's progress until it ends; Ctrl-C leaves it running.
-async function follow(s: Store, id: number): Promise<number> {
+async function follow(s: Store, id: number, verb = "add"): Promise<number> {
   let last = "";
   for (;;) {
     const r = s.db.query("SELECT result, done_at FROM requests WHERE id = ?").get(id) as Row | null;
@@ -108,13 +134,13 @@ async function follow(s: Store, id: number): Promise<number> {
     try { res = JSON.parse(String(r?.result ?? "{}")) ?? {}; } catch { /* no progress yet */ }
     const text = typeof res.text === "string" ? res.text : "";
     if (r?.done_at != null) {
-      if (res.ok === true) { console.log(text || "added"); return 0; }
-      console.error(`ds account add: ${String(res.error ?? "failed")}`);
+      if (res.ok === true) { console.log(text || `${verb} done`); return 0; }
+      console.error(`ds account ${verb}: ${String(res.error ?? "failed")}`);
       return 1;
     }
     if (text && text !== last) { console.log(`  ${text}`); last = text; }
     const down = loopDown(s);
-    if (down) { console.error(`ds account add: ${down}; the add goes on when it runs again (request ${id})`); return 1; }
+    if (down) { console.error(`ds account ${verb}: ${down}; the ${verb} goes on when it runs again (request ${id})`); return 1; }
     await Bun.sleep(Number(process.env.DS_ACCOUNT_ADD_POLL_MS) || 1000);
   }
 }
