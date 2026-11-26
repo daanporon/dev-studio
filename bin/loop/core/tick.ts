@@ -11,10 +11,13 @@
 // A plugin that throws is logged as a `plugin_error` event and the tick goes on; so is a squad
 // whose export fails, which is tried again next tick. Health is written even when a step throws,
 // and completed steps refresh progress_at so a long batch does not look stalled to the watchdog.
+// A side host's loop (opts.role `side`) ticks the projects in its own `projects` rows, and leaves out what
+// is main's alone: retiring capacity facts and the squad JSON snapshots (5) (side-loop-host U3).
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { exportJson, render, squadDoc } from "../db/export-json.ts";
-import type { Action, Actuator, Plugins, Scope, TickCtx, TickFacts } from "./plugins.ts";
+import type { Action, Actuator, Plugins, Role, Scope, TickCtx, TickFacts } from "./plugins.ts";
+import { sideProjects } from "./side-plugins.ts";
 import { loopProjects } from "../settings/projects.ts";
 import { now, type Row, type Store } from "./store.ts";
 import { retireCapacityFacts } from "../fulfil/pending.ts";
@@ -78,14 +81,16 @@ export class Loop {
   private seeded: Seeded | null = null;        // this tick's Run reads: which were kept, which read again and why (U248)
 
   constructor(readonly store: Store, readonly plugins: Plugins, readonly actuator: Actuator,
-    readonly opts: { tickS?: number; projects?: () => string[]; signals?: () => Promise<Signals> } = {}) {}
+    readonly opts: { tickS?: number; projects?: () => string[]; signals?: () => Promise<Signals>; role?: Role } = {}) {}
+
+  private get side(): boolean { return this.opts.role === "side"; }
 
   // The health row for this process; tick_no carries on from the last run. The JSON snapshots are
   // remembered, not written: the loop exports what changes while it runs, never a boot-time rewrite.
   boot(at = now(), version: string | null = null): void {
     this.tickNo = Number(this.store.get("health", { id: 1 })?.tick_no ?? 0);
     this.store.upsert("health", { id: 1 }, { pid: process.pid, started_at: at, progress_at: at, version });
-    for (const s of this.squads()) this.memo.set(`${s.project}/${s.topic}`, s.text);
+    for (const s of this.side ? [] : this.squads()) this.memo.set(`${s.project}/${s.topic}`, s.text);
     this.seen = this.changes();
   }
 
@@ -98,10 +103,10 @@ export class Loop {
     try {
       const fired = fire(store, at);
       report.fired = fired.map((t) => t.key);
-      const projects = this.opts.projects?.() ?? loopProjects(store.root);
+      const projects = this.opts.projects?.() ?? (this.side ? sideProjects(store) : loopProjects(store.root));
       const poked = new Set<string>();
       const facts: TickFacts = {};
-      const ctx = (project: string): TickCtx => ({ store, project, tick, now: at, fired, poked, facts });
+      const ctx = (project: string): TickCtx => ({ store, project, tick, now: at, fired, poked, facts, role: this.opts.role });
       const each = (scope?: Scope) => (scope === "host" ? [""] : projects).map(ctx);
 
       for (const o of this.plugins.observers) {
@@ -109,7 +114,7 @@ export class Loop {
         this.due.set(o.name, at + (o.every ?? 0));
         await pmap(each(o.scope), readSlots(), (c) => this.guard(o.name, c.project, () => o.run(c)));
       }
-      retireCapacityFacts(store);
+      if (!this.side) retireCapacityFacts(store);
       for (const r of this.plugins.reconcilers) {
         // Projects run side by side, but their actions join in project order, as when they ran in a row.
         const got = await pmap(each(r.scope), readSlots(), async (c) => {
@@ -143,7 +148,7 @@ export class Loop {
       }
       for (const [k, v] of this.actuator.takeTimes?.() ?? []) this.stepMs.set(k, (this.stepMs.get(k) ?? 0) + v);
       this.noteDeferred(tick, at);
-      const { written, failed } = await this.exportChanged();
+      const { written, failed } = this.side ? { written: [], failed: false } : await this.exportChanged();
       report.exported = written;
       exportedAll = !failed;
     } finally {

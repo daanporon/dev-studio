@@ -25,6 +25,7 @@ import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { cleanupGlobs, limitInt, trimGlobs } from "../settings/limits.ts";
 import type { Observer, TickCtx } from "../core/plugins.ts";
+import { sideProjects } from "../core/side-plugins.ts";
 import { discoverProjects } from "../settings/projects.ts";
 import { CLK_TCK, readCwdRaw, readText, readUid } from "../io/proc.ts";
 import { keepSet } from "../reconcilers/cleanup.ts";
@@ -423,7 +424,8 @@ export function cleanupObserver(o: CleanupOpts = {}): CleanupObserver {
       nextAt ??= Number((store.db.query("SELECT MAX(started_at) AS at FROM observed_cleanup_scan").get() as { at: number | null }).at ?? -Infinity) + every;
       if (now < nextAt) return;
       nextAt = now + every;
-      start("cleanup scan", scanCleanup(store, now, o).then((s) => { done = s; }));
+      const opts = ctx.role === "side" ? { projects: sideProjects, ...o } : o;
+      start("cleanup scan", scanCleanup(store, now, opts).then((s) => { done = s; }));
     },
   };
 }

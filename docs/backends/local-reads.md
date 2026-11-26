@@ -13,6 +13,9 @@ host (because it reads the loop's own files) is marked **loop host**.
 Keep this page current: a change that adds a new direct read of `/proc`, a transcript, a git
 checkout, an account folder or a disk path adds its line here.
 
+**Which loop does them there (side-loop-host U3).** `bin/loop/main.ts --role side` runs the observers named in
+`bin/loop/core/side-plugins.ts` and nothing else.
+
 **How the facts reach main (side-loop-host U6).** A side host's loop runs the same observers over its own
 copy of its members, squads, projects, units, worktrees and settings, which main sends down the link; the
 observed rows they write go up and land in main's tables tagged with the host (`host = <name>`), worktree ids
