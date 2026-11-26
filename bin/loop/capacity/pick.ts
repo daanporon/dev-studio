@@ -27,6 +27,11 @@
 // 5-hour window (reason no_session_window): only its weekly cap and a limit can block it, and it
 // sorts by its weekly reset. A window whose reset has passed counts as 0 %.
 //
+// One login is one account (issue #125, KTD12): the accounts rows of an agent with one login_id share its
+// limits, credits holds and expected load, and fill-first offers one of them: the default, then one Orca
+// lists, then the oldest. That row's switch and login hold are the login's; an account named outright
+// keeps its own row. A removed account, or a ds or orca one whose folder is missing, is `gone`.
+//
 // An active override (overrides.member = the member's id, worktree or <project>/<squad>/<role>[/<suffix>],
 // scope NULL or `member`; other scopes are v2, U24) wins until the member's work is done (KTD3): its
 // model replaces the ladder (no floor), its account replaces fill-first (no room check; a limit still
@@ -55,6 +60,8 @@ import { newBuilderStart, slot, type Asker } from "./slot.ts";
 import { memo } from "./walk-memo.ts";
 import { hostCrit, hostCritHit, sampleState, type CritHit, type SampleState } from "./machine-level.ts";
 import { canLaunch } from "../../backend/launch-lines.ts";
+import { accountFolder, type AccountRow } from "../../lib/account-dirs.ts";
+import { findKind } from "../../lib/account-kinds/index.ts";
 import { loopProjects } from "../settings/projects.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 
@@ -78,7 +85,7 @@ export const rungTag = (r: { agent: string; model: string; plan?: string | null 
 export const accountPlan = (store: Store, agent: string, account: string | null): string | null =>
   account ? (store.get("observed_accounts", { agent, account })?.plan as string | null) ?? null : null;
 export const matchesPlan = (plan: string | null, actual: string | null) => !plan || plan === actual;
-type Acct = { plan: string | null; account: string; pct: number; reset: number | null; weekly: number; wreset: number | null; noWindow: boolean; unknown: boolean; until: number; draining: boolean; disabled: boolean; credits?: boolean; login?: boolean };
+type Acct = { plan: string | null; account: string; pct: number; reset: number | null; weekly: number; wreset: number | null; noWindow: boolean; unknown: boolean; until: number; draining: boolean; disabled: boolean; credits?: boolean; login?: boolean; same: string[] };
 
 export const ENV: Record<string, string> = { pick_session_max: "DS_PICK_SESSION_MAX", pick_weekly_max: "DS_PICK_WEEKLY_MAX" };
 const DEFAULTS: Record<string, string> = {
@@ -233,36 +240,58 @@ export function workDone(store: Store, m: Row): boolean {
   return !!u && ["done", "merged", "cancelled"].includes(String(u.status ?? ""));
 }
 
-// The agent's current rows of accounts.tsv, or null when they say nothing: no rows, or claude's
-// `system` alone, which is what `account-list` prints when `orca account list` fails.
+// What the accounts table says beside the list: the agent's `gone` accounts (the refresh leaves them out
+// of accounts.tsv too, but up to a round later), and per account the accounts of its login, itself
+// included, in the order one is offered in.
+function tableOf(store: Store, agent: string): { gone: Set<string>; same: (account: string) => string[] } {
+  const rows = store.db.query("SELECT * FROM accounts WHERE agent = ? ORDER BY is_default DESC, orca_listed DESC, rowid").all(agent) as AccountRow[];
+  const system = findKind(agent)?.systemId;
+  const gone = new Set(rows.filter((r) => r.removed_at != null
+    || ((r.source === "ds" || r.source === "orca") && r.account !== system && !existsSync(accountFolder(r)))).map((r) => r.account));
+  const logins = new Map<string, string[]>(), loginOf = new Map<string, string>();
+  for (const r of rows) {
+    if (!r.login_id) continue;
+    loginOf.set(r.account, r.login_id);
+    logins.set(r.login_id, [...(logins.get(r.login_id) ?? []), r.account]);
+  }
+  return { gone, same: (account) => logins.get(loginOf.get(account) ?? "") ?? [account] };
+}
+
+// The agent's current rows of accounts.tsv, or null when it has none. The system login alone is a list:
+// the refresh builds it from the accounts table and keeps its last files when it cannot read that.
 function readList(store: Store, agent: string): { accounts: Set<string>; updated: number } | null {
   const rows = store.db.query("SELECT account, updated FROM observed_accounts WHERE agent = ?").all(agent) as Row[];
-  if (rows.every((r) => r.account === "system")) return null;
+  if (!rows.length) return null;
   return { accounts: new Set(rows.map((r) => String(r.account))), updated: Math.max(...rows.map((r) => n(r.updated) ?? 0)) };
 }
 
-// The accounts an agent is listed on now, or null when that can't be told: the list is empty, a
-// failed read, or has not been refreshed for five rounds (a failed read leaves the file to age).
+// The accounts an agent is listed on now, or null when that can't be told: the list is empty or has
+// not been refreshed for five rounds (a failed read leaves the file to age).
 // An account counts as removed only against a non-null list.
 export function accountList(store: Store, agent: string, now: number): Set<string> | null {
   const l = readList(store, agent);
-  return l && now - l.updated <= 5 * envInt("DS_LOOP_ACCOUNTS_S", 60) ? l.accounts : null;
+  if (!l || now - l.updated > 5 * envInt("DS_LOOP_ACCOUNTS_S", 60)) return null;
+  const { gone } = tableOf(store, agent);
+  return new Set([...l.accounts].filter((a) => !gone.has(a)));
 }
 
-// Each account an agent can run on, with what blocks it. An old `accounts` row the current list no
-// longer has is not offered; with no list to go by, the rows stand as they are.
+// Each account an agent can run on, with what blocks it. A gone account is not offered, nor an old
+// `accounts` row the current list no longer has; with no list to go by, the other rows stand as they are.
 function accounts(store: Store, agent: string, now: number, limited: string[]): Acct[] {
   let rows = store.db.query(`SELECT a.account, o.session_pct, o.session_reset, o.weekly_pct, o.weekly_reset, o.limited_until, o.plan, a.state,
       o.account IS NULL AS unknown
     FROM (SELECT agent, account, state FROM accounts WHERE agent = ?1
           UNION SELECT agent, account, NULL FROM observed_accounts WHERE agent = ?1 AND account NOT IN (SELECT account FROM accounts WHERE agent = ?1)) a
     LEFT JOIN observed_accounts o ON o.agent = a.agent AND o.account = a.account ORDER BY a.account`).all(agent) as Row[];
-  const list = readList(store, agent)?.accounts;
-  if (list) rows = rows.filter((r) => list.has(String(r.account)));
+  const table = tableOf(store, agent), list = readList(store, agent)?.accounts;
+  // A limit is the login's, so it is read from every row, also one that is not offered.
+  const limitedRows = store.db.query("SELECT account, limited_until FROM observed_accounts WHERE agent = ?").all(agent) as Row[];
+  rows = rows.filter((r) => !table.gone.has(String(r.account)) && (!list || list.has(String(r.account))));
   const until = new Map<string, number>();
   const later = (acct: string, t: number | null) => { if (t && t > now && t > (until.get(acct) ?? 0)) until.set(acct, t); };
-  for (const r of rows) later(String(r.account), n(r.limited_until));
-  for (const e of store.db.query("SELECT state, ended_at FROM episodes WHERE kind = 'account' AND ended_at > ?").all(now) as Row[]) {
+  for (const r of limitedRows) later(String(r.account), n(r.limited_until));
+  for (const e of store.db.query("SELECT subject, state, ended_at FROM episodes WHERE kind = 'account' AND ended_at > ?").all(now) as Row[]) {
+    if (String(e.subject).startsWith("login|")) continue;   // a login hold, read below
     const [a, acct] = String(e.state ?? "").split("/");
     if (a === agent && acct) later(acct, n(e.ended_at));
   }
@@ -272,11 +301,12 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
     const [a, acct] = k.split("/");
     if (a === agent && acct) { credits.add(acct); later(acct, t); }
   }
-  // claude-login-ended U2: so does a live login hold (login.ts), named `login ended`.
-  const login = new Set<string>();
+  // claude-login-ended U2: so does a live login hold (login.ts), named `login ended`. It is its folder's
+  // own, not the login's.
+  const login = new Map<string, number>();
   for (const [k, t] of loginHolds(store, now)) {
     const [a, acct] = k.split("/");
-    if (a === agent && acct) { login.add(acct); later(acct, t); }
+    if (a === agent && acct) login.set(acct, t);
   }
   for (const m of store.db.query("SELECT account, limited_until FROM members WHERE agent = ? AND account IS NOT NULL AND limited_until > ? AND COALESCE(status, '') NOT IN ('gone', 'closed')").all(agent, now) as Row[]) {
     later(String(m.account), n(m.limited_until));
@@ -292,10 +322,12 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
     const fetched = sp !== null || sr !== null || wp !== null || wr !== null;
     const noWindow = !r.unknown && fetched && sp === null && sr === null;
     const over = sr !== null && sr <= now;   // a reset in the past: that window is over, 0 %
+    const same = table.same(String(r.account)), held = login.get(String(r.account)) ?? 0;
     return {
+      same,
       plan: (r.plan as string | null) || null, account: String(r.account), pct: over ? 0 : sp ?? 0, reset: sr !== null && sr > now ? sr : null, weekly: wr !== null && wr <= now ? 0 : wp ?? 0,
-      wreset: wr !== null && wr > now ? wr : null, noWindow, unknown: !!r.unknown || !fetched, until: until.get(String(r.account)) ?? 0, draining: r.state === "draining", disabled: r.state === DISABLED,
-      ...(credits.has(String(r.account)) ? { credits: true } : {}),
+      wreset: wr !== null && wr > now ? wr : null, noWindow, unknown: !!r.unknown || !fetched, until: Math.max(held > now ? held : 0, ...same.map((id) => until.get(id) ?? 0)), draining: r.state === "draining", disabled: r.state === DISABLED,
+      ...(same.some((id) => credits.has(id)) ? { credits: true } : {}),
       ...(login.has(String(r.account)) ? { login: true } : {}),
     };
   });
@@ -306,6 +338,7 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
 // its account while the others placed on it pile up.
 export function accountBlock(store: Store, agent: string, account: string, now: number, limited: string[] = [], project = ""): string | null {
   if (!account || account === "-") return null;
+  if (tableOf(store, agent).gone.has(account)) return "gone";
   const list = accountList(store, agent, now);
   if (list && !list.has(account)) return "gone";
   const a = accounts(store, agent, now, limited).find((x) => x.account === account);
@@ -443,6 +476,8 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   for (const [k, v] of req.load ?? []) load.set(k, (load.get(k) ?? 0) + v);
   let wait = 0;
   const free = (t: number | null) => { if (t && t > now && (wait === 0 || t < wait)) wait = t; };
+  // The expected load on an account's login, whichever of its folders the members run on.
+  const loadOn = (agent: string, a: Acct) => a.same.reduce((sum, id) => sum + (load.get(loadKey(agent, id)) ?? 0), 0);
   const tried: string[] = [];
   const skipped: string[] = [];   // each higher rung left and why, for the fallback pick's why
   const broke = new Set<string>();   // U2: <agent>:<account> held out of credits, named in a wait's reason
@@ -450,14 +485,25 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   const backend = squad ? (store.get("squads", { project: req.project, topic: squad })?.backend as string | null) ?? "orca" : "orca";
   const noLaunch = new Set<string>();   // U31: agents this squad's backend has no launch line for, named in a wait's reason
   let off = false;                // the override's or explicit account is disabled
+  let lost = false;               // ... or gone
 
   for (let i = 0; i < floor.n; i++) {
     const r = rungs[i], tag = rungTag(r);
     if (!canLaunch(backend, r.agent)) { noLaunch.add(r.agent); skipped.push(`${tag} (no launch line on ${backend})`); continue; }
     let accts = accounts(store, r.agent, now, req.limited ?? []).filter((a) => matchesPlan(r.plan, a.plan));
+    if (account && tableOf(store, r.agent).gone.has(account)) {
+      lost = true;
+      skipped.push(`${tag} (${account} gone)`);
+      tried.push(tag);
+      continue;
+    }
     if (account) {
       const a = accts.find((x) => x.account === account);
-      accts = [a ?? { plan: null, account: String(account), pct: 0, reset: null, weekly: 0, wreset: null, noWindow: false, unknown: true, until: 0, draining: false, disabled: accountDisabled(store, r.agent, String(account)) }];
+      accts = [a ?? { plan: null, account: String(account), pct: 0, reset: null, weekly: 0, wreset: null, noWindow: false, unknown: true, until: 0, draining: false, disabled: accountDisabled(store, r.agent, String(account)), same: [String(account)] }];
+    } else {
+      // One row per login: the first of its accounts, in tableOf's order, that this rung could offer.
+      const here = new Set(accts.map((a) => a.account));
+      accts = accts.filter((a) => a.same.find((id) => here.has(id)) === a.account);
     }
     const why: string[] = [];
     // The pick's why names each disabled account left out on its own rung (a skipped rung names them in its reasons).
@@ -480,7 +526,7 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
       }
       if (["claude", "muse"].includes(r.agent) && a.weekly >= wmax) { blocks.push(a.wreset); why.push(`${a.account} weekly ${a.weekly}% >= ${wmax}%`); }
       if (!account && !a.noWindow) {
-        const extra = (load.get(loadKey(r.agent, a.account)) ?? 0) + planLoad(store, req.project, tier, r.agent, a.plan, req.role);
+        const extra = loadOn(r.agent, a) + planLoad(store, req.project, tier, r.agent, a.plan, req.role);
         if (a.pct >= smax || a.pct + extra >= room) { blocks.push(a.reset); why.push(`${a.account} session ${a.pct}%${extra ? ` + ${extra}% new load` : ""} over ${a.pct >= smax ? smax : room}%`); }
       }
       // Wait for the latest blocking reset on an account, then the earliest across accounts.
@@ -497,7 +543,7 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
     const best = (req.keep && (req.keep.plan === undefined || req.keep.plan === r.plan) && req.keep.agent === r.agent && (req.keep.model === r.model || req.keep.model === museResolve(r.model)) ? ok.find((a) => a.account === req.keep!.account) : undefined) ?? ok[0];
     if (best) {
       if (account) return out(best.account === "-" ? null : best.account, ov ? "override" : "explicit", `${ov ? overrideHow(ov) : "explicit"} account ${best.account}`);
-      const used = (load.get(loadKey(r.agent, best.account)) ?? 0) + planLoad(store, req.project, tier, r.agent, best.plan, req.role);
+      const used = loadOn(r.agent, best) + planLoad(store, req.project, tier, r.agent, best.plan, req.role);
       if (best.noWindow) return out(best.account, "no_session_window", `${best.account} has no 5-hour window; weekly ${best.weekly}% < ${wmax}%`);
       if (best.unknown) return out(best.account, "unknown_usage", `${best.account}, usage not known yet`);
       return out(best.account, "fill_first", `${best.account} resets soonest${best.reset ? ` (${best.reset})` : ""} with room: ${best.pct}% + ${used}% < ${room}%`);
@@ -508,6 +554,7 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   const known = wait > 0, at = known ? wait : now + (Number(process.env.DS_PICK_WAIT_S) || 3600);
   const below = floor.n < rungs.length ? ` (floor ${floor.floor})` : "";
   const until = `wait until ${known ? at : `${at} (no known reset)`}`;
+  if (lost) return { wait: at, known, why: "wait", reason: `${how}: account gone (${account}); ${until}` };
   if (off) return { wait: at, known, why: "wait", reason: `${how}: account disabled (${account}); ${until}` };
   const credits = broke.size ? `; ${[...broke].join(", ")} ${OUT_OF_CREDITS}` : "";
   const login = loggedOut.size ? `; ${[...loggedOut].join(", ")} ${LOGIN_ENDED}` : "";
