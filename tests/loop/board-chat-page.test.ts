@@ -34,7 +34,7 @@ function hooks() {
 const mdToHtml = new Function(`${cut("esc")} ${cut("urlTail")} ${cut("mdToHtml")} return mdToHtml;`)();
 
 const goneUrls = new Set<string>();   // stored chat images the fetch stub answers 404 for
-function panel(reply: any = { agent: "claude", source: "transcript", turns: [], updated_at: 1, sends: [] }) {
+function panel(reply: any = { agent: "claude", source: "transcript", turns: [], updated_at: 1, sends: [] }, postGate?: Promise<void>) {
   const h = hooks(), posts: any[] = [], fetches: string[] = [], timers: any[] = [], cleared: any[] = [], listeners = new Map<string, any>();
   let closed = 0;
   const answers: any[] = [], sentQ = new Map<string, string>(), askingKey = (k: string, since: string) => (k && since ? k + "@" + since : k);
@@ -44,13 +44,13 @@ function panel(reply: any = { agent: "claude", source: "transcript", turns: [], 
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
   const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store", "sendAnswer", "sentQ", "askingKey",
     `${cut("urlTail")} ${cut("linkedQ")} ${cut("QMd")} ${cut("QOptions")} const docLabel = () => "Open doc"; ${chatSrc} return { QOptions, ChatPanel, ChatCtl, ChatFailCtl, chatCount, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
-  const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); return { ok: true, id: 7 }; }, fetchStub,
+  const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); if (postGate) await postGate; return { ok: true, id: 7 }; }, fetchStub,
     (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub,
     async (...a: any[]) => { answers.push(a); sentQ.set(askingKey(a[0] + "/" + a[1] + "/" + a[2], a[4]), "12:00"); }, sentQ, askingKey);
   let seen = 0;
   const props: any = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; }, onSeen: () => { seen++; } };
   const render = () => { h.reset(); return mod.ChatPanel(props); };
-  return { h, mod, answers, sentQ, marks, props, seen: () => seen, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
+  return { h, mod, drafts, answers, sentQ, marks, props, seen: () => seen, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
 }
 
 // The class of a rendered row (`class="…"` written out, or `class=${…}` as the second value after key).
@@ -181,6 +181,79 @@ test("a send shrinks the input back to its empty height without waiting for typi
   await attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
   expect(p.posts.length).toBe(1);
   expect(el.style.height).toBe("26px");
+});
+
+// A panel whose post stays pending until `ok()`, with a box element on the textarea's ref.
+function inFlight() {
+  let ok!: () => void;
+  const gate = new Promise<void>((r) => { ok = r; });
+  const p = panel(undefined, gate);
+  p.render();
+  const el: any = { value: "", style: {} as any, get scrollHeight() { return this.value ? 120 : 24; } };
+  attrAfter(p.render(), 'class="chat-in"', "ref").current = el;
+  const type = (v: string) => { el.value = v; attrAfter(p.render(), 'class="chat-in"', "onInput")({ target: el }); };
+  const send = () => attrAfter(p.render(), 'class="btn pri chat-round chat-send"', "onClick")();
+  const key = p.mod.chatDraftKey("p", "one", "/w/b 1");
+  const draft = () => (p.drafts.has(key) ? JSON.parse(p.drafts.get(key)!) : null);
+  return { p, el, type, send, ok, draft };
+}
+
+test("text typed while a send is in flight stays in the box and its draft", async () => {
+  const f = inFlight();
+  f.type("first line");
+  const sending = f.send();
+  f.type("first line\nand the next one");
+  f.ok();
+  await sending;
+  expect(f.el.value).toBe("\nand the next one");
+  expect(f.p.h.states[2]).toBe("\nand the next one");
+  expect(f.draft()).toEqual({ text: "\nand the next one" });
+  expect(f.el.style.height).toBe("122px");
+});
+
+test("a sent text that was edited while in flight is kept whole", async () => {
+  const f = inFlight();
+  f.type("first line");
+  const sending = f.send();
+  f.type("a new thought");
+  f.ok();
+  await sending;
+  expect(f.el.value).toBe("a new thought");
+  expect(f.draft()).toEqual({ text: "a new thought" });
+});
+
+test("a send that succeeds after a switch to another member keeps what was typed for its own member", async () => {
+  const f = inFlight();
+  f.type("first line");
+  const sending = f.send();
+  f.type("first line, more");
+  f.p.h.refs[2].current = "/w/other";   // cur: the panel now shows someone else
+  f.el.value = "for the other one";
+  f.ok();
+  await sending;
+  expect(f.el.value).toBe("for the other one");
+  expect(f.draft()).toEqual({ text: ", more" });
+});
+
+test("an image attached while a send is in flight stays; the sent one goes", async () => {
+  const f = inFlight();
+  const held = () => f.p.h.refs.find((r: any) => r.current?.["/w/b 1"])!.current;
+  const files = () => f.p.h.states.find((s: any) => Array.isArray(s) && s[0]?.url);
+  const a = { id: "a.png", url: "api/chat-file/a.png", name: "a.png" }, b = { id: "b.png", url: "api/chat-file/b.png", name: "b.png" };
+  f.p.drafts.set(f.p.mod.chatDraftKey("p", "one", "/w/b 1"), JSON.stringify({ text: "look", files: [a] }));
+  f.type("look");
+  const sending = f.send();
+  expect(f.p.posts[0][1].files).toEqual(["a.png"]);
+  // An upload that finishes now: attach() adds it to held and the draft (putHeld).
+  held()["/w/b 1"] = [a, b];
+  f.p.drafts.set(f.p.mod.chatDraftKey("p", "one", "/w/b 1"), JSON.stringify({ text: "look", files: [a, b] }));
+  f.ok();
+  await sending;
+  expect(held()["/w/b 1"]).toEqual([b]);
+  expect(files()).toEqual([b]);
+  expect(f.draft()).toEqual({ files: [b] });
+  expect(f.el.value).toBe("");
+  expect(f.el.style.height).toBe("26px");
 });
 
 test("each send not yet in the transcript shows at the bottom where it is: queued with why, sent, turn started, not taken, failed", () => {
