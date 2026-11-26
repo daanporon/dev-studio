@@ -3073,6 +3073,22 @@ function UnitActions({ s, u, toast, onDetails }) {
 }
 // A unit's Builder: the squad member whose worktree is the unit's `builder_wt` (null when it is gone or not started).
 const builderMember = (s, u) => (u.builder_wt && (s.members || []).find((m) => m.wt && m.wt === u.builder_wt)) || null;
+// The unit window's `Machine` row: what the Builder's process tree uses now (open unit only) and the unit's totals
+// from `unit_cpu`; null when there is neither. The loop samples every 30 s, so a sample over 2 minutes old says its age.
+const unitMachine = (u, bm, open, done) => {
+  const r = open && bm ? bm.resources : null, c = u.cpu;
+  if (!r && !c) return null;
+  const pct = (v) => Math.round(v) + "%";
+  const stale = r && r.at != null && Date.now() / 1000 - r.at > 120;
+  const peaks = c ? [c.peak_cpu_pct != null && "peak CPU " + pct(c.peak_cpu_pct), c.peak_rss_kb != null && "peak RAM " + kbText(c.peak_rss_kb)].filter(Boolean) : [];
+  const tip = ["CPU: 100% = one core.",
+    r && (r.mem_kb != null ? "RAM now is memory counted once." : "RAM now is RSS (shared pages count in each process)."),
+    c && c.peak_rss_kb != null && "Peak RAM is RSS.",
+    r && r.psi_cpu != null && "CPU pressure " + r.psi_cpu + ".",
+    r && r.psi_mem != null && "Memory pressure " + r.psi_mem + ".",
+    r && r.at != null && "Sampled at " + clockOf(r.at) + "."].filter(Boolean).join(" ");
+  return html`<span title=${tip}>${r && html`<div class="ud-res-now">${stale ? "last measured " + docAge(r.at) + " ago" : "now"}: CPU ${r.cpu_pct == null ? "—" : pct(r.cpu_pct)} · RAM ${kbText(r.mem_kb ?? r.rss_kb)} · ${r.procs} ${r.procs === 1 ? "process" : "processes"}</div>`}${c && html`<div class="ud-res-total">${done ? "Used" : "So far"}: ${[cpuH(c) + " CPU-h", ...peaks].join(" · ")}</div>`}</span>`;
+};
 // A unit's short title: its stored `title`, else the first clause of `about` (cut near 80 characters), else the slug in words.
 const slugWords = (slug) => String(slug).replace(/^u\d+-/, "").replace(/-/g, " ");
 const unitTitle = (u) => {
@@ -3103,6 +3119,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, planOpe
   const b = u.builder, tierName = (u.tier || "").replace(/ ⚠\S+$/, "").split("·")[0].replace(/^std$/, "standard").replace(/↑$/, ""), model = b && b.model_label;
   const planFile = u.plan ? String(u.plan).split("/").pop() : null;
   const planDoc = planFile && (s.plans || []).find((p) => p.name === planFile);
+  const machine = unitMachine(u, bm, open, done);
   const rows = [
     u.about && ["ud-about", done ? "What it did" : "What it does", u.about],
     u.done_text && ["ud-done", "Done when", u.done_text],
@@ -3115,6 +3132,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, planOpe
       ? html`<b>${bm.label}</b> <span class="mut">· ${bm.state || "?"}${tierName ? " · " + tierName : ""}${model ? " · " : ""}</span>${model && (b.model_mismatch && b.model ? html`${model} <span class="mut">(set: ${b.model})</span>` : model)}${memberLinks(s, bm).length > 0 && html` <span class="mut">· 🔗</span> <${MemberLinks} items=${memberLinks(s, bm)} />`}`
       : html`<span class="none">gone — its worktree is no longer on the squad</span>`],
     open && ["ud-runs", "Runs on", runsOn(u)],
+    machine && ["ud-res", "Machine", machine],
     card && card.paused && ["ud-paused", "Paused", pausedText(card)],
     u.plan && ["ud-plan", "Plan", html`${planDoc && onPlan ? html`<a href="#" class="ud-planlink" title="Open the plan" onClick=${(e) => { e.preventDefault(); onClose(); onPlan(planDoc); }}>${planFile}</a>` : planFile}${u.plan_unit ? " · " + u.plan_unit : ""}`],
   ].filter(Boolean);
