@@ -20,6 +20,11 @@ state/board-serve*.pid
 # Per-account credits + limits for the picker and board (bin/lib/accounts-refresh.sh), its episodes, tmp and lock.
 state/accounts.tsv*
 state/.accounts.episodes*
+# Orca's profiles and the login folders the refresh found, for the state observer (bin/lib/accounts-list.ts).
+state/accounts-orca.tsv*
+state/account-folders.tsv*
+# dev-studio's own login folders (bin/lib/account-dirs.ts accountsRoot): credentials, never source.
+/accounts/
 
 # Per-worktree agent wiring (bin/hooks/arm-rewake.sh writes the rewake Stop hook here) — never source.
 .claude/settings.local.json

@@ -2,7 +2,7 @@
 // what pick.ts does with a disabled account, and `ds account`. On a temp state root with
 // tests/fixtures/loop/accounts.tsv (claude acct-a, acct-b, acct-c resetting in 1 h, 2 h and 4 h).
 import { afterEach, describe, expect, test } from "bun:test";
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
@@ -186,5 +186,32 @@ describe("ds account", () => {
     expect(amb.err).toContain("ambiguous");
     expect(ds(s.root, "account", "disable").code).toBe(2);
     expect(ds(s.root, "account", "pause", "claude:acct-c").code).toBe(2);
+  });
+
+  // Issue #125 (U1): the list's fields, the default and remove (a tombstone that leaves the folder).
+  test("list carries source, folder, login id and default; default moves it; remove tombstones and keeps the folder", () => {
+    const s = fixture(), folder = join(s.root, "accounts", "claude", "work");
+    mkdirSync(folder, { recursive: true });
+    s.upsert("accounts", { agent: "claude", account: "work" }, { source: "ds", config_dir: folder, login_id: "uuid-w", observed_at: T });
+    s.upsert("accounts", { agent: "claude", account: "acct-a" }, { source: "orca", orca_listed: 1, is_default: 1 });
+    const row = (account: string) => (JSON.parse(ds(s.root, "account").out) as Row[]).find((r) => r.account === account);
+    expect(row("work")).toMatchObject({ source: "ds", config_dir: folder, login_id: "uuid-w", is_default: false, removed_at: null });
+    expect(row("acct-a")).toMatchObject({ source: "orca", orca_listed: true, is_default: true });
+
+    expect(ds(s.root, "account", "remove", "acct-a")).toMatchObject({ code: 2 });   // the default
+    expect(ds(s.root, "account", "remove", "system").code).toBe(2);
+    expect(ds(s.root, "account", "remove", "default", "--agent", "codex").code).toBe(2);
+    expect(ds(s.root, "account", "default", "work")).toMatchObject({ code: 0, out: "claude:work is the default" });
+    expect([row("work")?.is_default, row("acct-a")?.is_default]).toEqual([true, false]);
+    expect(ds(s.root, "account", "remove", "acct-a")).toMatchObject({ code: 0, out: "claude:acct-a removed (its folder stays)" });
+    expect(ds(s.root, "account", "remove", "claude:acct-a").out).toBe("claude:acct-a removed (its folder stays) (already)");
+    expect(ds(s.root, "account", "default", "acct-a").code).toBe(2);              // removed
+    expect(ds(s.root, "account", "remove", "work").code).toBe(2);                 // the default now
+    expect(ds(s.root, "account", "default", "system")).toMatchObject({ code: 0, out: "claude:system is the default" });
+    expect(s.get("accounts", { agent: "claude", account: "system" })).toMatchObject({ source: "system", is_default: 1 });
+    expect(ds(s.root, "account", "remove", "work").code).toBe(0);
+    expect(existsSync(folder)).toBe(true);
+    expect(events(s, "account_removed")).toEqual([{ agent: "claude", account: "acct-a", by: "cli" }, { agent: "claude", account: "work", by: "cli" }]);
+    expect(events(s, "account_default").map((e) => e.account)).toEqual(["work", "system"]);
   });
 });

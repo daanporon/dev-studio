@@ -272,6 +272,96 @@ describe("state observer", () => {
   });
 });
 
+// Issue #125 (U1): the refresh's accounts-orca.tsv and account-folders.tsv into the accounts table.
+describe("the account list", () => {
+  const HDR = "agent\taccount\tsession_pct\tsession_reset\tweekly_pct\tweekly_reset\tlimited_until\tupdated\tlabel\tnote\tskills\tplan\tresets\n";
+  const line = (agent: string, account: string, label = account) => `${agent}\t${account}\t-\t-\t-\t-\t-\t1\t${label}\t-\t-\t-\t-\n`;
+  function files(s: Store, at: number, f: { tsv?: string; orca?: string; folders?: string }) {
+    for (const [name, text] of [["accounts.tsv", f.tsv], ["accounts-orca.tsv", f.orca], ["account-folders.tsv", f.folders]] as const) {
+      if (text === undefined) continue;
+      writeFileSync(join(s.root, name), text);
+      touch(join(s.root, name), at);
+    }
+  }
+  const acct = (s: Store, account: string, agent = "claude") => s.get("accounts", { agent, account });
+  const orca = (state: string, ...l: string[]) => `orca: ${state}\n${l.map((x) => x + "\n").join("")}`;
+
+  test("a profile Orca lists is an orca row it lists, even when accounts.tsv made the row first", () => {
+    const s = imported(), x = observer();
+    files(s, T, { tsv: HDR + line("claude", "prof-new", "n@example.test"), orca: orca("here", "prof-new\tn@example.test\t/x/prof-new/home\t0", "system\tsystem login\t-\t1") });
+    tick(s, x.o, T);
+    expect(acct(s, "prof-new")).toMatchObject({ source: "orca", orca_listed: 1, config_dir: "/x/prof-new/home", label: "n@example.test" });
+    // The fixture's rows: in accounts.tsv before, not in Orca's list now.
+    expect(acct(s, "acct-a")).toMatchObject({ orca_listed: 0 });
+  });
+
+  test("a sourceless row is claimed; a removed, ds or system row is never brought back or repointed", () => {
+    const s = imported(), x = observer();
+    s.upsert("accounts", { agent: "claude", account: "gone" }, { source: "orca", removed_at: T - 9, observed_at: 1 });
+    s.upsert("accounts", { agent: "claude", account: "mine" }, { source: "ds", config_dir: "/ds/mine", observed_at: 1 });
+    s.upsert("accounts", { agent: "claude", account: "loose" }, { observed_at: 1 });
+    files(s, T, { orca: orca("here", "gone\tG\t/o/gone\t0", "mine\tM\t/o/mine\t0", "loose\tL\t/o/loose\t0") });
+    tick(s, x.o, T);
+    expect(acct(s, "gone")).toMatchObject({ removed_at: T - 9, config_dir: null });
+    expect(acct(s, "mine")).toMatchObject({ source: "ds", config_dir: "/ds/mine" });
+    expect(acct(s, "loose")).toMatchObject({ source: "orca", config_dir: "/o/loose" });
+  });
+
+  test("orca_listed: here sets this list, absent clears every flag, unreachable leaves them", () => {
+    const s = imported(), x = observer();
+    files(s, T, { orca: orca("here", "p1\tP\t/o/p1\t0") });
+    tick(s, x.o, T);
+    expect(acct(s, "p1")?.orca_listed).toBe(1);
+    files(s, T + 1, { orca: orca("unreachable") });
+    tick(s, x.o, T + 1);
+    expect(acct(s, "p1")?.orca_listed).toBe(1);
+    files(s, T + 2, { orca: orca("absent") });
+    tick(s, x.o, T + 2);
+    expect(acct(s, "p1")?.orca_listed).toBe(0);
+    expect(acct(s, "p1")?.source).toBe("orca");
+  });
+
+  test("the default is seeded once from Orca's active account and never moved by a later import", () => {
+    const s = imported(), x = observer();
+    files(s, T, { orca: orca("here", "p1\tP1\t/o/p1\t1", "p2\tP2\t/o/p2\t0", "system\tS\t-\t0") });
+    tick(s, x.o, T);
+    expect(acct(s, "p1")?.is_default).toBe(1);
+    files(s, T + 1, { orca: orca("here", "p1\tP1\t/o/p1\t0", "p2\tP2\t/o/p2\t1", "system\tS\t-\t0") });
+    tick(s, x.o, T + 1);
+    expect([acct(s, "p1")?.is_default, acct(s, "p2")?.is_default]).toEqual([1, 0]);
+  });
+
+  test("an active system login is the default, its row made as a system row", () => {
+    const s = imported(), x = observer();
+    files(s, T, { orca: orca("here", "p1\tP1\t/o/p1\t0", "system\tsystem login (me)\t-\t1") });
+    tick(s, x.o, T);
+    expect(acct(s, "system")).toMatchObject({ source: "system", is_default: 1 });
+    expect(acct(s, "p1")?.is_default).toBe(0);
+  });
+
+  test("codex's and muse's default rows are system rows under their id; another row gets no source", () => {
+    const s = imported(), x = observer();
+    files(s, T, { tsv: HDR + line("claude", "system") + line("muse", "default") + line("codex", "default") + line("claude", "stray") });
+    tick(s, x.o, T);
+    for (const [agent, account] of [["claude", "system"], ["muse", "default"], ["codex", "default"]])
+      expect(acct(s, account, agent), `${agent}:${account}`).toMatchObject({ agent, account, source: "system" });
+    expect(acct(s, "stray")?.source).toBeNull();
+  });
+
+  test("the folder scan replaces observed_account_folders, copies login ids by folder and makes no row", () => {
+    const s = imported(), x = observer();
+    s.upsert("accounts", { agent: "claude", account: "p1" }, { source: "orca", config_dir: "/o/p1/home", observed_at: 1 });
+    files(s, T, { folders: "claude\t/o/p1/home\tuuid-1\t1\nclaude\t/o/orphan/home\t-\t0\n" });
+    tick(s, x.o, T);
+    expect(rows(s, "observed_account_folders").map((r) => [r.dir, r.login_id, r.logged_in])).toEqual([["/o/p1/home", "uuid-1", 1], ["/o/orphan/home", null, 0]]);
+    expect(acct(s, "p1")?.login_id).toBe("uuid-1");
+    expect(acct(s, "orphan")).toBeNull();
+    files(s, T + 1, { folders: "claude\t/o/p1/home\tuuid-1\t1\n" });
+    tick(s, x.o, T + 1);
+    expect(rows(s, "observed_account_folders").map((r) => r.dir)).toEqual(["/o/p1/home"]);
+  });
+});
+
 describe("a note in squads/ is not a squad", () => {
   const note = { kind: "pause-experiment", result: "ok", at: "2026-11-07" };
   const squad = { task_id: "t1", run_id: "r1", type: "feature", autonomy: "checkpoint", status: "running", waiting_on_you: [], lfg_assumptions: [], members: [], units: [] };
