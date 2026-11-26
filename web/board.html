@@ -2742,7 +2742,8 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           <div>${n.changes && html`<button class="btn sm" data-ev="what-changed" onClick=${() => onPlan({ ...n.doc, view: "changes", changes: n.changes })}>What changed</button> `}<button class="btn sm" data-ev="open-doc" onClick=${() => onPlan({ ...n.doc, view: "full", changes: n.changes })}>${docLabel(n)}</button></div></div>`}
         ${n.plain && !n.revision && n.facts && html`<div class="qfacts">${[n.facts.steps + " steps", n.facts.hard + " hard", n.facts.start_now + " start now"].map((t) => html`<span key=${t} class="qfact">${t}</span>`)}</div>`}
         ${n.plain && !n.revision && html`<ul class="qplain">${n.plain.map((l) => html`<li key=${l.label}><b>${l.label}</b>${l.text}</li>`)}</ul>`}
-        ${n.shown ? html`<${ShownText} n=${n} />` : !n.plain && n.text !== n.title && html`<div class="qtxt">${linkedQ(n.text, n.repo_slug)}</div>`}
+        ${n.shown && html`<${ShownText} n=${n} />`}
+        ${!n.plain && n.text !== n.title && !n.shown && html`<div class="qtxt">${linkedQ(n.text, n.repo_slug)}</div>`}
         ${n.id && isPicker && !termOnly && html`<div class="pnote">This mirrors the live picker in ${n.from}'s terminal: your pick is pressed there as its option, and the entry clears once the picker records it.</div>`}
         ${n.id && (termOnly
           ? html`<div class="pnote">${n.picker_kind === "permission" ? promptWhere(n, n.from) + " — Claude stopped at a safety check, and the board can't answer this prompt." : "Answer it in " + n.from + "'s terminal — this picker has several questions or allows several picks, so the board can't answer it."} It clears once it is answered.</div>
