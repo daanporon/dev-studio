@@ -581,6 +581,38 @@ export async function claudeAccounts(ctx: Ctx): Promise<string[]> {
   return out ? out.split("\n") : ["system\tsystem login"];
 }
 
+/** orca_accounts: Orca's own account list for dev-studio's import (issue #125, KTD4), or null when `orca
+ *  account list` fails or answers nothing readable. One "<id>\t<label>\t<home>\t<active>" line per Claude host
+ *  profile (home: its profile folder, active: 1 for Orca's active host account), then
+ *  "system\t<system login label>\t-\t<active>". Unlike claude_accounts it never falls back to a made-up list. */
+export async function orcaAccounts(ctx: Ctx): Promise<string[] | null> {
+  const r = await orca(ctx, ["account", "list", "--json"], "drop");
+  if (r.code !== 0) return null;
+  const clean = (v: unknown) => String(v).replace(/[\t\n]/g, " ");
+  try {
+    const rows: string[] = [];
+    let read = false;
+    for (const d of docs(r.out)) {
+      const c = idx(idx(d, "result"), "claude");
+      if (!c || typeof c !== "object") continue;
+      read = true;
+      const active = alt(alt(idx(idx(c, "activeAccountIdsByRuntime"), "host"), idx(c, "activeAccountId")), "system");
+      const email = idx(c, "systemDefaultEmail");
+      let systemActive = true;
+      for (const a of each(alt(idx(c, "accounts"), []))) {
+        if (alt(idx(a, "managedAuthRuntime"), "host") !== "host") continue;
+        const id = idx(a, "id");
+        if (typeof id !== "string" || !id) continue;
+        const on = id === active;
+        if (on) systemActive = false;
+        rows.push(`${clean(id)}\t${clean(alt(idx(a, "email"), idx(a, "organizationName"), id))}\t${orcaData(ctx.env)}/claude-profiles/${clean(id)}/home\t${on ? 1 : 0}`);
+      }
+      rows.push(`system\tsystem login${truthy(email) ? ` (${clean(interp(email))})` : ""}\t-\t${systemActive ? 1 : 0}`);
+    }
+    return read ? rows : null;
+  } catch (e) { if (e instanceof JqError) return null; throw e; }
+}
+
 /** Muse's short-lived subcommands (U21e): a `muse usage` or `muse skills` beside a member's own muse is a
  *  helper, not a second main agent. A first argument that is not one of these (a prompt, a flag, `resume`,
  *  `attach`, `serve`) is a muse the member runs. */
@@ -3662,6 +3694,14 @@ export const VERBS: Record<string, Verb> = {
    *  every host profile Orca manages plus the system login (`system`), default first. Muse/Codex: their one login. */
   async "account-list"(ctx) {
     ctx.out((await accountList(ctx)).map((l) => l + "\n").join(""));
+    return 0;
+  },
+  /** Orca's Claude host profiles for dev-studio's own list: "<id>\t<label>\t<home>\t<active>" each, then the
+   *  system login's line ("system\t<label>\t-\t<active>"). Exit 1 when Orca does not answer. */
+  async "orca-accounts"(ctx) {
+    const rows = await orcaAccounts(ctx);
+    if (!rows) { ctx.err("orca adapter: orca account list did not answer\n"); return 1; }
+    ctx.out(rows.map((l) => l + "\n").join(""));
     return 0;
   },
   async "agent-accounts"(ctx) {
