@@ -125,7 +125,7 @@ commas (a tracker issue, a GitHub issue, any page with more context):
 drop the links). `Link:` is a reserved label: only `http://` and `https://` URLs, at most 5 per unit and 500 characters
 each, and anything else refuses the whole plan naming the line. Put notes under another label (e.g. `Files:`).
 `Links:` is not read.
-A leading `[ID]` in the unit title (or a single one at its end) links by itself when the project sets `ticket_url` (`docs/settings.md`); the title needs no `Link:` line then.
+A leading `[ID]` in the unit title (or a single one at its end) links by itself when the project sets `ticket_url` (`docs/settings.md`). Keep the `Link:` line anyway: only it reaches the Builder (the board shows the same URL once).
 
 **A unit that touches the board needs a board Check.** If a unit changes what the board
 shows (`bin/board/board-data.ts`, `web/board.html`, a board row or status), its Check must render

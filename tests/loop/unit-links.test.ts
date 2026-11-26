@@ -40,6 +40,7 @@ test("ticketLink: a leading [ID], else a single trailing one; # leaves the URL, 
     expect([t, ticketLink(t, TPL)]).toEqual([t, null]);
   for (const tpl of [null, "-", "https://tracker.example/issue/", "javascript:alert({id})", "ftp://tracker.example/{id}"])
     expect([tpl, ticketLink("[ABC-12] x", tpl)]).toEqual([tpl, null]);
+  expect(ticketLink("[ABC-12] x", "https://tracker.example:{id}/x")).toBeNull();
 });
 
 test("unitLinks: the ticket link comes first, and a plan link with its URL is not shown twice", () => {

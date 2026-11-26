@@ -26,7 +26,8 @@ const TRAILING = new RegExp(`(?<!\\]\\s*)\\[(${TICKET})\\]\\s*$`);
 export function ticketLink(title: unknown, template: string | null): UnitLink | null {
   if (typeof title !== "string" || !template || template === "-" || ticketUrlProblem(template)) return null;
   const id = (LEADING.exec(title) ?? TRAILING.exec(title))?.[1];
-  return id ? { url: template.replaceAll("{id}", encodeURIComponent(id.replace(/^#/, ""))), label: id } : null;
+  const url = id ? template.replaceAll("{id}", encodeURIComponent(id.replace(/^#/, ""))) : "";
+  return id && URL.canParse(url) ? { url, label: id } : null; // {id} in a host or port may not parse
 }
 
 /** The chips of one unit: the ticket link first, then the plan's links, without a second copy of its URL. */
