@@ -251,8 +251,10 @@ export function permissionScreens(ctx: TickCtx): Action[] {
     if (now - Number(ep.started_at) < after || paused(store, { project, squad: String(m.squad), member: wt })) continue;
     const squad = String(m.squad), role = String(m.role) + (m.suffix ? `-${m.suffix}` : "");
     const shown = [...menu.prompt, ...menu.options.map((o, i) => `${i + 1}. ${o}`)].join("\n");
+    // Fenced: the card renders markdown, and a command's * _ # must show as typed.
     const acts = alertAction(store, { project, squad, key: `${squad}.${role}`, episode: `permission-${menu.sig}@${ep.started_at}`,
-      title: `${role} is waiting on a permission prompt`, card: PERMISSION_KIND, text: `${role} is waiting on a permission prompt. Its screen shows:\n${shown}`,
+      title: `${role} is waiting on a permission prompt`, card: PERMISSION_KIND,
+      text: `${role} is waiting on a permission prompt. Its screen shows:\n\`\`\`\n${shown.replaceAll("```", "'''")}\n\`\`\``,
       option: "pressed the key in its chat", why: "the role stays stuck until someone presses a key there",
       fields: { member: wt, prompt: menu.sig, chat_wt: wt, chat_label: role } });
     if (acts.length && ep.state === "seen") {

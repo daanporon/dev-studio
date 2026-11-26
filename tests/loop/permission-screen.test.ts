@@ -71,6 +71,7 @@ describe("a permission menu on a member's screen", () => {
     expect(p).toMatchObject({ title: "builder-u1 is waiting on a permission prompt", card: "permission_prompt", fields: { member: WT, chat_wt: WT, chat_label: "builder-u1" } });
     expect(String(p.text)).toContain("git push origin work");
     expect(String(p.text)).toContain("3. No, and tell Claude");
+    expect(String(p.text)).toMatch(/\n```\n[^`]+\n```$/);
     expect(cardPlace({ id: p.id, kind: p.card }, T)).toBe("needs");
     // The same prompt a tick later is the same claim, and no second event.
     expect(run(s, T + 180)[0].episode).toBe(a.episode);
