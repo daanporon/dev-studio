@@ -11,9 +11,10 @@ const cut = (name: string, kind = "function") => {
   return page.slice(i, kind === "const" ? page.indexOf("\n", i) : page.indexOf("\n}\n", i) + 2);
 };
 const html = (strings: TemplateStringsArray, ...values: any[]) => ({ strings: strings.join("\u0000"), values });
-const mod = new Function("html", `${cut("fmtSpan", "const")} ${cut("flowLabel")} const WORKING_NOT = ${page.match(/const WORKING_NOT = (\[.*?\]);/)![1]};
-  ${cut("flowStats")} ${cut("stats")} ${cut("UnitsCell")} const suspendedLike = (s) => s.status === "suspended" || s.status === "on-hold";
-  return { stats, UnitsCell, flowLabel, fmtSpan };`)(html);
+const mod = new Function("html", `${cut("fmtSpan", "const")} ${cut("flowLabel")} const STOPPED = ${page.match(/const STOPPED = (\[.*?\]);/)![1]};
+  ${cut("flowStats")} ${cut("segmentOf")} ${cut("stats")} ${cut("UnitsCell")} ${cut("flowTiles")} ${cut("unitsLeftDetail", "const")}
+  ${cut("UNIT_KEY", "const")} ${cut("UnitKey")} const suspendedLike = (s) => s.status === "suspended" || s.status === "on-hold";
+  return { stats, UnitsCell, flowLabel, fmtSpan, flowTiles, unitsLeftDetail, UnitKey };`)(html);
 
 const fx = flowFixture();
 afterAll(() => fx.cleanup());
@@ -27,7 +28,7 @@ const squad = board.squads.find((s: any) => s.topic === "flow");
 test("the Flow fixture's squad reads like the mockup, in order", () => {
   const st = mod.stats(squad, board.flow);
   const t = text(mod.UnitsCell({ st }));
-  const order = ["merged", "working", "stuck", "needs you", "ready", "last merge"].map((w) => t.indexOf(w)).filter((i) => i >= 0);
+  const order = ["merged", "working", "stuck", "needs you", "queued", "last merge"].map((w) => t.indexOf(w)).filter((i) => i >= 0);
   expect(order).toEqual([...order].sort((a, b) => a - b));
   expect(st.stuck).toBe(board.flow.squads["fa/flow"].stuck);
   expect(st.needsYou).toBe(board.flow.squads["fa/flow"].needs_you);
@@ -35,20 +36,59 @@ test("the Flow fixture's squad reads like the mockup, in order", () => {
   expect(t).toContain("last merge");
 });
 
+// The bar's widths in bar order, as unit counts: merged, working, stuck, needs you, stopped, parked, queued.
+const widths = (v: any, total: number) => v.values.slice(0, 7).map((x: any) => Math.round(parseFloat(x.width) * total / 100));
+
 test("a stuck and a needs-you unit take a red and an amber segment out of working", () => {
-  const units = Array.from({ length: 9 }, (_, i) => ({ slug: "u" + i, state: i < 3 ? "done" : i === 3 || i === 4 ? "working" : i === 5 || i === 6 ? "working" : "ready" }));
+  const units = Array.from({ length: 9 }, (_, i) => ({ slug: "u" + i, state: i < 3 ? "done" : i < 7 ? "working" : "ready" }));
   const s = { label: "p", topic: "t", units, prs: [] };
   const flow = { squads: { "p/t": { stuck: 1, longest_stuck_s: 9600, needs_you: 1, last_merge_at: FX_NOW - 2400 } },
     cards: [{ project: "p", squad: "t", slug: "u3", stuck: true, needs_you: false }, { project: "p", squad: "t", slug: "u4", stuck: false, needs_you: true }] };
   const st = mod.stats(s, flow);
   const v = mod.UnitsCell({ st });
-  const nums = v.values.slice(0, 5).map((x: any) => x.width as string);
-  const pct = (x: string) => parseFloat(x);
-  expect(nums.map((x: string) => Math.round(pct(x) * 9 / 100))).toEqual([3, 2, 1, 1, 2]);
-  expect(text(v)).toContain("3/9 merged · 2 working · 1 stuck 2h 40m · 1 needs you · 2 ready");
-  expect(pct(nums[0]) + pct(nums[1]) + pct(nums[2]) + pct(nums[3]) + pct(nums[4])).toBeLessThanOrEqual(100.0001);
-  expect(st.barStuck).toBe(1);
-  expect(st.barNeeds).toBe(1);
+  expect(widths(v, 9)).toEqual([3, 2, 1, 1, 0, 0, 2]);
+  expect(text(v)).toContain("3 of 9 merged · 2 working · 1 stuck 2h 40m · 1 needs you · 2 queued");
+});
+
+test("every unit sits in one segment, and the count line follows the bar's order", () => {
+  const u = (slug: string, state: string, parked: string | null = null) => ({ slug, state, parked });
+  const units = [u("a", "done"), u("b", "building"), u("c", "gone"), u("d", "paused"), u("e", "gone"),
+    u("f", "held", "held"), u("g", "blocked", "behind"), u("h", "blocked", "behind"), u("i", "ready", "held"),
+    u("j", "ready"), u("k", "blocked"), u("l", "waiting"), u("m", "cancelled"), u("n", "waiting")];
+  // e is stale with its Builder gone: the stuck flag wins. l is a Lead hold (a paused card). n asks a question.
+  const flow = { squads: { "p/t": { stuck: 1, longest_stuck_s: 7200, needs_you: 1, last_merge_at: null } },
+    cards: [{ project: "p", squad: "t", slug: "e", stuck: true }, { project: "p", squad: "t", slug: "l", paused: true },
+      { project: "p", squad: "t", slug: "n", needs_you: true }] };
+  const st = mod.stats({ label: "p", topic: "t", units, prs: [] }, flow);
+  const v = mod.UnitsCell({ st });
+  expect(st.total).toBe(13);
+  expect(widths(v, 13)).toEqual([1, 1, 1, 1, 3, 4, 2]);
+  expect(v.values.slice(0, 7).reduce((n: number, x: any) => n + parseFloat(x.width), 0)).toBeCloseTo(100);
+  expect(text(v)).toBe("1 of 13 merged · 1 working · 1 stuck 2h · 1 needs you · 3 stopped · 1 gone · 4 parked (2 held, 2 behind them) · 2 queued");
+});
+
+test("parked units that are all themselves held have no bracket", () => {
+  const st = mod.stats({ label: "p", topic: "t", prs: [], units: [{ slug: "a", state: "held", parked: "held" }, { slug: "b", state: "done" }] }, undefined);
+  expect(text(mod.UnitsCell({ st }))).toBe("1 of 2 merged · 1 parked");
+});
+
+test("the key line names all seven fills", () => {
+  const t = text(mod.UnitKey());
+  expect(t).toBe("solid: started · striped: not started yet · merged · working · stuck · needs you · stopped · parked: waits on you (Release, or approve the plan) · queued: starts by itself");
+});
+
+test("the Units left detail names the groups of the cards the number counts, never blocked", () => {
+  const card = (stage: string, o: any = {}) => ({ stage, group: null, ...o });
+  const cards = [card("building"), card("pr_open"), card("queued", { group: "waiting for a slot" }),
+    card("queued", { group: "waiting on another unit" }), card("queued", { group: "held", parked: "held" }),
+    card("queued", { group: "waiting on another unit", parked: "behind" }), card("building", { paused: true }),
+    card("queued", { group: "held" }), card("building", { stopped: true })];
+  const c = { queued: 5, building: 2, pr_open: 1, needs_you: 0, merging: 0, paused: 1 };
+  const t = mod.flowTiles({ counts: c, cards });
+  expect(t.left).toBe(9);
+  expect(t.groups).toEqual({ working: 2, ready: 1, parked: 2, stopped: 3 });
+  expect(mod.unitsLeftDetail(2, t.groups)).toBe("2 squads · 2 working · 1 ready · 2 parked · 3 stopped");
+  expect(mod.unitsLeftDetail(1, { working: 0, ready: 0, parked: 4, stopped: 0 })).toBe("1 squads · 4 parked");
 });
 
 test("a squad with no merges shows no last merge", () => {
@@ -58,11 +98,11 @@ test("a squad with no merges shows no last merge", () => {
 });
 
 test("an archived row and a squad with no flow entry render as today", () => {
-  expect(text(mod.UnitsCell({ st: { total: 4, merged: 4 } }))).toBe("4/4 merged");
+  expect(text(mod.UnitsCell({ st: { total: 4, merged: 4 } }))).toBe("4 of 4 merged");
   const s = { label: "p", topic: "paused", units: [{ slug: "a", state: "working" }, { slug: "b", state: "done" }], prs: [] };
   const withFlow = text(mod.UnitsCell({ st: mod.stats(s, { squads: {}, cards: [] }) }));
   expect(withFlow).toBe(text(mod.UnitsCell({ st: mod.stats(s, undefined) })));
-  expect(withFlow).toBe("1/2 merged · 1 working");
+  expect(withFlow).toBe("1 of 2 merged · 1 working");
 });
 
 test("each Work units row gets its card's group or stage and its time in stage", () => {
