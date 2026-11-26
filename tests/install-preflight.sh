@@ -51,13 +51,18 @@ if grep -qF "install: 'jq' not found" <<<"$out"; then good; else bad "missing jq
 rc=0; out="$(cd "$REPO" && FAKE_ORCA_NOACCT=1 PATH="$STUB" ./bin/host/install.sh "$DEST" 2>&1)" || rc=$?
 if [ "$rc" -eq 0 ]; then good; else bad "no login is soft — the install should continue"; fi
 if grep -qF 'no Claude login found' <<<"$out"; then good; else bad "no login should warn: $out"; fi
-# Soft: a system login with an email is a real login — no warning. (Its row contains the
-# bare `system login` row as a substring, so the no-login match must be whole-line.)
-out="$(cd "$REPO" && FAKE_ORCA_SYSLOGIN=1 PATH="$STUB" ./bin/host/install.sh "$DEST" 2>&1)"
-if grep -qF 'no Claude login found' <<<"$out"; then bad "a system login should not warn: $out"; else good; fi
-# Soft: a managed account alongside the system row is a login too — no warning.
+# Soft: the system login's credentials file is a real login — no warning.
+mkdir -p "$HOME/.claude"; had=0; [ ! -e "$HOME/.claude/.credentials.json" ] || had=1; : > "$HOME/.claude/.credentials.json"
 out="$(cd "$REPO" && PATH="$STUB" ./bin/host/install.sh "$DEST" 2>&1)"
-if grep -qF 'no Claude login found' <<<"$out"; then bad "a managed account should not warn: $out"; else good; fi
+if grep -qF 'no Claude login found' <<<"$out"; then bad "a system login should not warn: $out"; else good; fi
+[ "$had" = 1 ] || rm -f "$HOME/.claude/.credentials.json"
+# Soft: a login in the accounts table beside the system one counts too — no warning.
+# shellcheck source=tests/lib/seed-accounts.sh
+. "$ROOT/tests/lib/seed-accounts.sh"
+mkdir -p "$TMP/zzds"; seed_claude_accounts "$REPO/state" "zzds:$TMP/zzds"
+out="$(cd "$REPO" && PATH="$STUB" ./bin/host/install.sh "$DEST" 2>&1)"
+if grep -qF 'no Claude login found' <<<"$out"; then bad "a listed account should not warn: $out"; else good; fi
+seed_claude_accounts "$REPO/state"
 
 # Prune: a dangling checkout link goes; a foreign link, a foreign file, and a live link stay.
 ln -s "$REPO/.claude/commands/ds-old.md" "$DEST/ds-old.md"

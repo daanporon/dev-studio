@@ -12,6 +12,7 @@ import type { Action, Actuator, Reconciler } from "../../bin/loop/core/plugins.t
 import { Loop } from "../../bin/loop/core/tick.ts";
 import accountSkills from "../../bin/loop/reconcilers/account-skills.ts";
 import alerts from "../../bin/loop/reconcilers/alerts.ts";
+import { claudeSkillAccounts } from "../../bin/lib/account-skills.ts";
 
 const T = 1_800_000_000, DAY = 86_400;
 const PROJECTS = ["pa", "pb"];
@@ -142,5 +143,32 @@ describe("accountRows: the plan column (U123)", () => {
     expect(by()).toEqual({ a: "Ultra" });
     writeFileSync(join(d, "accounts.tsv"), [head, "claude\ta\t1\t-\t2\t-\t-\t1\tA\t-\tok", ""].join("\n"));
     expect(by()).toEqual({ a: null });
+  });
+});
+
+// orca-accounts-display U4: the skills check and installer take their accounts from the table, with no Orca.
+describe("claudeSkillAccounts", () => {
+  test("every listed folder, a ds one included; a missing folder is flagged; a removed or other agent's row is out", () => {
+    const s = root(), d = temps[temps.length - 1]!, env = { HOME: join(d, "home") };
+    const ds = join(d, "zz-ds"), gone = join(d, "zz-gone"), removed = join(d, "zz-removed");
+    for (const p of [ds, removed]) mkdirSync(p);
+    const add = (agent: string, account: string, source: string, dir: string | null, removedAt: number | null = null) =>
+      s.db.run("INSERT INTO accounts (agent, account, source, config_dir, removed_at, observed_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [agent, account, source, dir, removedAt, T]);
+    add("claude", "system", "system", null);
+    add("claude", "zzds", "ds", ds);
+    add("claude", "zzgone", "orca", gone);
+    add("claude", "zzremoved", "ds", removed, T);
+    add("codex", "zzcodex", "ds", ds);
+    expect(claudeSkillAccounts(d, env)).toEqual([
+      { account: "system", dir: join(env.HOME, ".claude") },
+      { account: "zzds", dir: ds },
+      { account: "zzgone", dir: gone, missing: true },
+    ]);
+  });
+  test("no table reads as the system login only", () => {
+    const d = mkdtempSync(join(tmpdir(), "zzloop-"));
+    temps.push(d);
+    expect(claudeSkillAccounts(d, { HOME: join(d, "home") })).toEqual([{ account: "system", dir: join(d, "home", ".claude") }]);
   });
 });
