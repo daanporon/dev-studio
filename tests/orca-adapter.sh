@@ -1534,6 +1534,14 @@ eq  "terminal create with no handle -> start_failed keeps what Orca printed" \
 eq  "worker-start --terminal refused -> exit 1"  "$rc" "1"
 has "worker-start --terminal refused -> its tab is closed" "$(cat "$ORCA_LOG")" "terminal close --terminal tab_new"
 
+# No system row and no listed default: a named account is still that account, never a plain claude.
+bun "$ROOT/tests/lib/accounts-table.ts" "$DS_STATE_ROOT" claude acctB "B org" orca - 0
+: > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec claude opus - - acctB >/dev/null 2>&1 || true
+has "no default listed: start keeps the named account"  "$(cat "$ORCA_LOG")" "--command CLAUDE_CONFIG_DIR=$BHOME $SHIMP claude --dangerously-skip-permissions --model opus"
+: > "$ORCA_LOG"; "$ADAPTER" worker-resume run_1 wtX spec opus acctB claude >/dev/null 2>&1 || true
+has "no default listed: resume keeps the named account" "$(cat "$ORCA_LOG")" "--command CLAUDE_CONFIG_DIR=$BHOME $SHIMP claude --dangerously-skip-permissions --continue --model opus"
+seed_accounts
+
 # worker-resume keeps the account: --continue under that account's config dir.
 : > "$ORCA_LOG"; "$ADAPTER" worker-resume run_1 wtX spec opus acctB claude >/dev/null 2>&1 || true
 has "worker-resume on account B: claude --continue with B's config dir" "$(cat "$ORCA_LOG")" "--command CLAUDE_CONFIG_DIR=$BHOME $SHIMP claude --dangerously-skip-permissions --continue --model opus"

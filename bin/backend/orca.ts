@@ -2687,7 +2687,8 @@ async function runWorkerStart(ctx: Ctx, what: string, args: string[]): Promise<b
  *  Codex and Muse: any account but their system row, which Orca's own worker-start launches. */
 async function onOtherAccount(ctx: Ctx, agent: string, acct: string): Promise<boolean> {
   if (acct === "") return false;
-  if (agent === "claude") return acct !== (await claudeAccounts(ctx))[0].split("\t")[0];
+  // claudeDefault, not the list's first row: with no marked or system row listed, that is a named account.
+  if (agent === "claude") return acct !== (claudeDefault(ctx.env) || "system");
   const kind = findKind(agent);
   return !!kind && acct !== kind.systemId;
 }
