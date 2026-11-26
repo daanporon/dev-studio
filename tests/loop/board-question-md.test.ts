@@ -106,6 +106,26 @@ test("a picker question has no recommendation in the Question view, and no Open 
   } finally { await t.r.window.happyDOM.close(); }
 }, 30000);
 
+test("a table reads as `a · b` in its list row, and an untitled question's row shows its text once", async () => {
+  const table = "Which layout?\n\n| Column one | Column two |\n|---|:---:|\n| x \\| y | z |\n\nPick one.";
+  const legacy = "Ship /srv/app/run.log now?\nThe checks passed.";
+  const untitled = (id: string, text: string, title: string) => need(id, { text, title, titled: false, why: null });
+  const t = await open([need("t1", { text: table, why: null }), untitled("t2", legacy, "Ship run.log now?"),
+    untitled("t3", "**Keep** the\nold one", "**Keep** the old one"), need("t4", { text: "Same ask, then more.", title: "Same ask", why: null })], []);
+  try {
+    const rows = [...t.d.querySelectorAll(".qnote")] as any[];
+    const row = (title: string) => rows.find((r) => r.querySelector(".l2").textContent === title);
+    const det = row(q.title).querySelector(".lndet").textContent;
+    expect(det).toBe("Which layout? Column one · Column two x | y · z Pick one.");
+    expect(det).not.toContain("---");
+    expect(row("Ship run.log now?").querySelector(".lndet")).toBeNull();
+    expect(row("**Keep** the old one").querySelector(".lndet")).toBeNull();
+    // a title the asker wrote keeps the text under it, even when the text starts with it
+    expect(row("Same ask").querySelector(".lndet").textContent).toBe("Same ask, then more.");
+    expect(t.r.errors).toEqual([]);
+  } finally { await t.r.window.happyDOM.close(); }
+}, 30000);
+
 test("mdPlain strips the markers a one-line row would show; a #NN stays out of code and links", () => {
   const cut = (name: string) => { const i = page.indexOf(`function ${name}(`); return page.slice(i, page.indexOf("\n}\n", i) + 2); };
   const { mdPlain, mdToHtml } = new Function(`${cut("esc")} ${cut("urlTail")} ${cut("mdToHtml")} ${cut("mdPlain")} return { mdPlain, mdToHtml };`)();

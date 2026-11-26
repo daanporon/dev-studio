@@ -464,7 +464,7 @@ test("a squad question card opens the chat panel of the member its answer goes t
   expect(btn.values).toContain("builder-x");
   fnIn(btn)();
   const open = render(q).find((n) => n.values[0] === ChatPanel)!;
-  expect(open.values[1]).toEqual({ project: "p", topic: "one", wt: "/w/bx", label: "builder-x" });
+  expect(open.values[1]).toEqual({ project: "p", topic: "one", wt: "/w/bx", label: "builder-x", qid: "q1" });
   // A card with no worktree of its own (a loop PR gate) is answered at the Lead, so it chats with the Lead.
   expect(render({ ...q, from: "loop", chat_wt: "/w/lead", chat_label: "the Lead" }).find((n) => n.strings.includes('class="btn chat-btn"'))!.values).toContain("the Lead");
   expect(render({ ...q, squad: "_studio", chat_wt: null }).some((n) => n.strings.includes("chat-btn"))).toBe(false);
@@ -677,6 +677,28 @@ test("U2: two open questions page '1 of 2', the screen menu first; a choice post
   // Answered: it is gone from the view (the page marks it sent), the panel is back on Chat or the next item.
   root = p.render();
   expect(flat(questionView(root) ?? "")).not.toContain("Title q1");
+});
+
+test("U3: opened for a question id, the Question view starts there, blocking or not; an unknown id starts at the first", () => {
+  const open = (qid: string, blocking = true) => {
+    const p = panel();
+    p.props.qid = qid;
+    p.render();
+    p.setData({ ...idle, questions: [bq("q1", { blocking }), bq("q2", { blocking })] });
+    return { p, root: p.render() };
+  };
+  for (const blocking of [true, false]) {
+    const { root } = open("q2", blocking);
+    expect(flat(questionView(root))).toContain("2 of 2");
+    expect(flat(questionView(root))).toContain("Question q2?");
+  }
+  const unknown = open("gone");
+  expect(flat(questionView(unknown.root))).toContain("1 of 2");
+  expect(flat(questionView(unknown.root))).toContain("Question q1?");
+  // Paging still works from the named question.
+  const { p, root } = open("q2");
+  fnIn(nodes(questionView(root)).find((n) => n.strings.includes('aria-label="Previous question"'))!)();
+  expect(flat(questionView(p.render()))).toContain("1 of 2");
 });
 
 test("U2: a terminal-only picker shows its text and Open Screen to answer, no answer buttons", () => {
