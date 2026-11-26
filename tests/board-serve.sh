@@ -54,7 +54,8 @@ PERM='. + {picker_kind:"permission",tool:"Bash",shown:"git push origin work",cho
 jq --arg t "$T" --argjson a "$(pk qp2 toolu_1 "$T" true)" --argjson b "$(pk qp3 toolu_3 "$T" true)" --argjson c "$(pk qp4 toolu_1 "$T" false)" \
   --argjson d "$(pk qp5 toolu_1 "$T" true)" --argjson e "$(pk qp6 toolu_6 "$T" true)" --argjson u "$(pk qpu toolu_1 "$TMP/nope.jsonl" true)" \
   --argjson p1 "$(pk pp1 toolu_1 "$T" true | jq -c "$PERM")" --argjson p2 "$(pk pp2 toolu_1 "$T" true | jq -c "$PERM")" \
-  '(.waiting_on_you[] | select(.id=="qp1") | .transcript_path) = $t | .waiting_on_you += [$a,$b,$c,$d,$e,$u,$p1,$p2,
+  --argjson p3 "$(pk pp3 toolu_1 "$T" true | jq -c "$PERM"' | .shown="PGPASSWORD=zzhunter2 psql"')" \
+  '(.waiting_on_you[] | select(.id=="qp1") | .transcript_path) = $t | .waiting_on_you += [$a,$b,$c,$d,$e,$u,$p1,$p2,$p3,
     {"id":"qc","asker":"lead","blocking":false,"question":"c?","since":"2026-10-08T09:00:00Z"},
     {"id":"qr","asker":"lead","blocking":false,"question":"r?","since":"2026-10-08T09:00:00Z"},
     {"id":"qa1","asker":"lead","blocking":false,"title":"Pick a name","question":"name?","since":"2026-10-08T09:00:00Z"},
@@ -324,6 +325,8 @@ bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.ar
 eq "permission: refused press is 409" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"pp2\",\"answer\":\"Yes\"}" "$U")" "409"
 has "permission: refused says the prompt changed" "$(cat "$TMP/post.out")" "the prompt changed"
 eq "permission: a refusal files nothing" "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'answer' AND json_extract(payload, '\$.id') IN ('pp1', 'pp2')" | jq '.[0].n')" "1"
+eq "permission: a hidden secret is 409 (U4)" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"pp3\",\"answer\":\"Yes\"}" "$U")" "409"
+has "permission: a hidden secret says the terminal" "$(cat "$TMP/post.out")" "hides a secret"
 curl -s -o "$TMP/perm.json" "http://127.0.0.1:$PORT/board.json"
 jt "permission: a refused prompt is terminal-only on the board" "$TMP/perm.json" '[.squads[] | select(.topic=="ans") | .questions[] | select(.id=="pp1" or .id=="pp2") | [.id, .picker_answerable, .picker_refused]] | sort == [["pp1",true,null],["pp2",false,"the screen shows a different command"]]'
 # Keys typed after a picker closed would land in the agent's prompt: the board refuses one whose
@@ -350,7 +353,7 @@ rm -f "$TMP/keys.rc"
 eq "picker: a failed press can be retried" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"qp5\",\"answer\":\"Blue\"}" "$U")" "202"
 ff
 eq "picker: retry pressed option 1"   "$(tail -n1 "$TMP/keys.log")" "$(printf 'wTh\t1')"
-eq "picker: the board leaves the squad file alone" "$(jq '[.waiting_on_you[] | select(.source=="picker")] | length' "$SD/ans.json")" "9"
+eq "picker: the board leaves the squad file alone" "$(jq '[.waiting_on_you[] | select(.source=="picker")] | length' "$SD/ans.json")" "10"
 jt "board: picker source passes through" "$TMP/served.json" '.squads[] | select(.topic=="ans") | .questions[] | select(.id=="qp1") | .source=="picker" and .picker_answerable==true'
 jt "board: inbox carries picker source"  "$TMP/served.json" '.needs_you[] | select(.id=="qp1") | .source=="picker"'
 TX="$(tb "$LBL" 2>/dev/null)"

@@ -67,7 +67,21 @@ describe("permissionKey (the screen check)", () => {
   test("the call's own command and description decide, and no description presses nothing", () => {
     expect(permissionKey(PUSH, { tool: "Bash", shown: "git push origin work" }, "Yes")).toHaveProperty("why");
     expect(permissionKey(PUSH, { ...bash, description: "Delete the build" }, "Yes")).toHaveProperty("why");
-    expect(permissionKey(screen(["TOKEN=abc123 git push origin work"]), { ...bash, shown: "TOKEN=[redacted] git push origin work", command: "TOKEN=abc123 git push origin work" }, "Yes")).toEqual({ digit: 1 });
+  });
+  test("a command with a redacted secret is a refusal, never a key (U4)", () => {
+    const command = "PGPASSWORD=zzabc123 psql -c 'select 1'";
+    const hidden = { ...bash, shown: "PGPASSWORD=[redacted] psql -c 'select 1'", command };
+    // Its own screen, another prompt with another secret, and a screen that prints the card's text.
+    for (const cmd of [command, "PGPASSWORD=zzother psql -c 'select 1'", hidden.shown]) {
+      for (const a of ["Yes", "No"]) {
+        expect(permissionKey(screen([cmd]), hidden, a)).toHaveProperty("why");
+        expect(permissionKey(screen([cmd]), { ...hidden, command: undefined }, a)).toHaveProperty("why");
+      }
+    }
+    // An entry an older hook queued with the secret still in it.
+    expect(permissionKey(screen([command]), { ...bash, shown: command }, "Yes")).toHaveProperty("why");
+    expect(checkable("Bash", { command }, hidden.shown)).toBe(false);
+    expect(checkable("Bash", { command }, command)).toBe(false);
   });
   test("a file change matches on its file's name in the question", () => {
     const edit = screen(["(diff)"], ["Yes", "No"], "Do you want to make this edit to notes.md?");
@@ -149,6 +163,12 @@ describe("the answer fulfiller on a permission prompt", () => {
       expect(r.keys).toEqual([]);
       expect(r.result).toMatchObject({ ok: false, prompt_changed: true });
     }
+  });
+  test("a redacted prompt types nothing, even on its own screen (U4)", async () => {
+    const r = await press("Yes", screen(["curl -u admin:zzhunter2 https://example.com"]), { shown: "curl -u admin:[redacted] https://example.com" });
+    expect(r.keys).toEqual([]);
+    expect(r.result).toMatchObject({ ok: false, prompt_changed: true });
+    expect(r.refused).toBe("the card hides a secret in it");
   });
   test("an unreadable screen types nothing", async () => {
     const r = await press("Yes", "");
