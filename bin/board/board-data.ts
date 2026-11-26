@@ -13,11 +13,12 @@
 // It never runs a command and never reads a state file, so it renders with orca, gh and git off
 // PATH, and with the loop stopped it shows the last data behind a "loop down" banner.
 import { resolveBackUp, returnOf } from "../loop/settings/roster.ts";
+import { menuOptions, menuText } from "../loop/chat/menu.ts";
 import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
 import { basename, dirname, join, resolve } from "node:path";
 import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
-import { unitLinks } from "./unit-links.ts";
+import { ticketLink, unitLinks } from "./unit-links.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { debriefTopic } from "./card-place.ts";
 import { placeAlert, questionsCount, shownStatus, doneWaits, shortTitle, prNumber } from "./needs-rules.ts";
@@ -1372,18 +1373,18 @@ const activeSquads = (squads: any[]) => squads.filter((s) => s.status !== "done"
 
 // The header tiles' numbers (plan U3, KTD8), from the squads the board renders: the page only lays
 // them out. "Active" squads are the page's (not done/failed/parked, pause active).
-function headerSummary(db: Db | null, label: string, squads: any[], needs: any[], loop: any) {
+export function headerSummary(db: Db | null, label: string, squads: any[], needs: any[], loop: any) {
   const active = activeSquads(squads);
   const units = active.flatMap((s) => arr(s.units));
   const open = units.filter((u: any) => u.state !== "done" && u.state !== "cancelled");
   const ready = open.filter((u: any) => u.state === "ready").length;
-  // The Units left detail without a Flow, from the units the tile counts; a unit blocked on live work is not named.
-  const left = { units_working: 0, units_ready: 0, units_parked: 0, units_stopped: 0 };
+  // The Units left detail without a Flow: every unit the tile counts lands in one group. Queued is ready, or blocked and not parked.
+  const left = { units_working: 0, units_queued: 0, units_parked: 0, units_stopped: 0 };
   for (const u of open as any[]) {
     if (u.parked) left.units_parked++;
     else if (STOPPED_STATES.includes(u.state)) left.units_stopped++;
-    else if (u.state === "ready") left.units_ready++;
-    else if (u.state !== "blocked") left.units_working++;
+    else if (u.state === "ready" || u.state === "blocked") left.units_queued++;
+    else left.units_working++;
   }
   const prs = squads.flatMap((s) => arr(s.prs)).filter((p: any) => p.status !== "merged" && p.status !== "closed");
   const maxB = db ? dsLimit(db, label, "max_builders") : null;
@@ -1709,6 +1710,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
   const lv = leadCheck && leadWt != null && st.run_id ? leadVerdict(db.s, label, String(leadWt), NOW()) : null;
   const limited = limitedFor(db, label);
   const health = prHealthFor(db, label);
+  const ticketUrl = limit(db.s, label, "ticket_url");
   const u = arr(st.units);
   const members = arr(st.members);
   // U1's dep rule, mirrored (squad-state.sh ready-units `satisfied`): a dep counts when done,
@@ -1908,7 +1910,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
         parked: null as "held" | "behind" | null,
         // U6: what the details overlay shows. The text comes from the plan's unit block (register-plan) or add-unit --about.
         title: x?.title ?? null, about: x?.about ?? null, done_text: x?.done ?? null, check_text: x?.check ?? null,
-        links: unitLinks(x?.links),
+        links: unitLinks(x?.links, ticketLink(x?.title, ticketUrl)),
         plan: x?.plan ? String(x.plan) : null, plan_unit: x?.plan_unit ?? null,
         // When the loop marked the unit done on its PR's merge (units.done_at); the window's `merged <age>`.
         done_at: us === "done" ? ((db.s.get("units", { project: label, squad: topic, slug }) as any)?.done_at ?? null) : null,
@@ -2234,6 +2236,8 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       project: l, id: x.id ?? null, from: typeof x.asker === "string" && x.asker !== "sweep" ? x.asker : null, text, title: x.title ?? shortTitle(text, x.id ?? null),
       card: typeof x.kind === "string" ? x.kind : typeof x.card === "string" ? x.card : null, reason: typeof x.reason === "string" ? x.reason : null,
       squad: typeof x.squad === "string" ? x.squad : null, unit: typeof x.unit === "string" ? x.unit : null,
+      // A card about one member (a permission prompt) names whose chat it opens.
+      chat_wt: typeof x.chat_wt === "string" ? x.chat_wt : null, chat_label: typeof x.chat_label === "string" ? x.chat_label : null,
       // A notice's one option is an acknowledgement, so it is no answer: `choices` are the options only when
       // the answer acts (2+ options, or the card's `acts_on_answer` marker); a lone option is shown as `when`.
       ...alertAnswers(x),
@@ -2311,7 +2315,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     // The inbox: every question and proposed fix from squads that aren't on hold: blocking first,
     // then approvals, then questions, oldest first; each carries the command to copy.
     needs_you: [...studioAlerts.map((a) => ({
-      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true,
+      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true, chat_wt: a.chat_wt, chat_label: a.chat_label,
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
@@ -2703,7 +2707,7 @@ export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] 
   { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "debrief", "archive_debrief_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
-  { name: "Board & machine", keys: ["update_run_max_min", "board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
+  { name: "Board & machine", keys: ["ticket_url", "update_run_max_min", "board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_"] },
   { name: "Morning brief", prefixes: ["briefing_"] },
   { name: "Host tidy", keys: ["host_tidy"], prefixes: ["cleanup_", "disk_"] },
   { name: "Feedback", keys: ["feedback"], prefixes: ["feedback_"] },
@@ -2739,7 +2743,7 @@ export function limitsJson(project: string, root = stateRoot()) {
       const first = (v: unknown) => fileOnly ? String(v ?? "").trim() : String(v ?? "").trim().split(/\s+/)[0] ?? "";
       const [value, source] = process.env[env] ? [process.env[env]!, "env"]
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
-      const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
+      const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "ticket_url" ? "https://tracker.example/issue/{id}, or -" : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
       return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
@@ -3240,27 +3244,7 @@ function chatCrew(db: Db, project: string, topic: string) {
   });
 }
 
-// Board chat U19b: the option count of a numbered menu at the bottom of a screen (a Claude permission prompt,
-// the folder-trust prompt), else 0. The last run of option lines numbered 1, 2, 3… within the last 25 non-blank
-// lines counts, and only when one of them carries the selection marker; a numbered list in plain output has none.
-export function menuOptions(tail: string): number { return menuText(tail).count; }
-
-// The same scan with the menu's text (the Question view): `options` are the last run's labels with the marker and
-// number stripped, `prompt` the up to 4 non-blank lines just above the run (the question the menu asks).
-export function menuText(tail: string): { count: number; prompt: string[]; options: string[] } {
-  const lines = tail.split("\n").filter((l) => l.trim() !== "").slice(-25);
-  let run: { mark: boolean; label: string; at: number }[] = [];
-  let last: typeof run = [];
-  lines.forEach((l, at) => {
-    const m = /^\s*([❯>›▶»])?\s*(\d{1,2})\.\s+(\S.*)$/.exec(l);
-    if (!m) return;
-    if (Number(m[2]) === 1) run = [];
-    if (Number(m[2]) === run.length + 1) { run.push({ mark: !!m[1], label: m[3].trim(), at }); last = run.slice(); }
-  });
-  if (last.length < 2 || !last.some((o) => o.mark)) return { count: 0, prompt: [], options: [] };
-  const prompt = lines.slice(Math.max(0, last[0].at - 4), last[0].at).map((l) => l.trim());
-  return { count: last.length, prompt, options: last.map((o) => o.label) };
-}
+export { menuOptions, menuText };
 
 // What a prompt in a terminal is about, on the entries that carry it (picker-hook.sh permission): the
 // text a card draws as a code block, where it runs and which helper agent asks. Absent fields are left out.

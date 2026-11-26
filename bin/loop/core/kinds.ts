@@ -156,9 +156,6 @@ export const FACTS = {
   delivery_verified: obj(delivery),
   exposed: obj({ name: str, role: opt(str), scope: opt(str), suffix: opt(str), url: opt(str), audience: opt(str), stop: opt(bool), ports: opt(arr(num)) }),
   feedback_imported: obj({ file: str, lines: num, added: num, renamed: opt(str) }),
-  // A role stopped at a safety-check prompt (project and squad are the event's columns): `agent` when a
-  // helper agent raised it, `text` the first 200 redacted characters of what the prompt is about.
-  permission_asked: obj({ role: str, tool: opt(str), via: str, agent: opt(bool), text: str }),
   feedback_noted: obj({ key: str, project: str, member: opt(str), source: str }),
   feedback_drafted: obj({ repo: str, notes: num, drafts: num, blocked: num, kept: num, model: opt(str), account: opt(str), head: opt(str) }),
   // U3: a draft on its way out, out (filed #issue), edited, dismissed (a draft or one note), a note restored.
@@ -173,6 +170,8 @@ export const FACTS = {
   limited: ep,
   message_delivered: obj({ ids: arr(num) }),
   message_read: obj({ ids: arr(num), by: str }),
+  // permission-prompt-needs-you: one per permission prompt a role waits on; via "hook" or "screen"; agent = a helper agent raised it.
+  permission_asked: obj({ role: str, tool: opt(str), via: str, agent: opt(bool), text: str }),
   message_replied: obj({ id: num, reply: opt(num), request: opt(num) }),
   message_sent: obj({ key: str, to: str, from: str, kind: str, subject: str }),
   finish_recorded: obj({ key: str, member: str, unit: opt(str), outcome: str, gen: opt(str) }),

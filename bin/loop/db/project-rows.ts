@@ -36,6 +36,7 @@ export const KEPT: Record<string, string> = {
   accounts: "host-wide account list",
   health: "the loop process's own health",
   observed_accounts: "host-wide account usage",
+  observed_account_folders: "host-wide login folders the accounts refresh found",
   observed_cleanup_scan: "host-wide cleanup scan",
   observed_disk_usage: "host-wide disk usage",
   observed_github: "per repo, shared by every project on the repo",
