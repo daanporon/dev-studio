@@ -106,6 +106,8 @@ FAKE_MUSE_SKILLS="$(muse_skills_all)"
 rm_log(){ rm -f "$CALL_LOG"; }
 
 # --- Part A: install-skills.sh --check ---------------------------------------
+# No accounts table: the system login only.
+export DS_STATE_ROOT="$TMP/no-table"
 S1="$TMP/s1"; make_stubs "$S1" yes yes no
 H1="$TMP/h1"; mkdir -p "$H1/.claude/plugins"; mk_skills_home "$H1/.claude"
 
@@ -113,7 +115,7 @@ H1="$TMP/h1"; mkdir -p "$H1/.claude/plugins"; mk_skills_home "$H1/.claude"
 rm_log
 out="$(HOME="$H1" PATH="$S1" "$SKILLS_SCRIPT" --check 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then good; else bad "--check all-present exits $rc, want 0: $out"; fi
-for want in "claude: CLI ok" "claude: skills ok" "muse: CLI ok" "ce-* skills ok" "muse: ds skill ok" "codex: not installed, not used"; do
+for want in "claude: CLI ok" "claude[system]: skills ok" "muse: CLI ok" "ce-* skills ok" "muse: ds skill ok" "codex: not installed, not used"; do
   if grep -qF "$want" <<<"$out"; then good; else bad "--check all-present should say '$want': $out"; fi
 done
 
@@ -162,7 +164,7 @@ mv "$H1/.claude/plugins/installed_plugins.json" "$TMP/reg.bak"
 rm_log
 rc=0; out="$(HOME="$H1" PATH="$S1" "$SKILLS_SCRIPT" --check 2>&1)" || rc=$?
 if [ "$rc" -eq 1 ]; then good; else bad "--check with a missing claude plugin exits $rc, want 1"; fi
-if grep -qF '⚠ claude: compound-engineering is not installed' <<<"$out"; then good; else bad "--check should name the missing compound-engineering plugin: $out"; fi
+if grep -qF '⚠ claude[system]: compound-engineering is not installed' <<<"$out"; then good; else bad "--check should name the missing compound-engineering plugin: $out"; fi
 mv "$TMP/reg.bak" "$H1/.claude/plugins/installed_plugins.json"
 
 # A7. codex present: still not used, and never skill-checked.
@@ -204,7 +206,11 @@ printf -- '---\ndescription: x\n---\nhi\n' > "$REPO/.claude/commands/ds-fake.md"
 # The skill verdicts are checked on a host whose required loop is installed.
 mkdir -p "$REPO/state"
 : > "$REPO/state/.loop-migrated"
-: > "$REPO/state/loop.db"
+# The accounts the check covers: the system login and a dev-studio table row, a1 (made below).
+unset DS_STATE_ROOT
+# shellcheck source=tests/lib/seed-accounts.sh
+. "$ROOT/tests/lib/seed-accounts.sh"
+seed_claude_accounts "$REPO/state" system "a1:$TMP/bhome/.config/orca/claude-profiles/a1/home"
 
 B_STUB="$TMP/bstub"; mkdir -p "$B_STUB"
 for t in bash dirname mkdir ln grep sed basename readlink rm head cat awk; do
@@ -242,8 +248,6 @@ export HOME="$TMP/bhome"; mkdir -p "$HOME"
 export DS_ORCA_DATA="$HOME/.config/orca"
 mkdir -p "$DS_ORCA_DATA/claude-profiles/a1/home/plugins" "$HOME/.claude/plugins"
 mk_skills_home "$DS_ORCA_DATA/claude-profiles/a1/home"; mk_skills_home "$HOME/.claude"
-# The account list is the checkout's loop.db accounts table (issue #125), not Orca's `account list`.
-bun "$ROOT/tests/lib/accounts-table.ts" "$REPO/state" claude system s@e.com system - 0 claude a1 t@e.com orca - 0
 
 # B1. all present: exit 0, preflight ok, per-agent ok lines, codex line.
 rm_log

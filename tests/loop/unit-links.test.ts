@@ -26,6 +26,12 @@ test("unitLinks: only http(s) URLs reach the board", () => {
   expect(unitLinks("https://example.org")).toEqual([]);
 });
 
+test("unitLinks: a URL with a login never reaches the board", () => {
+  const login = ["https://user:pw@tracker.example/x", "https://user@tracker.example/x", "https://:pw@tracker.example/x"];
+  expect(unitLinks(login)).toEqual([]);
+  expect(unitLinks([...login, "https://tracker.example/issue/ABC-1"])).toEqual([{ url: "https://tracker.example/issue/ABC-1", label: "ABC-1" }]);
+});
+
 const TPL = "https://tracker.example/issue/{id}";
 
 test("ticketLink: a leading [ID], else a single trailing one; # leaves the URL, not the label", () => {

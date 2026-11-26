@@ -443,18 +443,16 @@ check "restart-role writes the restart wish and starts nothing itself" "now/rest
 # wish and starts nothing itself (checked above); a suspended squad comes back with
 # suspend-squad.sh --resume.
 
-# install-skills.sh --check reads each Claude account's config dir through the seam
-# (status, account-list, claude-config-dir — never orca), and the op is in the contract.
+# install-skills.sh --check takes the Claude accounts from loop.db's table (issue #125), never from the seam.
 cstub="$tmp/ce-claude"; mkdir -p "$cstub"
 # shellcheck disable=SC2016 # a literal, not an expansion
 printf '#!/usr/bin/env bash\n[ "$1 $2 ${3:-}" = "plugin list --json" ] && echo "[]"\nexit 0\n' > "$cstub/claude"; chmod +x "$cstub/claude"
 celog="$tmp/ce-check.log"; : > "$celog"
 # The check reads ~/.claude from disk (no claude call): run it under an empty HOME, never the host's.
 cehome="$tmp/ce-home"; mkdir -p "$cehome"
-ceout="$(HOME="$cehome" STUB_LOG="$celog" BACKEND="$stub" PATH="$cstub:$PATH" "$ROOT/bin/host/install-skills.sh" --check 2>&1 || true)"
-check "install --check asks the backend for each Claude account's config dir" "1" "$(grep -c '^claude-config-dir default$' "$celog")"
-check "install --check lists accounts through the backend" "1" "$(grep -c '^account-list' "$celog")"
-check "install --check names the account in its verdict" "yes" "$(grep -qF 'claude[default]: compound-engineering is not installed' <<<"$ceout" && echo yes || echo no)"
+ceout="$(DS_STATE_ROOT="$tmp/ce-state" HOME="$cehome" STUB_LOG="$celog" BACKEND="$stub" PATH="$cstub:$PATH" "$ROOT/bin/host/install-skills.sh" --check 2>&1 || true)"
+check "install --check asks the backend for no account" "0" "$(grep -cE '^(status|account-list|claude-config-dir)' "$celog")"
+check "install --check names the account in its verdict" "yes" "$(grep -qF 'claude[system]: compound-engineering is not installed' <<<"$ceout" && echo yes || echo no)"
 # shellcheck disable=SC2016 # a literal, not an expansion
 check "conventions/backend.md documents claude-config-dir" "1" "$(grep -c '^| `claude-config-dir` |' "$ROOT/conventions/backend.md")"
 

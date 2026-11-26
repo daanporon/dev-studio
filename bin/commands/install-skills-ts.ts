@@ -5,7 +5,7 @@
 import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ROOT, writeErr, writeOut } from "../lib/shared";
-import { accountSkillsCheck, accountSkillsScan, ROLE_OPTIONAL_USER_SKILLS, ROLE_USER_SKILLS } from "../lib/account-skills";
+import { accountSkillsCheck, accountSkillsScan, claudeSkillAccounts, ROLE_OPTIONAL_USER_SKILLS, ROLE_USER_SKILLS } from "../lib/account-skills";
 import {
   MUSE_CE_SKILLS, MUSE_DS_SKILL, accountOwner, agentsInUse, canon, capture, exists, inherit, isDir, isFile,
   isLink, museSkillOn, restoreBunEnv, roleUses, versionSort, which, type RoleUse,
@@ -51,7 +51,7 @@ async function verifyAgents(st: State, museOnly: boolean): Promise<number> {
   else {
     out("claude: CLI ok");
     // listed is not enough: its registered installPath must exist under each account's config dir.
-    if ((await accountSkillsCheck(backend())) !== 0) st.accountsBroken = true;
+    if (accountSkillsCheck() !== 0) st.accountsBroken = true;
     if (st.verbose) await inherit(["claude", "plugin", "list"], { err: "ignore" });
   }
   if (which("muse") === null) {
@@ -84,8 +84,6 @@ async function verifyAgents(st: State, museOnly: boolean): Promise<number> {
   }
   return rc;
 }
-
-const backend = () => process.env.BACKEND || join(ROOT, "bin", "backend", "orca.sh");
 
 /** `muse skills list`: stdout and its exit code. */
 async function museList(): Promise<{ listing: string; rc: number }> {
@@ -161,25 +159,12 @@ function claudeAs(cfg: string, args: string[]): Promise<number> {
 }
 
 type Acct = { label: string; cfg: string; owner: string };
-/** Every Claude account the backend lists with its config dir and canonical owner; backend down or no
- *  account: the current env only, labelled `claude`. */
-async function collectAccounts(): Promise<Acct[]> {
-  const b = backend();
-  let accts: string[] = [];
-  if ((await inherit([b, "status"], { out: "ignore", err: "ignore" })) === 0) {
-    accts = (await capture([b, "account-list"])).out.split("\n").map((l) => l.split("\t")).filter((f) => f[0] === "claude" && (f[1] ?? "") !== "").map((f) => f[1]);
-  }
-  const ownerOf = (cfg: string) => canon(accountOwner(cfg));
-  if (accts.length === 0) {
-    const cfg = process.env.CLAUDE_CONFIG_DIR || join(HOME(), ".claude");
-    return [{ label: "claude", cfg, owner: ownerOf(cfg) }];
-  }
+/** Every Claude account in the accounts table with its config dir and canonical owner. */
+function collectAccounts(): Acct[] {
   const rows: Acct[] = [];
-  for (const acct of accts) {
-    const r = await capture([b, "claude-config-dir", acct]);
-    if (r.rc !== 0) { err(`⚠ claude[${acct}]: the backend has no Claude config dir for this account — skipped`); continue; }
-    const cfg = stripNl(r.out) || join(HOME(), ".claude");
-    rows.push({ label: `claude[${acct}]`, cfg, owner: ownerOf(cfg) });
+  for (const { account, dir, missing } of claudeSkillAccounts()) {
+    if (missing) { err(`⚠ claude[${account}]: its login folder ${dir} is missing — skipped`); continue; }
+    rows.push({ label: `claude[${account}]`, cfg: dir, owner: canon(accountOwner(dir)) });
   }
   return rows;
 }
@@ -312,7 +297,7 @@ export async function run(argv: string[]): Promise<number> {
   // recorded through the owner's own path, never through a profile whose plugins/ is a symlink.
   if (which("claude") === null) { err("install-skills: 'claude' CLI not found — install Claude Code on this host first"); return 1; }
   out("-> compound-engineering (Claude Code plugin, per account owner)");
-  const accts = await collectAccounts();
+  const accts = collectAccounts();
   const ownersDone = new Map<string, string>();
   for (const { owner } of accts) {
     if (owner === "" || ownersDone.has(owner)) continue;

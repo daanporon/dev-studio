@@ -562,7 +562,7 @@ const accountLabel = (r: AccountRow, env: Env): string => {
   if (r.label) return r.label.replace(/[\t\n]/g, " ");
   if (r.account !== findKind(r.agent)?.systemId) return r.account;
   if (r.agent !== "claude") return "default";
-  // A bare `system login` tells install.sh there is no Claude login, so a logged-in one names its address.
+  // The logged-in system login names its address, as the account list always has.
   const email = jsonField(join(systemJsonDir(env), ".claude.json"), ["oauthAccount", "emailAddress"]);
   return email ? `system login (${email.replace(/[\t\n]/g, " ")})` : "system login";
 };
