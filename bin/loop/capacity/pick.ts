@@ -241,20 +241,21 @@ export function workDone(store: Store, m: Row): boolean {
 }
 
 // What the accounts table says beside the list: the agent's `gone` accounts (the refresh leaves them out
-// of accounts.tsv too, but up to a round later), and per account the accounts of its login, itself
-// included, in the order one is offered in.
-function tableOf(store: Store, agent: string): { gone: Set<string>; same: (account: string) => string[] } {
+// of accounts.tsv too, but up to a round later), those switched off, and per account the accounts of its
+// login, itself included, in the order one is offered in.
+function tableOf(store: Store, agent: string): { gone: Set<string>; off: Set<string>; same: (account: string) => string[] } {
   const rows = store.db.query("SELECT * FROM accounts WHERE agent = ? ORDER BY is_default DESC, orca_listed DESC, rowid").all(agent) as AccountRow[];
   const system = findKind(agent)?.systemId;
   const gone = new Set(rows.filter((r) => r.removed_at != null
     || ((r.source === "ds" || r.source === "orca") && r.account !== system && !existsSync(accountFolder(r)))).map((r) => r.account));
+  const off = new Set((rows as (AccountRow & { state?: string | null })[]).filter((r) => r.state === DISABLED).map((r) => r.account));
   const logins = new Map<string, string[]>(), loginOf = new Map<string, string>();
   for (const r of rows) {
     if (!r.login_id) continue;
     loginOf.set(r.account, r.login_id);
     logins.set(r.login_id, [...(logins.get(r.login_id) ?? []), r.account]);
   }
-  return { gone, same: (account) => logins.get(loginOf.get(account) ?? "") ?? [account] };
+  return { gone, off, same: (account) => logins.get(loginOf.get(account) ?? "") ?? [account] };
 }
 
 // The agent's current rows of accounts.tsv, or null when it has none. The system login alone is a list:
@@ -288,7 +289,7 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
   const limitedRows = store.db.query("SELECT account, limited_until FROM observed_accounts WHERE agent = ?").all(agent) as Row[];
   rows = rows.filter((r) => !table.gone.has(String(r.account)) && (!list || list.has(String(r.account))));
   const until = new Map<string, number>();
-  const later = (acct: string, t: number | null) => { if (t && t > now && t > (until.get(acct) ?? 0)) until.set(acct, t); };
+  const later = (acct: string, t: number | null, into = until) => { if (t && t > now && t > (into.get(acct) ?? 0)) into.set(acct, t); };
   for (const r of limitedRows) later(String(r.account), n(r.limited_until));
   for (const e of store.db.query("SELECT subject, state, ended_at FROM episodes WHERE kind = 'account' AND ended_at > ?").all(now) as Row[]) {
     if (String(e.subject).startsWith("login|")) continue;   // a login hold, read below
@@ -308,12 +309,17 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
     const [a, acct] = k.split("/");
     if (a === agent && acct) login.set(acct, t);
   }
+  // A member's stamp or a caller's `limited` on a folder that is out for itself (gone, unlisted, switched
+  // off, login ended) means "not this folder": the login's other folders stay free.
+  const alone = new Map<string, number>();
+  const stamp = (acct: string, t: number | null) =>
+    later(acct, t, table.gone.has(acct) || table.off.has(acct) || login.has(acct) || (list && !list.has(acct)) ? alone : until);
   for (const m of store.db.query("SELECT account, limited_until FROM members WHERE agent = ? AND account IS NOT NULL AND limited_until > ? AND COALESCE(status, '') NOT IN ('gone', 'closed')").all(agent, now) as Row[]) {
-    later(String(m.account), n(m.limited_until));
+    stamp(String(m.account), n(m.limited_until));
   }
   for (const l of limited) {
     const m = /^([^:]+):(.+)=(\d+)$/.exec(l);
-    if (m && m[1] === agent) later(m[2], Number(m[3]));
+    if (m && m[1] === agent) stamp(m[2], Number(m[3]));
   }
   return rows.map((r) => {
     const sp = n(r.session_pct), sr = n(r.session_reset), wp = n(r.weekly_pct), wr = n(r.weekly_reset);
@@ -326,7 +332,7 @@ function accounts(store: Store, agent: string, now: number, limited: string[]): 
     return {
       same,
       plan: (r.plan as string | null) || null, account: String(r.account), pct: over ? 0 : sp ?? 0, reset: sr !== null && sr > now ? sr : null, weekly: wr !== null && wr <= now ? 0 : wp ?? 0,
-      wreset: wr !== null && wr > now ? wr : null, noWindow, unknown: !!r.unknown || !fetched, until: Math.max(held > now ? held : 0, ...same.map((id) => until.get(id) ?? 0)), draining: r.state === "draining", disabled: r.state === DISABLED,
+      wreset: wr !== null && wr > now ? wr : null, noWindow, unknown: !!r.unknown || !fetched, until: Math.max(held > now ? held : 0, alone.get(String(r.account)) ?? 0, ...same.map((id) => until.get(id) ?? 0)), draining: r.state === "draining", disabled: r.state === DISABLED,
       ...(same.some((id) => credits.has(id)) ? { credits: true } : {}),
       ...(login.has(String(r.account)) ? { login: true } : {}),
     };
