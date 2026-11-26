@@ -232,6 +232,11 @@ eq "long command is cut and marked" "$(entry "$P4" '(.shown|length|tostring)+" "
 P5="$(mkstate p5)"; ask "$P5" '.tool_name="Write" | .tool_input={file_path:"/tmp/wt/big.txt",content:("y" * 2500)}'
 eq "long Write is cut, path first, file title" "$(entry "$P5" '[(.shown|startswith("/tmp/wt/big.txt\ny")|tostring),(.shown|endswith("(cut)")|tostring),.title,(.picker_answerable|tostring)]|join("|")')" "true|true|builder-u1 asks: change this file?|false"
 
+# An input shown as JSON: its values are redacted before serialising, where a newline becomes the two
+# characters "\n" and would join the token's first letter. The made-up token is put together here.
+P9="$(mkstate p9)"; ask "$P9" '.tool_name="mcp__x__post" | .tool_input={body:("line one\n" + "gh" + "p_" + ("a" * 36))}'
+eq "JSON input: a token at a line start is redacted" "$(jq -r '.waiting_on_you[0] | [(.shown|contains("[redacted]")|tostring),(tostring|contains("a" * 36)|tostring)]|join(" ")' "$P9")" "true false"
+
 # The question tool and the plan dialog queue nothing and leave a live picker entry alone.
 P6="$(mkstate p6 '{"id":"picker-live","asker":"builder-u1","card_wt":"wtB","source":"picker","blocking":true,"question":"Which?","since":"2026-01-01T00:00:00Z"}')"
 for t in AskUserQuestion ExitPlanMode; do hookin ".tool_name=\"$t\"" | "$HOOK" permission "$P6" builder-u1 wtB >/dev/null 2>&1; done

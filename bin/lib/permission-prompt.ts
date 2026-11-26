@@ -3,7 +3,7 @@
 // so it is read back from the transcript). Used by `picker-hook.sh permission`.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { redact } from "../loop/core/redact.ts";
+import { redact, redactDeep } from "../loop/core/redact.ts";
 
 export const SHOWN_CAP = 2000;
 const FILE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
@@ -14,7 +14,8 @@ export const head = (s: string, n: number): string => Array.from(s).slice(0, n).
 
 /** The text the prompt is about, redacted, then cut at SHOWN_CAP with a "(cut)" line. */
 export function shownText(tool: string, input: any): string {
-  let text = JSON.stringify(input ?? {}, null, 2);
+  // Values are redacted before serialising: JSON writes a newline as "\n", which hides a token starting a line.
+  let text = JSON.stringify(redactDeep(input ?? {}), null, 2);
   if (tool === "Bash" && str(input?.command)) text = input.command;
   else if (tool === "Edit" && str(input?.file_path)) text = `${input.file_path}\n${str(input.new_string)}`;
   else if (tool === "Write" && str(input?.file_path)) text = `${input.file_path}\n${str(input.content)}`;
