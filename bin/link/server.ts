@@ -82,7 +82,7 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
     const c = ws.data;
     if (c.phase === "closing") return;
     const f = parseFrame(raw, c.phase === "up" ? MAX_FRAME_BYTES : JOIN_MAX_BYTES);
-    if ("bad" in f) { refuse(ws, f.bad); return; }
+    if ("bad" in f) { refuse(ws, String(f.bad)); return; }
     if (c.phase === "up") {
       if (!(await c.peer!.onFrame(f))) refuse(ws, `unexpected frame '${f.t}'`);
       return;
@@ -171,7 +171,7 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
       c.phase = "closing";
     },
   };
-  const fetchTcp = (req: Request, srv: Server): Response | undefined => {
+  const fetchTcp = (req: Request, srv: Server<Conn>): Response | undefined => {
     const u = new URL(req.url);
     if (u.pathname === "/healthz") return Response.json({ ok: true, pid: process.pid, link_version: LINK_VERSION });
     if (u.pathname === "/link") {
@@ -182,14 +182,14 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
     return new Response("not found", { status: 404 });
   };
 
-  const servers: Server[] = [];
+  const servers: Server<Conn>[] = [];
   let port = opts.port;
   const errors: string[] = [];
   for (const hostname of binds) {
     try {
       const s = Bun.serve<Conn, never>({ hostname, port, fetch: fetchTcp, websocket, idleTimeout: 30 });
       servers.push(s);
-      port = s.port;      // port 0: the rest bind the one Bun chose
+      port = s.port ?? port;      // port 0: the rest bind the one Bun chose
     } catch (e) { errors.push(`${hostname}: ${(e as Error).message}`); }
   }
   if (!servers.length) { clearInterval(tick); if (ownStore) store.close(); throw new Error(`link: could not bind port ${opts.port} (${errors.join("; ")})`); }
