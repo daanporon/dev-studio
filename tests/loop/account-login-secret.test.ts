@@ -141,6 +141,17 @@ describe("the code reaches the terminal and nothing else", () => {
     noCopyUnder(r.state, "second-made-up-code");
   });
 
+  test("the prompt gone after the wait (claude is logging in): the add stays code_typed", async () => {
+    const r = rig();
+    await r.toWaiting();
+    dropLoginCode(r.state, r.id, CODE);
+    await r.tick(T + 4);
+    r.screen().lines.splice(0, r.screen().lines.length, "Logging in…");
+    await r.tick(T + 4 + PROMPT_BACK_S);
+    await r.tick(T + 4 + PROMPT_BACK_S + 2);
+    expect(r.res()).toMatchObject({ state: "code_typed", why: null, url: URL });
+  });
+
   test("a code after the prompt has gone is dropped untyped, and the add says so", async () => {
     const r = rig();
     await r.toWaiting();

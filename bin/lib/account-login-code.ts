@@ -8,16 +8,16 @@
 //   clearLoginCode(root, id)        remove a code nobody took (the add ended)
 //
 // No message here ever carries the code: a refusal names the rule, not the text.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const MAX_CODE = 512;
+const MAX_CODE = 512;
 
 const dirOf = (root: string) => join(root, "account-login");
 export const loginCodeFile = (root: string, id: number | string): string => join(dirOf(root), String(id));
 
 /** The code as it is typed: surrounding whitespace (a paste's newline) trimmed. */
-export const cleanCode = (code: unknown): string => typeof code === "string" ? code.trim() : "";
+const cleanCode = (code: unknown): string => typeof code === "string" ? code.trim() : "";
 
 export function loginCodeProblem(code: unknown): string | null {
   const c = cleanCode(code);
@@ -39,9 +39,8 @@ export function dropLoginCode(root: string, id: number | string, code: string): 
 
 export function takeLoginCode(root: string, id: number | string): string | null {
   const f = loginCodeFile(root, id);
-  if (!existsSync(f)) return null;
-  let code = "";
-  try { code = readFileSync(f, "utf8"); } catch { /* gone between the check and the read */ }
+  let code: string;
+  try { code = readFileSync(f, "utf8"); } catch { return null; }   // none dropped
   rmSync(f, { force: true });
   return loginCodeProblem(code) ? null : cleanCode(code);
 }
