@@ -99,12 +99,19 @@ const openLongName: Open = async (p) => {
   }
   return true;
 };
+// mobile-chat-close-hidden U2: the member menu, opened with the long-label member shown and in the list.
+// One row's label is then made wider than the panel, so the ellipsis is measured at every phone width.
+const openLongMenu: Open = async (p) => {
+  if (!((await openLongName(p)) && (await click(p, ".chat-swbtn")) && (await p.locator(".chat-menu .chat-mi").filter({ hasText: LONG }).count()))) return false;
+  await p.locator(".chat-menu .chat-swlabel").first().evaluate((e: any, t: string) => { e.textContent = t; }, LONG + "-and-a-tail-wider-than-any-phone");
+  return true;
+};
 // chat-key-buttons U1: what each chat view must show, run in the page; returns the list of problems.
 const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.querySelector(".chat " + s), all = (s) => [...document.querySelectorAll(".chat " + s)], bad = [];
   const card = q(".chat-card"), vis = (e) => e && e.getBoundingClientRect().width > 0;
   if (!card) bad.push("no .chat-card"); else {
     const kids = [...card.querySelectorAll("button")].map((b) => b.className.replace(/btn |chat-round /g, "").trim());
-    const okKids = want === "long" || want === "working" || want === "menu" || want === "screen" || want === "question" ? ["chat-attach", "chat-stop", "chat-send pri"] : ["chat-attach", "chat-send pri"];
+    const okKids = want === "long" || want === "long-menu" || want === "working" || want === "menu" || want === "screen" || want === "question" ? ["chat-attach", "chat-stop", "chat-send pri"] : ["chat-attach", "chat-send pri"];
     if (JSON.stringify(kids.map((k) => k.replace("pri chat-send", "chat-send pri"))) !== JSON.stringify(okKids)) bad.push("card buttons " + kids);
     const r = card.getBoundingClientRect(); if (r.height > 200) bad.push("card is " + Math.round(r.height) + " px tall");
     if (parseFloat(getComputedStyle(card).borderTopLeftRadius) < 16) bad.push("card radius");
@@ -117,6 +124,14 @@ const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.que
   if (want === "working" && !(q(".chat-stop") && q(".chat-stop").closest(".chat-card"))) bad.push("working has no ■ in the card");
   if (want === "question") { const qv = q(".chat-q"); if (!qv) bad.push("no Question view"); else { for (const b of qv.querySelectorAll(".chat-qopt")) { const x = b.getBoundingClientRect(); if (x.height < 44) bad.push("choice " + Math.round(x.height) + " px tall"); } if (!qv.querySelector(".chat-qopt")) bad.push("no choices"); } if (keys) bad.push("Question shows a key row"); }
   if (want === "menu") { const b = q(".chat-banner"); if (!b || !/Open ›/.test(b.textContent)) bad.push("no menu banner"); }
+  if (want === "long-menu" && innerWidth <= 600) {
+    const m = q(".chat-menu"); if (!m) bad.push("no .chat-menu"); else {
+      const b = m.getBoundingClientRect(); if (b.left < 0 || b.right > innerWidth || b.bottom > innerHeight) bad.push("menu " + Math.round(b.left) + "→" + Math.round(b.right) + " (bottom " + Math.round(b.bottom) + ") not inside " + innerWidth + "x" + innerHeight);
+      if (b.top < q(".mhd").getBoundingClientRect().bottom - 1) bad.push("the menu does not open under the header");
+      const first = m.querySelector(".chat-swlabel"); if (!first || first.scrollWidth <= first.clientWidth) bad.push("the over-wide label is not cut");
+      for (const it of m.querySelectorAll(".chat-mi")) { const x = it.getBoundingClientRect(), l = it.querySelector(".chat-swlabel"); if (x.height < 44) bad.push("menu row " + Math.round(x.height) + " px tall"); if (x.right > b.right + 1 || l.getBoundingClientRect().right > x.right + 1) bad.push("menu row sticks out: " + l.textContent); if (l.scrollWidth > l.clientWidth && getComputedStyle(l).textOverflow !== "ellipsis") bad.push("cut without an ellipsis: " + l.textContent); }
+    }
+  }
   if (want !== "working" && !scr) bad.push("Screen toggle is not in the header");
   // mobile-chat-close-hidden U1: on a phone the switch is its own full-width row of 44 px buttons and the header never overflows.
   if (want === "long" && innerWidth <= 600) {
@@ -142,6 +157,7 @@ const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; cha
   { name: "chat-question", strict: true, chat: "question", open: openChatOf("builder-platform") },
   { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-segb", /^Screen/)) },
   { name: "long-name-chat", strict: true, chat: "long", open: openLongName },   // not ^chat: its 1280 measures must equal the base
+  { name: "long-name-menu", strict: true, chat: "long-menu", open: openLongMenu },
   { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
   { name: "page", strict: true, kind: "page", open: async () => true },
   { name: "squad", strict: true, kind: "page", open: (p) => click(p, ".row.squad") },
@@ -234,10 +250,10 @@ const shoot = async (size: any, view: string, base: boolean) => {
   return { opened, m } as any;
 };
 
-// The long name is also measured at 390 px (the middle phone width).
-const RUNS = [...SIZES.flatMap((size) => VIEWS.map((v) => ({ size, v }))), { size: { w: 390, h: 844, phone: true }, v: VIEWS.find((v) => v.name === "long-name-chat")! }];
+// The long name and its menu are also measured at 390 px (the middle phone width).
+const RUNS = [...SIZES.flatMap((size) => VIEWS.map((v) => ({ size, v }))), ...["long-name-chat", "long-name-menu"].map((n) => ({ size: { w: 390, h: 844, phone: true }, v: VIEWS.find((v) => v.name === n)! }))];
 for (const { size, v } of RUNS) {
-  if (v.kind === "keyboard" && !size.phone) continue;
+  if ((v.kind === "keyboard" || v.name === "long-name-menu") && !size.phone) continue;   // the desktop chat has tabs, no member menu
   const key = `${size.w}/${v.name}`; const { opened, m, kb, back, cover, stays, hide, after, y0 } = await shoot(size, v.name, false);
   report[key] = { opened, m, kb, back, cover, stays };
   if (!opened) { if (v.strict) breaks.push(`${key}: did not open`); continue; }
