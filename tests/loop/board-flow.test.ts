@@ -3,7 +3,7 @@
 // board-data.ts wiring; the tables below feed bin/board/flow.ts directly for the edge rules.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { flowLine, flowOf, ordinal, unitStage, type FlowEvent, type FlowReview, type FlowUnit } from "../../bin/board/flow.ts";
-import { pausedFacts, renderText } from "../../bin/board/board-data.ts";
+import { parkedUnits, pausedFacts, renderText } from "../../bin/board/board-data.ts";
 import { FX_NOW, flowFixture } from "./flow-fixture.ts";
 
 const N = FX_NOW, D = 86400;
@@ -120,6 +120,21 @@ const flow = (units: FlowUnit[], events: FlowEvent[] = [], floor = 10, reviews?:
 const one = (u: FlowUnit, events: FlowEvent[] = [], floor = 10) => flow([u], events, floor).cards[0];
 
 describe("flow.ts", () => {
+  test("parked and stopped ride on the card, only when set", () => {
+    expect(one(unit("u1", { status: "planned", hold: true, parked: "held" }))).toMatchObject({ stage: "queued", parked: "held" });
+    expect(one(unit("u2", { status: "planned", blocked_by: ["u1"], parked: "behind" }))).toMatchObject({ group: "waiting on another unit", parked: "behind" });
+    expect(one(unit("u3", { status: "planned", parked: null, stopped: false }))).not.toHaveProperty("parked");
+    expect(one(unit("u4", { stopped: true }))).toMatchObject({ stopped: true });
+  });
+
+  test("parkedUnits: a held or plan-not-approved unit, and what waits on it; started units and live blockers are not parked", () => {
+    const u = (slug: string, deps: string[] = [], status = "planned") => ({ slug, deps, status });
+    // held h <- a <- b (two deps behind); s started on h, c behind s; w working <- q; p plan not approved
+    const units = [u("h"), u("a", ["h"]), u("b", ["a"]), u("s", ["h"], "dispatched"), u("c", ["s"]), u("w", [], "dispatched"), u("q", ["w"]), u("p")];
+    const got = parkedUnits(units, new Set(["h", "p"]), new Set(["h", "a", "b", "c", "q", "p"]));
+    expect(Object.fromEntries(got)).toEqual({ h: "held", p: "held", a: "behind", b: "behind", c: "behind" });
+  });
+
   test("Queued groups: a queued: reason is a slot wait; an unknown or missing reset reads no account free", () => {
     const q = (pick: FlowUnit["pick"]) => one(unit("u", { status: "planned", pick }));
     const p = { reason: null, wait_until: null, wait_known: null, slot: 0, account: null };
