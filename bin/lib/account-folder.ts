@@ -8,11 +8,12 @@
 //   removeMadeFolder(folder, id)             remove it, only when that marker says so (the duplicate add, R6)
 //   loginLine(kind, folder)                  `exec env <ENV>=<folder> DS_LOGIN_DIR=<folder> BROWSER=true sh -c '<login>; echo $? > …'`
 //   loginExit(folder)                        the login command's exit code once it ended, else null
+//   copyAccountFolder(from, to, id, creds)   `ds account move`'s copy, links kept (U8)
 //
 // No other code path removes a folder: a failed add keeps its folder, and a folder an add did not make (a
-// --dir folder, an Orca profile) is never touched.
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+// --dir folder, an Orca profile) is never touched. The move removes only its own staging folder.
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { accountsRoot } from "./account-dirs.ts";
 import type { AccountKind, Env } from "./account-kinds/index.ts";
 
@@ -83,4 +84,32 @@ export function loginExit(folder: string): number | null {
     const t = readFileSync(join(folder, EXIT_FILE), "utf8").trim();
     return t === "" ? null : Number(t);
   } catch { return null; }
+}
+
+/** The file that records which `ds account move` request copied a folder in (U8). */
+export const MOVE_MARKER = ".ds-account-move";
+const movedBy = (folder: string, id: number | string): boolean => {
+  try { return readFileSync(join(folder, MOVE_MARKER), "utf8").trim() === String(id); } catch { return false; }
+};
+const isFile = (f: string): boolean => { try { return lstatSync(f).isFile(); } catch { return false; } };
+
+/** `ds account move`'s copy (U8, KTD14): `from` (an Orca profile folder) copied to `to` with its links kept as links
+ *  (`cp -a`), through a staging folder `<to>.moving-<id>` renamed into place once `<credentialsFile>` arrived, so a
+ *  folder at `to` is always a whole copy. `to` gets mode 0700 and a marker naming request `id`; a run after a loop
+ *  restart finds its own copy there and keeps it. `from` is only read. The only folder this removes is its own
+ *  staging folder. Resolves to null, or why it could not copy (`to` stays absent). */
+export async function copyAccountFolder(from: string, to: string, id: number | string, credentialsFile: string): Promise<string | null> {
+  if (existsSync(to)) return movedBy(to, id) ? null : `${to} already exists`;
+  const stage = `${to}.moving-${id}`;
+  rmSync(stage, { recursive: true, force: true });   // an earlier run's half copy (this request's own name)
+  mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
+  const p = Bun.spawn(["cp", "-a", "--", from, stage], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+  const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
+  const why = code !== 0 ? `copying ${from} failed: ${err.trim().split("\n").slice(-2).join("; ").slice(0, 300) || `cp exit ${code}`}`
+    : !isFile(join(stage, credentialsFile)) ? `the copy has no ${credentialsFile}` : null;
+  if (why) { rmSync(stage, { recursive: true, force: true }); return why; }
+  chmodSync(stage, 0o700);
+  writeFileSync(join(stage, MOVE_MARKER), `${id}\n`, { mode: 0o600 });
+  renameSync(stage, to);
+  return null;
 }
