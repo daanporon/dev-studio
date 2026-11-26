@@ -440,6 +440,9 @@ Moving state in and out of `loop.db`. `bin/loop/db/import-json.ts` imports the
 old squad JSON once, `bin/loop/db/export-json.ts` writes the squad snapshots,
 `bin/loop/db/seed.ts` seeds a project's wishes from what runs, and
 `bin/loop/db/migrate-host.ts` imports each project's existing state once.
+`bin/loop/db/project-rows.ts` copies one project's rows to an archive file and
+then deletes them from `loop.db` in one transaction that counts them again first
+(remove-project; no caller yet).
 
 ### drivers/
 
