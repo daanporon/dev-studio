@@ -19,6 +19,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
 import { ticketLink, unitLinks } from "./unit-links.ts";
+import { archiveHint, otherBoards, removalRecordCmd } from "../loop/squad/project-removal.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { debriefTopic } from "./card-place.ts";
 import { placeAlert, questionsCount, shownStatus, doneWaits, shortTitle, prNumber } from "./needs-rules.ts";
@@ -32,7 +33,7 @@ import { planChanges } from "./plan-changes.ts";
 import { compareSquads } from "./squad-order.ts";
 import { archiveDebriefStep, type Step } from "../loop/squad/archive-debrief.ts";
 import { removeWaitS } from "../loop/squad/close-drift.ts";
-import { redact } from "../loop/chat/redact.ts";
+import { redact, redactDeep } from "../loop/chat/redact.ts";
 import { planUnitFacts } from "../loop/squad/plan-lines.ts";
 import { blockingForUnit, entryOf, list, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
 import { DEFAULTS as BRIEFING_DEFAULTS, gaveUp as briefingGaveUp, localDate, nextSlot, parseDays, parseTime, scheduleSince } from "../loop/reconcilers/briefing.ts";
@@ -1806,7 +1807,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
       since: x.since ?? null, age_min: ageMin(x.since),
       // A terminal-picker mirror (bin/hooks/picker-hook.sh): the board answers it by keystroke when
       // picker_answerable (one single-select question); otherwise "answer it in the terminal".
-      source: x.source ?? null, picker_answerable: x.picker_answerable ?? null,
+      source: x.source ?? null, picker_answerable: x.picker_answerable ?? null, ...shownFields(x),
       pr: qpr(x?.pr),
       ...questionDoc(db, label, topic, x, u),
     })).sort((a, b) => (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1) || (b.age_min ?? 0) - (a.age_min ?? 0)),
@@ -2300,6 +2301,9 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
         label: String(p.ref), state: p.state, url: p.repo && p.pr ? `https://github.com/${p.repo}/pull/${p.pr}` : null })),
     ]) : [],
     project_url: label && projSlug ? "https://github.com/" + projSlug : null,
+    removal: removalView(db, label),
+    // What a project's page names when it loses its server without having seen a removal.
+    removal_record_cmd: db && label ? removalRecordCmd(db.s.root, label) : null,
     live_worktrees: db && seen ? Number(db.one("SELECT COUNT(DISTINCT wt) AS n FROM observed_worktrees WHERE gone_at IS NULL")?.n ?? 0) : null,
     capacity: db && seen ? { label: "terminals", count: terminals } : null,
     gh: { ok: !!db && (at("observed_prs") ?? 0) > 0, cmd: "loop" },
@@ -2322,7 +2326,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
         squad: s.topic, label: s.label, kind: q.blocking ? "blocking" : "question", id: q.id, since: q.since ?? null, from: q.asker, chat_wt: q.chat_wt ?? null, chat_label: q.chat_label ?? null,
         text: q.question, title: q.title, titled: q.titled, choices: q.choices,
         suggestion: q.suggestion, why: q.why, options: q.options, age_min: q.age_min, command: null,
-        source: q.source ?? null, picker_answerable: q.picker_answerable ?? null,
+        source: q.source ?? null, picker_answerable: q.picker_answerable ?? null, ...shownFields(q),
         pr: q.pr ?? null, repo_slug: s.repo_slug ?? null,
         doc: q.doc ?? null, plain: q.plain ?? null, plain_from: q.plain_from ?? null, facts: q.facts ?? null, revision: q.revision ?? null, changes: q.changes ?? null,
       })),
@@ -2402,6 +2406,23 @@ function updateRun(db: any, label: string, now: number) {
     id: q.id, state, why: text(res.why), line: (state === "done" ? text(res.line)?.replace(/^DS-UPDATE: /, "") : text(res.line)) ?? (state === "failed" ? text(res.error) : null),
     error: text(res.error), warnings: arr(res.warnings).filter((w: unknown) => typeof w === "string"), squads_line: text(res.squads_line),
     log: text(res.log), age_min: Math.max(0, Math.floor(((open ? now : Number(q.done_at)) - since) / 60)),
+  };
+}
+// The label's newest `remove-project` request. One that worked deleted the label's projects row, so with a
+// row again the label is reused and shows nothing. The row's observed_at is restamped every tick: it dates nothing.
+function removalView(db: any, label: string) {
+  if (!db || !label) return null;
+  const q = db.one("SELECT id, done_at, result FROM requests WHERE kind = 'remove-project' AND json_extract(payload, '$.label') = ? ORDER BY id DESC LIMIT 1", label);
+  if (!q) return null;
+  const res = parse(q.result) ?? {};
+  if (q.done_at != null && res.ok === true && db.one("SELECT 1 FROM projects WHERE label = ?", label)) return null;
+  const state = q.done_at == null ? "removing" : res.ok === true ? "removed" : "failed";
+  const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+  return {
+    id: Number(q.id), label, state, step: text(res.step), text: text(res.text) ?? "Waiting for the loop",
+    error: state === "failed" ? text(res.error) ?? text(q.result) ?? "unknown error" : null,
+    command: `ds remove-project ${label}`, archive: text(res.archive), archive_hint: archiveHint(db.s.root, label),
+    record_cmd: removalRecordCmd(db.s.root, label), boards: otherBoards(db.s, label),
   };
 }
 function updateSummary(db: any, label: string) {
@@ -2614,6 +2635,7 @@ export function renderText(b: Board): string {
       // A picker mirror lives in the asker's terminal (not the Lead's) and recommends nothing.
       const where = q.source === "picker" ? `answer it in ${q.asker}'s terminal${q.picker_answerable === true ? " or on the web board" : ""}` : `answer at the ${s.topic} Lead`;
       o.push(`   ${q.blocking ? "‼ BLOCKING" : "❗"} ${q.asker}: ${text.length > 100 ? text.slice(0, 100) + "…" : text} (${ag}) — ${where}`);
+      if (q.shown) o.push(...String(q.shown).split("\n").map((l) => `      │ ${l}`));
       if (q.suggestion && q.source !== "picker") o.push(`      suggested: ${q.suggestion}${q.why ? " — " + q.why : ""}`.replace(/[\t\n]/g, " "));
     }
     for (const m of s.members) if (m.limited) o.push(`   ⏸ usage limit: ${m.label} — ${m.limited.line}${m.limited.wait_label ? ` (${m.limited.wait_label})` : m.limited.switching ? " (restart on the next account requested)" : ""}`);
@@ -3245,6 +3267,12 @@ function chatCrew(db: Db, project: string, topic: string) {
 
 export { menuOptions, menuText };
 
+// What a prompt in a terminal is about, on the entries that carry it (picker-hook.sh permission): the
+// text a card draws as a code block, where it runs and which helper agent asks. Absent fields are left out.
+function shownFields(x: any): Record<string, string> {
+  return Object.fromEntries(["picker_kind", "shown", "agent", "cwd"].filter((k) => typeof x?.[k] === "string" && x[k]).map((k) => [k, x[k]]));
+}
+
 // The open questions whose card opens a chat with this member (the cards' chat_wt rule in squad(): the card's
 // worktree, else the Lead's), as the Question view shows them. Blocking first, then oldest first. [] for the Studio.
 function chatQuestionsAll(db: Db, project: string, topic: string) {
@@ -3263,6 +3291,7 @@ function chatQuestionsAll(db: Db, project: string, topic: string) {
       // The suggestion is redacted as the labels are, so the Question view can match it to its option.
       suggestion: x.suggestion == null ? null : redact(String(x.suggestion)), why: x.why == null ? null : redact(String(x.why)),
       repo_slug: slug, doc: linkedDoc(db, project, topic, x),
+      ...(typeof x.shown === "string" ? redactDeep({ ...shownFields(x), asker: String(x.asker ?? "") }) : {}),
     })).sort((a: any, b: any) => (a.blocking ? 0 : 1) - (b.blocking ? 0 : 1) || String(a.since ?? "").localeCompare(String(b.since ?? "")));
 }
 function chatQuestions(db: Db, project: string, topic: string, wt: string) {

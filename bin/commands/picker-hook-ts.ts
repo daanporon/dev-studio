@@ -1,13 +1,18 @@
 // picker-hook-ts.ts — bin/hooks/picker-hook.sh, ported (U190): mirror a terminal AskUserQuestion
 // picker onto the board and clear it when answered. bin/hooks/picker-hook.sh runs it (U193: the only body).
+// `permission` (the PermissionRequest hook) mirrors a Claude safety-check prompt the same way. It never
+// returns a decision: it prints nothing, exits 0, and queues from a detached `permission-async`.
 // Same stdin, exit codes (always 0), picker-hook.log lines, tombstones and
 // squad-state.sh / ask-operator.sh calls as the shell body; `pre` starts the .sh again detached.
-import { accessSync, appendFileSync, constants, closeSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { accessSync, appendFileSync, constants, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { ROOT, run as runCmd, writeErr } from "../lib/shared";
 import { mktemp } from "../lib/lib";
+import { findToolUse, head, promptQuestion, promptTitle, promptTranscript, shownText } from "../lib/permission-prompt.ts";
+import { open as openStore } from "../loop/core/store.ts";
 
-export const help = "picker-hook-ts <pre|post|pre-async> <state> <role> <wt> [input] — the picker-mirror hook (bin/hooks/picker-hook.sh)";
+export const help = "picker-hook-ts <pre|post|permission|pre-async|permission-async> <state> <role> <wt> [input] — the picker-mirror hook (bin/hooks/picker-hook.sh)";
 
 const SS = join(ROOT, "bin", "role", "squad-state.sh");
 const ASK = join(ROOT, "bin", "role", "ask-operator.sh");
@@ -92,9 +97,9 @@ export function readUnitSep(text: string): [string, string][] {
 
 export async function run(argv: string[]): Promise<number> {
   const [MODE = "", STATE = "", ROLE = "", WT = ""] = argv;
-  const usage = () => { writeErr("picker-hook: usage: picker-hook.sh <pre|post> <state> <role> <wt>\n"); return 0; };
-  if (!["pre", "post", "pre-async"].includes(MODE)) return usage();
-  if (MODE !== "pre-async" && (!STATE || !ROLE || !WT)) return usage();
+  const usage = () => { writeErr("picker-hook: usage: picker-hook.sh <pre|post|permission> <state> <role> <wt>\n"); return 0; };
+  if (!["pre", "post", "permission", "pre-async", "permission-async"].includes(MODE)) return usage();
+  if (!MODE.endsWith("-async") && (!STATE || !ROLE || !WT)) return usage();
 
   const ld = labelDir(STATE || "/none");
   const LOG = ld ? join(ld, "picker-hook.log") : join(tmpdir(), "ds-picker-hook.log");
@@ -132,22 +137,105 @@ export async function run(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (MODE === "pre") {
+  if (MODE === "pre" || MODE === "permission") {
     const tmp = mktemp(join(tmpdir(), "ds-picker-pre."));
     if (!tmp) return 0;
     try { writeFileSync(tmp, await Bun.stdin.text()); } catch { rmSync(tmp, { force: true }); return 0; }
     // Detached: the queueing (backend calls) must never delay the picker's display.
     let fd: number;
     try { fd = openSync(LOG, "a"); } catch { return 0; }
-    const p = Bun.spawn([SELF, "pre-async", STATE, ROLE, WT, tmp], { stdin: "ignore", stdout: fd, stderr: fd });
+    const p = Bun.spawn([SELF, `${MODE}-async`, STATE, ROLE, WT, tmp], { stdin: "ignore", stdout: fd, stderr: fd });
     p.unref();
     closeSync(fd);
     return 0;
   }
 
-  // pre-async <input-file>: the detached half of `pre`; stdout/stderr go to the log.
+  // <mode>-async <input-file>: the detached half; stdout/stderr go to the log.
   const input = argv[4] ?? "";
-  try { return await preAsync(input); } finally { if (input) rmSync(input, { force: true }); }
+  try { return await (MODE === "pre-async" ? preAsync(input) : permissionAsync(input)); } finally { if (input) rmSync(input, { force: true }); }
+
+  // True when the prompt was answered before this run could queue it. Prunes tombstones past 2h first.
+  async function answeredAlready(id: string, mode: string): Promise<boolean> {
+    try {
+      for (const f of readdirSync(TDONE)) {
+        if (!f.startsWith("picker-")) continue;
+        const p = join(TDONE, f);
+        try { if (Date.now() - statSync(p).mtimeMs > 120 * 60_000) rmSync(p, { recursive: true, force: true }); } catch { /* gone */ }
+      }
+    } catch { /* as the shell */ }
+    const t = tomb(id);
+    if (t === null) return false;
+    await resolvePicker(id, t);
+    rmSync(join(TDONE, id), { force: true });
+    log(`${mode}: ${id} skipped — the picker was already answered (tombstone)`);
+    return true;
+  }
+
+  // A role has at most one live picker: clear any earlier picker entry of this worktree first.
+  async function clearEarlier(doc: any, mode: string): Promise<void> {
+    const olds: string[] = [];
+    try {
+      for (const e of each(alt(dot(doc, "waiting_on_you"), []))) {
+        const eid = alt(dot(e, "id"), "");
+        if (typeof eid !== "string") break; // startswith on a non-string: jq stops here
+        if (!eid.startsWith("picker-")) continue;
+        if (alt(dot(e, "card_wt"), "") === WT || dot(e, "asker") === ROLE) olds.push(raw(dot(e, "id")));
+      }
+    } catch { /* jq stops; earlier lines stand */ }
+    for (const old of olds) {
+      if (!old) continue;
+      await ss(["resolve-question", old]);
+      log(`${mode}: resolved earlier picker entry ${old}`);
+    }
+  }
+
+  // ask-operator.sh, blocking, with its output in the log: its exit code (1 when the log can't open).
+  async function askOperator(id: string, args: string[]): Promise<number> {
+    let fd: number;
+    try { fd = openSync(LOG, "a"); } catch { return 1; }
+    const p = Bun.spawn([ASK, STATE, id, ROLE, "true", ...args], { stdin: "ignore", stdout: fd, stderr: fd });
+    const rc = await p.exited;
+    closeSync(fd);
+    return rc;
+  }
+
+  async function permissionAsync(file: string): Promise<number> {
+    const h = readJsonFile(file).v;
+    const text = (k: string): string => (typeof h?.[k] === "string" ? h[k] : "");
+    const tool = text("tool_name");
+    // These two are the picker pair's and the plan dialog's, not a safety check.
+    if (!tool || tool === "AskUserQuestion" || tool === "ExitPlanMode") { log(`permission: ignoring ${tool || "input without a tool_name"}`); return 0; }
+    const st = readJsonFile(STATE);
+    if (!st.ok || !st.v) { log(`permission: ignored — state ${STATE} unreadable`); return 0; }
+    const agentId = text("agent_id"), agent = agentId ? text("agent_type") || "helper agent" : "";
+    const tpath = promptTranscript(text("transcript_path"), agentId);
+    let found = tpath ? findToolUse(tpath, tool, h.tool_input) : "";
+    // The tool call may reach the transcript just after the prompt opens.
+    for (let i = 0; !found && tpath && i < 4; i++) { await Bun.sleep(500); found = findToolUse(tpath, tool, h.tool_input); }
+    const tid = found || `permission-${randomBytes(4).toString("hex")}`;
+    const id = `picker-${last8(tid)}`;
+    if (await answeredAlready(id, "permission")) return 0;
+    await clearEarlier(st.v, "permission");
+    const shown = shownText(tool, h.tool_input);
+    // Not answerable from the board: nothing yet checks that the screen still shows this prompt.
+    const rc = await askOperator(id, ["--title", promptTitle(ROLE, tool), "--question", promptQuestion(shown, text("cwd")),
+      "--option", "Yes", "let it run this once", "--option", "No", "refuse it; the role is told no",
+      "--recommend", "No", "--why", "a Claude safety check stopped here — no recommendation; read it before you answer",
+      "--picker", tid, tpath || "(none)", "false", "--permission", tool, agent, shown, text("cwd")]);
+    log(rc === 0 || rc === 3 ? `permission: queued ${id} (${tool}, tool_use_id ${found ? "found" : "not found"})` : `permission: ${id} NOT queued — ask-operator.sh exited ${rc}`);
+    permissionAsked({ role: ROLE, tool, via: "hook", agent: agentId !== "", text: head(shown, 200) });
+    return 0;
+  }
+
+  // One event per prompt, in the loop.db beside the state file (none there: nothing to count in).
+  function permissionAsked(payload: { role: string; tool: string; via: string; agent: boolean; text: string }): void {
+    const labelRoot = dirname(dirname(STATE)), root = dirname(labelRoot);
+    if (!existsSync(join(root, "loop.db"))) return;
+    try {
+      const s = openStore(root);
+      try { s.fact("permission_asked", [], { project: basename(labelRoot), squad: basename(STATE, ".json"), payload }); } finally { s.close(); }
+    } catch (e) { log(`permission: event not written — ${(e as Error).message.split("\n")[0]}`); }
+  }
 
   async function preAsync(file: string): Promise<number> {
     const h = readJsonFile(file);
@@ -163,21 +251,8 @@ export async function run(argv: string[]): Promise<number> {
     const id = `picker-${last8(tid)}`;
     const st = readJsonFile(STATE);
     if (!st.ok || st.v === null || st.v === false) { log(`pre: ${id} ignored — state ${STATE} unreadable`); return 0; }
-    // The answer beat the enqueue (post ran first): don't queue a corpse. Prune tombstones past 2h first.
-    try {
-      for (const f of readdirSync(TDONE)) {
-        if (!f.startsWith("picker-")) continue;
-        const p = join(TDONE, f);
-        try { if (Date.now() - statSync(p).mtimeMs > 120 * 60_000) rmSync(p, { recursive: true, force: true }); } catch { /* gone */ }
-      }
-    } catch { /* as the shell */ }
-    const t = tomb(id);
-    if (t !== null) {
-      await resolvePicker(id, t);
-      rmSync(join(TDONE, id), { force: true });
-      log(`pre: ${id} skipped — the picker was already answered (tombstone)`);
-      return 0;
-    }
+    // The answer beat the enqueue (post ran first): don't queue a corpse.
+    if (await answeredAlready(id, "pre")) return 0;
     // Rule 1: the role asked through ask-operator.sh first (blocking, same card).
     if (anyEntry(STATE, (e) => alt(dot(e, "source"), "") !== "picker" && dot(e, "blocking") === true && alt(dot(e, "card_wt"), "") === WT)) {
       log(`pre: ${id} skipped — a blocking entry is already queued for ${WT} (rule 1)`);
@@ -194,21 +269,7 @@ export async function run(argv: string[]): Promise<number> {
       log(`pre: ${id} skipped — a picker question restates a queued entry's title (rule 2)`);
       return 0;
     }
-    // A role has at most one live picker: clear any earlier picker entry of this worktree first.
-    const olds: string[] = [];
-    try {
-      for (const e of each(alt(dot(st.v, "waiting_on_you"), []))) {
-        const eid = alt(dot(e, "id"), "");
-        if (typeof eid !== "string") break; // startswith on a non-string: jq stops here
-        if (!eid.startsWith("picker-")) continue;
-        if (alt(dot(e, "card_wt"), "") === WT || dot(e, "asker") === ROLE) olds.push(raw(dot(e, "id")));
-      }
-    } catch { /* jq stops; earlier lines stand */ }
-    for (const old of olds) {
-      if (!old) continue;
-      await ss(["resolve-question", old]);
-      log(`pre: resolved earlier picker entry ${old}`);
-    }
+    await clearEarlier(st.v, "pre");
     const questions = () => dot(dot(h.v, "tool_input"), "questions");
     const first = () => { const v = questions(); if (v !== null && !Array.isArray(v)) throw new JqError("index"); return v === null ? null : v[0] ?? null; };
     const answerable = q(() => length(questions()) === 1 && alt(dot(first(), "multiSelect"), false) === false, false) === true ? "true" : "false";
@@ -237,16 +298,8 @@ export async function run(argv: string[]): Promise<number> {
     }
     if (nopts === 0) { log(`pre: ${id} ignored — the first question has no options`); return 0; }
     if (nopts === 1) opts.push("--option", "Other", "answer in your own words"); // ask-operator.sh needs 2+
-    let rc: number;
-    let fd: number | null = null;
-    try { fd = openSync(LOG, "a"); } catch { fd = null; }
-    if (fd === null) rc = 1;
-    else {
-      const p = Bun.spawn([ASK, STATE, id, ROLE, "true", "--title", title, "--question", question, ...opts,
-        "--recommend", "1", "--why", why, "--picker", tid, tpath, answerable], { stdin: "ignore", stdout: fd, stderr: fd });
-      rc = await p.exited;
-      closeSync(fd);
-    }
+    const rc = await askOperator(id, ["--title", title, "--question", question, ...opts,
+      "--recommend", "1", "--why", why, "--picker", tid, tpath, answerable]);
     if (rc === 0) {
       const t2 = tomb(id);
       if (t2 !== null) { // the answer landed mid-enqueue: take it back down at once
