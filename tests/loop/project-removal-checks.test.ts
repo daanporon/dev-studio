@@ -41,6 +41,8 @@ function rig() {
   return { s, root, dir, put, folder, wt, absent, studio, squad, member, worker, blockers };
 }
 
+const byGit = (p: string) => `git worktree remove ${p}   (\`ds worktree rm\` cannot: the loop has no record of its repo; check it for unsaved work first)`;
+
 describe("removalBlockers", () => {
   test("a running, a paused and a done squad with a live Lead each block and are named", () => {
     const r = rig();
@@ -73,9 +75,16 @@ describe("removalBlockers", () => {
   test("a live worker of a closed squad blocks and is named", () => {
     const r = rig();
     r.squad("old", { status: "closed" });
-    r.member("old", "builder", { suffix: "a", wt: r.absent("a"), status: "gone" });
+    r.member("old", "builder", { suffix: "a", wt: r.absent("a"), status: "gone", want: "gone" });
+    r.member("old", "builder", { suffix: "b", wt: r.absent("b"), status: "running", want: "running" });
     r.worker(r.absent("a"));
-    expect(r.blockers()).toMatchObject([{ kind: "live-member", squad: "old", clear: `ds want member ${r.s.get("members", { project: P, squad: "old" })!.id} archived` }]);
+    r.worker(r.absent("b"));
+    const [gone, onRoster] = r.blockers();
+    expect(gone).toMatchObject({ kind: "live-member", squad: "old" });
+    // The loop ignores a `gone` row, so no wish is offered for it.
+    expect(gone.clear).toContain(`remove its entry from the backend (${r.absent("a")})`);
+    expect(gone.clear).not.toContain("ds want");
+    expect(onRoster.clear).toBe(`ds want member ${r.s.get("members", { project: P, squad: "old", suffix: "b" })!.id} archived`);
   });
 
   test("a closed squad with no folder on disk does not block", () => {
@@ -113,15 +122,19 @@ describe("removalBlockers", () => {
     const left = r.folder("left"), plain = r.folder("plain"), unrecorded = r.folder("unrecorded");
     r.squad("old", { status: "closed", doc: JSON.stringify({ leftovers: [{ wt: r.wt(left), path: left }] }) });
     r.member("old", "lead", { wt: r.wt(left), status: "gone", want: "gone" });
+    const synced = r.folder("synced");
     r.put("worktrees", { host: "local", path: left, provider: "orca", created_at: T, project: P, squad: "old" });
-    r.put("worktrees", { host: "local", path: plain, provider: "git", created_at: T, project: P, squad: "old" });
+    r.put("worktrees", { host: "local", path: plain, provider: "git", created_at: T, project: P, squad: "old", repo: r.dir });
+    // The sync observer's row: no repo, so `ds worktree rm` would be refused.
+    r.put("worktrees", { host: "local", path: synced, provider: "orca", created_at: T, project: P, squad: "old" });
     r.member("old", "builder", { wt: r.wt(unrecorded), status: "gone", want: "gone" });
     expect(r.blockers().map((b) => [b.kind, b.path, b.squad, b.clear])).toEqual([
       ["worktree", left, "old", "the board's leftover Remove on squad 'old' (it saves the changes first)"],
       ["worktree", plain, "old", `ds worktree rm ${plain}`],
-      ["worktree", unrecorded, "old", `git worktree remove ${unrecorded}   (the loop has no record of it; check it for unsaved work first)`],
+      ["worktree", synced, "old", byGit(synced)],
+      ["worktree", unrecorded, "old", byGit(unrecorded)],
     ]);
-    for (const p of [left, plain, unrecorded]) rmSync(p, { recursive: true });
+    for (const p of [left, plain, synced, unrecorded]) rmSync(p, { recursive: true });
     expect(r.blockers()).toEqual([]);
   });
 

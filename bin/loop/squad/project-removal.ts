@@ -89,9 +89,10 @@ function onDisk(store: Store, label: string): Map<string, Named> {
     add(s.topic, s.lead_wt, s.lead_path);
   }
   for (const r of rows(store, "SELECT squad, wt, wt_path FROM members WHERE project = ? ORDER BY id", label)) add(r.squad, r.wt, r.wt_path);
-  for (const r of rows(store, "SELECT squad, path FROM worktrees WHERE project = ? AND gone_at IS NULL AND host = 'local'", label)) {
+  for (const r of rows(store, "SELECT squad, path, repo FROM worktrees WHERE project = ? AND gone_at IS NULL AND host = 'local'", label)) {
     const n = add(r.squad, r.path);
-    if (n) n.recorded = true;
+    // A provider refuses to remove a row with no repo (the sync observer's Orca rows have none).
+    if (n && r.repo) n.recorded = true;
   }
   for (const r of rows(store, "SELECT squad, wt, wt_path FROM coordinators WHERE project = ?", label)) add(r.squad, r.wt, r.wt_path);
   for (const r of rows(store, "SELECT squad, builder_wt, builder_path FROM units WHERE project = ?", label)) add(r.squad, r.builder_wt, r.builder_path);
@@ -134,6 +135,14 @@ function squadsByState(store: Store, label: string, disk: Map<string, Named>): {
   return { open, never, closed };
 }
 
+const byHand = (path: string, n: Named) => n.recorded ? `ds worktree rm ${path}`
+  : `git worktree remove ${path}   (\`ds worktree rm\` cannot: the loop has no record of its repo; check it for unsaved work first)`;
+
+// The member rows the decider still acts on (decide.ts members): the newest of its slot, on the roster.
+const actedOn = (store: Store, m: Row) => !["gone", "closed"].includes(String(m.status ?? ""))
+  && !store.db.query("SELECT 1 FROM members WHERE project = ? AND squad = ? AND role = ? AND suffix IS ? AND id > ?")
+    .get(String(m.project), String(m.squad), String(m.role), m.suffix as string | null, Number(m.id));
+
 /** Everything that stops a removal of `label` now; empty when it can go on. Writes nothing. */
 export function removalBlockers(store: Store, label: string): Blocker[] {
   const bad = labelProblem(store, label);
@@ -156,10 +165,8 @@ export function removalBlockers(store: Store, label: string): Blocker[] {
     const squads = [...n.squads];
     const squad = n.leftoverOf ?? squads.find((t) => openTopics.has(t)) ?? squads[0];
     const clear = n.leftoverOf ? `the board's leftover Remove on squad '${n.leftoverOf}' (it saves the changes first)`
-      : squad && openTopics.has(squad) ? `closing squad '${squad}' removes it; if it stays: ds worktree rm ${path}`
-      : n.recorded ? `ds worktree rm ${path}`
-      // `ds worktree rm` knows only the worktrees the loop recorded.
-      : `git worktree remove ${path}   (the loop has no record of it; check it for unsaved work first)`;
+      : squad && openTopics.has(squad) ? `closing squad '${squad}' removes it; if it stays: ${byHand(path, n)}`
+      : byHand(path, n);
     out.push({ kind: "worktree", path, ...(squad ? { squad } : {}),
       text: `worktree folder still on disk${squad ? ` (squad '${squad}')` : ""}: ${path}`, clear });
   }
@@ -175,7 +182,8 @@ export function removalBlockers(store: Store, label: string): Blocker[] {
     const who = [m.role, m.suffix].filter(Boolean).join("/");
     out.push({ kind: "live-member", squad, ...(path ? { path } : {}), text: `member ${who} of squad '${squad}' still has a live worker (${wt})`,
       // By row id: the slot form does not find a row whose status is `gone`.
-      clear: `ds want member ${m.id} archived` });
+      clear: actedOn(store, m) ? `ds want member ${m.id} archived`
+        : `stop its agent, close that worktree's terminals and remove its entry from the backend (${wt}); the loop no longer acts on this member row` });
   }
   return out;
 }
