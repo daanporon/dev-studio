@@ -451,10 +451,10 @@ async function strays(ctx: TickCtx, orca: Orca, up: Map<string, string>, panes: 
   const ts = await (early ?? orca.run("terminal-shells", []));
   if (ts.code !== 0) return [];
   last.set(project, now);
-  const out: Action[] = [], shells = parseShells(ts.out);
+  const out: Action[] = [], shells = parseShells(ts.out), logins = loginTerminals(store);
   for (const t of shells) {
     const squad = up.get(t.wt);
-    if (!squad || isLoopPane(t.handle, t.title, panes) || !quiet(t, now) || (t.state === "busy" && /^Setup\b/.test(t.title))) continue;
+    if (!squad || isLoopPane(t.handle, t.title, panes) || logins.has(t.handle) || !quiet(t, now) || (t.state === "busy" && /^Setup\b/.test(t.title))) continue;
     out.push({ project, squad, member: t.wt, subject: `stray:${t.handle}`, kind: "stray", episode: t.state, payload: { wt: t.wt, handle: t.handle, state: t.state, title: t.title } });
   }
   const live = new Set(shells.map((t) => t.handle));
@@ -463,6 +463,13 @@ async function strays(ctx: TickCtx, orca: Orca, up: Map<string, string>, panes: 
     out.push({ project, squad: null, subject: `drop:${c.id}`, kind: "alert-clear", episode: `drop@${c.since}`, payload: { id: c.id, why: "its terminal is gone" } });
   }
   return out;
+}
+
+// U5 (issue #125): the login terminals of open `ds account add` requests (fulfil/account-add.ts) are the add's,
+// never strays, wherever they were opened: the add closes its own.
+function loginTerminals(store: Store): Set<string> {
+  return new Set((store.db.query(`SELECT json_extract(result, '$.terminal.handle') AS h FROM requests
+    WHERE kind = 'account-add' AND done_at IS NULL`).all() as Row[]).map((r) => String(r.h ?? "")).filter(Boolean));
 }
 
 // orca: the fake in tests; the backend by default (resolved per tick, so $BACKEND is read late).
