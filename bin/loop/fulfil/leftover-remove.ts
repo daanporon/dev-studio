@@ -50,7 +50,7 @@ async function untracked(path: string): Promise<string[] | null> {
 }
 
 // The patch, the tar and the ref; why it failed, or null.
-async function save(path: string, dir: string): Promise<string | null> {
+export async function save(path: string, dir: string): Promise<string | null> {
   try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch (e) { return `cannot make ${dir}: ${(e as Error).message}`; }
   const diff = await spawn(["git", "-C", path, "diff", "--binary", "HEAD"], {}, 120_000);
   if (diff.code !== 0) return `git diff: ${diff.err.trim() || `exit ${diff.code}`}`;
