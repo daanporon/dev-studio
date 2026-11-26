@@ -87,7 +87,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .pill.retest{background:var(--amber-bg);color:var(--amber)} .pill.planning{background:#262a3a;color:#c5c9ff} .pill.waiting-on-you,.pill.blocked{background:var(--amber-bg);color:var(--amber)}
 .pill.queued{background:#2a2733;color:#d4b8ff} .pill.archiving,.pill.suspending,.pill.resuming{background:var(--amber-bg);color:var(--amber)} .pill.stuck{background:var(--red-bg);color:var(--red)}
 .pill.implementing{background:var(--blue-bg);color:var(--blue)} .pill.fixing,.pill.testing{background:#1c2c2a;color:#7fd8c0}
-.pill.done{background:var(--green-bg);color:var(--green)} .pill.failed{background:var(--red-bg);color:var(--red)} .pill.on-hold,.pill.suspended{color:var(--mut)} .pill.held-only{background:#2e2a1c;color:#d9b866} .pill.wrapping-up{background:var(--blue-bg);color:var(--blue)} .pill.done{box-shadow:inset 0 0 0 1px var(--green)} .statelegend,.unitkey{font-size:11px;color:var(--mut);padding:8px 16px;border-top:1px solid var(--line,#2a2f38)} .explain{font-size:12px;color:var(--mut);margin:4px 0} .pill.broken{background:var(--red-bg);color:var(--red)}
+.pill.done{background:var(--green-bg);color:var(--green)} .pill.failed{background:var(--red-bg);color:var(--red)} .pill.on-hold,.pill.suspended{color:var(--mut)} .pill.held-only{background:#2e2a1c;color:#d9b866} .pill.wrapping-up{background:var(--blue-bg);color:var(--blue)} .pill.done{box-shadow:inset 0 0 0 1px var(--green)} .unitkey{font-size:11px;color:var(--mut);padding:8px 16px;border-top:1px solid var(--line,#2a2f38)} .explain{font-size:12px;color:var(--mut);margin:4px 0} .pill.broken{background:var(--red-bg);color:var(--red)}
 .lead{font-size:13px;white-space:nowrap} .lead::before{content:"●";margin-right:6px;font-size:10px;vertical-align:1px}
 .lead.ok{color:var(--green)} .lead.idle{color:var(--mut)} .lead.warn{color:var(--amber)} .lead.bad{color:var(--red)}
 .bar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#2a303b} .bar i{display:block}
@@ -1834,7 +1834,6 @@ function Graph({ text, id }) {
 const suspendedLike = (s) => s.status === "suspended" || s.status === "on-hold";
 // One plain-words line per squad state: what it means, who set it, what you can do (board-data.ts EXPLAIN).
 const explainText = (s) => s.explain ? s.explain.means + " (set by " + s.explain.set_by + "). You can: " + s.explain.you_can + "." : "";
-const STATE_LEGEND = ["paused: you stopped its agents; its worktrees stay", "suspended: you removed its worktrees; branches stay", "parked: nobody stopped it; it only has held work left"];
 // The Close squad confirm warns when units are still open: they are archived with the squad (branches are kept).
 function closeConfirm(s) {
   const open = (s.units || []).filter((u) => u.status === "planned" || u.status === "dispatched");
@@ -4593,7 +4592,6 @@ function App() {
           ${isOpen && html`<${Detail} s=${s} onPlan=${setPlan} planOpen=${!!plan} toast=${setToast} setAsk=${setAsk} askKeys=${askKeys} prerequisites=${data.prerequisites} flow=${data.flow} />`}
         </${React.Fragment}>`; })}
       ${shown.some((s) => st.get(key(s)).total > 0) && html`<${UnitKey} />`}
-      ${shown.some((s) => suspendedLike(s) || ["pausing", "paused", "resuming", "held-only"].includes(s.display_key || s.display_status)) && html`<div class="statelegend">${STATE_LEGEND.join(" · ")}</div>`}
       ${data.archived.length > 0 && html`<${React.Fragment}><div class="arch">Archived (${data.archived.length}) · ${data.archived.slice(0, 6).map((a) => a.topic).join(", ")}${data.archived.length > 6 ? "…" : ""}
         <button onClick=${() => setShowArch(!showArch)}>${showArch ? "hide" : "show"}</button></div>
         ${showArch && data.archived.map((a, i) => { const k = "arch:" + a.topic + ":" + (a.closed_at || i), isOpen = open.has(k);

@@ -812,6 +812,49 @@ eq "account-reset: a second press while paused is 409" "$(rp "{\"project\":\"$LB
 DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); s.db.run("DELETE FROM pause_intents WHERE scope = ?", ["project"]); s.close();'
 eq "web board: the Use button posts api/account-reset after a confirm" "$(grep -cF 'post("api/account-reset"' "$ROOT/web/board.html")$(sed -n '/^async function useReset(/,/^}/p' "$ROOT/web/board.html" | grep -cF 'This cannot be undone.')" "11"
 
+# POST /api/account-add and /api/account-login-code (issue #125, U6): the board's Add files the `account-add` request
+# `ds account add` files; the pasted code goes to a 0600 drop file and nowhere else (R7: no row, no log, no echo).
+# The fulfiller's typing is tests/loop/account-login-secret.test.ts.
+AA="http://127.0.0.1:$PORT/api/account-add"; AC="http://127.0.0.1:$PORT/api/account-login-code"
+ap(){ post -H "$O" -H "$CT" -d "$1" "$AA"; }
+cp_(){ post -H "$O" -H "$CT" -d "$1" "$AC"; }
+ar(){ dbq "SELECT id, project, requested_by, payload FROM requests WHERE kind = 'account-add' ORDER BY id" | jq -c '[.[] | [.project, .requested_by, (.payload | fromjson | [.agent, .name, .project])]]'; }
+setres(){ DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); s.db.run("UPDATE requests SET result = ? WHERE id = ?", [process.argv[2], Number(process.argv[1])]); s.close();' "$1" "$2"; }
+ACODE='zq-made-up-code#Kx81'
+eq "account-add: a bad name is 400"              "$(ap "{\"project\":\"$LBL\",\"name\":\"Bad Name\"}")" "400"
+eq "account-add: the system name is 400"         "$(ap "{\"project\":\"$LBL\",\"name\":\"system\"}")" "400"
+eq "account-add: an unknown project is 409"      "$(ap '{"project":"nope-zz","name":"realp"}')" "409"
+eq "account-add: foreign Origin is 403"          "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"name\":\"realp\"}" "$AA")" "403"
+eq "account-add: none of those filed a request"  "$(ar | jq length)" "0"
+eq "account-add: a good name is 202"             "$(ap "{\"project\":\"$LBL\",\"name\":\"realp\"}")" "202"
+eq "account-add: one Claude add, by the board"   "$(ar)" "[[\"$LBL\",\"board\",[\"claude\",\"realp\",\"$LBL\"]]]"
+eq "account-add: a second while open is 409"     "$(ap "{\"project\":\"$LBL\",\"name\":\"realp\"}")" "409"
+has "account-add: ... saying one is in progress" "$(cat "$TMP/post.out")" "already in progress"
+AID=$(dbq "SELECT id FROM requests WHERE kind = 'account-add'" | jq -r '.[0].id')
+eq "login-code: an add not waiting yet is 409"   "$(cp_ "{\"request\":$AID,\"code\":\"$ACODE\"}")" "409"
+has "login-code: ... saying it is not waiting"   "$(cat "$TMP/post.out")" "not waiting for a code"
+setres "$AID" '{"state":"waiting_login","url":"https://claude.ai/oauth/authorize?state=zz"}'
+eq "login-code: two lines are 400"               "$(cp_ "{\"request\":$AID,\"code\":\"zq-line-one\\nzq-line-two\"}")" "400"
+eq "login-code: ... and the refusal has no code" "$(grep -c 'zq-line' "$TMP/post.out" || true)" "0"
+eq "login-code: a long code is 400"              "$(cp_ "{\"request\":$AID,\"code\":\"$(printf 'x%.0s' $(seq 1 513))\"}")" "400"
+eq "login-code: no request id is 400"            "$(cp_ "{\"request\":\"$AID\",\"code\":\"$ACODE\"}")" "400"
+eq "login-code: an unknown request is 409"       "$(cp_ "{\"request\":987654,\"code\":\"$ACODE\"}")" "409"
+eq "login-code: foreign Origin is 403"           "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"request\":$AID,\"code\":\"$ACODE\"}" "$AC")" "403"
+eq "login-code: none of those made a drop file"  "$(test -e "$DBR/account-login/$AID" && echo yes || echo no)" "no"
+eq "login-code: a waiting paste-flow add is 202" "$(cp_ "{\"request\":$AID,\"code\":\" $ACODE\\n\"}")" "202"
+eq "login-code: the answer has no code"          "$(grep -cF "$ACODE" "$TMP/post.out" || true)" "0"
+eq "login-code: the drop file, 0600 in 0700"     "$(stat -c '%a' "$DBR/account-login")/$(stat -c '%a' "$DBR/account-login/$AID")/$(cat "$DBR/account-login/$AID")" "700/600/$ACODE"
+eq "login-code: no copy in loop.db or the log"   "$(cat "$DBR"/loop.db* "$TMP/serve.log" | grep -caF "$ACODE" || true)" "0"
+eq "login-code: no request or event row came"    "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'account-add'" | jq '.[0].n')" "1"
+rm -f "$DBR/account-login/$AID"
+DID=$(DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); console.log(s.requestAny("account-add", {agent:"codex", name:"zzdev", project:process.argv[1]}, {project:process.argv[1], by:"cli"}).row.id); s.close();' "$LBL")
+setres "$DID" '{"state":"waiting_login","url":"https://example.com/device","device_code":"ABCD-1234"}'
+eq "login-code: a device-flow add is 409"        "$(cp_ "{\"request\":$DID,\"code\":\"$ACODE\"}")" "409"
+has "login-code: ... approved in the browser"    "$(cat "$TMP/post.out")" "approved in the browser"
+DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); s.db.run("UPDATE requests SET done_at = 1 WHERE kind = ?", ["account-add"]); s.close();'
+eq "login-code: an ended add is 409"             "$(cp_ "{\"request\":$AID,\"code\":\"$ACODE\"}")" "409"
+eq "login-code: ... and no drop file"            "$(test -e "$DBR/account-login/$AID" && echo yes || echo no)" "no"
+
 # POST /api/leftover-remove (archive-leftovers U4): a Leftovers box's Remove files one `leftover-remove` request
 # for a leftover the squad names; 404 for none, 409 with one open, 400 for a body that is no JSON or bad fields.
 # The fulfiller's runs are tests/loop/leftover-remove-button.test.ts.
