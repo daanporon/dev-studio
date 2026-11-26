@@ -134,6 +134,8 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .dot.bad{background:var(--red)} .dot.warnd{background:var(--amber)} .dot.done{background:var(--green)} .dot.working,.dot.waiting,.dot.built,.dot.building,.dot.testing,.dot.babysitting{background:var(--blue)} .dot.ready{background:var(--fg)} .dot.gone{background:var(--red)} .dot.fixing,.dot.noPR{background:var(--amber)} .dot.merged{background:var(--purple)} .dot.cancelled,.dot.held{background:var(--dim)} .dot.redPR{background:var(--amber)} .dot.merge-ready{background:var(--green)}
 .imp-src{display:flex;flex-direction:column;gap:8px;align-items:flex-start;margin-bottom:12px} .imp-src textarea{width:100%;font:12px var(--mono)} .imp-tab{width:100%;border-collapse:collapse;font:12px var(--mono)} .imp-tab th,.imp-tab td{text-align:left;padding:3px 6px;border-bottom:1px solid var(--line);vertical-align:top;word-break:break-word} .imp-row.dim{color:var(--mut);opacity:.7} .imp-go{margin-top:10px} .set-note.err{color:var(--red,#e5534b)}
 .set-box{overflow:auto} .set-body{padding:12px 16px 16px;overflow:auto} .set-note{font-size:12px;color:var(--mut);margin:0 0 10px}
+.set-body.set-searched{padding-top:0} .set-search{position:sticky;top:0;z-index:2;display:flex;gap:6px;padding:10px 0 8px;background:var(--panel)} .set-search input{flex:1;min-width:0;background:var(--bg);color:inherit;border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:inherit} .set-search input:disabled{opacity:.5} .set-search input::-webkit-search-cancel-button{display:none}
+.set-hidden{margin-left:10px;font-size:12px;color:var(--amber)}
 .set-tabs{display:flex;gap:4px;padding:8px 16px 0;border-bottom:1px solid var(--line)} .set-tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--mut);font:600 13px var(--mono);padding:6px 10px;cursor:pointer} .set-tab.on{color:inherit;border-bottom-color:var(--blue)}
 .lim{width:100%;border-collapse:collapse;font-size:13px} .lim th{text-align:left;font-weight:500;color:var(--mut);font-size:11px;padding:4px 8px} .lim td{padding:5px 8px;border-top:1px solid var(--line,#8883);vertical-align:middle}
 .lim{table-layout:fixed} .lim th:nth-child(1){width:26%} .lim th:nth-child(2){width:150px} .lim th:nth-child(3){width:190px} .set-cat{border-top:1px solid var(--line,#8883);padding:4px 0} .set-cat>summary{cursor:pointer;font-size:13px;font-weight:600;padding:6px 0} .lim input,.lim select{width:110px;font:inherit;padding:2px 6px} .lim .src{color:var(--mut);font-size:12px} .lim .src.override{color:var(--amber,#b7791f);font-weight:600} .lim .mean{color:var(--mut);font-size:12px} .set-h{font-size:13px;margin:18px 0 8px} .set-h small{font-weight:400;font-size:12px;color:var(--mut);margin-left:8px} .roles-tab .mean{margin-bottom:8px} .lim .err{color:#d33;font-size:12px}
@@ -359,6 +361,7 @@ html:has(.modal) .modal,html:has(.modal) .toast{visibility:visible}
 @media (max-width:600px){
 .set-tabs{flex:none;overflow-x:auto;flex-wrap:nowrap;padding:0 12px;gap:2px;-webkit-overflow-scrolling:touch} .set-tab{flex:none;min-height:44px;white-space:nowrap}
 .set-body{padding:10px 12px 0} .set-box .mhd{flex-wrap:wrap}
+.set-search input{min-height:44px;font-size:16px}
 .lim,.lim tbody{display:block;width:100%} .lim thead{display:none} .lim tr{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:8px 0;border-top:1px solid var(--line,#8883)} .lim td{display:block;border:0;padding:0;min-width:0;overflow-wrap:anywhere}
 .lim td:nth-child(3){order:2} .lim td:nth-child(4){order:1} .lim td:nth-child(2){order:3;display:flex;flex-wrap:wrap;gap:8px;align-items:center} .lim td:nth-child(2)>input,.lim td:nth-child(2)>select{flex:1 1 140px;width:auto;min-height:44px;min-width:0}
 .lim td:nth-child(2)>.err,.lim td:nth-child(2)>.set-note,.lim td:nth-child(2)>code{flex:1 1 100%}
@@ -3888,14 +3891,22 @@ function Settings({ project, projects, accounts, folderOnly, adds, kinds, at, to
   const [importing, setImporting] = useState(false);
   useEffect(() => { if (at) { setImporting(false); setTab(tabAt(at)); } }, [at]);   // `#settings/<tab>` while it is open
   const [rev, setRev] = useState(0);   // bumped by an applied import: the tabs read their rows again
+  const [query, setQuery] = useState("");   // the search box; not stored, so each opening starts empty
+  const box = useRef(null);
+  // Not on a phone: focusing there pops the keyboard over the window.
+  useEffect(() => { if (window.matchMedia && window.matchMedia("(pointer: fine)").matches) box.current?.focus(); }, []);
+  const searched = tab === "limits";
+  const clearSearch = () => { setQuery(""); box.current?.focus(); };
+  // Esc with text only clears: stopping it here keeps it from the window's Esc listener, which closes Settings.
+  const searchKey = (e) => { if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); clearSearch(); } };
   return html`<div class="modal" id="settings" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox set-box" role="dialog" aria-label="Settings"><div class="mhd"><span>Settings · ${project}</span><span class="sp"></span>
       <a class="btn sm" id="settings-export" href=${"api/settings-export?project=" + encodeURIComponent(project)} download=${project + "-settings.txt"} title="Download this project's settings as a text file another project (or host) can import">Export</a>
       <button class="btn sm" id="settings-import" style=${{ marginLeft: 6 }} title="Copy settings in from a file or another project, choosing row by row" onClick=${() => setImporting(!importing)}>Import</button>
       <button class="btn sm mclose" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
-      <div class="set-note set-backend" style=${{ margin: "8px 16px 0" }}>Backend: <b class="mono">${backend}</b> — the Studio's; new squads start on it. To change it run <code>ds up ${project} --backend &lt;name&gt;</code>; squads already running keep theirs.</div>
+      <div class="set-note set-backend" style=${{ margin: "8px 16px 0" }}>Backend: <b class="mono">${backend}</b> — the Studio's; new squads start on it. To change it run <code>ds up ${project} --backend ${"<name>"}</code>; squads already running keep theirs.</div>
       ${importing ? html`<div class="set-body"><${ImportPane} project=${project} toast=${toast} onBack=${() => setImporting(false)} onApplied=${() => setRev((n) => n + 1)} /></div>` : html`<div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
-      <div class="set-body" key=${rev}>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}${tab === "accounts" && html`<${AccountsPane} accounts=${accounts} folderOnly=${folderOnly} adds=${adds} kinds=${kinds} project=${project} toast=${toast} />`}</div>`}</div></div>`;
+      <div class="set-body set-searched" key=${rev}><div class="set-search"><input ref=${box} type="search" aria-label="Search settings" placeholder="Search settings" value=${query} disabled=${!searched} title=${searched ? undefined : "This tab is not searched"} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${searchKey} />${searched && query && html`<button class="btn sm set-clear" aria-label="Clear search" title="Clear search" onClick=${clearSearch}>✕</button>`}</div>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} />`}${tab === "accounts" && html`<${AccountsPane} accounts=${accounts} folderOnly=${folderOnly} adds=${adds} kinds=${kinds} project=${project} toast=${toast} />`}</div>`}</div></div>`;
 }
 
 // Import in Settings: a source (a file, pasted export text, or another project on this host) -> the plan
@@ -3969,21 +3980,44 @@ function ImportPane({ project, toast, onBack, onApplied }) {
   </div>`;
 }
 
-// A category's folded line: "<Name> · <n> settings", then only when non-zero overridden / unsaved / error.
-// Env rows are never "unsaved" (the same filter as Save's dirtyKeys).
-function limitGroupSummary(name, rows, draft, msg) {
+// The Settings search: every word of the query appears somewhere in the texts; `_` and `-` read as spaces.
+// A query with no words matches everything.
+function settingWords(text) { return String(text ?? "").toLowerCase().replace(/[_-]/g, " "); }
+function settingMatch(query, ...texts) {
+  const hay = texts.map(settingWords).join(" ");
+  return settingWords(query).split(/\s+/).every((w) => hay.includes(w));
+}
+
+// A category's folded line: "<Name> · <n> settings" (while searching, "<Name> · <m> of <n> match"), then
+// only when non-zero overridden / unsaved / error. Env rows are never "unsaved" (the same filter as Save's dirtyKeys).
+function limitGroupSummary(name, rows, draft, msg, matched) {
   const n = rows.length, k = rows.filter((l) => l.source === "override").length;
   const j = rows.filter((l) => l.source !== "env" && !l.fileOnly && draft[l.key] !== undefined && draft[l.key] !== l.value).length;
   const e = rows.some((l) => msg[l.key]);
-  return name + " · " + n + " setting" + (n === 1 ? "" : "s") + (k ? " · " + k + " overridden" : "") + (j ? " · " + j + " unsaved" : "") + (e ? " · error" : "");
+  const size = matched === undefined ? n + " setting" + (n === 1 ? "" : "s") : matched + " of " + n + " match";
+  return name + " · " + size + (k ? " · " + k + " overridden" : "") + (j ? " · " + j + " unsaved" : "") + (e ? " · error" : "");
 }
 
-function LimitsPane({ project, toast }) {
+function LimitsPane({ project, toast, query = "", onShowAll }) {
   const [rows, setRows] = useState(null);
   const [groups, setGroups] = useState([]);
   const [open, setOpen] = useState({});       // group -> true/false once toggled; otherwise the stored state
   const [forced, setForced] = useState({});   // group -> opened by a refused save (not stored)
-  const isOpen = (g) => forced[g] || (open[g] ?? lstore.get("set:limits:" + g, false));
+  // While searching, a shown group is open; a hand fold lasts until the next keystroke and is never stored.
+  const searching = settingWords(query).trim() !== "";
+  const [searchFold, setSearchFold] = useState({ query, open: {} });
+  if (searchFold.query !== query) setSearchFold({ query, open: {} });
+  const isOpen = (g) => forced[g] || (searching ? searchFold.open[g] ?? true : open[g] ?? lstore.get("set:limits:" + g, false));
+  const toggled = (g, el) => {
+    const o = el.open;
+    if (o === isOpen(g)) return;
+    if (searching) {
+      if (forced[g]) el.open = true;
+      else setSearchFold((f) => ({ query, open: { ...f.open, [g]: o } }));
+      return;
+    }
+    setOpen((m) => ({ ...m, [g]: o })); setForced((f) => ({ ...f, [g]: false })); lstore.set("set:limits:" + g, o);
+  };
   const [draft, setDraft] = useState({});     // key -> typed value not yet saved
   const [msg, setMsg] = useState({});         // key -> error text
   const load = async () => {
@@ -4033,13 +4067,20 @@ function LimitsPane({ project, toast }) {
     say(ok + " saved" + (failed.length ? ", failed: " + failed.join(", ") : ""));
     load();
   };
+  const matches = (l) => !searching || settingMatch(query, l.key, l.comment, l.group, l.value, l.env);
+  const shown = groups.map((g) => { const all = (rows || []).filter((l) => l.group === g); return { g, all, hit: all.filter(matches) }; })
+    .filter((x) => !searching || x.hit.length);
+  const dirty = new Set(dirtyKeys.map((l) => l.key));
+  const hidden = (rows || []).filter((l) => (dirty.has(l.key) || msg[l.key]) && !matches(l));
+  const hiddenErrors = hidden.filter((l) => msg[l.key]).length;
   return html`<div>
     <p class="set-note">Limits for ${project} · applies on the next sweep minute</p>
     ${msg._ && html`<div class="err">${msg._}</div>`}
-    ${rows && html`<div>${groups.map((g) => { const gr = rows.filter((l) => l.group === g); return html`<details class="set-cat" key=${g} open=${isOpen(g)} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== isOpen(g)) { setOpen((m) => ({ ...m, [g]: o })); setForced((f) => ({ ...f, [g]: false })); lstore.set("set:limits:" + g, o); } }}>
-      <summary>${limitGroupSummary(g, gr, draft, msg)}</summary>
+    <div role="status">${rows && searching && !shown.length ? html`<p class="set-note">No setting matches "${query}"</p>` : null}</div>
+    ${rows && html`<div>${shown.map(({ g, all, hit }) => html`<details class="set-cat" key=${g} open=${isOpen(g)} onToggle=${(e) => toggled(g, e.currentTarget)}>
+      <summary>${limitGroupSummary(g, all, draft, msg, searching ? hit.length : undefined)}</summary>
       <table class="lim"><thead><tr><th>Key</th><th>Value</th><th>Source</th><th>Meaning</th></tr></thead><tbody>
-      ${gr.map((l) => {
+      ${hit.map((l) => {
         const env = l.source === "env";
         const cur = draft[l.key] ?? l.value;
         return html`<tr key=${l.key}>
@@ -4055,8 +4096,8 @@ function LimitsPane({ project, toast }) {
             ${msg[l.key] && html`<div class="err">${msg[l.key]}</div>`}</td>
           <td class=${"src " + l.source}>${env ? "env — set by env var " + l.env : l.source}</td>
           <td class="mean">${l.comment}${l.key.startsWith("auto_compact_") ? " (applies at the agent's next restart)" : ""}</td></tr>`; })}
-      </tbody></table></details>`; })}
-    <div style=${{ marginTop: "12px" }}><button class="btn pri" disabled=${dirtyKeys.length === 0} onClick=${saveAll}>${dirtyKeys.length ? "Save " + dirtyKeys.length + " change" + (dirtyKeys.length > 1 ? "s" : "") : "Save"}</button></div></div>`}</div>`;
+      </tbody></table></details>`)}
+    <div style=${{ marginTop: "12px" }}><button class="btn pri" disabled=${dirtyKeys.length === 0} onClick=${saveAll}>${dirtyKeys.length ? "Save " + dirtyKeys.length + " change" + (dirtyKeys.length > 1 ? "s" : "") : "Save"}</button>${hidden.length > 0 && html`<span class="set-hidden">${hidden.length + " edited setting" + (hidden.length === 1 ? " is" : "s are") + " hidden by the search" + (hiddenErrors ? " · " + hiddenErrors + " with an error" : "")} <button class="btn sm set-showall" onClick=${onShowAll}>Show all</button></span>`}</div></div>`}</div>`;
 }
 
 // Roles tab of Settings (GET/POST api/roles -> roles.sh). Self-contained: renders only its own
