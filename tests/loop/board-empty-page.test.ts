@@ -4,6 +4,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { explainState } from "../../bin/board/board-data";
 import { mount } from "./board-mount";
 
 const root = join(import.meta.dir, "../..");
@@ -31,11 +32,19 @@ test("a project with no squads shows a tidy empty board", async () => {
   } finally { await r.window.happyDOM.close(); }
 });
 
-test("a filtered empty list keeps the filter wording and the legend shows only for a paused squad", async () => {
-  const sq = { label: "fixture", topic: "p", status: "suspended", members: [], display_status: "suspended", display_key: "suspended", units: [] };
-  const r = await mount({ ...board, squads: [sq] }, false);
+test("a paused, suspended or parked squad adds no status legend; its pill hover names the meaning", async () => {
+  const states = [["paused", "paused"], ["suspended", "suspended"], ["held-only", "parked"]];
+  const squads = states.map(([key, shown]) => ({ label: "fixture", topic: "t-" + key, status: key === "suspended" ? "suspended" : "running",
+    members: [], display_status: shown, display_key: key, units: [], explain: explainState(key) }));
+  const r = await mount({ ...board, squads }, false);
   try {
-    expect(r.window.document.querySelector(".statelegend")?.textContent).toContain("suspended:");
+    const doc = r.window.document;
+    expect(doc.querySelector(".statelegend")).toBeNull();
+    for (const [key, shown] of states) {
+      const pill = doc.querySelector(`#squads .pill.${key}`)!;
+      expect(pill.textContent!.toLowerCase()).toBe(shown);
+      expect(pill.getAttribute("title")).toContain(explainState(key)!.means);
+    }
     expect(r.errors).toEqual([]);
   } finally { await r.window.happyDOM.close(); }
 });
