@@ -483,9 +483,9 @@ the board shows and counts, not the loop's pokes (`pr_stale_min`).
 On the web board each squad has two dropdowns: **work units** (the list above, with
 each unit's live status and PR chip); with the light lane on (`max_light_builders` > 0) a light unit also carries a `light` chip next to its Tier (`light→normal` once its CPU passed `light_lane_cpu_h`; the tooltip names the rule and CPU-hours), and the Builders tile reads `normal x/max_builders · light y/max_light_builders` and **pipeline graph** (the unit dependency graph,
 drawn with Mermaid — an add-on that needs internet to render; offline it degrades to the
-graph's text, the work-units list is unaffected). Closed squads collapse into a separate
-**Archived** section at the bottom, so a finished squad's units/PRs/plan stay viewable
-without cluttering the live board.
+graph's text, the work-units list is unaffected). Archived squads are in the **Archived**
+section at the bottom of the board, under the Event log, closed until you open it, so a
+finished squad's units/PRs/plan stay viewable without cluttering the live board.
 
 A unit with links (`links` on the unit doc, from its plan) shows the first one as a chip beside its name in the **work units**
 list, with `+N` when there are more (the badge's tooltip names them). The chip opens that page in a new tab; a click anywhere
@@ -674,7 +674,8 @@ It removes exactly this squad's recorded worktrees (Lead + roles + any fanned-ou
 Builders — tracked in the state file, so a sibling topic with a shared name prefix is
 never touched) and, by default, **archives** its state + plans to
 `state/<project>/archive/`. So the squad leaves the *live* board but stays viewable in
-the board's collapsed **Archived** section (its units, PRs and plan are still there).
+the **Archived** section at the bottom of the board, under the Event log, closed until you
+open it (its units, PRs and plan are still there).
 Removing a worktree stops its worker. **Without `--force`, Orca keeps any branch whose
 changes it can't prove are merged** — unmerged Builder work is preserved, only the
 worktrees go. `--purge` hard-deletes instead of archiving; `--keep-state` leaves it live
