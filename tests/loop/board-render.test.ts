@@ -796,6 +796,49 @@ test("Remove on a leftover: look first confirms with the commits and posts the f
   } finally { await w.happyDOM.close(); }
 });
 
+// collapsible-archived-table-section U1: archived squads have their own closed section under the Event log.
+test("archived squads sit in a closed section after the Event log, not in the Squads table", async () => {
+  const mk = (topic: string, n: number) => ({ topic, closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 },
+    prs: [{ num: n, status: "merged" }], plans: [], lavish: [], leftovers: [{ wt: "wt-" + topic, path: "/tmp/" + topic, branch: "br", n_files: 1, files: ["a.txt"], unpushed: 0, reason: "kept", waits_on: null, unit: "u1", age_min: 5 }] });
+  const r = await mount({ ...board, archived: [mk("gone-one", 901), mk("gone-two", 902)] }, false);
+  const w = r.window, doc = w.document;
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  try {
+    for (let k = 0; k < 80 && !doc.querySelector("#archived"); k++) await wait(25);
+    const sec = doc.querySelector("details#archived") as any;
+    expect(doc.querySelector("#events").compareDocumentPosition(sec) & w.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(sec.hasAttribute("open")).toBe(false);
+    expect(sec.querySelector("summary").textContent).toContain("2 squads");
+    const squads = doc.querySelector("#squads");
+    expect(squads.querySelector(".arch")).toBeNull();
+    expect(squads.textContent).not.toContain("gone-one");
+    expect(squads.textContent).not.toContain("Archived (");
+    sec.open = true;
+    sec.dispatchEvent(new w.Event("toggle"));
+    await wait(100);
+    const rows = [...sec.querySelectorAll(".row.squad")] as any[];
+    expect(rows.map((e) => e.querySelector(".topic").textContent)).toEqual(["gone-one", "gone-two"]);
+    rows[0].dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await wait(100);
+    const detail = sec.querySelector(".detail");
+    expect(detail.textContent).toContain("Documents");
+    expect(detail.textContent).toContain("Leftovers");
+    expect(detail.querySelector(".item").textContent).toContain("901");
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
+test("with no archived squads there is no Archived section", async () => {
+  const r = await mount({ ...board, archived: [] }, false);
+  const w = r.window, doc = w.document;
+  try {
+    for (let k = 0; k < 80 && !doc.querySelector("#events"); k++) await new Promise((x) => setTimeout(x, 25));
+    expect(doc.querySelector("#events")).toBeTruthy();
+    expect(doc.querySelector("#archived")).toBeNull();
+    expect(r.errors).toEqual([]);
+  } finally { await w.happyDOM.close(); }
+});
+
 // archive-leftovers U2: an archived squad's box lists its kept worktrees in the same Leftovers block as a live squad.
 test("an archived squad's box shows the Leftovers block", async () => {
   const archived = { topic: "oldsq", closed_at: "2026-11-20T10:00:00Z", type: "feature", framing: "f", progress: { total: 1, done: 1 }, prs: [], plans: [], lavish: [],
@@ -804,11 +847,12 @@ test("an archived squad's box shows the Leftovers block", async () => {
   const w = r.window, doc = w.document;
   const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
   try {
-    for (let k = 0; k < 80 && !doc.querySelector(".arch"); k++) await wait(25);
-    const show = [...doc.querySelectorAll(".arch button")].find((b: any) => b.textContent.trim() === "show") as any;
-    show.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    for (let k = 0; k < 80 && !doc.querySelector("#archived"); k++) await wait(25);
+    const sec = doc.querySelector("details#archived") as any;
+    sec.open = true;
+    sec.dispatchEvent(new w.Event("toggle"));
     await wait(100);
-    const row = [...doc.querySelectorAll(".row.squad")].find((e: any) => e.textContent.includes("oldsq")) as any;
+    const row = [...doc.querySelectorAll("#archived .row.squad")].find((e: any) => e.textContent.includes("oldsq")) as any;
     expect(row).toBeTruthy();
     row.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
     await wait(100);
