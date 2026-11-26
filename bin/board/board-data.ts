@@ -15,9 +15,12 @@
 import { resolveBackUp, returnOf } from "../loop/settings/roster.ts";
 import { menuOptions, menuText } from "../loop/chat/menu.ts";
 import { consumers, consumerLine, disksOf, titleOf } from "../loop/squad/disk-pressure.ts";
+import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
+import { accountFolder } from "../lib/account-dirs.ts";
+import { findKind } from "../lib/account-kinds/index.ts";
 import { ticketLink, unitLinks } from "./unit-links.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { debriefTopic } from "./card-place.ts";
@@ -1066,13 +1069,99 @@ function resetsPending(db: Db): Map<string, ResetPending> {
   return out;
 }
 
+// issue #125 U7: the strip's rows are logins. The `accounts` table says what is listed (a removed row goes),
+// observed_accounts has its usage, and observed_account_folders every login folder the refresh scanned.
+const whereTag = (r: any): "system" | "Orca + ds" | "ds only" | null =>
+  findKind(r.agent)?.systemId === r.account || r.source === "system" ? "system" : !r.source ? null : r.orca_listed ? "Orca + ds" : "ds only";
+
+// The observed rows first (in accounts.tsv's order), then the listed rows the refresh has not seen yet.
+function accountList(db: Db) {
+  const table = db.all("SELECT rowid AS seq, * FROM accounts ORDER BY rowid");
+  const byKey = new Map(table.map((r) => [`${r.agent}/${r.account}`, r]));
+  const seen = new Set<string>(), out: { c: any; t: any }[] = [];
+  for (const c of db.all("SELECT * FROM observed_accounts ORDER BY rowid")) {
+    const k = `${c.agent}/${c.account}`, t = byKey.get(k);
+    seen.add(k);
+    if (t?.removed_at == null) out.push({ c, t });
+  }
+  for (const t of table) if (t.source && t.removed_at == null && !seen.has(`${t.agent}/${t.account}`)) out.push({ c: { agent: t.agent, account: t.account }, t });
+  return out;
+}
+
+// Each listed row's tag, folder, login and warnings (KTD12, KTD13), and the logged-in folders no listed row
+// has (`folder only`, one per login). A folder-only row is not an account: it goes in its own list.
+function accountPlaces(db: Db, list: { c: any; t: any }[]) {
+  const scanned = db.all("SELECT dir, agent, login_id FROM observed_account_folders WHERE logged_in = 1 ORDER BY dir") as { dir: string; agent: string; login_id: string | null }[];
+  const loginOfDir = new Map(scanned.map((f) => [`${f.agent}\n${resolve(f.dir)}`, f.login_id]));
+  const rows = list.map(({ c, t }) => {
+    const r = { agent: String(c.agent), account: String(c.account), source: t?.source ?? null, orca_listed: !!t?.orca_listed, config_dir: t?.config_dir ?? null };
+    const tag = whereTag(r);
+    const folder = tag ? resolve(accountFolder(r)) : null;
+    return { ...r, tag, folder, login: (t?.login_id ?? (folder ? loginOfDir.get(`${r.agent}\n${folder}`) : null) ?? null) as string | null,
+      is_default: !!t?.is_default, seq: Number(t?.seq ?? Infinity), missing: !!folder && tag !== "system" && !existsSync(folder) };
+  });
+  const owned = new Set(rows.filter((r) => r.folder).map((r) => `${r.agent}\n${r.folder}`));
+  // An agent with no listed row still has its system login (account-dirs.ts), so that folder is not folder-only.
+  for (const f of scanned) {
+    const kind = findKind(String(f.agent));
+    if (kind && !rows.some((r) => r.agent === f.agent && r.tag)) owned.add(`${f.agent}\n${resolve(kind.systemDir(process.env))}`);
+  }
+  const folders = new Map<string, Set<string>>(); // `<agent>\n<login>` -> every folder holding that login
+  const add = (agent: string, login: string, dir: string) => {
+    const k = `${agent}\n${login}`;
+    folders.set(k, (folders.get(k) ?? new Set()).add(dir));
+  };
+  for (const r of rows) if (r.login && r.folder) add(r.agent, r.login, r.folder);
+  const listedLogins = new Set(folders.keys());
+  const only = new Map<string, { agent: string; login: string | null; folder: string }>();
+  for (const f of scanned) {
+    const agent = String(f.agent), dir = resolve(f.dir), login = (f.login_id ?? null) as string | null;
+    if (login) add(agent, login, dir);
+    if (owned.has(`${agent}\n${dir}`) || (login && listedLogins.has(`${agent}\n${login}`))) continue;
+    const k = `${agent}\n${login ?? dir}`;
+    if (!only.has(k)) only.set(k, { agent, login, folder: dir });
+  }
+  const dups = (agent: string, login: string | null) => {
+    const d = login ? [...folders.get(`${agent}\n${login}`) ?? []].sort() : [];
+    return d.length > 1 ? d : null;
+  };
+  return {
+    rows: new Map(rows.map((r) => [`${r.agent}/${r.account}`, { ...r, dup_folders: dups(r.agent, r.login) }])),
+    folderOnly: [...only.values()].map((f) => ({ agent: f.agent, tag: "folder only", folder: f.folder, login_short: f.login?.slice(0, 8) ?? null, dup_folders: dups(f.agent, f.login) })),
+  };
+}
+
+// Which rows the strip shows, set once accountUsers has run: enabled rows of one login are one row (the
+// default, then an Orca-listed one, then the oldest; it takes the others' roles), and a disabled row stays
+// only while a role still runs on it. `merged_into` names the row an enabled twin is shown in.
+function stripRows(accts: any[]) {
+  const reps = new Map<string, any>();
+  const first = [...accts].filter((a) => !a.disabled && a.login_id)
+    .sort((a, b) => Number(b.is_default) - Number(a.is_default) || Number(b.orca_listed) - Number(a.orca_listed) || a.seq - b.seq);
+  for (const a of first) if (!reps.has(`${a.agent}\n${a.login_id}`)) reps.set(`${a.agent}\n${a.login_id}`, a);
+  for (const a of accts) {
+    const rep = !a.disabled && a.login_id ? reps.get(`${a.agent}\n${a.login_id}`) : a;
+    a.merged_into = rep === a ? null : rep.account;
+    if (rep !== a) {
+      rep.users.push(...a.users);
+      rep.users_count += a.users_count; rep.users_other += a.users_other;
+      a.users = []; a.users_count = 0; a.users_other = 0;
+    }
+  }
+  for (const a of accts) {
+    a.strip = !a.merged_into && (!a.disabled || a.users_count + a.users_other > 0);
+    delete a.login_id; delete a.seq; // the page gets the first 8 characters only (login_short)
+  }
+}
+
 // One entry per (agent, account); [] when there are none (the board then shows no strip).
 // `text` is the strip cell both views print: `A 72% · resets 15:00 · wk 41%`, `B ?`, or
 // `C limited · resets 15:00` while limited_until is in the future, `D out of credits · <link>` while a credits
 // hold is live (no reset: the provider's link instead); a non-ok skills value is appended
 // (`· skills broken: …`), whether usage is known or not.
 function accounts(db: Db, now = NOW()) {
-  const rows = db.all("SELECT * FROM observed_accounts ORDER BY rowid");
+  const list = accountList(db), places = accountPlaces(db, list);
+  const rows = list.map(({ c, t }) => ({ ...c, label: c.label ?? t?.label ?? null }));
   // plan "disable" U3: the operator's switch (accounts.state, written by accounts.ts) — NULL is enabled.
   const off = new Set(db.all("SELECT agent, account FROM accounts WHERE state = 'disabled'").map((r) => `${r.agent}/${r.account}`));
   // provider-billing-fallback U4: a live credits hold (credits.ts) reads `out of credits`, with the provider's link.
@@ -1082,8 +1171,12 @@ function accounts(db: Db, now = NOW()) {
   const multi = new Set(rows.map((c) => c.agent)).size > 1;
   const lastReset = resetsUsed(db, now), pending = resetsPending(db);
   const dash = (v: unknown) => (typeof v === "string" && v && v !== "-" ? v : null);
-  return rows.map((c) => {
-    const agent = String(c.agent), account = String(c.account);
+  // The agent's default: the marked row, else its system login, else its first row.
+  const defaults = new Map<string, string>();
+  for (const p of [...places.rows.values()].sort((a, b) => Number(b.is_default) - Number(a.is_default) || Number(b.tag === "system") - Number(a.tag === "system")))
+    if (!defaults.has(p.agent)) defaults.set(p.agent, p.account);
+  const out = rows.map((c) => {
+    const agent = String(c.agent), account = String(c.account), place = places.rows.get(`${agent}/${account}`)!;
     const session = pctOf(c.session_pct), weekly = pctOf(c.weekly_pct), reset = epochOf(c.session_reset), limitedUntil = epochOf(c.limited_until);
     const limited = limitedUntil != null && limitedUntil > now;
     const plan = dash(c.plan);   // U123: accounts.tsv's 12th column; unknown = null, never a guess
@@ -1102,8 +1195,12 @@ function accounts(db: Db, now = NOW()) {
     const resets = resetsOf(c.resets);
     return { disabled: off.has(`${agent}/${account}`), plan, resets, reset_last: lastReset.get(`${agent}/${account}`) ?? null, reset_pending: pending.get(`${agent}/${account}`) ?? null, agent, account, session_pct: session, session_reset: reset, weekly_pct: weekly,
       weekly_reset: epochOf(c.weekly_reset), note: dash(c.note), label: dash(c.label) ?? account, limited_until: limited ? limitedUntil : null, limited, credits, login,
+      tag: place.tag, folder: place.folder, source: place.source, login_short: place.login?.slice(0, 8) ?? null, dup_folders: place.dup_folders,
+      folder_missing: place.missing, default: defaults.get(agent) === account,
+      is_default: place.is_default, orca_listed: place.orca_listed, login_id: place.login, seq: place.seq,
       skills, text: `${text}${resets.state === "reported" ? ` · free resets ${resets.count}` : ""}${skills ? ` · skills ${skills}` : ""}` };
   });
+  return { accounts: out as any[], folderOnly: places.folderOnly };
 }
 
 // The Accounts tile (plan U3, KTD8): free of total, each out-of-limits account with its reset, the
@@ -1111,7 +1208,7 @@ function accounts(db: Db, now = NOW()) {
 // accounts are left out. Level: crit when none is free, warn when any is limited, out of credits or near.
 function accountsSummary(db: Db | null, label: string, accts: any[], now = NOW()) {
   const sMax = (db ? dsLimit(db, label, "pick_session_max") : null) ?? 95, wMax = (db ? dsLimit(db, label, "pick_weekly_max") : null) ?? 95;
-  const live = accts.filter((a) => !a.disabled);
+  const live = accts.filter((a) => !a.disabled && !a.merged_into);
   const day = (e: number) => new Date(e * 1000).toDateString();
   const resetText = (e: number) => (day(e) === day(now) ? clock(e) : new Date(e * 1000).toLocaleDateString("en-US", { weekday: "short" }));
   const limited = live.filter((a) => a.limited && !a.credits && !a.login).map((a) => ({ account: a.account, agent: a.agent, label: a.label, until: a.limited_until, reset: resetText(a.limited_until) }));
@@ -1466,7 +1563,7 @@ function acctChip(m: any, accts: any[]) {
   const agent = typeof m.agent === "string" && m.agent ? m.agent : "claude";
   const id = typeof m.account === "string" && m.account ? m.account : "";
   if (id) { const c = accts.find((a) => a.agent === agent && a.account === id); return { account_label: c?.label ?? id, account_plan: c?.plan ?? null, account_default: false }; }
-  const d = accts.find((a) => a.agent === agent);
+  const d = accts.find((a) => a.agent === agent && a.default);
   return { account_label: d ? d.label : null, account_plan: d?.plan ?? null, account_default: !!d };
 }
 
@@ -2108,14 +2205,15 @@ function fromDb(db: Db, label: string, topic: string, liveRoot = false) {
     const ok = st && typeof st === "object" && !Array.isArray(st) ? st : null;
     return { l, t, st: ok };
   });
-  const toks = tokenSpend(db), accts = accounts(db);
+  const toks = tokenSpend(db), { accounts: accts, folderOnly } = accounts(db);
   const squads = read.map(({ l, t, st }) => {
     if (!st) return broken(l, t);
     try { return squad(db, l, t, st, live, toks, accts); } catch { return broken(l, t); }
   }).sort(compareSquads);
   accountUsers(db, accts, label, squads);
+  stripRows(accts);
   const labels = label ? [label] : db.all("SELECT label FROM projects UNION SELECT project AS label FROM squads ORDER BY label").map((r) => String(r.label)).filter((l) => !(liveRoot && !label && isTestProject(l)));
-  return { ...board(db, label, labels, squads, accts, live), project_controls: !topic };
+  return { ...board(db, label, labels, squads, accts, live), account_folders: folderOnly, project_controls: !topic };
 }
 
 // The Studio's morning briefs (documents rows of <label>/briefings/<date>.md), newest first; only the

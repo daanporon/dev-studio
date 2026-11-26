@@ -74,7 +74,7 @@ eq "disabled: the text board says so"        "$(grep '^ACCOUNTS' "$TMP/accoff.tx
 # The web page: the row's badge + button + dim class, the "N roles, switch on restart" cell, the event
 # lines, and a disabled account left out of the top-strip flags.
 W="$ROOT/web/board.html"
-eq "web board: disabled row has badge, class; the Enable/Disable button is in the opened panel" "$(grep -cF 'class="bdg off"' "$W")$(grep -cF '(a.disabled ? " off" : "")' "$W")$(sed -n '/^function AccountDetail(/,/^}/p' "$W" | grep -cF '${a.disabled ? "Enable" : "Disable"}</button>')" "111"
+eq "web board: disabled row has badge, class; the Enable/Disable button is in the opened panel" "$(grep -cF 'class="bdg off"' "$W")$(grep -cF '(a.disabled ? " off" : "")' "$W")$(sed -n '/^function accountSwitch(/,/^}/p' "$W" | grep -cF '${a.disabled ? "Enable" : "Disable"}</button>')$(sed -n '/^function AccountDetail(/,/^}/p' "$W" | grep -cF '${accountSwitch(a, all, project, toast)}')" "1111"
 eq "web board: button click stops the row toggle" "$(grep -F 'class="abtn"' "$W" | grep -cF 'e.stopPropagation(); switchAccount(')" "1"
 eq "web board: no action cell in the row, header has 6 cells" "$(sed -n '/^function AccountRow(/,/^}/p' "$W" | grep -c "class=\"abtn\"")$(grep -cF "<span>In use</span></div>" "$W")" "01"
 eq "web board: skills is a chip, no paragraph" "$(grep -cF 'class="sk"' "$W")$(grep -cF '"bdg sk"' "$W")" "01"
@@ -1648,6 +1648,50 @@ jt "permission card: in Needs-you with its role, lines and chat" "$TMP/perm.json
 has "permission card: the text board shows it" "$(render "$LBL" 2>/dev/null)" "builder-u1 is waiting on a permission prompt. Its screen shows: Do you want to proceed? 1. Yes 2. No"
 "$ROOT/bin/lib/alerts.sh" "$DS_STATE_ROOT/$LBL/alerts.json" resolve sweep-perm-sq.builder-u1-1 >/dev/null
 rm -f "$SD/perm-sq.json"
+
+# issue #125 U7: the strip is one row per enabled login with its where-tag. Every kind of row, each folder a
+# temp one: system, Orca + ds (also found in a second folder), ds only (the default), a missing folder,
+# an idle disabled account, a disabled one with a role still running, and a folder-only login in two folders.
+U7="$TMP/u7"; mkdir -p "$U7/st" "$U7/orca" "$U7/orca2" "$U7/dsd" "$U7/idle" "$U7/busy" "$U7/lone" "$U7/lone2"
+{ printf 'agent\taccount\tsession_pct\tsession_reset\tweekly_pct\tweekly_reset\tlimited_until\tupdated\tlabel\n'
+  for a in system:Own o1:orca@example.com d1:ds@example.com gone:Gone idle:Idle busy:Busy old:Removed; do
+    printf 'claude\t%s\t-\t-\t-\t-\t-\t%s\t%s\n' "${a%%:*}" "$NOW" "${a#*:}"; done; } > "$U7/st/accounts.tsv"
+printf '{"run_id":"r7","status":"running","type":"feature","members":[{"role":"builder","suffix":"u1","wt":"wU7","agent":"claude","model":"opus","account":"busy"},{"role":"lead","suffix":"","wt":"wU7L","agent":"claude","model":"opus"}],"units":[]}' > "$SD/u7-sq.json"
+printf '{"workers":[["wU7","working","b","busy"],["wU7L","working","l",null]],"worktrees":[["wU7",null]]}\n' > "$U7/seed.json"
+SEED="$U7/seed.json" HOSTST="$U7/st" mkdb "$LBL"
+acct(){ # <account> <label> <source> <config_dir|-> <login|-> <orca_listed> <is_default> <state> [removed_at]
+  local cd="'$4'" lg="'$5'"; [ "$4" != - ] || cd=NULL; [ "$5" != - ] || lg=NULL
+  dbw "INSERT OR REPLACE INTO accounts (agent,account,label,state,observed_at,config_dir,source,login_id,orca_listed,is_default,removed_at) VALUES ('claude','$1','$2','$8',1,$cd,'$3',$lg,$6,$7,${9:-NULL})"; }
+dbw "DELETE FROM accounts"
+acct system Own system - login-system-0000 0 0 active
+acct o1 orca@example.com orca "$U7/orca" login-orca-1111 1 0 active
+acct d1 ds@example.com ds "$U7/dsd" login-dsss-2222 0 1 active
+acct gone Gone ds "$U7/nowhere" login-gone-3333 0 0 active
+acct idle Idle ds "$U7/idle" login-idle-4444 0 0 disabled
+acct busy Busy orca "$U7/busy" login-busy-5555 0 0 disabled
+acct old Removed ds "$U7/idle" - 0 0 active 5
+for f in orca:login-orca-1111 orca2:login-orca-1111 dsd:login-dsss-2222 idle:login-idle-4444 busy:login-busy-5555 lone:login-lone-6666 lone2:login-lone-6666; do
+  dbw "INSERT OR REPLACE INTO observed_account_folders VALUES ('$U7/${f%%:*}','claude','${f#*:}',1,1)"; done
+render "$LBL" --json > "$U7/board.json"
+S7='[.accounts[] | select(.strip)]'
+jt "U7: strip rows and their tags" "$U7/board.json" "$S7 | map([.account, .tag]) == [[\"system\",\"system\"],[\"o1\",\"Orca + ds\"],[\"d1\",\"ds only\"],[\"gone\",\"ds only\"],[\"busy\",\"ds only\"]]" "$S7 | map([.account,.tag])"
+jt "U7: the duplicate warning names both folders" "$U7/board.json" "[.accounts[] | select(.dup_folders) | [.account, .dup_folders]] == [[\"o1\",[\"$U7/orca\",\"$U7/orca2\"]]]" '[.accounts[].dup_folders]'
+jt "U7: only the missing folder warns" "$U7/board.json" '[.accounts[] | select(.folder_missing) | .account] == ["gone"]' '[.accounts[] | [.account,.folder_missing]]'
+jt "U7: the default chip is on dev-studio's default" "$U7/board.json" '[.accounts[] | select(.default) | .account] == ["d1"]' '[.accounts[] | [.account,.default]]'
+jt "U7: a member with no account of its own gets the default" "$U7/board.json" '.squads[] | select(.topic=="u7-sq") | .members[] | select(.role=="lead") | .account_default and .account_label=="ds@example.com"' '[.squads[].members[] | select(.role=="lead")]'
+jt "U7: a disabled account leaves the strip, unless a role still runs on it" "$U7/board.json" '[.accounts[] | select(.disabled) | [.account, .strip, .users_count]] == [["idle",false,0],["busy",true,1]]' '[.accounts[] | [.account,.strip,.users_count]]'
+jt "U7: a removed account is not listed; the others all are" "$U7/board.json" '[.accounts[].account] == ["system","o1","d1","gone","idle","busy"]' '[.accounts[].account]'
+jt "U7: one folder-only login for its two folders, outside the account list" "$U7/board.json" ".account_folders == [{agent:\"claude\",tag:\"folder only\",folder:\"$U7/lone\",login_short:\"login-lo\",dup_folders:[\"$U7/lone\",\"$U7/lone2\"]}]" '.account_folders'
+jt "U7: only the first 8 characters of a login reach the page" "$U7/board.json" '(tostring | test("login-[a-z]+-[0-9]{4}") | not) and .accounts[1].login_short == "login-or"'
+jt "U7: the detail view has the folder and the source" "$U7/board.json" ".accounts[2] | .folder==\"$U7/dsd\" and .source==\"ds\""
+# Two enabled rows of one login are one strip row (the default first), holding the other's roles.
+SEED="$U7/seed.json" HOSTST="$U7/st" mkdb "$LBL"
+dbw "DELETE FROM accounts"
+acct system Own system - login-busy-5555 0 0 active
+acct busy Busy orca "$U7/busy" login-busy-5555 1 0 active
+render "$LBL" --json > "$U7/one.json"
+jt "U7: one login, one row: the Orca-listed one, with the roles" "$U7/one.json" '[.accounts[] | select(.account=="system" or .account=="busy") | [.account,.strip,.merged_into,.users_count]] == [["system",false,"busy",0],["busy",true,null,1]]' '[.accounts[] | [.account,.strip,.merged_into,.users_count]]'
+rm -f "$SD/u7-sq.json"
 
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

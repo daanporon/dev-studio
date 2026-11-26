@@ -869,3 +869,53 @@ test("a unit's links: a chip and +N in its row, More info in its window, nothing
     expect(r.errors).toEqual([]);
   } finally { await w.happyDOM.close(); }
 });
+
+// issue #125 U7: the strip is the rows marked `strip`; the Manage panel lists every account and folder-only login.
+const u7Board = {
+  ...board,
+  accounts: [
+    account({ account: "system", label: "Own", tag: "system", strip: true, default: false }),
+    account({ account: "u-o1", label: "orca@example.com", tag: "Orca + ds", strip: true, default: true, folder: "/x/orca", source: "orca", login_short: "abcd1234", dup_folders: ["/x/orca", "/x/orca2"] }),
+    account({ account: "gone", label: "Gone", tag: "ds only", strip: true, folder: "/x/gone", folder_missing: true }),
+    account({ account: "idle", label: "Idle", tag: "ds only", disabled: true, strip: false }),
+    account({ account: "busy", label: "Busy", tag: "ds only", disabled: true, strip: true, users_other: 1 }),
+  ],
+  account_folders: [{ agent: "claude", tag: "folder only", folder: "/x/lone", login_short: "ffff0000", dup_folders: null }],
+};
+const texts = (el: any, sel: string) => [...el.querySelectorAll(sel)].map((n: any) => n.textContent.trim());
+
+test("accounts: the strip's tags, warnings, default chip and hidden count; Manage lists every account with its switch", async () => {
+  const r = await mount(u7Board);
+  try {
+    const sec = r.root.querySelector("#accounts")!;
+    expect(texts(sec, ".arow:not(.head) .al .t")).toEqual(["Own", "orca@example.com", "Gone", "Busy"]);
+    expect(texts(sec, ".arow .bdg.where")).toEqual(["system", "Orca + ds", "ds only", "ds only"]);
+    const defaults = [...sec.querySelectorAll(".arow .al")].filter((al: any) => [...al.querySelectorAll(".bdg")].some((b: any) => b.textContent === "default"));
+    expect(defaults).toHaveLength(1);
+    expect((defaults[0] as any).textContent).toContain("orca@example.com");
+    expect(texts(sec, ".arow .awarn")).toEqual(["same login in two or more folders: /x/orca and /x/orca2", "folder missing: /x/gone · picks skip this account"]);
+    expect(sec.querySelector("summary small")!.textContent).toBe("4 · 5-hour and 7-day usage left · 2 hidden");
+    expect(texts(sec, ".afacts")).toContain("u-o1 · folder /x/orca · source orca · login abcd1234");
+    sec.querySelector(".amanage")!.dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((res) => setTimeout(res, 30));
+    const panel = r.root.querySelector(".acct-panel")!;
+    expect(texts(panel, ".mrow .al .t")).toEqual(["Own", "orca@example.com", "Gone", "Idle", "Busy", "/x/lone"]);
+    expect(texts(panel, ".mrow .bdg.where")).toEqual(["system", "Orca + ds", "ds only", "ds only", "ds only", "folder only"]);
+    expect([...panel.querySelectorAll(".mrow")].map((m: any) => m.querySelector(".abtn")?.textContent ?? null)).toEqual(["Disable", "Disable", "Disable", "Enable", "Enable", null]);
+    expect(texts(panel, ".awarn")).toHaveLength(2);
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
+
+test("accounts: with no accounts the section and its Manage button are still there", async () => {
+  const r = await mount({ ...board, accounts: [], account_folders: [] });
+  try {
+    const sec = r.root.querySelector("#accounts")!;
+    expect(sec.querySelector(".amanage")).not.toBeNull();
+    expect(sec.querySelector(".acct-tbl")).toBeNull();
+    sec.querySelector(".amanage")!.dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
+    await new Promise((res) => setTimeout(res, 30));
+    expect(r.root.querySelector(".acct-panel")!.textContent).toContain("no accounts yet");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});
