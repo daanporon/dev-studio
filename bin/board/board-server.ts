@@ -72,6 +72,11 @@
 //   /api/account {project, agent, account, enabled}  `account`: switch one account off/on for every pick
 //   /api/account-reset {project, agent, account, grant}  `account-reset`: use one free reset grant (usable now, none
 //                 open for that account: else 400/409); the server adds the idempotency key every try reuses
+//   /api/account-add {project, name}  `account-add` (issue #125, U6): a new Claude login, its terminal beside the
+//                 project's Studio (fulfil/account-add.ts); 400 for a bad or taken name, 409 with one open for it
+//   /api/account-login-code {request, code}  the pasted login code of an open paste-flow add in waiting_login, to
+//                 <state root>/account-login/<request> (0600; bin/lib/account-login-code.ts) for the add to type;
+//                 202 with no row, event or delivery, and no answer, log line or refusal ever carries the code
 //   /api/leftover-remove {project, topic, wt, fingerprint?}  `leftover-remove`: a Leftovers box's Remove (404 for no such
 //                 leftover, 409 with one open for it); the loop removes a safe tree, a look-first one only saved and
 //                 with the fingerprint the operator saw (archive-leftovers U4)
@@ -98,6 +103,9 @@ import { KEYS, KEYS_MAX, keyOk } from "../loop/chat/keys.ts";
 import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
 import { skillsJson } from "./skills-data.ts";
+import { findKind } from "../lib/account-kinds/index.ts";
+import { nameProblem } from "../lib/account-folder.ts";
+import { dropLoginCode, loginCodeProblem } from "../lib/account-login-code.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
 import { servePage } from "./saved-pages.ts";
 import { answer as answerQuestion, pressRefused } from "../loop/messages/questions.ts";
@@ -991,6 +999,52 @@ async function accountResetPost(req: Request) {
   });
 }
 
+// account-add (issue #125, U6): the board's Add account files the request `ds account add` files, for the board's
+// project (its Studio's worktree takes the login terminal). Claude only here; the agent picker and `dir` are U9's.
+async function accountAddPost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const { project, name } = pr.b;
+  const agent = "claude", kind = findKind(agent);
+  if (!NAME.test(project ?? "") || typeof name !== "string") return json(400, { error: "need project and name" });
+  if (!kind?.multi || !kind.login) return json(400, { error: kind?.why ?? `${agent} has no login command` });
+  return write((s) => {
+    if (!one(s, "SELECT 1 FROM projects WHERE label = ?", project)) no(409, `no project ${project}`);
+    const bad = nameProblem(name, (s.db.query("SELECT account FROM accounts WHERE agent = ?").all(agent) as Row[]).map((r) => String(r.account)));
+    if (bad) no(400, bad);
+    const open = one(s, "SELECT id FROM requests WHERE kind = 'account-add' AND done_at IS NULL AND json_extract(payload, '$.agent') = ? AND json_extract(payload, '$.name') = ?", agent, name);
+    if (open) no(409, `an add of ${agent}:${name} is already in progress (request #${open.id})`);
+    const row = board(s, "account-add", { agent, name, project, by: "board" }, { project });
+    return paused(s, { project }) ? json(202, { ok: true, id: Number(row.id), queued: true }) : row;
+  });
+}
+
+// account-login-code (issue #125, U6, KTD10): the pasted code goes to a 0600 drop file the add's fulfiller reads,
+// removes and types. Nothing here writes loop.db or logs, and no answer echoes the code.
+async function accountLoginCodePost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const { request: id, code } = pr.b;
+  if (!Number.isInteger(id) || id <= 0) return json(400, { error: "need request (the add's id) and code" });
+  const bad = loginCodeProblem(code);
+  if (bad) return json(400, { error: bad });
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  const s = openReadOnly();
+  let refusal: string | null = null;
+  try {
+    const row = one(s, "SELECT payload, result, done_at FROM requests WHERE id = ? AND kind = 'account-add'", id);
+    let p: any = {}, r: any = {};
+    try { p = JSON.parse(String(row?.payload ?? "{}")) ?? {}; r = JSON.parse(String(row?.result ?? "{}")) ?? {}; } catch { /* unreadable: refused below */ }
+    if (!row) refusal = `no account add #${id}`;
+    else if (row.done_at != null) refusal = `account add #${id} has ended`;
+    else if (findKind(String(p.agent))?.login?.flow !== "paste") refusal = `account add #${id} takes no pasted code: its login is approved in the browser`;
+    else if (r.state !== "waiting_login") refusal = `account add #${id} is not waiting for a code (${r.state ?? "starting"})`;
+  } finally { s.close(); }
+  if (refusal) return json(409, { error: refusal });
+  try { dropLoginCode(stateRoot(), id, code); } catch { return json(500, { error: "could not hand the code over" }); }
+  return json(202, { ok: true });
+}
+
 // leftover: a Leftovers box's Remove (archive-leftovers U4). One `leftover-remove` request; the loop checks the
 // tree again and removes it when it is safe, or saved first when `fingerprint` is still the tree's (else refused).
 async function leftoverRemovePost(req: Request) {
@@ -1371,7 +1425,7 @@ async function get(req: Request, url: URL) {
 
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
-  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
   "/api/settings-import/preview": settingsImportPreview,
 };
 
