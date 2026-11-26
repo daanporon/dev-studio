@@ -61,7 +61,11 @@ Main's own observers read and prune only `host = 'local'` rows, so they never to
 
 | File | What it reads |
 |---|---|
-| `bin/backend/orca.ts` | Each managed Claude account's profile home `<orca data>/claude-profiles/<id>/home`: its `.credentials.json` (the OAuth token for the usage call), its `projects/` link; `system`'s `~/.claude`. |
+| `bin/backend/orca.ts` | Each listed account's folder, as its `accounts` row names it: the login file the usage and reset calls read (Claude's `.credentials.json`, Codex's `auth.json`), a Claude folder's `.claude.json` and its `projects/` link; `system`'s `~/.claude`. |
+| `bin/lib/accounts-list.ts` | The accounts refresh's folder scan: Orca's `<orca data>/claude-profiles/*/home`, `<accounts root>/<agent>/*` and each agent's own folder: whether the login file is there, and the login id in it (`.claude.json`, `auth.json`). Only the id leaves the file. |
+| `bin/lib/account-dirs.ts` | Whether a listed account's folder still exists (the list; the picker's "account gone"). |
+| `bin/loop/fulfil/account-add.ts`, `bin/lib/account-folder.ts` | A new account's folder: made with links into the agent's own folder, then watched for the login file, the login id and `.ds-login-exit`; a `--dir` folder's login file and id, read only. The kind's `afterLogin` copies Claude's onboarding keys from the system `.claude.json`. |
+| `bin/loop/fulfil/account-move.ts`, `bin/lib/account-folder.ts` | `ds account move`: `cp -a` of an Orca-folder account into the accounts root (Orca's folder is left alone), and the copy's plugin `installPaths` that still point into Orca's folder. |
 | `bin/loop/observers/codex.ts` | `~/.codex/sessions/` (see Transcripts). |
 | `bin/loop/settings/skills.ts` | `$CLAUDE_CONFIG_DIR` (or `~/.claude`): `commands/`, user skills, `~/.claude.json`'s MCP servers; a project's own `.claude/skills/*/SKILL.md`. |
 | `bin/lib/account-skills.ts`, `bin/host/install-skills.sh` | Each Claude account's `plugins/installed_plugins.json`, `settings.json` and `skills/`. Install time, not the loop. |
@@ -81,7 +85,7 @@ readers do not change.
 
 | File | What it reads |
 |---|---|
-| `bin/loop/observers/state.ts` | `accounts.tsv`, `tokens.tsv`, Lavish `state.json` and start log; per project `dispatcher.json`, `requests/<dir>/*.txt`, `alerts.json`, `loop/squad-spent.tsv`, `loop/limited.json`, `picker-done/`, `squads/<topic>.beat`. |
+| `bin/loop/observers/state.ts` | `accounts.tsv`, `accounts-orca.tsv` and `account-folders.tsv` (the refresh's Orca list and folder scan), `tokens.tsv`, Lavish `state.json` and start log; per project `dispatcher.json`, `requests/<dir>/*.txt`, `alerts.json`, `loop/squad-spent.tsv`, `loop/limited.json`, `picker-done/`, `squads/<topic>.beat`. |
 | `bin/loop/observers/documents.ts` | Plans and brainstorms (`squads/*.md`), `journals/*.md`, `cross-squad.md`, `archive/*`. |
 | `bin/loop/observers/config.ts` | The shipped `conventions/*.conf`. |
 | `bin/loop/observers/update.ts` | `state/loop/host-update.json`, each project's `squads-rev.json`. |

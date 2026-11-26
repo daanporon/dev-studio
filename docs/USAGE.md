@@ -19,18 +19,15 @@ first. In short:
 
 - An Orca host with the `orca` CLI (`orca status` shows `runtimeReachable: true`).
 - `git`, `jq`, and `claude` on PATH.
-- **A managed agent account on the host.** Squads launch as supervised workers
-  (`worker-start --agent claude`), which Orca can only start if that account is
-  registered on the host that runs the workers. Check with `orca account list`; if
-  it's empty, run `orca account add` once (it runs `claude login` with your own
-  account). Without this, `/ds-start-squad` fails at `worker-start` — see
-  `docs/solutions/2026-10-06-worker-start-needs-managed-account.md`.
+- **A Claude login on the host that runs the workers.** `claude` logged in there (`~/.claude`) is
+  enough to start: dev-studio lists that login as `system`. Add more with `ds account add`
+  ([Accounts](#accounts)). You add nothing in Orca.
 - The role skills the agents invoke, installed **on the host** (the squad agents
   run there as Claude Code): `ce-brainstorm`, `ce-plan`, `ce-work`,
   `ce-code-review`, `ce-compound`, `ce-babysit-pr`, `lfg` (the compound-engineering
   plugin) and `no-mistakes`. Install them with `bin/host/install.sh --skills`
   (which runs `bin/host/install-skills.sh`: the `compound-engineering` plugin via
-  `claude plugin` into every Claude account Orca manages, and `no-mistakes` via its
+  `claude plugin` into every Claude account on dev-studio's list, and `no-mistakes` via its
   official installer, linked into each account's `skills/`). Verify with
   `bin/host/install-skills.sh --check` (one verdict per account; exit 1 when one is broken).
 - **Lavish (OPTIONAL)** — a visual HTML review surface the Thinker can offer for a plan
@@ -246,10 +243,10 @@ Studio on `<x>` in a new worktree, closes the old one and switches the project. 
 is open (a paused one too), so close them first. The squads you start afterwards run on `<x>`; the Studio always follows
 the project's backend (`conventions/backend.md`).
 
-**What still needs Orca.** Adding a Claude login (until `plan-accounts` lands) still goes through Orca, and Muse
-runs only there; the account list and the skills install (`bin/host/install-skills.sh`) read loop.db's `accounts`
-table. A project on another backend
-launches Claude only; a roster row naming another agent is refused when you pick the backend. To try two backends
+**What still needs Orca.** Codex and Muse run only on `orca`: a project on another backend
+launches Claude only, and a roster row naming another agent is refused when you pick the backend. Accounts do not
+need Orca: the list, `ds account add` and the skills install (`bin/host/install-skills.sh`) work from loop.db
+([Accounts](#accounts)). To try two backends
 on one repo, follow [backends/side-by-side.md](backends/side-by-side.md).
 
 ## Start a feature squad
@@ -605,6 +602,73 @@ Each project ships via `ce-pipeline` (default), `no-mistakes`, `direct-PR`, or
 [<mode>]`. See `conventions/ship-modes.md` — and [`settings.md`](settings.md)
 for where the mode lives.
 
+## Accounts
+
+dev-studio keeps **one account list for the whole host**, for every agent, in loop.db. Every project picks
+from it. It holds:
+
+- each agent's own login on the host: Claude's `~/.claude` (id `system`), Codex's and Muse's own folders
+  (id `default`);
+- the logins you add with `ds account add`, each in its own folder under `~/.dev-studio/accounts/<agent>/<name>`;
+- on a host with the `orca` CLI, the Claude accounts Orca manages. dev-studio imports them and keeps using
+  Orca's folder for each one until you move it.
+
+```bash
+bin/ds account                                    # JSON: every account and its state
+bin/ds account add acct-b                         # a new Claude login
+bin/ds account add acct-c --agent codex           # a new Codex login
+bin/ds account add acct-d --dir /srv/logins/acct-d   # a folder that is already logged in
+bin/ds account default acct-b                     # the account a worker gets when nothing names one
+bin/ds account remove acct-c --agent codex        # off the list; its folder stays on disk
+bin/ds account move <account|label>               # copy a Claude account out of Orca's folder
+```
+
+On the board, **Settings → Accounts** (`#settings/accounts`, or **Manage** in the Accounts section) lists the
+same accounts, with the adds in progress and each account's switch.
+
+**Add a login.** The loop does the add, so it must be running. `ds account add <name>` makes the folder and
+opens a login terminal beside a project's Studio (`--project <label>` when more than one has a live Studio; if
+no terminal can be opened, it prints the line to run yourself). The command follows the add and prints where
+the terminal is, the login link and the end. `--no-wait` returns at once, and Ctrl-C leaves the add running.
+A name is a lowercase letter, then up to 31 of `a-z`, `0-9` and `-`; `system`, `default` and a name already
+used (a removed one too) are refused. An add that is not logged in within 30 minutes fails and keeps its folder.
+
+- **Claude:** open the link, log in, and paste the code the page gives you into the login terminal, or into
+  the board's **Send code** box. The board passes the code to that terminal and keeps it out of loop.db, chat
+  files and logs.
+- **Codex** (`--agent codex`): a device login. Open the link and type the code shown beside it.
+- **Muse:** it keeps one login per host, so `ds account add --agent muse` makes nothing. On Muse Code 1.4.25
+  no variable or flag of Muse itself moves its config folder (`~/.config/muse`), and moving `XDG_CONFIG_HOME`
+  or `HOME` would move other tools' settings with it. Log in with Muse itself.
+
+On the board, **Add account** asks for the agent, a name and an optional existing folder.
+
+**`--dir`: a folder that is already logged in.** dev-studio uses the folder where it is. It never moves,
+copies, writes or deletes it. On the board, give its full path in **Existing folder**, or press **Add** on a
+`folder only` row: a login folder the host has and no account uses.
+
+**The same login twice.** An add whose login is already listed adds nothing (`already there as <label>`) and
+removes only the folder that add made. Adding a login you removed brings the old entry back under its old
+name. When two or more folders hold one login, the board warns and the picker counts them as one account.
+
+**Default, remove and disable.** An account whose folder is gone, or that you removed, is never picked.
+`remove` deletes no folder; it refuses an agent's own login and the current default. To keep an account listed but unused, disable it (see
+[`settings.md`](settings.md), Accounts).
+
+**Move an account out of Orca's folder** (Claude only; the board's **Move** button). `ds account move` copies
+the folder into dev-studio's accounts folder and uses the copy; the account keeps its id, and Orca's folder
+stays as it is. It is refused while a member or an agent process uses the account, and while Orca still lists
+it unless you pass `--force`: two copies of one login rotate its token, so the first copy to refresh logs the
+other out at that copy's next refresh.
+
+> **Warning: never remove in Orca an account that dev-studio uses from Orca's folder, and never run
+> `orca account remove`.** Orca's own account remove deletes the profile folder, and with it the login
+> dev-studio runs on. `orca account remove` cannot remove a Claude account at all (it takes only
+> `--agent opencode|devin`). This applies while dev-studio uses Orca's folder. After `ds account move`,
+> removing the account in Orca is safe and ends the board's duplicate-login warning, unless the move's result names a plugin path that still runs through Orca's folder (reinstall that plugin first).
+
+A Codex account other than `default` starts only on the `orca` backend.
+
 ## Configure roles and models
 
 View and change which agent/model each role uses with `/ds-roles` (or
@@ -639,7 +703,7 @@ The override is **per role**: `set` writes that one role's row, every role the p
 never set runs the default row (and follows later changes to it), and `reset` or `rm`
 drops the project's row so the role runs the default again.
 New values apply to the **next** spawn, not running squads. Rationale for the
-defaults is in `conventions/models.md`. Available accounts: `orca account list`.
+defaults is in `conventions/models.md`. Available accounts: `bin/ds account` ([Accounts](#accounts)).
 Every role row, limit key, and other setting is described in
 [`settings.md`](settings.md).
 
@@ -852,9 +916,9 @@ alternatives a project can start on, and each has a runbook with what its trial 
   project still holds is ignored. A settings import never copies `worktree_provider` to another project.
 - **Running squads.** A move touches new squads only, and is refused while any squad is open. Each running
   squad keeps its backend and worktree tool for life. To move a topic, close its squad and start it again.
-- **What still needs Orca.** The Studio and the account list (logins, limits) are Orca's until
-  `plan-project-start` and `plan-accounts` land, so keep Orca installed and signed in on the host
-  even when a project's squads run elsewhere.
+- **What still needs Orca.** `bin/host/install.sh` still checks for a reachable Orca runtime, and Codex
+  and Muse run only on `orca`. The account list is dev-studio's own ([Accounts](#accounts)), so a project
+  on another backend needs no Orca account.
 - **Worktree tool.** `worktree_provider` is `auto` (the default: Orca's own for `orca` and
   `orca-lite`, `git` for `tmux` and `herdr`), `git`, or `treehouse` (a warm pool of leased worktrees,
   only on `tmux` and `herdr`; the binary comes from `DS_TREEHOUSE_BIN` or `PATH`). A tool the backend
@@ -886,7 +950,7 @@ removal closes the Studio. Use `bin/ds remove-project` or the board ([Remove a p
 - `/ds-q` — inside a squad's Lead or Thinker: pop its open questions into a picker and answer them.
 - `/ds-roles [set|rm …]` — view or change the per-role agent/model/effort/fallbacks (per-project override).
 - `/ds-limits [set|rm …]` — view or change the context/usage/token thresholds (per-project override).
-- `/ds-accounts [list | disable|enable <agent>:<account|label>]` — list the accounts agents run on (with `state`), or switch one off/on host-wide (`bin/ds account`). No pick uses a disabled account; members running on it switch at their next restart. See `docs/settings.md` (Accounts). The board's Accounts table has a **Free resets** cell per account (`2 · first by 10 Dec` = two grants, the earliest use-by date; hover for each grant's label, what it refills, use-by date and left/total; `0`, `not reported` for Muse, `?` when unknown), and the text board's account strip adds `free resets <n>`. Click any account row to open it: each grant is listed with what it refills, left/total and use-by date and, when the provider says it is usable now, a **Use** button (it asks first); the opened account also holds its **Enable/Disable** button, and the roles table when it has roles. The closed row shows only the summary and a small marker for a use in the last hour. A grant usable now has a **Use** button: it asks first (a reset cannot be undone), then the loop uses that grant once (`POST /api/account-reset`; a second press waits for the first) and a toast says what happened (`reset used`, `nothing to reset` keeps the grant, `no grant left`, `already used`, `failed`); the cell shows `last HH:MM · <outcome>` for an hour and the accounts are read again. The Accounts section has the same switch: an **Enable/Disable** button in each opened row (`POST /api/account`; disabling an agent's last enabled account asks first). The section shows one row per enabled login, tagged `Orca + ds`, `ds only` or `system`, with the `default` chip on dev-studio's default, a warning for a login found in two or more folders and a **folder missing** warning. A disabled account leaves it once no role runs on it (until then: a dimmed row with a `disabled` badge, no top-strip flag), as does a login folder no account uses (`folder only`); the header says how many are hidden. **Manage**, at the top of the section, lists every account and `folder only` login with its tag, warnings and the same switch (a `folder only` login is not an account and has none). The text board lists every account.
+- `/ds-accounts [list | disable|enable <agent>:<account|label>]` — list the accounts agents run on (with `state`), or switch one off/on host-wide (`bin/ds account`). No pick uses a disabled account; members running on it switch at their next restart. See `docs/settings.md` (Accounts). The board's Accounts table has a **Free resets** cell per account (`2 · first by 10 Dec` = two grants, the earliest use-by date; hover for each grant's label, what it refills, use-by date and left/total; `0`, `not reported` for Muse, `?` when unknown), and the text board's account strip adds `free resets <n>`. Click any account row to open it: each grant is listed with what it refills, left/total and use-by date and, when the provider says it is usable now, a **Use** button (it asks first); the opened account also holds its **Enable/Disable** button, and the roles table when it has roles. The closed row shows only the summary and a small marker for a use in the last hour. A grant usable now has a **Use** button: it asks first (a reset cannot be undone), then the loop uses that grant once (`POST /api/account-reset`; a second press waits for the first) and a toast says what happened (`reset used`, `nothing to reset` keeps the grant, `no grant left`, `already used`, `failed`); the cell shows `last HH:MM · <outcome>` for an hour and the accounts are read again. The Accounts section has the same switch: an **Enable/Disable** button in each opened row (`POST /api/account`; disabling an agent's last enabled account asks first). The section shows one row per enabled login, tagged `Orca + ds`, `ds only` or `system`, with the `default` chip on dev-studio's default, a warning for a login found in two or more folders and a **folder missing** warning. A disabled account leaves it once no role runs on it (until then: a dimmed row with a `disabled` badge, no top-strip flag), as does a login folder no account uses (`folder only`); the header says how many are hidden. **Manage**, at the top of the section, opens **Settings → Accounts**, which lists every account and `folder only` login with its tag, warnings and the same switch (a `folder only` login is not an account and has none), and adds and moves accounts ([Accounts](#accounts)). The text board lists every account.
 - `/ds-mode [<project>] [<mode>]` — view or change a project's ship mode.
 - `/ds-reload [<project>]` — reload instructions: yourself in a role terminal (a Lead also writes a reload wish per running child), or all squads from the Studio.
 - `/ds-restart [<project>] [--topic …] [--role …]` — restart roles fresh: a whole project, one squad, or one role. Each restart picks from the top of its role, tier and current phase ladder before stopping anything. With no room, a running member stays put (`WAIT <epoch>`, exit 3); a stopped member waits for the next free pick. Direct `restart-role.sh` placement flags (`--agent`, `--model`, `--effort`, `--account`) force a choice, with an active member override taking priority. `/ds-resume --suspended` restores a suspended squad's conversation.

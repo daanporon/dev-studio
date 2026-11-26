@@ -91,7 +91,8 @@ The contract is small because the loop keeps the rest:
 
 - **Launch drivers.** The agent's command line, its flags and model, the account it runs on, and
   reading a menu or a limit notice off the screen.
-- **Accounts and the picker.** Account folders, usage and credentials are read on the loop's side
+- **Accounts and the picker.** The account list is dev-studio's own, host-wide, in loop.db's `accounts`
+  table, not a backend's. Account folders, usage and credentials are read on the loop's side
   (`docs/backends/local-reads.md`).
 - **Agent state** when `state` is `none`, and the turn check when `turn_confirm` is `none`.
 - **The parents tree** when `parents` is not `native`, and **start idempotency**, through `gen`.
@@ -293,8 +294,8 @@ contract backend (U11, "Started" below).
   its squads together (below, "Moving a project"). User-facing steps: `docs/USAGE.md`, "Start a project on a backend".
   A `worktree_provider` is checked against the Studio's backend when set (a tool the backend cannot use, a
   missing binary, a roster row naming an agent the backend cannot launch). A running squad is never moved: it
-  keeps its backend until it is closed and started again. A settings import leaves `worktree_provider` alone. Still on Orca: the
-  account list (until `plan-accounts`).
+  keeps its backend until it is closed and started again. A settings import leaves `worktree_provider` alone. The account list
+  does not depend on the project's backend (**Accounts**, below).
 - **Moving a project (U54).** `ds up <project> --backend <x>` on a project up on another backend moves its
   Studio, and so the project. It is refused, changing nothing, while any squad of the project is open (a
   paused one too: close them first). `ds up` makes the new Studio's worktree (`<prefix><project>-studio-<x>`:
@@ -514,7 +515,8 @@ Script-callable (implemented by the adapter, used by the loop's observers and fu
 | `repo-ensure` | `<path>` | — (registers the home repo, idempotent) |
 | `status` | — | `reachable` when the runtime answers and reports reachable (exit 1 otherwise; install.sh's preflight) |
 | `project-list` | — | registered projects (raw backend JSON; `/ds-start-squad` reads it) |
-| `account-list` | — | `<agent>\t<account_id>\t<label>` per account; **the first line per agent is that agent's default login** (a one-account backend: one line per agent, id `default`) |
+| `account-list` | — | `<agent>\t<account_id>\t<label>` per account; **the first line per agent is that agent's default login** (a one-account backend: one line per agent, id `default`). Orca's prints dev-studio's list, from loop.db's `accounts` table |
+| `orca-accounts` | — | Orca's own Claude accounts, only for dev-studio's import: `<account_id>\t<label>\t<home>\t<active>` per host profile, then `system\t<label>\t-\t<active>`; exit 1 when `orca account list` does not answer. The accounts refresh calls `bin/backend/orca.sh` for it whenever an `orca` CLI is here, whatever `BACKEND` is, so another backend needs no such verb |
 | `claude-config-dir` | `<account_id>` | the `CLAUDE_CONFIG_DIR` a Claude role on that account runs with (its plugin registry lives under it); **empty** = run with `CLAUDE_CONFIG_DIR` unset (Orca's `system`); exit 1 when the account's config dir is missing. A one-login backend prints nothing |
 | `preflight` | — | install.sh's one read (U246): exit 1 with nothing on stdout when the runtime is unreachable, else the `account-list` rows, each Claude row with a fourth column, its `claude-config-dir` (empty = unset or no home); `wrap-hooks.sh` reads the same rows. A backend without it fails install, so implement it alongside `status` |
 | `agent-accounts` | — | Per live agent process on this host, whoever started it (a hand restart, `/ds-restart`, an Orca restart). A top-level agent (no agent above it) prints a main line, `<cwd>\tmain\t<agent>\t<model>\t<account_id>\t<effort>\t<pid>\t<start>\t<rss_kb>` (`<account_id>` comes from the process's folder env, `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, matched against the `accounts` table; muse: `default`; the model and effort are its `--model`/`--effort` flags, the start is epoch seconds from the process table, each `-` when unread; U149, a backend may still print the older `<cwd>\t<agent>\t<account_id>`); the loop's Orca observer maps the cwd to a worktree (`observed_workers` presence, agent, account, pid, start, RSS and live model) and the record reconciler makes the member's record follow it (U55, U149). An agent under another agent (a review-unit `claude -p` under a muse Builder) prints a sub line, `<cwd>\tsub\t<agent>\t<model>\t<account_id>[\t<effort>]` (`-` when its `--model` flag can't be read; the effort is its `--effort` flag, left off when it has none, U105); the observer keeps those in `observed_workers.sub_agents` and a sub line never overwrites the main account (U90). So does a headless `claude -p` anywhere (U98: review-unit.sh runs detached, or under a claude Builder's own claude); a claude without `-p` under another claude stays skipped; a backend that can't tell prints nothing |
@@ -555,7 +557,12 @@ Script-callable (implemented by the adapter, used by the loop's observers and fu
 ignores it. A caller that passes `account` but skips an earlier optional positional (`host`,
 `effort`, `parent_wt`) passes `-` for it, and adapters treat `-` as empty. A member with no
 `account` runs on its agent's default login — core resolves it from the first `account-list` line
-for that agent and never hardcodes an id. The loop turns `account-list` + `account-usage` +
+for that agent and never hardcodes an id. dev-studio owns the list: loop.db's `accounts` table, for
+every agent and the whole host (`ds account add|default|remove|move`, `docs/USAGE.md`, "Accounts").
+Each agent's own login is its system row, an account added with `ds account add` has its own folder, and
+Orca's Claude accounts come in through the `orca-accounts` import and keep Orca's folder until they are
+moved. A new agent's accounts are one file in `bin/lib/account-kinds/` (`docs/scripts.md`, "Adding an
+agent's accounts"). The loop turns `account-list` + `account-usage` +
 `limited` into `state/accounts.tsv` (`bin/lib/accounts-refresh.sh`); nothing in core names how a
 backend switches accounts, so a one-account backend degrades to model fallbacks + wait.
 

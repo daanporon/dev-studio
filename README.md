@@ -23,8 +23,8 @@ topic's true state, and questions that reach you instead of getting buried.
 ## Install
 
 On the Orca host you need `git`, `jq`, Claude Code, the `orca` CLI with a
-reachable runtime, and [Bun](https://bun.sh). `orca account list` must show at
-least one Claude login (add one with `orca account add`), and Orca's "Nested
+reachable runtime, and [Bun](https://bun.sh). `claude` must be logged in on the host (add more logins later
+with `bin/ds account add`, see [docs/USAGE.md](docs/USAGE.md#accounts)), and Orca's "Nested
 worker depth" must be 2 or more, or a squad's workers fail to start.
 
 ```sh

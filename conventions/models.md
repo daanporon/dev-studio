@@ -1,8 +1,9 @@
 # Per-role model mapping
 
-Each squad role runs on a fitting managed Orca account/model (KTD7), with an
+Each squad role runs on a fitting account/model (KTD7), with an
 optional per-role reasoning **effort** (`low|medium|high|xhigh|max`; blank = the
-model's default). List the accounts available on this host with
+model's default). The accounts are dev-studio's own host-wide list (`bin/ds account`,
+`docs/USAGE.md`, "Accounts"); a role reads it with
 `~/.dev-studio/bin/role/orch.sh account-list` (`<agent>\t<account_id>\t<label>`, the first line per agent is its default login).
 
 | Role | Agent | Model | Fallbacks | Why |
@@ -46,8 +47,8 @@ the unit as waiting for an account. A
 per-project override without the 6th column has no model fallbacks (`roles.sh list` shows it).
 The `builder` row falls back last to Spark (`muse:muse-spark-1.3`, Orca's native `--agent muse`):
 launching it is proven, resuming it is not — a restarted Muse worker starts fresh from the squad state.
-Claude accounts are every Claude profile Orca manages on the host plus the host's own login
-(`system`); a member on a non-default managed account runs with that account's config dir, while `system` runs with
+Claude accounts are the Claude entries of that list, with the host's own login as
+`system`; a member on another account runs with that account's config dir, while `system` runs with
 no config dir (`env -u CLAUDE_CONFIG_DIR`; its login lives in `~/.claude.json`), and a restart
 keeps its account (and its model, when it was on a fallback) unless it is pinned with
 `bin/ds want member <id> --model <m> --account <a>` (`restart-role.sh` no longer takes those flags, U153).
