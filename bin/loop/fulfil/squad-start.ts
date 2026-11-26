@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { failRequest, finishRequest, requestActions, type Exec, type Fulfiller } from "../core/actuator.ts";
 import type { Action } from "../core/plugins.ts";
 import type { Row, Store } from "../core/store.ts";
+import { openRemoval } from "../squad/project-removal.ts";
 import { envInt } from "../core/tick.ts";
 import { pick } from "../capacity/pick.ts";
 import { childEnv } from "../io/orca.ts";
@@ -99,6 +100,8 @@ const squadStart: Fulfiller = {
     const fail = (why: string) => { failRequest(a, x, why); logStart(x, a, { ok: false, error: why }); return { done: true as const, result: `failed: ${why}` }; };
     const project = a.project;
     if (!project) return fail("a squad start needs a project");
+    const removing = openRemoval(x.store, project);
+    if (removing !== null) return fail(`'${project}' is being removed (request ${removing})`);
     if (typeof p.framing !== "string" || !p.framing.trim()) return fail("say what the squad should do: the text is empty");
 
     let framingFile: string;
