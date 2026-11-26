@@ -1,7 +1,7 @@
 -- 0038-exposed.sql — what squad members host for the operator to open (expose-hosted-services U1, KTD1).
 -- `exposed` holds what roles wrote with `ds expose` (bin/commands/expose.ts, bin/loop/squad/exposed.ts): one
 -- open row per (project, squad, owner_wt, name), so exposing a name again updates it in place. An entry
--- ends by setting gone_at + gone_why (ds unexpose, or the loop's reconciler, U2); rows are never deleted.
+-- ends by setting gone_at + gone_why (ds unexpose, or the loop's reconciler, U2); ending keeps the row (only `ds remove-project` deletes it).
 --   owner_wt  the owner member's worktree id ('<repo>::<path>'); '' for an entry the squad owns from
 --             outside a role worktree (--project/--topic: the operator or the Studio)
 --   role      the owner's role (operator | studio outside a role worktree); suffix as in members
