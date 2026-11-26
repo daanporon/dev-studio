@@ -35,9 +35,9 @@ ok "bin/README.md is generated and up to date" "cmp -s '$TMP/README.md' '$ROOT/b
 # ds runs a shell command from a folder, passing args and exit code through.
 if "$ROOT/bin/ds" ship-mode dev-studio 2>&1 | grep -q 'ship mode'; then pass=$((pass+1)); else fail=$((fail+1)); echo "  FAIL: ds ship-mode runs commands/ship-mode.sh" >&2; fi
 
-# U186: the shims are gone — the top of bin/ is ds, ds.ts, README.md and the folders.
+# U186: the shims are gone — the top of bin/ is ds, ds.ts, README.md and the folders (side-loop-host U1 adds link/, the host link code).
 top="$(ls "$ROOT/bin" | LC_ALL=C sort | tr '\n' ' ')"
-ok "bin/ top level is ds, ds.ts, README.md and the folders" "[ '$top' = 'README.md backend board commands ds ds.ts hooks host lib loop review role ' ]"
+ok "bin/ top level is ds, ds.ts, README.md and the folders" "[ '$top' = 'README.md backend board commands ds ds.ts hooks host lib link loop review role ' ]"
 
 # The README has no < or > outside a code span (a bare <s> strikes the rest through on GitHub).
 bare="$(python3 -c 'import re,sys; t=open(sys.argv[1]).read(); t=re.sub(r"(`+).*?\1","",t); print(len(re.findall(r"[<>]",t)))' "$ROOT/bin/README.md")"

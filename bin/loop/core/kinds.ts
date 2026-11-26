@@ -168,6 +168,12 @@ export const FACTS = {
   feedback_edited: obj({ draft: num, leak: str }),
   feedback_dismissed: obj({ draft: opt(num), notes: arr(num), why: opt(str) }),
   feedback_restored: obj({ note: num }),
+  // side-loop-host U1 (bin/link/host-keys.ts): a side host's join request, its expiry, the operator's answer.
+  host_join_requested: obj({ name: str, fingerprint: str }),
+  host_join_expired: obj({ name: str, fingerprint: opt(str) }),
+  host_accepted: obj({ name: str, fingerprint: str, seats: num, by: str }),
+  host_rejected: obj({ name: str, fingerprint: str, was: str, by: str }),
+  host_removed: obj({ name: str, fingerprint: str, was: str, by: str }),
   limit_cleared: ep,
   limit_expired: ep,
   limit_wait: ep,
