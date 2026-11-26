@@ -128,4 +128,12 @@ describe("redact: passwords, login headers and URL credentials", () => {
     redact(text);
     expect(performance.now() - t).toBeLessThan(2000);
   });
+  test("a repeated bracket type neither stalls the scan nor hides a later secret from it", () => {
+    const t = performance.now();
+    expect(redact(`password: ${"a[]|".repeat(60)}a; DB_PASSWORD: zzreal`)).toEndWith(`DB_PASSWORD: ${R}`);
+    expect(redact(`password: ${"a<>|".repeat(60)}a; DB_PASSWORD: zzreal`)).toEndWith(`DB_PASSWORD: ${R}`);
+    expect(performance.now() - t).toBeLessThan(2000);
+  });
+  test.each([String.raw`curl -u "admin:zzA\$(zzB" x`, 'curl -u "admin:zzA\\`zzB" x', String.raw`curl -u admin:"zzA\$(zzB" x`])
+  ("an escaped substitution in a -u password is text: %s", (text) => expect(redact(text)).not.toContain("zz"));
 });

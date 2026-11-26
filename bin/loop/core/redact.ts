@@ -62,7 +62,11 @@ const NAME = `(?<![\\w.-])(?=[\\w.-]*?${KEY})([\\w.-]+)`;
 // sign, a quoted key or a type between (`password = "x"`, `'password' => 'x'`, `apiKey: string = "x"`) only a
 // quoted value counts, so prose and `token == other` stay.
 // A type as an annotation writes it: `str`, `Optional[str]`, `Map<string, string>`, `str | None`.
-const TYPE_NAME = String.raw`[A-Za-z_][\w.]*(?:\[[\w., |\[\]]{0,80}\]|<[\w., |<>\[\]]{0,80}>)?\??`;
+// A bracket body holds one nested level and cannot run past its closer: overlapping bodies backtrack
+// exponentially, and the replace then silently stops matching.
+const SQUARE = String.raw`\[(?:[\w., |]|\[[\w., |]{0,80}\]){0,80}\]`;
+const ANGLE = String.raw`<(?:[\w., |\[\]]|<[\w., |\[\]]{0,80}>){0,80}>`;
+const TYPE_NAME = String.raw`[A-Za-z_][\w.]*(?:${SQUARE}|${ANGLE})?\??`;
 const TYPES = String.raw`${TYPE_NAME}(?:[ \t]*\|[ \t]*${TYPE_NAME})*`;
 const SPACED = String.raw`(?:\\*["'])?(?:(?:[ \t]*:[ \t]*${TYPES})?[ \t]*(?::=|=>|=(?!=))|[ \t]*:)[ \t]*`;
 // In `name: Type = "x"` the word after the colon is the type; the spaced form hides what is assigned.
@@ -97,8 +101,8 @@ export function redact(text: string): string {
   for (const re of USER_FLAGS) {
     out = out.replace(re, (all, flag: string, user, pw) => {
       const literal = flag.endsWith("'"); // the shell expands nothing in single quotes
-      // A substitution runs, so it stays on the card.
-      return (!literal && !pw.startsWith("'") && (isRef(pw) || /\$\(|`/.test(pw))) || /^\d+:\d+$/.test(user + pw) ? all : `${flag}${user}${hide(pw)}`;
+      // A substitution runs, so it stays on the card; an escaped `\$(` or backtick is text.
+      return (!literal && !pw.startsWith("'") && (isRef(pw) || /\$\(|`/.test(pw.replace(/\\./g, "")))) || /^\d+:\d+$/.test(user + pw) ? all : `${flag}${user}${hide(pw)}`;
     });
   }
   for (const re of ASSIGNS) {
