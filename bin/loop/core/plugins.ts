@@ -4,11 +4,13 @@
 //   bin/loop/reconcilers/*.ts   export default { name, scope?, run(ctx) => Action[] }       rows into actions
 //   bin/loop/fulfil/*.ts        the same shape as a reconciler; wishes into actions
 // Each kind runs in filename order. `scope: "host"` runs once per tick with project "", the default
-// "project" once per discovered project.
+// "project" once per discovered project. A side host's loop (role `side`) loads only what side-plugins.ts names
+// and never the decider (side-loop-host U3).
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Store } from "./store.ts";
 import type { Timer } from "./timers.ts";
+import { SIDE_PLUGINS } from "./side-plugins.ts";
 
 export const DIRS = {
   observers: join(import.meta.dir, "..", "observers"),
@@ -19,7 +21,11 @@ export const DIRS = {
 // Read by the Orca observer this tick; absent = unknown, and a step reads Orca itself (U244).
 export type TickFacts = { unreadRuns?: Set<string>; terminalHandles?: Set<string> };
 
+/** `main` decides; `side` (`main.ts --role side`) runs terminals and local reads for main. */
+export type Role = "main" | "side";
+
 export type TickCtx = {
+  role?: Role;            // absent = main
   store: Store;
   project: string;        // "" for a host-scope plugin
   tick: number;           // health.tick_no of this tick
@@ -51,10 +57,16 @@ export type Actuator = { act(action: Action, ctx: TickCtx): unknown; seats?(ctx:
   takeTimes?(): Map<string, number>;
   takeDeferred?(): Map<string, number> };   // U249: background actions turned down this tick, by kind   // ms per `actuator:<kind>` since the last call (U239)
 
-// The plugins in `dir`, by filename. A module exports its plugin as default (or as named exports).
-export async function load<T extends { name: string }>(dir: string): Promise<T[]> {
+// The plugins in `dir`, by filename. A module exports its plugin as default (or as named exports). With
+// `only` (file names without `.ts`) no other file is imported, and a name with no file is an error.
+export async function load<T extends { name: string }>(dir: string, only?: readonly string[]): Promise<T[]> {
   let files: string[] = [];
-  try { files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort(); } catch { return []; }
+  try { files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort(); } catch { if (!only?.length) return []; }
+  if (only) {
+    const missing = only.filter((n) => !files.includes(`${n}.ts`));
+    if (missing.length) throw new Error(`loop: ${dir} has no plugin file for ${missing.join(", ")}`);
+    files = files.filter((f) => only.includes(f.slice(0, -3)));
+  }
   const out: T[] = [];
   for (const f of files) {
     const m = await import(join(dir, f));
@@ -67,7 +79,13 @@ export async function load<T extends { name: string }>(dir: string): Promise<T[]
 
 export type Plugins = { observers: Observer[]; reconcilers: Reconciler[] };
 
-export async function loadAll(dirs = DIRS): Promise<Plugins> {
+export async function loadAll(dirs = DIRS, role: Role = "main"): Promise<Plugins> {
+  if (role === "side") {
+    return {
+      observers: await load<Observer>(dirs.observers, SIDE_PLUGINS.observers),
+      reconcilers: [...await load<Reconciler>(dirs.reconcilers, SIDE_PLUGINS.reconcilers), ...await load<Reconciler>(dirs.fulfil, SIDE_PLUGINS.fulfil)],
+    };
+  }
   return {
     observers: await load<Observer>(dirs.observers),
     // The decider first (U152): it compares wishes with what the observers just saw, before any

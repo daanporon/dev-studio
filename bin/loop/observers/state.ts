@@ -10,6 +10,8 @@
 //             picker mirrors (squads rows + picker-done/ + the transcript) -> observed_pickers,
 //             each member's newest transcript (path, mtime, size, last model, last effort, entrypoint) -> observed_transcripts,
 //             each Lead's watch beat (squads/<topic>.beat, its mtime) -> observed_markers
+// On a side host (role `side`) only the transcripts run: every other read is a `state/` file of main's own.
+//
 // Never the squad JSON: the squads, members and units rows are the truth and the JSON is the loop's
 // own export, so re-reading it would roll back what was written since (U18's migration imports it
 // once). Never the marker files either (sweep/*.poke, *.pending, ...): the sweep is off after the switch.
@@ -23,6 +25,7 @@ import { confirm, Gate, replace, sig } from "../core/gate.ts";
 import { copyLoginIds, mergeOrcaImport, parseAccountFolders, parseOrcaImport } from "../capacity/accounts.ts";
 import { accountRows, alertRows, dispatcherRows, doneRequests, isObj, mtime, num, readJson, requestFiles, requestRows, spendRows, tokenRows, tsv } from "../db/import-json.ts";
 import type { Observer, TickCtx } from "../core/plugins.ts";
+import { sideProjects } from "../core/side-plugins.ts";
 import { discoverProjects } from "../settings/projects.ts";
 import { ROOT, type FactRow, type Row, type Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
@@ -304,6 +307,10 @@ export function stateObserver(opts: StateOpts = {}): Observer {
     scope: "host",
     run(ctx: TickCtx) {
       const { store, now } = ctx;
+      if (ctx.role === "side") {
+        for (const p of sideProjects(store)) transcripts(store, now, p);
+        return;
+      }
       accounts(store, now);
       file(store, now, "tokens.tsv", sig(join(store.root, "tokens.tsv")), () => tokenRows(store.root), [["observed_tokens", {}]]);
       sessions(store, now);

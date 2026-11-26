@@ -14,6 +14,10 @@
 // default only on the live root (the checkout's own state/); DS_LOOP_CODE_WATCH=1 forces it on, =0 off,
 // DS_LOOP_CODE_ROOT (tests) names the repo to watch and DS_LOOP_CODE_CHECK_MS (tests) the interval.
 //
+// `--role side` (side-loop-host U3, issue #127) is the loop of a side host: only the plugins
+// core/side-plugins.ts names, never the decider, and none of main's own steps (the old files' migration,
+// the actuator, the squad JSON snapshots, the rollback's export and board stop). Default `main`.
+//
 // DS_LOOP_HANG=1 (tests only): take the lock and the pidfile and boot, then never tick — a live,
 // stalled loop.
 import { markStopping } from "./core/stopping.ts";
@@ -25,7 +29,8 @@ import { CODE_CHECK_MS, CodeWatch, codeWatchOn, headRev, hostUpdateRunning } fro
 import { exportForRollback } from "./db/export-json.ts";
 import { stopAll } from "./fulfil/board.ts";
 import { migrateLoopFiles, reconcile } from "./db/migrate-host.ts";
-import { loadAll } from "./core/plugins.ts";
+import { loadAll, type Role } from "./core/plugins.ts";
+import { sideActuator } from "./core/side-plugins.ts";
 import { queuedWork } from "./messages/replay.ts";
 import { now, open, ROOT, stateRoot } from "./core/store.ts";
 import { RECONCILE } from "./db/reconcile-mark.ts";
@@ -51,6 +56,16 @@ async function rolledBack(): Promise<boolean> {
   return !existsSync(import.meta.path);
 }
 
+function roleArg(args: string[]): Role {
+  if (!args.length) return "main";
+  const m = /^--role[= ](main|side)$/.exec(args.join(" "));
+  if (m) return m[1] as Role;
+  console.error("usage: main.ts [--role main|side]");
+  process.exit(2);
+}
+const role = roleArg(process.argv.slice(2)), side = role === "side";
+const act = side ? sideActuator : actuator;
+
 const root = stateRoot();
 mkdirSync(root, { recursive: true });
 const pidFile = join(root, "loop.pid");
@@ -65,8 +80,10 @@ if (!flock(lock)) {
   console.log(line);
   process.exit(0);
 }
-migrateLoopFiles(root);
-reconcile(root);
+if (!side) {
+  migrateLoopFiles(root);
+  reconcile(root);
+}
 writeFileSync(pidFile, `${process.pid}\n`);
 
 let stopping = false, busy = false;
@@ -101,14 +118,14 @@ async function codeChanged(): Promise<boolean> {
   const c = code?.check();
   if (c?.kind !== "restart") return false;
   // A start in flight records its worker first, as the rollback waits; bounded, so a hung one cannot hold it.
-  await Promise.race([actuator.drain(), Bun.sleep(ROLLBACK_DRAIN_MS)]);
+  if (!side) await Promise.race([actuator.drain(), Bun.sleep(ROLLBACK_DRAIN_MS)]);
   store.fact("loop_code_changed", [], { payload: { from_rev: c.from, to_rev: c.to, files: c.files.slice(0, 10), count: c.files.length } });
   return true;
 }
-const loop = new Loop(store, await loadAll(), actuator, { signals });
+const loop = new Loop(store, await loadAll(undefined, role), act, side ? { role } : { signals });
 loop.boot(undefined, bootRev ? bootRev.slice(0, 7) : null);
 // Calls a crash cut short are settled with Orca before the first tick acts again.
-await actuator.boot(store, now());
+if (!side) await actuator.boot(store, now());
 if (process.env.DS_LOOP_HANG === "1") {
   setInterval(() => {}, 1 << 30);
 } else {
@@ -118,6 +135,10 @@ if (process.env.DS_LOOP_HANG === "1") {
     // `git checkout main` took this very file away: that is the rollback (U18). main knows nothing of
     // the loop, so it leaves by itself, and the unit's ConditionPathExists keeps it from coming back.
     if (await rolledBack()) {
+      if (side) {
+        store.event("loop_exit", { payload: { why: `${import.meta.path} is gone from its checkout` } });
+        break;
+      }
       // First, so that no way back to this checkout finds rows it trusts without a look at the files.
       writeFileSync(join(root, RECONCILE), "");
       // A pinned older checkout reads the files from here on: a start in flight records its worker first (bounded,

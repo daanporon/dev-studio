@@ -412,6 +412,18 @@ migration not yet run), loads the plugins and ticks forever. `bin/loop/loop.sh` 
 (`--ensure`, `--status`, `--stop`); the work is in `bin/commands/loop-ts.ts`.
 `systemd/ds-loop.service` runs the daemon on the host.
 
+`main.ts --role side` is the loop of a side host (default `main`). It loads only
+the plugins `bin/loop/core/side-plugins.ts` names, all of them observers of that
+host (processes, transcripts and rollouts, chat, the backend contract, reviews,
+exposed URLs, cleanup, disk usage, worktrees), and writes their rows into its own
+`loop.db`. A plugin not on the list never runs there, so a new one is main-only
+until someone names it. The decider is never loaded, and main's own steps are
+left out: the old files' migration, the actuator, retiring capacity facts, the
+squad JSON snapshots, and the rollback's export and board stop. Its projects are
+the `projects` rows main sent down, not folders in the state root. It runs no
+Studio, and of the `state` observer only the transcripts. Nothing starts it yet,
+and it does not open the link yet.
+
 ### capacity/
 
 Who runs on which model and account. `bin/loop/capacity/pick.ts` is the picker
