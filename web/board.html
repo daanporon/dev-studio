@@ -250,6 +250,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .md.qmd{padding:0;overflow:visible;overflow-wrap:anywhere;min-width:0;max-width:100%} .md.qmd>:first-child{margin-top:0} .md.qmd>:last-child{margin-bottom:0}
 .md.qmd ul,.md.qmd ol{margin:4px 0;padding-left:20px} .md.qmd :is(h3,h4,h5,h6){margin:8px 0 4px;font-size:inherit;font-weight:700}
 .qbody h3,.chat-q h3,.opt,.sugg{overflow-wrap:anywhere}
+.qcmd{margin:0;padding:8px 10px;flex:none;max-height:40vh;overflow:auto;background:#0f1115;color:#e6e8ee;border:1px solid #2b303a;border-radius:8px;font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere} .qnote .qcmd{max-height:9.5em;margin-top:4px}
 .qbody .prline{display:flex;align-items:center;font-size:13px;color:var(--mut)} .qbody .prline .prchip{margin-left:0}
 .opts{display:flex;flex-direction:column;gap:6px}
 .pnote{font-size:13px;color:var(--amber);background:var(--amber-bg);border:1px solid #4a3a1e;border-radius:7px;padding:9px 12px}
@@ -2286,6 +2287,13 @@ const sqName = (n) => n.squad === "_studio" ? "Studio" : n.squad;
 const nkey = (n) => n.id ? n.label + "/" + n.squad + "/" + n.id : "appr:" + n.label + "/" + n.squad + "/" + n.text;
 const akey = (n) => n.id ? askingKey(nkey(n), n.since) : nkey(n);
 
+// ShownText: the command or change a prompt in a terminal is about (an entry with `shown`), as a code block.
+function ShownText({ n }) {
+  return html`<pre class="qcmd">${n.shown}</pre>${n.cwd && html`<div class="lndet">in ${n.cwd}</div>`}`;
+}
+// Where a safety-check prompt is answered, and who raised it.
+const promptWhere = (n, who) => "Answer it in " + who + "'s terminal" + (n.agent ? " (its helper agent " + n.agent + " asks)" : "");
+
 // AskOverlay: one question at a time, tabs for the rest of the inbox. Numbered options (the
 // recommended one pre-selected) plus free text; 1-9 picks, ←/→ switch tabs, Esc closes.
 // planOpen: the plan modal is stacked over this overlay, so every key belongs to it (Esc closes the plan only).
@@ -2794,7 +2802,7 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
             ${qCur.options.map((o, i) => html`<button key=${i} type="button" class="btn chat-qopt" disabled=${pressing === shown.wt} onClick=${() => pressOpt(i)}>${i + 1}. ${o}</button>`)}
             <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(() => goView("chat"))}>Esc · leave the menu</button>`
           : html`<h3>${linkedQ(qCur.title, qCur.repo_slug)}</h3>${qCur.doc && onPlan && html`<div><button type="button" class="btn sm" data-ev="open-doc" onClick=${() => onPlan(qCur.doc)}>${docLabel(qCur)}</button></div>`}
-            ${qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
+            ${qCur.shown ? html`<${ShownText} n=${qCur} />${qCur.picker_kind === "permission" && !qCur.answerable && html`<div class="chat-qprompt">${promptWhere(qCur, qCur.asker || shown.label)}</div>`}` : qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
             ${qCur.answerable
               ? html`<${QOptions} n=${qCur} rec=${qRec} onPick=${(l) => answerQ(qCur, l)} />
                 ${qRec && !qCur.choices.some((c) => c.label === qRec) && html`<div class="sugg"><b>Suggested:</b> ${qRec}${qCur.why ? html` — ${linkedQ(qCur.why, qCur.repo_slug)}` : ""}</div>`}
@@ -2905,10 +2913,11 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           <div>${n.changes && html`<button class="btn sm" data-ev="what-changed" onClick=${() => onPlan({ ...n.doc, view: "changes", changes: n.changes })}>What changed</button> `}<button class="btn sm" data-ev="open-doc" onClick=${() => onPlan({ ...n.doc, view: "full", changes: n.changes })}>${docLabel(n)}</button></div></div>`}
         ${n.plain && !n.revision && n.facts && html`<div class="qfacts">${[n.facts.steps + " steps", n.facts.hard + " hard", n.facts.start_now + " start now"].map((t) => html`<span key=${t} class="qfact">${t}</span>`)}</div>`}
         ${n.plain && !n.revision && html`<ul class="qplain">${n.plain.map((l) => html`<li key=${l.label}><b>${l.label}</b>${l.text}</li>`)}</ul>`}
-        ${!n.plain && n.text !== n.title && html`<${QMd} cls="qtxt" text=${n.text} slug=${n.repo_slug} />`}
+        ${n.shown ? html`<${ShownText} n=${n} />` : null}
+        ${!n.plain && n.text !== n.title && !n.shown && html`<${QMd} cls="qtxt" text=${n.text} slug=${n.repo_slug} />`}
         ${n.id && isPicker && !termOnly && html`<div class="pnote">This mirrors the live picker in ${n.from}'s terminal: your pick is pressed there as its option, and the entry clears once the picker records it.</div>`}
         ${n.id && (termOnly
-          ? html`<div class="pnote">Answer it in ${n.from}'s terminal — this picker has several questions or allows several picks, so the board can't answer it. It clears once it is answered.</div>
+          ? html`<div class="pnote">${n.picker_kind === "permission" ? promptWhere(n, n.from) + " — Claude stopped at a safety check, and the board can't answer this prompt." : "Answer it in " + n.from + "'s terminal — this picker has several questions or allows several picks, so the board can't answer it."} It clears once it is answered.</div>
             <${QOptions} n=${n} termOnly=${true} />`
           : html`${studioCard && n.when && html`<div class="when mut">When done: ${n.when}</div>`}
             ${!(studioCard && one !== null) && html`<${QOptions} n=${n} val=${val} rec=${rec} onPick=${set} />`}
@@ -4483,6 +4492,7 @@ function App() {
         <div class="l2">${linkedQ(n.title, n.repo_slug)}</div>
         ${debrief ? (n.text && n.text !== n.title && html`<div class="lndet dbr">${linkedQ(n.text, n.repo_slug)}</div>`)
           : n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
+          : n.shown ? html`<${ShownText} n=${n} />${n.picker_kind === "permission" && n.picker_answerable !== true && html`<div class="lndet">${promptWhere(n, n.from)}</div>`}`
           : n.text && !textInTitle(n) && html`<div class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}</div>`}
         ${n.why && html`<div class="lndet">Why: ${linkedQ(mdPlain(n.why), n.repo_slug)}</div>`}</div>`;
     })}</div>`}

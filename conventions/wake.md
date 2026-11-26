@@ -94,6 +94,13 @@ The Studio is not a squad role and is never armed. Both entries carry `timeout: 
   the entry's `tool_use_id` before each key; the server refuses a multi-question or multiSelect picker
   (`picker_answerable:false` — "answer it in the terminal"), and leaves resolving to Post.
 
+**Safety-check prompts** use a third entry, `PermissionRequest` with matcher `*` (`… permission …`,
+armed the same way, `timeout: 15`). A role runs with permissions skipped, so the prompts left are
+Claude's safety checks. The hook returns no decision and queues a `picker-…` entry with
+`picker_kind: "permission"` holding the command or file change, even beside an open blocking
+question. The board shows it and sends the operator to the role's terminal; the loop's picker sweep
+clears it once the call has a result or the role stops waiting (`docs/scripts.md`).
+
 Like rewake, the hooks always exit 0 and print nothing to the agent: a hook failure must
 never block the picker. Detached-run output goes to `state/<label>/picker-hook.log`.
 

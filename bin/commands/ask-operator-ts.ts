@@ -11,7 +11,7 @@ import { LABEL_FORM, PLAIN_HEADING, PLAIN_LABELS, REVISION_LABELS, approvedCopyP
 
 export const help = `<state-file> <id> <asker> <true|false> --title "<~8 words>" --question "<markdown>" --option "<label>" "<what happens>" … --recommend <n|label> --why "<why>" [--unit <slug>] [--pr <n>] [--doc <path>] — raise a question to the operator (ask-operator.sh)`;
 
-const USAGE = 'usage: ask-operator.sh <state-file> <id> <asker> <true|false> --title "<~8 words>" --question "<markdown>" --option "<label>" "<what happens>" --option … --recommend <n|label> --why "<why>" [--unit <slug>] [--pr <n>] [--doc <path>] [--picker <tool_use_id> <transcript_path> <true|false>]';
+const USAGE = 'usage: ask-operator.sh <state-file> <id> <asker> <true|false> --title "<~8 words>" --question "<markdown>" --option "<label>" "<what happens>" --option … --recommend <n|label> --why "<why>" [--unit <slug>] [--pr <n>] [--doc <path>] [--picker <tool_use_id> <transcript_path> <true|false> [--permission <tool> <helper-agent|""> <shown-text> <cwd>]]';
 
 const arr = (v: any): any[] => (Array.isArray(v) ? v : []);
 const isLeadOrBuilder = (a: string): boolean => a === "lead" || a === "builder" || a.startsWith("builder-");
@@ -40,6 +40,7 @@ async function main(argv: string[]): Promise<number> {
   let rest = argv.slice(4);
   if (BLOCKING !== "true" && BLOCKING !== "false") bad(`blocking must be true or false, got '${BLOCKING}'`);
   let TITLE = "", UNIT = "", PR = "", PR_EXPLICIT = false, PICKER_TID = "", PICKER_TPATH = "", PICKER_ANS = "", DOC = "";
+  let PERMISSION: Record<string, string> | null = null;
   const CHOICES: { label: string; does: string }[] = [];
   let Q = "", SUG = "", WHY = "", OPTS = "";
 
@@ -77,6 +78,10 @@ async function main(argv: string[]): Promise<number> {
         if (rest[3] !== "true" && rest[3] !== "false") bad(`--picker answerable must be true or false, got '${rest[3]}'`);
         PICKER_TID = rest[1]; PICKER_TPATH = rest[2]; PICKER_ANS = rest[3]; rest = rest.slice(4);
       }
+      else if (a === "--permission") {
+        if (!(rest.length >= 5 && rest[1] !== "" && rest[3] !== "")) bad("--permission needs <tool> <helper-agent> <shown-text> <cwd>");
+        PERMISSION = { picker_kind: "permission", tool: rest[1], agent: rest[2], shown: rest[3], cwd: rest[4] }; rest = rest.slice(5);
+      }
       else bad(`unknown argument '${a}'`);
     }
     if (!(TITLE !== "" && codepoints(TITLE) <= 80)) bad("--title is required, 80 characters at most (it is the board's one-line row)");
@@ -90,6 +95,7 @@ async function main(argv: string[]): Promise<number> {
       const n = Number(REC);
       if (n >= 1 && n <= labels.length) SUG = labels[n - 1];
     } else for (const l of labels) if (l === REC) SUG = l;
+    if (PERMISSION && !PICKER_TID) bad("--permission goes with --picker");
     if (!SUG) bad(`--recommend must name one of the options (1-${labels.length} or its label)`);
     OPTS = labels.join("|");
     if (codepoints(Q) > 300 && !Q.includes("\n")) writeErr("ask-operator: write it as markdown: a plain lead, bullets, the ask last (conventions/escalation.md)\n");
@@ -256,7 +262,7 @@ async function main(argv: string[]): Promise<number> {
   // Only a BLOCKING question stops the squad; a non-blocking one (a follow-up to file) just queues.
   if (BLOCKING === "true") { const rc = await ss([STATE, "set-status", "waiting-on-you"]); if (rc !== 0) return rc; }
   let picker: Record<string, any> = {};
-  if (PICKER_TID) picker = { source: "picker", tool_use_id: PICKER_TID, transcript_path: PICKER_TPATH, picker_answerable: PICKER_ANS === "true" };
+  if (PICKER_TID) picker = { source: "picker", tool_use_id: PICKER_TID, transcript_path: PICKER_TPATH, picker_answerable: PICKER_ANS === "true", ...PERMISSION };
   if (UNIT) picker = { ...picker, unit: UNIT };
   {
     const rc = await ss([STATE, "enqueue-question", ID, ASKER, BLOCKING, Q, wt, SUG, WHY, OPTS, TITLE, JSON.stringify(CHOICES), JSON.stringify(picker), PR, DOC_PATH]);
