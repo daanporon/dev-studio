@@ -735,8 +735,8 @@ the old `state/<label>/` folder (squad files, plans, notes, journals, pages) plu
 - `pages/_studio/leftovers/<worktree>/`: the Studio worktree's saved changes, `changes.patch` (uncommitted
   changes to tracked files) and, when there were any, `untracked.tar`. Its last commit is also kept in the repo
   as `refs/ds-leftovers/<worktree folder name>`.
-- Now and then `after-move/` (files written at the old path after the move) or `loop-rows.partial-<n>.db` (a
-  copy that was set aside and redone).
+- Now and then `after-move/` (files written at the old path after the move) or `loop-rows.partial-<n>.db` or
+  `loop-rows.stale-<n>.db` (an unfinished or a finished copy that was set aside and redone).
 
 Read `loop-rows.db` with any SQLite tool, for example:
 
@@ -758,7 +758,8 @@ sqlite3 -readonly state/.removed/your-app-2026-11-26/loop-rows.db \
 ### Bring a project back
 
 There is no restore command. Run `ds up` again with the URL or selector you used the first time, plus
-`--label <label>` when the label is not the repo's name:
+`--label <label>` when the label is not the repo's name. A project that did not run on the defaults needs its
+`--backend` (and `--worktree`) again, else it comes up on `orca`:
 
 ```sh
 bin/ds up https://github.com/you/your-app
