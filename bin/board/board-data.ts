@@ -1270,7 +1270,7 @@ function machineSummary(db: Db | null, label: string, worktrees: number | null, 
 // RAM (U4, KTD6): `ram_kb` is charged memory counted once (`mem_kb`) when every row and host group of
 // the scan has it, else RSS for all of them (`ram_basis` says which); `rss_kb` stays on every item.
 // `loop` (U5) is the loop's own load from the host row, the same on every board and in no project's share.
-type Resources = { rss_kb: number; mem_kb: number | null; cpu_pct: number | null; procs: number; psi_cpu: number | null; psi_mem: number | null };
+type Resources = { rss_kb: number; mem_kb: number | null; cpu_pct: number | null; procs: number; psi_cpu: number | null; psi_mem: number | null; at: number | null };
 type ProcRow = Resources & { project: string; wt: string };
 type HostGroup = { label: string; procs: number; rss_kb: number; mem_kb: number | null; cpu_pct: number | null };
 const addCpu = (a: number | null, b: number | null) => (a == null && b == null ? null : (a ?? 0) + (b ?? 0));
@@ -1283,9 +1283,9 @@ function procRows(db: Db | null, label: string) {
   const u4 = db.memo("procs_mem_kb", () => db.s.columns("observed_procs").has("mem_kb"));  // an older loop.db: RSS only
   const u9 = db.memo("procs_cpu_cg", () => db.s.columns("observed_procs").has("cpu_cg_pct"));  // an older loop.db: sampled CPU only
   // CPU is the leaf cgroups' figure (U9) when the scan had one, else the sampled process ticks.
-  for (const r of db.all(`SELECT project, wt, procs, rss_kb, cpu_pct${u9 ? ", cpu_cg_pct" : ""}${u4 ? ", mem_kb, psi_cpu, psi_mem" : ""} FROM observed_procs`)) {
+  for (const r of db.all(`SELECT project, wt, procs, rss_kb, cpu_pct, observed_at${u9 ? ", cpu_cg_pct" : ""}${u4 ? ", mem_kb, psi_cpu, psi_mem" : ""} FROM observed_procs`)) {
     const e: Resources = { rss_kb: Number(r.rss_kb) || 0, mem_kb: numOrNull(r.mem_kb), cpu_pct: numOrNull(r.cpu_cg_pct) ?? numOrNull(r.cpu_pct), procs: Number(r.procs) || 0,
-      psi_cpu: numOrNull(r.psi_cpu), psi_mem: numOrNull(r.psi_mem) };
+      psi_cpu: numOrNull(r.psi_cpu), psi_mem: numOrNull(r.psi_mem), at: numOrNull(r.observed_at) };
     rows.push({ project: String(r.project), wt: String(r.wt), ...e });
     if (!label || r.project === label) mine.set(String(r.wt), e);
   }
