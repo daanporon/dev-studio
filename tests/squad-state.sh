@@ -507,6 +507,30 @@ ua="$(tmp)"
 "$SS" "$ua" add-unit adhoc-one "" "" "" --tier standard --about "does a thing   on two lines" >/dev/null 2>&1
 check "add-unit --about stores about" "does a thing on two lines" "$("$SS" "$ua" get | jq -r '.units[0].about')"
 
+# unit-info-link U1: `Link:` lines in a unit block become the unit's links; add-unit --link does the same.
+ul="$(tmp)"; "$SS" "$ul" init >/dev/null 2>&1
+lp="$(tmp)"
+printf 'U1 — First — deps: none — Tier: standard\n  Done: it works.\n  Link: https://tracker.example/issue/ABC-1, https://github.com/acme/app/issues/7\n  Links: not read.\n\nU2 — Second — deps: none — Tier: standard\n- **Link:** https://tracker.example/issue/ABC-3\n  https://tracker.example/issue/ABC-4 https://tracker.example/issue/ABC-3\n**Link:** http://example.org/page\n' > "$lp"
+"$SS" "$ul" register-plan "$lp" >/dev/null 2>&1
+check "register-plan stores the Link: URLs" '["https://tracker.example/issue/ABC-1","https://github.com/acme/app/issues/7"]' "$("$SS" "$ul" get | jq -c '.units[0].links')"
+check "..a continuation and a second Link: line add up, a repeat counts once" '["https://tracker.example/issue/ABC-3","https://tracker.example/issue/ABC-4","http://example.org/page"]' "$("$SS" "$ul" get | jq -c '.units[1].links')"
+printf 'U1 — First — deps: none — Tier: standard\n  Done: it works.\n\nU2 — Second — deps: none — Tier: standard\n  Link: https://tracker.example/issue/ABC-5\n' > "$lp"
+"$SS" "$ul" register-plan "$lp" >/dev/null 2>&1
+check "register-plan drops links the plan lost and replaces changed ones" 'false ["https://tracker.example/issue/ABC-5"]' "$("$SS" "$ul" get | jq -r '"\(.units[0] | has("links")) \(.units[1].links | tojson)"')"
+before="$("$SS" "$ul" get | jq -Sc .units)"
+many="$(printf 'https://tracker.example/issue/ABC-%s ' 1 2 3 4 5 6)"
+long="https://tracker.example/$(printf '%0500d' 0)"
+for bad in 'javascript:alert(1)' 'not a url' 'https://' 'ftp://tracker.example/x' "$many" "$long" '`bin/x.ts` exposes it'; do
+  printf 'U1 — First — deps: none — Tier: standard\n  Done: changed.\n  Link: %s\n' "$bad" > "$lp"
+  err="$("$SS" "$ul" register-plan "$lp" 2>&1 >/dev/null)"; rc=$?
+  check "register-plan refuses Link: ${bad:0:30}, naming the line" "1 yes" "$rc $(case "$err" in *"line 3: Link:"*) echo yes ;; *) echo "$err" ;; esac)"
+done
+check "..and a refused plan writes nothing" "$before" "$("$SS" "$ul" get | jq -Sc .units)"
+"$SS" "$ul" add-unit linked "" "" "" --tier standard --link https://tracker.example/issue/ABC-2 --link https://example.org/page >/dev/null 2>&1
+check "add-unit --link stores the links" '["https://tracker.example/issue/ABC-2","https://example.org/page"]' "$("$SS" "$ul" get | jq -c '.units[] | select(.slug=="linked") | .links')"
+"$SS" "$ul" add-unit badlink "" "" "" --tier standard --link 'javascript:alert(1)' >/dev/null 2>&1
+check "add-unit --link refuses a non-web URL and adds nothing" "2 0" "$? $("$SS" "$ul" get | jq '[.units[] | select(.slug=="badlink")] | length')"
+
 # U1 (adaptive-builder-capacity). Lane: light|normal [(rule: <id>)] on a unit line -> lane / lane_rule on the unit.
 ln="$(tmp)"
 printf 'U1 — Contracts — deps: none — Lane: light (rule: contracts-only) — Tier: standard\nU2 — Plain — deps: none — Tier: standard\n' > "$ln.plan"
