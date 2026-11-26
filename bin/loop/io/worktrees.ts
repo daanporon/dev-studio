@@ -9,8 +9,8 @@
 // Crash safety: `create` writes the row (gone_at NULL) before the provider runs and fills it in after, so
 // a crash between the two leaves a row that names the folder: the next create of the same path adopts
 // what the provider already made, and the next `list` or `prune` of its repo marks it gone when the
-// provider has no such worktree. A `remove` whose folder is already gone marks the row gone. No row is
-// ever deleted. A provider that picks the folder itself (`pathFor` gives null: treehouse's pool slot) can
+// provider has no such worktree. A `remove` whose folder is already gone marks the row gone. Nothing here
+// deletes a row (only `ds remove-project` does, into the project's archive). A provider that picks the folder itself (`pathFor` gives null: treehouse's pool slot) can
 // only be recorded after it ran, so it must adopt what an interrupted create made (treehouse finds its slot
 // by the lease holder); its other live rows of the same name are marked gone. The host is always `local` for now (other hosts come later, through a sideloop).
 import { existsSync, realpathSync } from "node:fs";

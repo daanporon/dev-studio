@@ -10,6 +10,12 @@ its own instance), one file per live squad. The instance's own state (home repo,
 label, Studio worktree id) is `state/<project>/dispatcher.json` (kept as the
 filename). The schema is `state/SCHEMA.json`.
 
+`state/.removed/<label>-<YYYY-MM-DD>[-<n>]/` is the archive of a removed project (`ds remove-project`): its
+old `state/<label>/` folder, its `loop.db` rows in `loop-rows.db`, and the record `removed.json`, written once
+the removal finishes. Project discovery skips dot folders, so nothing there is ticked or listed, and the label
+is free again. The loop moves the folder and never deletes it; no role writes there (`docs/USAGE.md`,
+"Remove a project").
+
 `squads/` holds only `<topic>.json` squad state files (written by `bin/role/squad-state.sh`) and `.md` plans and brainstorms, and the approved copy of each plan (`<plan>.approved.md`, saved by `approve-plan`; the loop's squad close archives it with its plan); notes, reviews and experiment records go in `state/<project>/notes/` or as `.md` next to their plan, and a JSON file in `squads/` that is not a squad is skipped with a warning.
 
 ## Who writes it

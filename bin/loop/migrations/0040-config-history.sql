@@ -1,6 +1,6 @@
 -- 0040-config-history.sql — U255: one row per change a project's settings take through
 -- bin/loop/settings/settings.ts (the one writer of a project's limits.conf, roles.conf, models.conf and
--- ship-mode rows). Additive; nothing is ever deleted from it.
+-- ship-mode rows). Additive; only `ds remove-project` deletes from it.
 --   project, file, key   the config row that changed
 --   old_value            its value before; NULL when there was no row
 --   new_value            its value after; NULL when the row was dropped (back to the default)
