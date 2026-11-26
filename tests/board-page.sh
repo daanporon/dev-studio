@@ -743,7 +743,7 @@ eq "U10 page: asks get an Answer button" "$(grep -cF 'out.push({ key: "answer", 
 eq "U4 page: a done row has Close squad and Open" "$(grep -cF 'out.push({ key: "show", label: "Open"' "$ROOT/web/board.html")" "1"
 eq "U4 page: the pill hover and the squad panel carry the explanation" "$(grep -cF 'explainText(s)' "$ROOT/web/board.html" | awk '{print ($1>=2)}')" "1"
 eq "U4 page: the close confirm names open units" "$(grep -cF 'are still held or planned and will be archived with them' "$ROOT/web/board.html")$(grep -cF '1 unit is still held and will be archived with it' "$ROOT/web/board.html")" "11"
-eq "U4 page: the legend and wrapping-up pill colour" "$(grep -cF '.pill.wrapping-up{' "$ROOT/web/board.html")$(grep -cF 'STATE_LEGEND.join' "$ROOT/web/board.html")" "11"
+eq "U4 page: the wrapping-up pill colour, no squad-status legend line" "$(grep -cF '.pill.wrapping-up{' "$ROOT/web/board.html")$(grep -ciF 'statelegend' "$ROOT/web/board.html" || true)$(grep -cF 'STATE_LEGEND' "$ROOT/web/board.html" || true)" "100"
 eq "U10 page: Studio card has Show squad" "$(grep -cF 'if (n.card_squad) out.push({ key: "show", label: "Show squad"' "$ROOT/web/board.html")" "1"
 eq "U10 page: from shown only for an asker not already in the who line" "$(grep -cF 'n.from && !who.includes(n.from)' "$ROOT/web/board.html")" "1"
 eq "U10 page: the overlay shows from only when set" "$(grep -cF '${n.from && html`<span>· from ${n.from}</span>`}' "$ROOT/web/board.html")" "1"
