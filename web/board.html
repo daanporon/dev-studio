@@ -3189,9 +3189,9 @@ function DependencyWait({ s, m, prerequisites, toast, close }) {
     <div class="qfoot"><span class="err">${error}</span><span class="sp"></span><button class="btn pri" disabled=${busy || !selected.size} onClick=${send}>${busy ? "Recording…" : "Checkpoint and wait"}</button></div>
   </div></div>`;
 }
-// The squad row's ⋯ menu (squad-priority U2, U4): pause/resume, events, focus, the restarts, suspend, then archive in red after a divider. Built like the unit menu
+// The squad row's ⋯ menu (squad-priority U2, U4): chat (squad-menu-chat U1), pause/resume, events, focus, the restarts, suspend, then archive in red after a divider. Built like the unit menu
 // above (position:fixed, closes after a choice, on a click outside and on Escape); it sits inside the squad's box, so a click never toggles the squad.
-function SquadMenu({ s, toast }) {
+function SquadMenu({ s, toast, onChat }) {
   const [open, setOpen] = useState(false), [pos, setPos] = useState(null);
   const wrap = useRef(null), trigger = useRef(null), menu = useRef(null);
   const close = (refocus) => { setOpen(false); setPos(null); if (refocus && trigger.current) trigger.current.focus(); };
@@ -3226,11 +3226,17 @@ function SquadMenu({ s, toast }) {
   };
   const parked = suspendedLike(s), label = "Actions for squad " + s.topic;
   const others = s.focus_squad && s.focus_squad !== s.topic ? s.focus_squad : null;
+  // Chat opens on the Thinker (the unsuffixed one first), else the Lead; the panel's switcher reaches the others.
+  const live = (s.members || []).filter((m) => m.wt), thinkers = live.filter((m) => m.role === "thinker");
+  const mate = thinkers.find((m) => !m.suffix) || thinkers[0] || live.find((m) => m.role === "lead");
+  const mateName = mate && mate.role === "lead" ? "Lead" : "Thinker";
   return html`<span class="acts" ref=${wrap} onClick=${(e) => e.stopPropagation()} onBlur=${(e) => { if (open && e.relatedTarget && !wrap.current.contains(e.relatedTarget)) close(false); }}>
     <button ref=${trigger} class="btn sm acts-btn squad-menu" aria-haspopup="menu" aria-expanded=${open ? "true" : "false"} aria-label=${label} title="More squad actions" onClick=${() => (open ? close(false) : setOpen(true))}>⋯</button>
     <div ref=${menu} class="amenu" role="menu" aria-label=${label} hidden=${!open}
       style=${pos ? { top: pos.top + "px", right: pos.right + "px", maxWidth: pos.maxWidth + "px" } : undefined}
-      onClick=${(e) => { if (e.target.closest("button")) close(true); }}>
+      onClick=${(e) => { const b = e.target.closest("button"); if (b) close(!b.classList.contains("squad-chat")); }}>
+      ${!parked && html`<button class="btn sm squad-chat" disabled=${!mate} title=${mate ? "Chat with this squad's " + mateName + "; switch to anyone else in the panel" : "No Thinker or Lead of this squad is running"}
+        onClick=${() => onChat({ project: s.label, topic: s.topic, wt: mate.wt, label: mate.label || mate.role })}>Chat with ${mateName}</button>`}
       ${!parked && html`<${PauseControls} target=${{ scope: "squad", project: s.label, topic: s.topic }} pause=${s.pause} label=${"squad " + s.label + "/" + s.topic} toast=${toast} />`}
       ${parked && html`<button class="btn sm" title="Recreate its worktrees on the same branches and restart every role with its conversation" onClick=${() => studio({ project: s.label, action: "resume", topic: s.topic }, toast)}>Resume squad</button>`}
       <button class="btn sm" data-ev="squad-events" title="The event log, filtered to this squad" onClick=${() => openEvents({ project: s.label, squad: s.topic })}>Events</button>
@@ -4109,6 +4115,9 @@ function App() {
   // The Flow card's unit details window: the squad and unit are looked up in the live board on every render.
   const [feedbackOpen, setFeedbackOpen] = useState(false);   // the header Feedback panel
   const [studioChat, setStudioChat] = useState(null), [, bumpSeen] = useState(0);   // the header Studio chat; bumpSeen re-renders its dot
+  const [squadChat, setSquadChat] = useState(null);   // the squad ⋯ menu's chat, rendered outside the rows
+  // Opened from a menu item that is now hidden: the keyboard goes to the panel's input, not behind the modal.
+  useEffect(() => { const el = squadChat && document.querySelector(".chat-modal .chat-in"); if (el) el.focus(); }, [squadChat]);
   const [flowUnit, setFlowUnit] = useState(null);   // { label, topic, slug, ask }
   const openFlowUnit = (c) => setFlowUnit({ label: c.project, topic: c.squad, slug: c.slug, ask: c.needs_you && c.ask ? c.ask : null, card: c });
   const showMember = (sq, m) => { show(sq.label, sq.topic); markCrewRow(sq, m); };
@@ -4295,7 +4304,7 @@ function App() {
             <span class="c-prs"><${PrsCell} s=${s} st=${x} /></span>
             <${OpenCell} s=${s} onGo=${() => { if (!isOpen) toggle(k); setTimeout(() => { const el = document.getElementById("sqx-" + k); if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" }); }, 60); }} />
             <${SpentCell} r=${s.spent_since} />
-            <span class="c-menu"><${SquadMenu} s=${s} toast=${setToast} /></span>
+            <span class="c-menu"><${SquadMenu} s=${s} toast=${setToast} onChat=${setSquadChat} /></span>
           </div>
           ${isOpen && html`<${Detail} s=${s} onPlan=${setPlan} toast=${setToast} setAsk=${setAsk} askKeys=${askKeys} prerequisites=${data.prerequisites} flow=${data.flow} />`}
         </${React.Fragment}>`; })}
@@ -4347,6 +4356,7 @@ function App() {
     <${Briefs} list=${data.briefings || []} schedule=${data.briefing_schedule} project=${data.project || (data.squads[0] && data.squads[0].label) || ""} />
     <${EventLog} tick=${data.generated_at} toast=${setToast} />
 
+    ${squadChat && html`<${ChatPanel} ...${squadChat} onClose=${() => setSquadChat(null)} />`}
     ${studioChat && html`<${ChatPanel} ...${studioChat} onSeen=${() => bumpSeen((n) => n + 1)} onClose=${() => { setStudioChat(null); bumpSeen((n) => n + 1); }} />`}
     ${feedbackOpen && html`<${FeedbackPanel} summary=${data.feedback} project=${data.project} toast=${setToast} onClose=${() => setFeedbackOpen(false)} />`}
     ${settingsOpen && data.project && html`<${Settings} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setSettings(false)} />`}

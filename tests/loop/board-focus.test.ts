@@ -172,8 +172,8 @@ test("the mounted page: ★ chip on the focus squad, ⋯ menu items, one ⋯ per
   const [ma, mb] = [menus.find((m: any) => m.getAttribute("aria-label") === "Actions for squad a"), menus.find((m: any) => m.getAttribute("aria-label") === "Actions for squad b")];
   expect(ma.closest(".row.squad").lastElementChild.contains(ma)).toBe(true);
   expect(ma.closest(".detail")).toBeNull();
-  expect(items(ma)).toEqual(["Pause squad", "Events", "Unfocus squad", "Restart Lead", "Restart squad", "Suspend squad", "Archive squad"]);
-  expect(items(mb)).toEqual(["Pause squad", "Events", "Focus squad (replaces a)", "Restart Lead", "Restart squad", "Suspend squad", "Archive squad"]);
+  expect(items(ma)).toEqual(["Chat with Lead", "Pause squad", "Events", "Unfocus squad", "Restart Lead", "Restart squad", "Suspend squad", "Archive squad"]);
+  expect(items(mb)).toEqual(["Chat with Lead", "Pause squad", "Events", "Focus squad (replaces a)", "Restart Lead", "Restart squad", "Suspend squad", "Archive squad"]);
   expect(doc.body.textContent).not.toContain("task task_");
   expect(doc.body.textContent).not.toMatch(/\btask a\b/);
   expect(ma.parentElement.querySelector(".sep")).not.toBeNull();
