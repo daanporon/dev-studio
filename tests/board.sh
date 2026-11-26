@@ -1634,5 +1634,20 @@ render "$LBL" --json > "$TMP/lo.json"
 jt "leftover U3: the board JSON carries the check" "$TMP/lo.json" '.squads[] | select(.topic=="lo-sq") | .leftovers[0].check | .safe==false and (.commits|length)==2 and .differ==["a.ts"] and .n_differ==1'
 hasre "leftover U3: the text line says look first" "$(render "$LBL" 2>/dev/null)" '⚑ /tmp/wt-look  \(br-look\) — look first: 2 commits, 1 file not on main · checked '
 
+# permission-prompt-needs-you U3: the card for a prompt the screen shows, as the loop files it on a squad: in
+# Needs-you at once, naming the role, with the prompt lines, and the member whose chat it opens.
+cat > "$SD/perm-sq.json" <<'JSON'
+{"run_id":"perm","status":"running","type":"feature","members":[{"role":"builder","suffix":"u1","wt":"wperm"}],"units":[{"slug":"u1","status":"dispatched"}]}
+JSON
+"$ROOT/bin/lib/alerts.sh" "$DS_STATE_ROOT/$LBL/alerts.json" add sweep-perm-sq.builder-u1-1 "perm-sq · builder-u1 is waiting on a permission prompt" \
+  $'builder-u1 is waiting on a permission prompt. Its screen shows:\nDo you want to proceed?\n1. Yes\n2. No' "pressed the key in its chat" "the role stays stuck" \
+  '{"kind":"permission_prompt","squad":"perm-sq","member":"wperm","chat_wt":"wperm","chat_label":"builder-u1"}' >/dev/null
+mkdb "$LBL"
+render "$LBL" --json > "$TMP/perm.json"
+jt "permission card: in Needs-you with its role, lines and chat" "$TMP/perm.json" '[.needs_you[] | select(.id=="sweep-perm-sq.builder-u1-1")] | length == 1 and (.[0] | .card_squad == "perm-sq" and .chat_wt == "wperm" and .chat_label == "builder-u1" and .choices == [] and (.title | test("builder-u1 is waiting on a permission prompt")) and (.text | test("Do you want to proceed")))'
+has "permission card: the text board shows it" "$(render "$LBL" 2>/dev/null)" "builder-u1 is waiting on a permission prompt. Its screen shows: Do you want to proceed? 1. Yes 2. No"
+"$ROOT/bin/lib/alerts.sh" "$DS_STATE_ROOT/$LBL/alerts.json" resolve sweep-perm-sq.builder-u1-1 >/dev/null
+rm -f "$SD/perm-sq.json"
+
 echo "board: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

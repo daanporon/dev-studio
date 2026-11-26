@@ -456,6 +456,12 @@ eq "limits: risk globs accepted" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LB
 ff
 eq "limits: loop writes risk globs" "$(lim review_risk_paths)" 'contracts/*.sol,src/auth/* override'
 eq "limits: risk empty element refused" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"review_risk_paths\",\"value\":\"a,,b\"}" "$LU")" "400"
+jt "limits: ticket_url uses a text input" "$TMP/lim.json" '.limits[] | select(.key=="ticket_url") | (.hint|contains("{id}")) and .value=="-" and .group=="Board & machine"'
+eq "limits: a ticket address is accepted" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"ticket_url\",\"value\":\"https://tracker.example/issue/{id}\"}" "$LU")" "202"
+ff
+eq "limits: loop writes the ticket address" "$(lim ticket_url)" 'https://tracker.example/issue/{id} override'
+eq "limits: a ticket address without {id} is 400" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"ticket_url\",\"value\":\"https://tracker.example/issue/\"}" "$LU")" "400"
+has "limits: ... says why" "$(cat "$TMP/post.out")" "holding {id}"
 jt "limits: skipped lenses use text input" "$TMP/lim.json" '.limits[] | select(.key=="review_skip_lenses") | .list==true and .value=="-"'
 eq "limits: skipped lenses accepted" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"review_skip_lenses\",\"value\":\"security,learnings\"}" "$LU")" "202"
 ff
@@ -898,7 +904,7 @@ jt "U2: a note carries its allowed action" "$TMP/u2.json" '[.loop_notes[] | sele
 jt "U2: an unknown action is dropped" "$TMP/u2.json" '[.loop_notes[] | select(.id=="loop-u2-bad")][0].act == null'
 jt "U2: a Studio ask carries its squad for Show squad" "$TMP/u2.json" '[.needs_you[] | select(.id=="loop-u2-ask")][0] | .card_squad == "ans" and has("repo_slug") and has("pr") and has("act")'
 eq "web board: a loop note shows its text and why under a title without the squad prefix" "$(grep -cF 'class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}' "$ROOT/web/board.html")$(grep -cF 'const noteTitle' "$ROOT/web/board.html")$(grep -cF 'squads.length > 1' "$ROOT/web/board.html")" "211"
-eq "web board: Show squad on a Studio card, the PR chip and the action button" "$(grep -cF 'n.card_squad' "$ROOT/web/board.html")$(grep -cF 'function ActBtn' "$ROOT/web/board.html")$(grep -cF 'onShow(n.project, n.squad)' "$ROOT/web/board.html")" "311"
+eq "web board: Show squad on a Studio card, the PR chip and the action button" "$(grep -cF 'n.card_squad' "$ROOT/web/board.html")$(grep -cF 'function ActBtn' "$ROOT/web/board.html")$(grep -cF 'onShow(n.project, n.squad)' "$ROOT/web/board.html")" "511"
 
 # POST /api/request files a `studio` request; the loop writes it out for the Studio as
 # <state root>/<label>/requests/_studio/board-<action>[-<topic>]-<id>.txt, which the Studio's watch
