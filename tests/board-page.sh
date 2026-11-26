@@ -260,7 +260,7 @@ if grep -q 'ext_deps' "$ROOT/web/board.html"; then pass=$((pass+1)); else fail=$
 rm -rf "$ED"
 
 # PR health: the sweep's pr-health.json refines dispatched phases — ready is merge-ready, a
-# blocked PR the sweep poked is stale (with reasons); blocked-but-unpoked stays babysitting,
+# blocked PR is "red PR" (with reasons), poked or not,
 # and a gone Builder still overrides. Rows observed more than 10 min ago are ignored.
 GRH="$TMP/ghrepo2"
 jq --arg r "path:$GRH" '.repos = {($r): "acme/app2"} | .prs = [501,502,503,504 | {"repo":"acme/app2","pr":.,"state":"OPEN","ci":"green","head":"x"}]' "$SEED" > "$TMP/seed-hl.json"
@@ -271,18 +271,18 @@ printf '{"at":%s,"units":{"health/s":{"pr":501,"verdict":"blocked","reasons":"co
   "$NOWH" "$((NOWH-600))" "$((NOWH-120))" "$((NOWH-600))" "$((NOWH-120))" > "$DS_STATE_ROOT/$LBL/sweep/pr-health.json"
 SEED="$TMP/seed-hl.json" board "$LBL" > "$TMP/hl.json"
 H='.squads[] | select(.topic=="health")'
-jt "health: poked blocked unit is stale, with reasons" "$TMP/hl.json" "$H"' | .units[] | select(.slug=="s") | .state=="stale" and .reasons=="conflicting,threads:2"'
+jt "health: blocked unit reads red PR, with reasons" "$TMP/hl.json" "$H"' | .units[] | select(.slug=="s") | .state=="red PR" and .reasons=="conflicting,threads:2"'
 jt "health: ready unit is merge-ready" "$TMP/hl.json" "$H"' | .units[] | select(.slug=="r") | .state=="merge-ready"'
-jt "health: unpoked blocked unit stays babysitting" "$TMP/hl.json" "$H"' | .units[] | select(.slug=="u") | .state=="babysitting"'
-jt "health: a gone Builder still overrides stale" "$TMP/hl.json" "$H"' | .units[] | select(.slug=="g") | .state=="gone"'
+jt "health: unpoked blocked unit reads red PR too" "$TMP/hl.json" "$H"' | .units[] | select(.slug=="u") | .state=="red PR"'
+jt "health: a gone Builder still overrides red PR" "$TMP/hl.json" "$H"' | .units[] | select(.slug=="g") | .state=="gone"'
 HT="$(SEED="$TMP/seed-hl.json" tb "$LBL" 2>/dev/null)"
-has "health: text board shows stale with reasons" "$HT" "(stale: conflicting,threads:2)"
+has "health: text board shows red PR with reasons" "$HT" "(red PR: conflicting,threads:2)"
 has "health: text board shows merge-ready" "$HT" "(merge-ready)"
-eq "web board: stale dot is amber" "$(grep -cF '.dot.stale{background:var(--amber)}' "$ROOT/web/board.html")" "1"
+eq "web board: red PR dot is amber" "$(grep -cF '.dot.redPR{background:var(--amber)}' "$ROOT/web/board.html")" "1"
 eq "web board: merge-ready dot is green" "$(grep -cF '.dot.merge-ready{background:var(--green)}' "$ROOT/web/board.html")" "1"
-eq "web board: stale state is amber" "$(grep -cF '.ust.stale{color:var(--amber)}' "$ROOT/web/board.html")" "1"
+eq "web board: red PR state is amber" "$(grep -cF '.ust.redPR{color:var(--amber)}' "$ROOT/web/board.html")" "1"
 eq "web board: merge-ready state is green" "$(grep -cF '.ust.merge-ready{color:var(--green)}' "$ROOT/web/board.html")" "1"
-eq "web board: stale row shows reasons" "$(grep -cF 'u.state + ": " + u.reasons' "$ROOT/web/board.html")" "1"
+eq "web board: red PR row shows reasons" "$(grep -cF 'u.state + ": " + u.reasons' "$ROOT/web/board.html")" "1"
 jq --argjson at "$((NOWH-900))" '.at = $at' "$DS_STATE_ROOT/$LBL/sweep/pr-health.json" > "$TMP/ph" && mv "$TMP/ph" "$DS_STATE_ROOT/$LBL/sweep/pr-health.json"
 SEED="$TMP/seed-hl.json" board "$LBL" > "$TMP/hl2.json"
 jt "health: rows older than 10 min are ignored" "$TMP/hl2.json" "$H"' | .units[] | select(.slug=="s") | .state=="babysitting" and .reasons==null'
@@ -291,9 +291,9 @@ SEED="$TMP/seed-hl.json" board "$LBL" > "$TMP/hl3.json"
 jt "health: malformed JSON is ignored, not fatal" "$TMP/hl3.json" "$H"' | .units[] | select(.slug=="s") | .state=="babysitting" and .reasons==null'
 printf '{"at":%s,"units":{"health/s":{"pr":501,"verdict":"blocked","reasons":"","poked":%s,"pokes":1}}}' "$NOWH" "$((NOWH-120))" > "$DS_STATE_ROOT/$LBL/sweep/pr-health.json"
 SEED="$TMP/seed-hl.json" board "$LBL" > "$TMP/hl4.json"
-jt "health: stale with empty reasons keeps null reasons" "$TMP/hl4.json" "$H"' | .units[] | select(.slug=="s") | .state=="stale" and .reasons==null'
+jt "health: red PR with empty reasons keeps null reasons" "$TMP/hl4.json" "$H"' | .units[] | select(.slug=="s") | .state=="red PR" and .reasons==null'
 HT4="$(SEED="$TMP/seed-hl.json" tb "$LBL" 2>/dev/null)"
-has "health: text board shows bare stale without reasons" "$HT4" "(stale)"
+has "health: text board shows bare red PR without reasons" "$HT4" "(red PR)"
 rm -f "$SD/health.json"; rm -rf "$DS_STATE_ROOT/$LBL/sweep"
 
 eq "the board never calls the backend (only the write routes poke and press keys)" "$(grep -cvE '^(poke|keys) ' "$BOARD_LOG" || true)" "0"
@@ -722,7 +722,7 @@ FR="$TMP/flowroot"; mkdir -p "$FR"
 FXNOW="$(DS_STATE_ROOT="$FR" bun "$ROOT/tests/loop/flow-fixture.ts" "$FR" zzflow)"
 DS_STATE_ROOT="$FR" DS_NOW="$FXNOW" TZ=UTC PATH="$TMP/nopath" "$ROOT/bin/board/board.sh" zzflow --json > "$TMP/flow.json"
 jt "U1: flow has a card in every stage" "$TMP/flow.json" '[.flow.cards[].stage] | unique == ["building","merging","needs_you","pr_open","queued"]' '.flow.cards'
-jt "U1: flow has a card in every Queued and PR open group" "$TMP/flow.json" '[.flow.cards[].group | select(. != null)] | unique == ["blocked","checks running","coding","draft","fixing","fixing findings","held","in review","review stopped","reviewing","waiting for a slot","waiting for an account","waiting on another unit"]' '[.flow.cards[].group]'
+jt "U1: flow has a card in every Queued and PR open group" "$TMP/flow.json" '[.flow.cards[].group | select(. != null)] | unique == ["blocked","checks failing","checks running","coding","draft","fixing findings","held","in review","review stopped","reviewing","waiting for a slot","waiting for an account","waiting on another unit"]' '[.flow.cards[].group]'
 jt "U4: the fixture squad's Building units show the four review groups with their notes" "$TMP/flow.json" '[.flow.cards[] | select(.squad == "flow" and .stage == "building") | {slug, group, note}] | sort_by(.slug) == [{"slug":"u19-slow","group":"reviewing","note":"2nd review · delta 4m"},{"slug":"u2-building","group":"coding","note":null},{"slug":"u20-starting","group":"coding","note":null},{"slug":"u8-gone","group":"review stopped","note":"reviews stopped · needs --retry"},{"slug":"u9-closed","group":"fixing findings","note":"6 findings 12m"}]' '[.flow.cards[] | select(.stage == "building")]'
 jt "U1: flow counts add up to the header's units left" "$TMP/flow.json" '.flow.counts as $c | ($c.queued + $c.building + $c.pr_open + $c.needs_you + $c.merging + ($c.paused // 0)) == .header.units_left'
 jt "U1: flow keeps 30 days of merges" "$TMP/flow.json" '(.flow.per_day | length) == 30'

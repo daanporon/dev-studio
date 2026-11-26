@@ -695,13 +695,13 @@ function readLimitedFor(db: Db, label: string): any[] {
     .filter((r) => NOW() - (Number(r.mtime) || 0) <= 600).map((r) => parse(r.doc)).filter(Boolean);
 }
 
-// Per-unit PR verdicts ("<topic>/<slug>" -> {verdict, reasons, poked}): the GitHub observer's row for
-// the unit's PR, else the sweep's pr-health.json row; a row older than 10 min proves nothing. A
-// GitHub row has no poke count: its `stale` (blocked past pr_stale_min) stands in for "poked".
+// Per-unit PR verdicts ("<topic>/<slug>" -> {verdict, reasons, since}): the GitHub observer's row for
+// the unit's PR, else the sweep's pr-health.json row; a row older than 10 min proves nothing. `since`
+// is when the PR's red stretch began (observed_prs.since); a sweep row has none.
 const prHealthFor = (db: Db, label: string): Record<string, PrHealth> => db.memo(`health:${label}`, () => readPrHealthFor(db, label));
 function readPrHealthFor(db: Db, label: string): Record<string, PrHealth> {
   const out: Record<string, PrHealth> = {};
-  const rows = db.all(`SELECT ref, unit, repo, verdict, reasons, stale, doc, observed_at FROM observed_prs
+  const rows = db.all(`SELECT ref, unit, repo, verdict, reasons, since, doc, observed_at FROM observed_prs
     WHERE project = ? AND (unit IS NOT NULL OR repo IS NULL) ORDER BY repo IS NULL, observed_at DESC`, label);
   for (const r of rows) {
     const d = parse(r.doc) ?? {};
@@ -712,7 +712,7 @@ function readPrHealthFor(db: Db, label: string): Record<string, PrHealth> {
     const raw = parse(r.reasons);
     const reasons = Array.isArray(raw) ? raw.join(",") : typeof raw === "string" ? raw : null;
     out[unit] = { verdict: r.verdict == null ? undefined : String(r.verdict), reasons: reasons ?? undefined,
-      poked: r.repo == null ? d.poked ?? undefined : Number(r.stale) === 1 ? 1 : undefined };
+      since: r.repo == null ? undefined : Number(r.since) || undefined };
   }
   return out;
 }
@@ -964,14 +964,13 @@ function failedReport(db: Db, label: string, squad: string, slug: string, wt: un
 // reports done — "no PR" when it finished without recording one, so a Builder that stopped
 // short of the PR is visible), checks running = testing, a check failed = fixing, green and
 // awaiting review/merge = babysitting. The sweep's pr-health verdict refines that: ready =
-// merge-ready, and a blocked PR the sweep poked (or whose Builder is gone) = stale; a
-// blocked-but-unpoked PR stays babysitting. A waiting/gone/unknown/suspended Builder overrides
-// the phase. hasPr is passed separately because a null status is ambiguous (no PR vs unknown).
-type PrHealth = { verdict?: string; reasons?: string; poked?: number } | null;
-function unitPhase(b: string, ps: string | null | undefined, hasPr: boolean, h: PrHealth = null, hasBuilder = true): string {
+// merge-ready, and blocked = red PR (the Flow card says whether its Builder is fixing it, slow or
+// stuck). A waiting/gone/unknown/suspended Builder overrides the phase. hasPr is passed separately because a null status is ambiguous (no PR vs unknown).
+type PrHealth = { verdict?: string; reasons?: string; since?: number } | null;
+function unitPhase(b: string, ps: string | null | undefined, hasPr: boolean, h: PrHealth = null): string {
   if (b === "waiting" || b === "gone" || b === "unknown" || b === "suspended") return b;
   if (h?.verdict === "ready") return "merge-ready";
-  if (h?.verdict === "blocked" && (h.poked != null || !hasBuilder)) return "stale";
+  if (h?.verdict === "blocked") return "red PR";
   if (ps === "failing") return "fixing";
   if (ps === "running") return "testing";
   if (ps === "open" || ps === "ready") return "babysitting";
@@ -1962,7 +1961,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
         : waitTitle ? "waiting"
         : heldPlanned ? "held"
         : us === "planned" ? (depReady ? "ready" : "blocked")
-        : us === "dispatched" ? unitPhase(wst(x.builder_wt), pr?.status, pr != null, h, !!x?.builder_wt)
+        : us === "dispatched" ? unitPhase(wst(x.builder_wt), pr?.status, pr != null, h)
         : us;
       if (us === "planned" && !STOPPED_STATES.includes(state)) {
         notStarted.add(String(slug));
@@ -1990,7 +1989,8 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
           urgent: x?.urgent === true, focus: us === "cancelled" ? null : focusMark(db.s, label, topic, slug), ...unlockFacts(db.s, label, topic, slug, us),
           ...unitLane(db, label, x, unitCpuFor(db, label).get(`${topic}/${slug}`)),
           verdict: h?.verdict ?? null, reasons,
-          stale: (h?.verdict === "blocked" && (h.poked != null || !x?.builder_wt)) || (us === "dispatched" && (b === "gone" || b === "unknown")),
+          pr_red: h?.verdict === "blocked", red_since: h?.verdict === "blocked" ? h.since ?? null : null,
+          no_builder: (h?.verdict === "blocked" && !x?.builder_wt) || (us === "dispatched" && (b === "gone" || b === "unknown")),
         });
       }
       return {
@@ -2773,7 +2773,7 @@ export function renderText(b: Board): string {
       const waits = (u.ext_deps ?? []).filter((d) => d.status !== "done" && d.status !== "closed-done");
       const bbd = (u as any).blocked_by ?? [];
       const bb = bbd.length ? `blocked by ${bbd.join(", ")}` : "";
-      const ustate = u.state === "stale" && u.reasons ? `stale: ${u.reasons}` : u.state;
+      const ustate = u.state === "red PR" && u.reasons ? `red PR: ${u.reasons}` : u.state;
       const row = (t: string) => t + (u.status === "done" || u.status === "cancelled" ? "" : mk);
       o.push(row(u.status === "done" ? `      ✓ ${cell}  done`
         : u.status === "cancelled" ? `      ✗ ${cell}  ${u.superseded_by ? `folded into ${u.superseded_by}` : "cancelled"}`
