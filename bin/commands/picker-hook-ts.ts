@@ -10,6 +10,7 @@ import { basename, dirname, join } from "node:path";
 import { ROOT, run as runCmd, writeErr } from "../lib/shared";
 import { mktemp } from "../lib/lib";
 import { findToolUse, head, promptQuestion, promptTitle, promptTranscript, shownText } from "../lib/permission-prompt.ts";
+import { checkable } from "../loop/chat/permission.ts";
 import { open as openStore } from "../loop/core/store.ts";
 
 export const help = "picker-hook-ts <pre|post|permission|pre-async|permission-async> <state> <role> <wt> [input] — the picker-mirror hook (bin/hooks/picker-hook.sh)";
@@ -217,11 +218,13 @@ export async function run(argv: string[]): Promise<number> {
     if (await answeredAlready(id, "permission")) return 0;
     await clearEarlier(st.v, "permission");
     const shown = shownText(tool, h.tool_input);
-    // Not answerable from the board: nothing yet checks that the screen still shows this prompt.
+    // Answerable from the board only when shown in full and tied to its tool call (D5); the answer fulfiller
+    // also reads the screen again before it presses anything (bin/loop/chat/permission.ts).
+    const answerable = found !== "" && checkable(tool, h.tool_input, shown);
     const rc = await askOperator(id, ["--title", promptTitle(ROLE, tool), "--question", promptQuestion(shown, text("cwd")),
       "--option", "Yes", "let it run this once", "--option", "No", "refuse it; the role is told no",
       "--recommend", "No", "--why", "a Claude safety check stopped here — no recommendation; read it before you answer",
-      "--picker", tid, tpath || "(none)", "false", "--permission", tool, agent, shown, text("cwd")]);
+      "--picker", tid, tpath || "(none)", String(answerable), "--permission", tool, agent, shown, text("cwd")]);
     log(rc === 0 || rc === 3 ? `permission: queued ${id} (${tool}, tool_use_id ${found ? "found" : "not found"})` : `permission: ${id} NOT queued — ask-operator.sh exited ${rc}`);
     permissionAsked({ role: ROLE, tool, via: "hook", agent: agentId !== "", text: head(shown, 200) });
     return 0;

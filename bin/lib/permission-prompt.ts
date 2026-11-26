@@ -4,9 +4,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { redact, redactDeep } from "../loop/core/redact.ts";
+import { FILE_TOOLS } from "../loop/chat/permission.ts";
 
 export const SHOWN_CAP = 2000;
-const FILE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 /** The first `n` codepoints. */
@@ -49,6 +49,23 @@ const KEYS: Record<string, string[]> = { Bash: ["command"], Edit: ["file_path", 
 function sameInput(tool: string, a: any, b: any): boolean {
   const keys = KEYS[tool];
   return keys ? keys.every((k) => a?.[k] === b?.[k]) : Bun.deepEquals(a, b);
+}
+
+/** The input of the `tool_use` with this id, or null (no such call, no file). The answer fulfiller compares the
+ *  call's own command and description with the screen (bin/loop/chat/permission.ts). */
+export function toolUseInput(transcript: string | undefined, id: string | undefined): Record<string, unknown> | null {
+  if (!transcript || !id) return null;
+  let text = "";
+  try { text = readFileSync(transcript, "utf8"); } catch { return null; }
+  for (const line of text.split("\n")) {
+    if (!line.includes(id)) continue;
+    let content: unknown;
+    try { content = JSON.parse(line)?.message?.content; } catch { continue; }
+    if (!Array.isArray(content)) continue;
+    const c = content.find((u) => u?.type === "tool_use" && u.id === id);
+    if (c) return c.input && typeof c.input === "object" ? c.input : {};
+  }
+  return null;
 }
 
 /** The newest `tool_use` of this tool and input that has no `tool_result`; "" when none (or no file). */

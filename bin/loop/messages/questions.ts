@@ -116,6 +116,17 @@ export function reopen(store: Store, project: string, squad: string, id: string,
   });
 }
 
+// permission-prompt-needs-you U2: the board's answer to this permission prompt (the picker id and its tool call)
+// was not pressed because the screen no longer matched; it is answered in the terminal from then on. The
+// reason, or null. A new prompt has a new tool call, so it starts answerable again.
+export function pressRefused(store: Store, project: string, squad: string, id: string, toolUseId: unknown): string | null {
+  if (typeof toolUseId !== "string" || !toolUseId) return null;
+  const r = store.db.query(`SELECT json_extract(result, '$.why') AS why FROM requests WHERE project = ? AND squad = ? AND kind = 'answer'
+    AND done_at IS NOT NULL AND json_extract(result, '$.prompt_changed') = 1 AND json_extract(payload, '$.id') = ? AND json_extract(payload, '$.tool_use_id') = ?
+    ORDER BY id DESC LIMIT 1`).get(project, squad, id, toolUseId) as { why: string | null } | null;
+  return r ? String(r.why ?? "the prompt changed") : null;
+}
+
 // Make the open rows match a squad's waiting_on_you entries; returns the number of rows changed. An open
 // row whose entry left is answered by `reality` (cancel-unit, a hand edit); a kept entry updates its row
 // in place; from the first entry out of order on (a re-asked id moves to the end) rows are replaced.
