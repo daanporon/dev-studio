@@ -1858,7 +1858,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
         : us;
       if (us === "planned" && !STOPPED_STATES.includes(state)) {
         notStarted.add(String(slug));
-        if (x.hold || planBlocked) parkRoots.add(String(slug));
+        if (x.hold || !approvedPlans(db.s.root, st.approved_plans, x?.plan ?? null)) parkRoots.add(String(slug));
       }
       if (us !== "done" && us !== "cancelled") {
         // The Flow's view of this open unit (bin/board/flow.ts): what it needs beyond the rows above.
