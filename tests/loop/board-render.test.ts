@@ -903,6 +903,9 @@ test("accounts: the strip's tags, warnings, default chip and hidden count; Manag
     expect(texts(panel, ".mrow .bdg.where")).toEqual(["system", "Orca + ds", "ds only", "ds only", "ds only", "folder only"]);
     expect([...panel.querySelectorAll(".mrow")].map((m: any) => m.querySelector(".abtn")?.textContent ?? null)).toEqual(["Disable", "Disable", "Disable", "Enable", "Enable", null]);
     expect(texts(panel, ".awarn")).toHaveLength(2);
+    panel.querySelector(".abtn")!.dispatchEvent(new r.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise((res) => setTimeout(res, 30));
+    expect(r.root.querySelector(".acct-panel")).toBeNull();
     expect(r.errors).toEqual([]);
   } finally { await r.window.happyDOM.close(); }
 });

@@ -1137,7 +1137,7 @@ function accountPlaces(db: Db, list: { c: any; t: any }[]) {
 function stripRows(accts: any[]) {
   const reps = new Map<string, any>();
   const first = [...accts].filter((a) => !a.disabled && a.login_id)
-    .sort((a, b) => Number(b.is_default) - Number(a.is_default) || Number(b.orca_listed) - Number(a.orca_listed) || a.seq - b.seq);
+    .sort((a, b) => Number(a.folder_missing) - Number(b.folder_missing) || Number(b.is_default) - Number(a.is_default) || Number(b.orca_listed) - Number(a.orca_listed) || a.seq - b.seq);
   for (const a of first) if (!reps.has(`${a.agent}\n${a.login_id}`)) reps.set(`${a.agent}\n${a.login_id}`, a);
   for (const a of accts) {
     const rep = !a.disabled && a.login_id ? reps.get(`${a.agent}\n${a.login_id}`) : a;
@@ -1173,7 +1173,7 @@ function accounts(db: Db, now = NOW()) {
   const dash = (v: unknown) => (typeof v === "string" && v && v !== "-" ? v : null);
   // The agent's default: the marked row, else its system login, else its first row.
   const defaults = new Map<string, string>();
-  for (const p of [...places.rows.values()].sort((a, b) => Number(b.is_default) - Number(a.is_default) || Number(b.tag === "system") - Number(a.tag === "system")))
+  for (const p of [...places.rows.values()].filter((p) => !p.missing).sort((a, b) => Number(b.is_default) - Number(a.is_default) || Number(b.tag === "system") - Number(a.tag === "system")))
     if (!defaults.has(p.agent)) defaults.set(p.agent, p.account);
   const out = rows.map((c) => {
     const agent = String(c.agent), account = String(c.account), place = places.rows.get(`${agent}/${account}`)!;
@@ -1208,7 +1208,7 @@ function accounts(db: Db, now = NOW()) {
 // accounts are left out. Level: crit when none is free, warn when any is limited, out of credits or near.
 function accountsSummary(db: Db | null, label: string, accts: any[], now = NOW()) {
   const sMax = (db ? dsLimit(db, label, "pick_session_max") : null) ?? 95, wMax = (db ? dsLimit(db, label, "pick_weekly_max") : null) ?? 95;
-  const live = accts.filter((a) => !a.disabled && !a.merged_into);
+  const live = accts.filter((a) => !a.disabled && !a.merged_into && !a.folder_missing);
   const day = (e: number) => new Date(e * 1000).toDateString();
   const resetText = (e: number) => (day(e) === day(now) ? clock(e) : new Date(e * 1000).toLocaleDateString("en-US", { weekday: "short" }));
   const limited = live.filter((a) => a.limited && !a.credits && !a.login).map((a) => ({ account: a.account, agent: a.agent, label: a.label, until: a.limited_until, reset: resetText(a.limited_until) }));

@@ -1466,7 +1466,7 @@ function ResetsCell({ a }) {
 // issue #125 U7: an account's on/off button and its login's warnings (the strip row, its detail and the Manage panel).
 // A plain function, not a component, so tests/board-page.sh renders it as part of AccountDetail.
 function accountSwitch(a, all, project, toast) {
-  return html`<button class="abtn" title=${a.disabled ? "Let picks use this account again" : "No pick uses this account until it is enabled again"} onClick=${(e) => { e.stopPropagation(); switchAccount(a, all, project, toast); }} onKeyDown=${(e) => e.stopPropagation()}>${a.disabled ? "Enable" : "Disable"}</button>`;
+  return html`<button class="abtn" title=${a.disabled ? "Let picks use this account again" : "No pick uses this account until it is enabled again"} onClick=${(e) => { e.stopPropagation(); switchAccount(a, all, project, toast); }} onKeyDown=${(e) => { if (e.key !== "Escape") e.stopPropagation(); }}>${a.disabled ? "Enable" : "Disable"}</button>`;
 }
 function acctWarnings(a) {
   return html`${a.dup_folders && html`<div class="lu awarn">same login in two or more folders: ${a.dup_folders.join(" and ")}</div>`}${a.folder_missing && html`<div class="lu awarn">folder missing: ${a.folder} · picks skip this account</div>`}`;

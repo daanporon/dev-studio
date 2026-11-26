@@ -1683,6 +1683,9 @@ jt "U7: a disabled account leaves the strip, unless a role still runs on it" "$U
 jt "U7: a removed account is not listed; the others all are" "$U7/board.json" '[.accounts[].account] == ["system","o1","d1","gone","idle","busy"]' '[.accounts[].account]'
 jt "U7: one folder-only login for its two folders, outside the account list" "$U7/board.json" ".account_folders == [{agent:\"claude\",tag:\"folder only\",folder:\"$U7/lone\",login_short:\"login-lo\",dup_folders:[\"$U7/lone\",\"$U7/lone2\"]}]" '.account_folders'
 jt "U7: only the first 8 characters of a login reach the page" "$U7/board.json" '(tostring | test("login-[a-z]+-[0-9]{4}") | not) and .accounts[1].login_short == "login-or"'
+jt "U7: the Accounts tile leaves the missing folder out" "$U7/board.json" '.accounts_summary.total == 3' '.accounts_summary'
+dbw "UPDATE accounts SET is_default = (account = 'gone')"; render "$LBL" --json > "$U7/gone.json"
+jt "U7: a default whose folder is missing gives the chip to the system login" "$U7/gone.json" '[.accounts[] | select(.default) | .account] == ["system"]' '[.accounts[] | [.account,.default]]'
 jt "U7: the detail view has the folder and the source" "$U7/board.json" ".accounts[2] | .folder==\"$U7/dsd\" and .source==\"ds\""
 # Two enabled rows of one login are one strip row (the default first), holding the other's roles.
 SEED="$U7/seed.json" HOSTST="$U7/st" mkdb "$LBL"
