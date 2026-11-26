@@ -1970,9 +1970,21 @@ function linkedQ(text, slug) {
 }
 
 // A question's markdown as one plain line, for list rows and tooltips, so they never show raw markers.
+// A GFM table (found as mdToHtml finds it) loses its separator row; each other row reads "a · b".
 function mdPlain(text) {
   if (text == null) return text;
-  return String(text).replace(/\[([^\]]+)\]\(https?:\/\/[^)\s]+\)/gi, "$1").replace(/^[ \t]*(?:#{1,6}|[-*+])[ \t]+/gm, "")
+  const lines = String(text).split("\n");
+  const cells = (ln) => ln.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+  const sepRow = (ln) => ln != null && ln.includes("|") && cells(ln).every((c) => /^:?-{3,}:?$/.test(c));
+  const row = (ln) => cells(ln).filter(Boolean).join(" · ");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes("|") || !sepRow(lines[i + 1])) { out.push(lines[i]); continue; }
+    out.push(row(lines[i]));
+    for (i += 2; i < lines.length && lines[i].trim() !== "" && lines[i].includes("|"); i++) out.push(row(lines[i]));
+    i--;
+  }
+  return out.join("\n").replace(/\[([^\]]+)\]\(https?:\/\/[^)\s]+\)/gi, "$1").replace(/^[ \t]*(?:#{1,6}|[-*+])[ \t]+/gm, "")
     .replace(/\*\*|`/g, "").replace(/\s*\n\s*/g, " ").trim();
 }
 
@@ -2145,6 +2157,13 @@ async function dismissEach(list, send = sendAnswer) {
 // A note's title as the card text has it: "<squad> · <role>: <title>"; the squad and role show on line 1, so strip them.
 const noteSplit = (n) => { const m = String(n.title || "").match(/^(?:(.+?) · )?(?:([a-z-]+): )?([\s\S]*)$/); return { role: m && m[2] || "", title: m ? m[3] : n.title }; };
 const noteTitle = (n) => noteSplit(n).title;
+// True when a Needs-you row's title already shows its text. An untitled question's title is cut from its text the way
+// shortTitle does it (bin/board/needs-rules.ts: one line, paths cut to file names, "…" when cut short).
+const textInTitle = (n) => {
+  if (mdPlain(n.text) === mdPlain(n.title)) return true;
+  const flat = String(n.text).replace(/\s+/g, " ").trim().replace(/(^|\s)~?\/\S*\/([^\s/]+)/g, "$1$2");
+  return n.titled === false && flat.startsWith(String(n.title).replace(/…$/, ""));
+};
 const noteRole = (n) => noteSplit(n).role || n.unit || "";
 // U2: a Studio card's one action button: the same Studio request as the squad card's buttons; it does not dismiss the card.
 function ActBtn({ n, toast }) {
@@ -2469,7 +2488,7 @@ const chatNewReply = (project, m) => m.reply_at != null && lstore.get(chatSeenKe
 const chatMailTip = (m) => m.unread + " unread · " + m.reply_due + " waiting for a reply";
 const chatMemberAria = (m, mail, fresh) => m.label + (mail > 0 ? ", " + mail + " mail" : "") + (fresh ? ", new reply" : "");
 // planOpen: the doc modal (onPlan) is stacked over this panel, so Esc closes the doc only.
-function ChatPanel({ project, topic, wt, label, onClose, onSeen, onPlan, planOpen }) {
+function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, planOpen }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [text, setText] = useState(String(chatDraft(project, topic, wt).text || ""));
@@ -2486,7 +2505,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen, onPlan, planOpe
   const [screenOn, setScreenOn] = useState(null);   // null: the live screen when the member has no transcript, else the conversation
   const [pressing, setPressing] = useState("");    // the worktree a key press is in flight for
   const [qOn, setQOn] = useState(null);             // the operator's pick of the Question view: {wt, key, on}; a new blocking question resets it to open
-  const [qAt, setQAt] = useState(0);                // which of several open questions the Question view shows
+  const [qAt, setQAt] = useState(qid || 0);         // which open question the Question view shows: an index, or the id it was opened for
   const [, bump] = useState(0);
   const log = useRef(null), input = useRef(null), cur = useRef(wt), tabs = useRef(null), menuOn = useRef(false), swBtn = useRef(null);
   const pick = useRef(null), held = useRef({}), slots = useRef({}), seq = useRef(0), planOn = useRef(false);
@@ -2647,11 +2666,17 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen, onPlan, planOpe
     ...((data && data.questions) || []).filter((q) => q.id && !sentQ.has(askOf(q))).map((q) => ({ ...q, key: "q:" + q.id + "@" + q.since }))];
   const blockKey = (qItems.find((x) => x.menu || x.blocking) || {}).key || "";
   // It opens by itself once per new blocking item; a pick of the operator's holds until the next one.
-  const qView = qItems.length > 0 && (qOn && qOn.wt === shown.wt && qOn.key === blockKey ? qOn.on : blockKey !== "");
+  // Opened for a question: it shows, blocking or not, until a blocking item that was not there at the opening arrives.
+  const openKey = useRef(null);
+  if (data && openKey.current === null) openKey.current = blockKey;
+  const qNamed = typeof qAt === "string" && (!blockKey || blockKey === openKey.current) ? qItems.findIndex((x) => x.id === qAt) : -1;
+  const qView = qItems.length > 0 && (qOn && qOn.wt === shown.wt && qOn.key === blockKey ? qOn.on : blockKey !== "" || qNamed >= 0);
   const showScreen = !qView && !!scr && (screenOn == null ? data.source === "screen" : screenOn);
   const view = qView ? "question" : showScreen ? "screen" : "chat";
   const goView = (v) => { setQOn({ wt: shown.wt, key: blockKey, on: v === "question" }); if (v !== "question") setScreenOn(v === "screen"); };
-  const qCur = qItems[Math.min(qAt, qItems.length - 1)] || null;
+  const qIdx = typeof qAt === "string" ? Math.max(qNamed, 0) : Math.min(qAt, qItems.length - 1);
+  const qCur = qItems[qIdx] || null;
+  const pageQ = (i) => { goView("question"); setQAt(i); };   // paging keeps the view open when nothing blocks
   const qRec = qCur && qCur.source !== "picker" ? qCur.suggestion : null;   // a picker's option 1 is only first, not recommended
   // A tap on a choice is the card's own answer: sendAnswer posts api/answer with the question's `since`.
   const answerQ = async (q, answer) => {
@@ -2698,8 +2723,8 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen, onPlan, planOpe
         aria-selected=${m.wt === shown.wt ? "true" : "false"} tabindex=${m.wt === shown.wt ? 0 : -1} title=${m.label} aria-label=${chatMemberAria(m, mail(m), m.wt !== shown.wt && chatNewReply(project, m))}
         onClick=${() => switchTo(m)}><span class="chat-swlabel">${m.label.length > 14 ? m.label.slice(0, 13) + "…" : m.label}</span>${badge(mail(m), chatMailTip(m))}${ask(m)}${m.wt !== shown.wt && dot(m)}</button>`)}</div>`}
       <div class="chat-wrap"><div class="chat-log" ref=${log} onScroll=${onScroll} role=${multi && !phone ? "tabpanel" : undefined} aria-labelledby=${multi && !phone ? tabId(shownAt) : undefined}>${qView && qCur
-        ? html`<div class="chat-q" data-chat-question>${qItems.length > 1 && html`<div class="chat-qnav"><button type="button" class="btn sm" aria-label="Previous question" disabled=${qAt <= 0} onClick=${() => setQAt(Math.max(0, qAt - 1))}>‹</button>
-            <span>${Math.min(qAt, qItems.length - 1) + 1} of ${qItems.length}</span><button type="button" class="btn sm" aria-label="Next question" disabled=${qAt >= qItems.length - 1} onClick=${() => setQAt(Math.min(qItems.length - 1, qAt + 1))}>›</button></div>`}
+        ? html`<div class="chat-q" data-chat-question>${qItems.length > 1 && html`<div class="chat-qnav"><button type="button" class="btn sm" aria-label="Previous question" disabled=${qIdx <= 0} onClick=${() => pageQ(Math.max(0, qIdx - 1))}>‹</button>
+            <span>${qIdx + 1} of ${qItems.length}</span><button type="button" class="btn sm" aria-label="Next question" disabled=${qIdx >= qItems.length - 1} onClick=${() => pageQ(Math.min(qItems.length - 1, qIdx + 1))}>›</button></div>`}
           ${qCur.menu ? html`<div class="chat-qprompt">${qCur.prompt.join("\n") || shown.label + "'s screen shows a menu"}</div>
             ${qCur.options.map((o, i) => html`<button key=${i} type="button" class="btn chat-qopt" disabled=${pressing === shown.wt} onClick=${() => pressOpt(i)}>${i + 1}. ${o}</button>`)}
             <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(() => goView("chat"))}>Esc · leave the menu</button>`
@@ -2835,7 +2860,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
         ${openAct && html`<button class="btn qsec" data-ev="open-debrief" onClick=${() => onDebrief(n)}>Open debrief</button>`}
         ${acts.some((a) => a.key === "act") && html`<${ActBtn} n=${n} toast=${toast} />`}
         ${(n.squad !== "_studio" && n.chat_wt || n.card_squad && n.chat_wt) && html`<button class="btn chat-btn" title="Read this member's recent turns and type it one line"
-          onClick=${() => setChat({ project: n.label, topic: n.card_squad || n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead" })}>Chat with ${n.chat_label || "the Lead"}</button>`}
+          onClick=${() => setChat({ project: n.label, topic: n.card_squad || n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead", qid: n.id })}>Chat with ${n.chat_label || "the Lead"}</button>`}
         <span class="sp"></span>
         ${st.err && html`<span class="err">not sent: ${st.err}</span>`}
         ${sent && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
@@ -4371,7 +4396,7 @@ function App() {
         <div class="l2">${linkedQ(n.title, n.repo_slug)}</div>
         ${debrief ? (n.text && n.text !== n.title && html`<div class="lndet dbr">${linkedQ(n.text, n.repo_slug)}</div>`)
           : n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
-          : n.text && n.text !== n.title && html`<div class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}</div>`}
+          : n.text && !textInTitle(n) && html`<div class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}</div>`}
         ${n.why && html`<div class="lndet">Why: ${linkedQ(mdPlain(n.why), n.repo_slug)}</div>`}</div>`;
     })}</div>`}
     <${LoopNotes} notes=${data.loop_notes || []} open=${notesOpen} setOpen=${(o) => { setNotesOpen(o); lstore.set("b:notes", o); }} sq=${notesSq} setSq=${(v) => { setNotesSq(v); lstore.set("b:notes-sq", v); }} toast=${setToast} onShow=${show} />
