@@ -1,5 +1,7 @@
 // reconcilers/services.ts — keep each wished service the way its row asks (U16, R7, KTD16). Every
-// tick, for each `services` row (v1: the web board, one row per scope):
+// tick, for each `services` row (the web board, one row per scope; and the side-host link server, side-loop-host
+// U2, one row named `link` whose wish follows link_listen, link_port and the host list: fulfil/link.ts
+// syncLinkWish, written here before the rows are read; its kinds are link_* where the board's are board_*):
 //   want=running  no live pid yet (new, stopped, or a new wish after a failure) -> board_start
 //                 running, pid gone (whatever the wish times say)                -> board_restart (counted)
 //                 running, a newer wish (another port) than the start           -> board_restart
@@ -12,6 +14,7 @@
 // healthy pid the row already holds is adopted at loop boot: nothing to do. A wish the loop gave up
 // on (want_result `failed: …`) waits for the next `ds want board`.
 import { bindsOf, boardUp, exitCodeOf, isBoard, isStarting, restartsOf, set } from "../fulfil/board.ts";
+import { isLink, linkExitCode, linkUp, syncLinkWish } from "../fulfil/link.ts";
 import type { Action, Reconciler } from "../core/plugins.ts";
 import type { Row } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
@@ -24,15 +27,18 @@ const services: Reconciler = {
   scope: "host",
   async run(ctx) {
     const { store, now: at } = ctx, out: Action[] = [];
-    const rows = store.db.query("SELECT * FROM services WHERE name = 'board' ORDER BY id").all() as Row[];
+    syncLinkWish(store, at);
+    const rows = store.db.query("SELECT * FROM services WHERE name IN ('board', 'link') ORDER BY id").all() as Row[];
+    const isLinkRow = (r: Row) => r.name === "link";
     // The pings of every running row at once: one hung board must not hold up the others.
-    const alive = rows.map((r) => isBoard(r.pid));
+    const alive = rows.map((r) => (isLinkRow(r) ? isLink(r.pid) : isBoard(r.pid)));
     const answers = await Promise.all(rows.map((r, i) => r.want === "running" && r.status === "running" && alive[i] && !isStarting(Number(r.id))
-      ? boardUp(Number(r.port), bindsOf(r), r.pid) : false));
+      ? (isLinkRow(r) ? linkUp(r) : boardUp(Number(r.port), bindsOf(r), r.pid)) : false));
     for (const [i, r] of rows.entries()) {
-      const id = Number(r.id), subject = `service:${id}`;
+      const id = Number(r.id), subject = `service:${id}`, svc = isLinkRow(r) ? "link" : "board";
+      // Kinds are named board_*; a link row gets the same verb as link_* (fulfil/link.ts).
       const act = (kind: string, episode: string, payload: Record<string, unknown> = {}) =>
-        out.push({ project: String(r.project), squad: String(r.topic) || null, subject, kind, episode, payload: { id, ...payload } });
+        out.push({ project: String(r.project), squad: String(r.topic) || null, subject, kind: kind.replace(/^board_/, `${svc}_`), episode, payload: { id, ...payload } });
       if (r.want !== "running") {
         if (alive[i]) act("board_stop", `stop:${r.want_at}`);
         else if (r.status !== "stopped" && r.status != null) {
@@ -57,7 +63,7 @@ const services: Reconciler = {
         continue;
       }
       // Down: a pid gone (or never recorded) or a live one that does not answer.
-      const pid = Number(r.pid ?? 0), reload = !alive[i] && pid > 0 && exitCodeOf(pid) === 75;
+      const pid = Number(r.pid ?? 0), reload = !alive[i] && pid > 0 && (exitCodeOf(pid) ?? (isLinkRow(r) ? linkExitCode(pid) : null)) === 75;
       const why = reload ? "its code changed (exit 75)" : alive[i] ? "it stopped answering /healthz" : "its process is gone";
       if (reload) { act("board_restart", `reload:${pid}:${r.started_at}`, { why }); continue; }
       const since = Math.max(at - windowS(), Number(r.want_at ?? 0));

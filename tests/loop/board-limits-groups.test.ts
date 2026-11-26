@@ -14,14 +14,14 @@ const summary = new Function(`${cut("limitGroupSummary")} return limitGroupSumma
 const match = new Function(`${cut("settingWords")}\n${cut("settingMatch")} return settingMatch;`)();
 
 test("every limits.conf key has a named category, none Other", () => {
-  expect(keys.length).toBe(111);
+  expect(keys.length).toBe(113);
   expect(keys.filter((k) => limitGroup(k) === "Other")).toEqual([]);
 });
 test("the nine categories hold the planned counts", () => {
   const n: Record<string, number> = {};
   for (const k of keys) n[limitGroup(k)] = (n[limitGroup(k)] ?? 0) + 1;
   expect(LIMIT_GROUPS[0].name).toBe("Context & compaction");
-  expect(LIMIT_GROUPS.map((g) => n[g.name])).toEqual([18, 15, 26, 8, 5, 26, 3, 7, 3]);
+  expect(LIMIT_GROUPS.map((g) => n[g.name])).toEqual([18, 15, 26, 8, 5, 28, 3, 7, 3]);
 });
 test("an unknown key is Other", () => { expect(limitGroup("brand_new_key")).toBe("Other"); });
 test("the folded line counts overridden, unsaved (not env) and error", () => {
