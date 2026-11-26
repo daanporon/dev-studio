@@ -82,6 +82,12 @@ eq "add-role reviewer: wish, no unit" "$(dbq "SELECT role, want, json_extract(wa
 rc=0; addrole lead x >/dev/null 2>&1 || rc=$?
 eq "add-role lead: refused" "$rc" "2"
 
+# --- one login, two folders (issue #125 U3) -----------------------------------------------
+newsquad; two; usage claude a 10 $((N + 1800)) 18 - -; usage claude b 72 $((N + 7200)) 41 - -; sync
+bun -e 'const { Database } = require("bun:sqlite"); new Database(process.argv[1]).run("UPDATE accounts SET login_id = ?, is_default = (account = ?) WHERE agent = ? AND account IN (?, ?)", ["L1", "b", "claude", "a", "b"])' "$TMP/state/loop.db"
+eq "one login: the default folder is offered, though the other has more room" \
+  "$("$ROOT/bin/ds" pick "$LABEL" builder --tier standard 2>/dev/null | cut -f4)" "b"
+
 # --- spawn-squad (U158): only a wish; the loop picks and starts (tests/loop/squad-lifecycle.test.ts).
 # The pick itself is covered above through add-role and `ds pick`.
 

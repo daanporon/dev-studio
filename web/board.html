@@ -2952,14 +2952,14 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
         ${n.plain && !n.revision && html`<ul class="qplain">${n.plain.map((l) => html`<li key=${l.label}><b>${l.label}</b>${l.text}</li>`)}</ul>`}
         ${n.shown ? html`<${ShownText} n=${n} />` : null}
         ${!n.plain && n.text !== n.title && !n.shown && html`<${QMd} cls="qtxt" text=${n.text} slug=${n.repo_slug} />`}
-        ${n.id && isPicker && !termOnly && html`<div class="pnote">This mirrors the live picker in ${n.from}'s terminal: your pick is pressed there as its option, and the entry clears once the picker records it.</div>`}
+        ${n.id && isPicker && !termOnly && html`<div class="pnote">${n.picker_kind === "permission" ? html`Yes or No is pressed in ${n.from}'s terminal only while its screen still shows this command; otherwise nothing is typed and you answer it there.` : html`This mirrors the live picker in ${n.from}'s terminal: your pick is pressed there as its option, and the entry clears once the picker records it.`}</div>`}
         ${n.id && (termOnly
-          ? html`<div class="pnote">${n.picker_kind === "permission" ? promptWhere(n, n.from) + " — Claude stopped at a safety check, and the board can't answer this prompt." : "Answer it in " + n.from + "'s terminal — this picker has several questions or allows several picks, so the board can't answer it."} It clears once it is answered.</div>
+          ? html`<div class="pnote">${n.picker_kind === "permission" ? promptWhere(n, n.from) + (n.picker_refused ? " — the board did not press it (" + n.picker_refused + ")." : " — Claude stopped at a safety check, and the board can't answer this prompt.") : "Answer it in " + n.from + "'s terminal — this picker has several questions or allows several picks, so the board can't answer it."} It clears once it is answered.</div>
             <${QOptions} n=${n} termOnly=${true} />`
           : html`${studioCard && n.when && html`<div class="when mut">When done: ${n.when}</div>`}
             ${!(studioCard && one !== null) && html`<${QOptions} n=${n} val=${val} rec=${rec} onPick=${set} />`}
           ${rec && !n.choices.some((c) => c.label === rec) && html`<div class="sugg"><b>Suggested:</b> ${rec}${n.why ? html` — ${linkedQ(n.why, n.repo_slug)}` : ""}</div>`}
-          ${!studioCard && html`<textarea enterkeyhint="send" placeholder=${"Or type your own answer (" + (typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches ? "Enter" : "⌘/Ctrl+Enter") + " sends)"} value=${isChoice ? "" : val} onInput=${(e) => set(e.target.value)}></textarea>`}`)}
+          ${!studioCard && n.picker_kind !== "permission" && html`<textarea enterkeyhint="send" placeholder=${"Or type your own answer (" + (typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches ? "Enter" : "⌘/Ctrl+Enter") + " sends)"} value=${isChoice ? "" : val} onInput=${(e) => set(e.target.value)}></textarea>`}`)}
         ${n.plain && n.revision && html`<details class="qdetails"><summary>Whole plan in plain words</summary>${n.facts && html`<div class="qfacts">${[n.facts.steps + " steps", n.facts.hard + " hard", n.facts.start_now + " start now"].map((t) => html`<span key=${t} class="qfact">${t}</span>`)}</div>`}
           <ul class="qplain">${n.plain.map((l) => html`<li key=${l.label}><b>${l.label}</b>${l.text}</li>`)}</ul></details>`}
         ${n.plain && (n.text !== n.title || n.why) && html`<details class="qdetails"><summary>Details for the record</summary>
