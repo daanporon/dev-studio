@@ -90,7 +90,7 @@ test("the Units left detail puts every card the number counts in one group", () 
   expect(t.left).toBe(9);
   expect(t.groups).toEqual({ working: 2, queued: 2, parked: 2, stopped: 3 });
   expect(Object.values(t.groups as Record<string, number>).reduce((n, x) => n + x, 0)).toBe(t.left);
-  expect(mod.unitsLeftDetail(2, t.groups)).toBe("2 squads · 2 working · 2 parked · 3 stopped · 2 queued");
+  expect(mod.unitsLeftDetail(2, t.groups)).toBe("2 squads · 2 working · 3 stopped · 2 parked · 2 queued");
   expect(mod.unitsLeftDetail(1, { working: 0, queued: 0, parked: 4, stopped: 0 })).toBe("1 squad · 4 parked");
   expect(mod.unitsLeftDetail(1, { working: 0, queued: 3, parked: 0, stopped: 0 })).toBe("1 squad · 3 queued");
 });

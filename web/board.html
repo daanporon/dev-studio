@@ -1811,8 +1811,8 @@ function closeConfirm(s) {
   return "Archive " + s.topic + "? Its worktrees are removed and it moves to Archived — it can't be resumed. Unmerged branches are kept." + warn;
 }
 
-// "2 squads · 2 working · 1 ready · 6 parked · 1 stopped": the open units by group, non-zero only.
-const unitsLeftDetail = (squads, g) => [squads + (squads === 1 ? " squad" : " squads"), ...["working", "parked", "stopped", "queued"].filter((k) => g[k] > 0).map((k) => g[k] + " " + k)].join(" · ");
+// "2 squads · 2 working · 1 stopped · 6 parked · 1 queued": the open units by group, non-zero only.
+const unitsLeftDetail = (squads, g) => [squads + (squads === 1 ? " squad" : " squads"), ...["working", "stopped", "parked", "queued"].filter((k) => g[k] > 0).map((k) => g[k] + " " + k)].join(" · ");
 
 // Stuck and needs-you counts from the Flow (board.json `flow`); nothing for a squad without an entry.
 // A stuck or needs-you unit leaves "working", so the segments still sum to the total.
