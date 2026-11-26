@@ -92,6 +92,7 @@ import { studioBackend } from "../loop/squad/studio.ts";
 import { chatProblem } from "../loop/chat/limits.ts";
 import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
+import { ticketUrlProblem } from "../loop/squad/plan-lines.ts";
 import { KEYS, KEYS_MAX, keyOk } from "../loop/chat/keys.ts";
 import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
@@ -772,6 +773,9 @@ async function limitsPost(req: Request) {
     } else if (key === "focus_squad") {
       // squad-priority U2: the squad menu's Make focus sends a squad name; the loop's settings write checks it is a live feature squad.
       if (!/^[A-Za-z0-9._-]{1,100}$/.test(v)) return json(400, { error: `${key} must be a squad name, or - for none` });
+    } else if (key === "ticket_url") {
+      const why = ticketUrlProblem(v);
+      if (why) return json(400, { error: why });
     } else if (key === "briefing_time") {
       if (!/^(off|([01][0-9]|2[0-3]):[0-5][0-9])$/.test(v)) return json(400, { error: `${key} must be off or HH:MM, 24h (00:00-23:59)` });
     } else if (key === "briefing_days") {

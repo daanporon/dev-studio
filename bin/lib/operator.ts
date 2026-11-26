@@ -7,6 +7,7 @@ import { ROOT, stateRoot, readIfs } from "./shared";
 import { PROVIDER_SETTINGS } from "../backend/registry";
 import { confWord, textWord } from "./lib";
 import { ownText } from "./settings-rows.ts";
+import { ticketUrlProblem } from "../loop/squad/plan-lines.ts";
 
 /** `exec "$ROOT/bin/ds" --state "$STATE" <args>`: the loop's CLI with this process's stdio; returns its exit code. */
 export async function dsExec(args: string[]): Promise<number> {
@@ -127,6 +128,9 @@ export function limitValueProblem(key: string, val: string): string {
   } else if (key === "feedback_repo") {
     // ds-feedback-github-issues U1: the GitHub repo feedback issues go to, owner/name, or - (off).
     if (val !== "-" && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(val)) return `feedback_repo must be owner/name, or - (got '${val}')`;
+  } else if (key === "ticket_url") {
+    const why = ticketUrlProblem(val);
+    if (why) return why;
   } else {
     const wide = key === "expected_checks" || key === "review_skip_lenses";
     if (val === "" || (wide ? /[^A-Za-z0-9._,-]/ : /[^A-Za-z0-9._-]/).test(val)) return `bad value '${val}'`;

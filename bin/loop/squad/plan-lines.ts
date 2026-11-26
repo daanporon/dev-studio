@@ -92,6 +92,14 @@ export function isWebUrl(x: string): boolean {
   if (!/^https?:\/\/[^\s/?#]/i.test(x)) return false;
   try { return new URL(x).hostname !== ""; } catch { return false; }
 }
+/** Why `v` is not a `ticket_url` setting (`-` = unset), or null: an http(s) URL holding `{id}`, in plain URL characters. */
+export function ticketUrlProblem(v: string): string | null {
+  if (v === "-") return null;
+  const filled = v.replaceAll("{id}", "1");
+  const ok = v.includes("{id}") && v.length <= LINK_CHARS && /^[A-Za-z0-9._~:/?#\[\]@!&()*+,;=%-]*$/.test(filled) && isWebUrl(filled)
+    && !new URL(filled).username && !new URL(filled).password;
+  return ok ? null : `ticket_url must be an http(s) URL holding {id}, without spaces, quotes or a login, or - for none (got '${v.slice(0, 80)}')`;
+}
 /** Why these links are refused, or null. */
 export function linksProblem(links: string[]): string | null {
   const bad = links.find((x) => !isWebUrl(x));

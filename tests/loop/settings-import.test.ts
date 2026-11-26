@@ -299,6 +299,17 @@ describe("the export file", () => {
     expect(s3.db.query("SELECT key, value FROM config WHERE project = ? AND file = 'skills.conf'").all(DST)).toEqual([{ key: "builder lavish", value: "off" }]);
   });
 
+  test("ticket_url: project-specific, so unpicked until named; a bad one is refused", () => {
+    const { s, o } = fixture();
+    raw(s, SRC, "limits.conf", "ticket_url", "https://tracker.example/issue/{id}");
+    const plan = planImport(s, DST, { project: SRC }, o);
+    expect(brief(find(plan, "limits.conf", "ticket_url"))).toEqual(["skip", "project-specific", false, true]);
+    applyImport(s, DST, { project: SRC }, [{ file: "limits.conf", key: "ticket_url" }], "ds", o);
+    expect(row(s, DST, "limits.conf", "ticket_url")).toBe("https://tracker.example/issue/{id}");
+    raw(s, SRC, "limits.conf", "ticket_url", "https://tracker.example/issue/");
+    expect(find(planImport(s, DST, { project: SRC }, o), "limits.conf", "ticket_url").why).toStartWith("refused: ticket_url");
+  });
+
   test("the project-specific limits keys are shipped keys, and the shell-only ones are the board's file-only list", () => {
     const shipped = new Set(confRows("", "limits.conf", join(ROOT, "conventions", "limits.conf")).map((r) => String(r.key.key)));
     for (const k of PROJECT_SPECIFIC_LIMITS) expect([k, shipped.has(k)]).toEqual([k, true]);
