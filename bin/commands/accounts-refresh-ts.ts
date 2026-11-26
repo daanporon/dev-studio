@@ -1,13 +1,17 @@
 // ds accounts-refresh-ts — bin/lib/accounts-refresh.sh, ported (U274): rewrite state/accounts.tsv (the picker's
-// and the board's view of every account) from the backend's account-list + account-usage + limited, with the
-// limit episodes in .accounts.episodes beside it. Same args, output, files and exit codes as the shell body;
-// the header comment of bin/lib/accounts-refresh.sh describes the columns and the episode rules.
+// and the board's view of every account) from the account list + the backend's account-usage + limited, with the
+// limit episodes in .accounts.episodes beside it. The header comment of bin/lib/accounts-refresh.sh describes the
+// columns and the episode rules.
+// Issue #125 (U1): the list is loop.db's accounts table plus Orca's host profiles, whatever the backend, and
+// the refresh writes accounts-orca.tsv and account-folders.tsv beside accounts.tsv for the state observer
+// (bin/lib/accounts-list.ts). It never writes loop.db.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { accountPlan, accountSkillsCheck } from "../lib/account-skills";
+import { accountSkillsCheck, claudePlan } from "../lib/account-skills";
 import { hostBackendPath, globJson, readIfs, run as runCmd, stateRoot, writeErr } from "../lib/shared";
 import { globNames } from "../lib/install";
-import { ACCOUNTS_SKIP, orcaMissing } from "../lib/orca-missing";
+import { accountList } from "../lib/accounts-list";
+import { systemJsonDir } from "../loop/drivers/claude-launch.ts";
 import { dbPath, open } from "../loop/core/store.ts";
 import { contractLimited } from "../loop/capacity/contract-limited.ts";
 
@@ -67,17 +71,17 @@ export async function run(argv: string[]): Promise<number> {
   const fallback = Number(process.env.DS_ACCOUNTS_LIMIT_S || 3600);
   mkdirSync(root, { recursive: true });
   if (maxAge && existsSync(OUT) && Number(now) - mtime(OUT) < Number(maxAge)) return 0;
-  // U58: Orca missing (no CLI, or its runtime not answering), so no accounts to read (they move off Orca in #125):
-  // one line, the last file kept.
-  if (await orcaMissing(hostBackendPath())) { writeErr(ACCOUNTS_SKIP("accounts-refresh") + "\n"); return 0; }
   const LOCK = join(root, ".accounts-refresh.lock");
   if (existsSync(LOCK) && Math.floor(Date.now() / 1000) - mtime(LOCK) > 600) { try { rmdirSync(LOCK); } catch { /* taken */ } }
   try { mkdirSync(LOCK); } catch { return 0; }
   try {
     const be = hostBackendPath();
     const out = async (args: string[]) => stripNl((await runCmd([be, ...args])).out);
-    const LIST = await out(["account-list"]);
-    if (!LIST) return 0; // nothing to describe: leave the last file alone
+    // Issue #125: the list is loop.db's accounts table plus this run's Orca profiles, never the backend's
+    // account-list. A table that cannot be read keeps last run's files.
+    const listed = await accountList(root);
+    if (!listed) return 0;
+    const LIST = listed.join("\n");
     const USAGE = await out(["account-usage"]);
     // account-free-resets U3: each account's free resets (`<agent>\t<account>\t<json>`); a failed call is `-` for every row.
     const RESETS = await out(["account-resets"]);
@@ -125,12 +129,12 @@ export async function run(argv: string[]): Promise<number> {
     // Per-account skills verdict: "<account>\t<ok|broken|warn>\t<reason>".
     let SKILLS = "";
     await accountSkillsCheck(be, true, { out: (s) => { SKILLS += s; }, err: () => {} });
-    // Per-account plan: "<agent>\t<account>\t<plan>" for the accounts that have one.
+    // Per-account plan: "<agent>\t<account>\t<plan>" for the accounts that have one, from each login folder.
     const plans: string[] = []; // awk reads them as `printf '%s\n' "$PLANS"`: none is one empty line
     for (const l of lines(LIST)) {
-      const [pa, pc] = readIfs(l, 3, "\t");
-      if (!pa || !pc) continue;
-      const p = await accountPlan(be, pa, pc);
+      const [pa, pc, , dir] = l.split("\t");
+      if (pa !== "claude" || !pc) continue;
+      const p = claudePlan(join(pc === "system" ? systemJsonDir(process.env) : dir, ".claude.json"));
       if (p) plans.push(`${pa}\t${pc}\t${p}`);
     }
 

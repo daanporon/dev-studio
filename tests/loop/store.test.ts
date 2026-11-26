@@ -299,6 +299,35 @@ describe("U204: the avoid column", () => {
   });
 });
 
+describe("issue #125 U1: migration 0059, the accounts own the list", () => {
+  test("system and non-claude rows become system rows, claude rows in accounts.tsv orca rows Orca lists, the rest unlisted", () => {
+    const root = tmp(), dir = join(tmp(), "migrations");
+    mkdirSync(dir);
+    for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql") && n < "0059-accounts-own-list.sql")) copyFileSync(join(MIGRATIONS, f), join(dir, f));
+    const env = { ...process.env, DS_LOOP_MIGRATIONS: dir };
+    expect(Bun.spawnSync([DS, "--state", root, "migrate"], { env, stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+    const old = open(root, { migrations: dir });
+    for (const [agent, account] of [["claude", "system"], ["claude", "listed"], ["claude", "unlisted"], ["codex", "default"], ["muse", "default"]])
+      old.db.run("INSERT INTO accounts (agent, account, label, observed_at) VALUES (?, ?, ?, 1)", [agent, account, `${account} label`]);
+    old.db.run("INSERT INTO observed_accounts (agent, account, observed_at) VALUES ('claude', 'listed', 1), ('claude', 'system', 1)");
+    old.close();
+    const s = store(root);
+    const got = s.db.query("SELECT agent, account, source, orca_listed, is_default, removed_at, label FROM accounts ORDER BY agent, account").all();
+    expect(got).toEqual([
+      { agent: "claude", account: "listed", source: "orca", orca_listed: 1, is_default: 0, removed_at: null, label: "listed label" },
+      { agent: "claude", account: "system", source: "system", orca_listed: 0, is_default: 0, removed_at: null, label: "system label" },
+      { agent: "claude", account: "unlisted", source: null, orca_listed: 0, is_default: 0, removed_at: null, label: "unlisted label" },
+      { agent: "codex", account: "default", source: "system", orca_listed: 0, is_default: 0, removed_at: null, label: "default label" },
+      { agent: "muse", account: "default", source: "system", orca_listed: 0, is_default: 0, removed_at: null, label: "default label" },
+    ]);
+    // One default per agent, and the source is checked.
+    s.db.run("UPDATE accounts SET is_default = 1 WHERE agent = 'claude' AND account = 'system'");
+    expect(() => s.db.run("UPDATE accounts SET is_default = 1 WHERE agent = 'claude' AND account = 'listed'")).toThrow();
+    expect(() => s.db.run("UPDATE accounts SET source = 'elsewhere' WHERE account = 'listed'")).toThrow();
+    expect(s.db.query("SELECT COUNT(*) AS n FROM observed_account_folders").get()).toEqual({ n: 0 });
+  });
+});
+
 describe("write paths", () => {
   test("a fact is readable at once in the same process, with its event", () => {
     const s = store(tmp());

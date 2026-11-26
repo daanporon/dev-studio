@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # host-no-orca.sh — orca-backend-alternatives U58: a project whose Studio and squads run on tmux needs no Orca for
 # the host commands. With Orca absent (the adapter a stub that logs and exits 127, no `orca` on PATH), `ds team`,
-# `directory.sh list|reach`, `set-orca-depth`, `accounts-refresh` and `account-skills check` exit 0 with their line
-# and never call the stub for that project; a Studio off Orca asking an Orca-only verb gets `<verb>: not on tmux`,
+# `directory.sh list|reach`, `set-orca-depth` and `account-skills check` exit 0 with their line
+# and never call the stub for that project (`accounts-refresh` lists loop.db's accounts, issue #125); a Studio off Orca asking an Orca-only verb gets `<verb>: not on tmux`,
 # exit 2, no stack. tests/board.sh covers the board side by side with an Orca project.
 set -euo pipefail
 
@@ -83,18 +83,26 @@ rc=0; out="$(DS_MEMBER="$LBL/sq/lead" BACKEND="$TMP/orca-stub" "$ROOT/bin/ds" se
 check "set-orca-depth from a member: exits 0 with the line" "0 set-orca-depth: Orca only, nothing to do for $LBL on tmux" "$rc $out"
 check "set-orca-depth: never calls the Orca stub" "" "$(cat "$LOG")"
 
-# Accounts (Orca's until #125): no Orca CLI where the adapter looks, so skip with one line and ask nothing.
-rc=0; out="$(DS_ORCA_CLI_BIN_DIR="$TMP/nobin" "$ROOT/bin/ds" accounts-refresh 2>&1)" || rc=$?
+# Accounts (issue #125, U1): with no Orca CLI where the adapter looks, the refresh lists loop.db's table (a ds row
+# here) and the logged-in system login, prints no skip line, and says Orca is absent.
+mkdir -p "$TMP/home/.claude" "$TMP/zzds"; : > "$TMP/home/.claude/.credentials.json"
+q "INSERT INTO accounts (agent, account, source, config_dir, observed_at) VALUES ('claude', 'zzds', 'ds', '$TMP/zzds', 1)" >/dev/null
+refresh() { HOME="$TMP/home" DS_CLAUDE_SYSTEM_JSON_DIR="$TMP/home" DS_ORCA_CLI_BIN_DIR="$TMP/nobin" "$ROOT/bin/ds" accounts-refresh 2>&1; }
+claude_rows() { awk -F'\t' 'NR>1 && $1=="claude"{print $2}' "$DS_STATE_ROOT/accounts.tsv" | sort | tr '\n' ' '; }
+rc=0; out="$(refresh)" || rc=$?
 check "accounts-refresh: exits 0" "0" "$rc"
-has "accounts-refresh: names issue #125" "$out" "issue #125"
-check "accounts-refresh: one line" "1" "$(printf '%s\n' "$out" | grep -c .)"
+hasnt "accounts-refresh: no issue #125 skip line" "$out" "issue #125"
+check "accounts-refresh: the ds row and the system login" "system zzds " "$(claude_rows)"
+check "accounts-refresh: Orca absent" "orca: absent" "$(head -1 "$DS_STATE_ROOT/accounts-orca.tsv")"
 rc=0; out="$(DS_ORCA_CLI_BIN_DIR="$TMP/nobin" "$ROOT/bin/ds" account-skills check 2>&1)" || rc=$?
 check "account-skills check: exits 0" "0" "$rc"
 has "account-skills check: names issue #125" "$out" "issue #125"
 # An Orca CLI that is there but does not answer (exits 127): the adapter's preflight fails, the same one line.
 ln -s "$TMP/orca-stub" "$TMP/nobin/orca"
-rc=0; out="$(DS_ORCA_CLI_BIN_DIR="$TMP/nobin" "$ROOT/bin/ds" accounts-refresh 2>&1)" || rc=$?
-check "accounts-refresh, Orca not answering: exits 0 with the #125 line" "0 1" "$rc $(printf '%s\n' "$out" | grep -c 'issue #125')"
+rm -f "$DS_STATE_ROOT/accounts.tsv"
+rc=0; out="$(refresh)" || rc=$?
+check "accounts-refresh, Orca not answering: exits 0, no #125 line, the table's list" "0 0 system zzds " "$rc $(printf '%s\n' "$out" | grep -c 'issue #125') $(claude_rows)"
+check "accounts-refresh, Orca not answering: unreachable" "orca: unreachable" "$(head -1 "$DS_STATE_ROOT/accounts-orca.tsv")"
 rc=0; out="$(DS_ORCA_CLI_BIN_DIR="$TMP/nobin" "$ROOT/bin/ds" account-skills check 2>&1)" || rc=$?
 check "account-skills check, Orca not answering: exits 0 with the #125 line" "0 1" "$rc $(printf '%s\n' "$out" | grep -c 'issue #125')"
 rm -f "$TMP/nobin/orca"; : > "$LOG"
