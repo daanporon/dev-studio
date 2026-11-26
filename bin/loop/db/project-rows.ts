@@ -212,16 +212,23 @@ export function deleteRows(store: Store, label: string, counts: Counts): DeleteR
     }
     return { deleted, cleared_pins, cleared_links };
   });
+  // The automatic WAL checkpoint runs inside COMMIT's call but after the write lock is released, so it is
+  // held off for this transaction and run by hand (the same passive checkpoint) once held_ms is taken.
   const fk = (db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys;
+  const ckpt = (db.query("PRAGMA wal_autocheckpoint").get() as { wal_autocheckpoint: number }).wal_autocheckpoint;
   db.run("PRAGMA foreign_keys = OFF");
+  db.run("PRAGMA wal_autocheckpoint = 0");
   const t0 = performance.now();
   let out: ReturnType<typeof txn>;
+  let held_ms = 0;
   try {
     out = txn.immediate();
+    held_ms = Math.round((performance.now() - t0) * 10) / 10;
   } finally {
     if (fk) db.run("PRAGMA foreign_keys = ON");
+    db.run(`PRAGMA wal_autocheckpoint = ${Number(ckpt)}`);
   }
-  const held_ms = Math.round((performance.now() - t0) * 10) / 10;
+  if (ckpt > 0) db.query("PRAGMA wal_checkpoint(PASSIVE)").get();
   if ("mismatch" in out) return { ok: false, mismatch: out.mismatch, held_ms };
   return { ok: true, ...out, rows: Object.values(out.deleted).reduce((a, b) => a + b, 0), held_ms };
 }

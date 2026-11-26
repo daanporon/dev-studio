@@ -132,6 +132,7 @@ describe("project-rows", () => {
     expect(count(db, "messages", "project = 'stay' AND reply_to IS NULL")).toBe(4);
     // The delete runs with foreign keys off: they are back on and nothing dangles.
     expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(db.query("PRAGMA wal_autocheckpoint").get()).toEqual({ wal_autocheckpoint: 1000 });
     expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
 
     const a = new Database(arc, { readonly: true });
