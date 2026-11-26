@@ -485,3 +485,58 @@ test("paused-in-swimlanes: a lane's paused cards leave its count, sit in a folde
   expect(text(card)).toContain("25h");
   expect(store.writes).toEqual([]);
 });
+
+// Merged per day: the number on each bar, and tap-a-bar (bar-pr-counts U1).
+const chartDays = [3, 0, 5, 7, 2, 4, 6, 8].map((merged, i) => ({ day: `2026-11-${19 + i}`, merged }));
+const chartFlow = (openPrs: number) => ({ ...flow, per_day: chartDays, counts: { ...flow.counts, open_prs: openPrs } });
+const barsOf = (v: any) => nodes(v).filter((n) => /^fbar( |$)/.test(String(n.values[1] ?? "")));
+// The number's span in a bar's rendered text: [class, text without the <em> around today's open part].
+const num = (bar: any) => { const m = text(bar).match(/<span class=(fnum(?: z)?) style=>(.*?)<\/span>/)!; return [m[1], m[2].replace(/<\/?em>/g, "")]; };
+const label = (bar: any) => num(bar)[1];
+const head = (v: any) => text(v).match(/<b>Merged per day<\/b><span>(.*?) · median/)![1];
+
+test("chart labels: one per bar with its merged count, a 0 day reads 0 and is dim, today's reads merged+open", () => {
+  const bars = barsOf(render({ flow: chartFlow(2) }).view);
+  expect(bars.map(label)).toEqual(["3", "0", "5", "7", "2", "4", "6", "8+2"]);
+  expect(num(bars[1])[0]).toBe("fnum z");
+  expect(num(bars[0])[0]).toBe("fnum");
+  expect(text(bars[7])).toContain("<em>+2</em>");
+  expect(barsOf(render({ flow: chartFlow(0) }).view).map(label)[7]).toBe("8");
+});
+
+test("chart labels: the view's width class follows its longest label, at least 2 characters", () => {
+  const cls = (openPrs: number) => nodes(render({ flow: chartFlow(openPrs) }).view).flatMap((n) => n.values).includes("flow-bars w" + (openPrs ? String(openPrs).length + 2 : 2));
+  expect(cls(0)).toBe(true);
+  expect(cls(2)).toBe(true);
+  expect(cls(12)).toBe(true);
+  for (let n = 2; n <= 7; n++) expect(page).toContain(`.flow-bars.w${n} .fnum{display:none}`);
+});
+
+test("chart tap: a past bar sets the header, a second tap restores today, the 8/30 toggle clears it", () => {
+  const states: any[] = [];
+  let i = 0;
+  const stateful = (init: any) => { const k = i++; if (!(k in states)) states[k] = typeof init === "function" ? init() : init; return [states[k], (v: any) => { states[k] = typeof v === "function" ? v(states[k]) : v; }]; };
+  const h = hooks(), store = lstoreOf();
+  const l: any = lib(stateful, ...h.args.slice(1));
+  const draw = () => { i = 0; return l.FlowSection({ flow: chartFlow(2), lstore: store, focus: null, onOpen: () => {}, now: FX_NOW, showProject: false }); };
+  const today = "today 8 merged + 2 PRs open";
+  const selected = (v: any) => barsOf(v).filter((b) => / sel$/.test(b.values[1])).length;
+  expect(head(draw())).toBe(today);
+  click(barsOf(draw())[3]);
+  expect(head(draw())).toBe("11-22: 7 merged");
+  expect(selected(draw())).toBe(1);
+  click(barsOf(draw())[3]);
+  expect(head(draw())).toBe(today);
+  expect(selected(draw())).toBe(0);
+  click(barsOf(draw())[7]);
+  expect(head(draw())).toBe(today);
+  expect(selected(draw())).toBe(1);
+  expect(store.writes).toEqual([]);
+  click(barsOf(draw())[1]);
+  expect(head(draw())).toBe("11-20: 0 merged");
+  const thirty = nodes(draw()).find((n) => n.str.includes(" days</button>") && n.values.includes(30));
+  click(thirty);
+  expect(head(draw())).toBe(today);
+  expect(selected(draw())).toBe(0);
+  expect(store.writes).toEqual([["b:flow:days", 30]]);
+});
