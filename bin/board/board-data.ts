@@ -1373,18 +1373,18 @@ const activeSquads = (squads: any[]) => squads.filter((s) => s.status !== "done"
 
 // The header tiles' numbers (plan U3, KTD8), from the squads the board renders: the page only lays
 // them out. "Active" squads are the page's (not done/failed/parked, pause active).
-function headerSummary(db: Db | null, label: string, squads: any[], needs: any[], loop: any) {
+export function headerSummary(db: Db | null, label: string, squads: any[], needs: any[], loop: any) {
   const active = activeSquads(squads);
   const units = active.flatMap((s) => arr(s.units));
   const open = units.filter((u: any) => u.state !== "done" && u.state !== "cancelled");
   const ready = open.filter((u: any) => u.state === "ready").length;
-  // The Units left detail without a Flow, from the units the tile counts; a unit blocked on live work is not named.
-  const left = { units_working: 0, units_ready: 0, units_parked: 0, units_stopped: 0 };
+  // The Units left detail without a Flow: every unit the tile counts lands in one group. Queued is ready, or blocked and not parked.
+  const left = { units_working: 0, units_queued: 0, units_parked: 0, units_stopped: 0 };
   for (const u of open as any[]) {
     if (u.parked) left.units_parked++;
     else if (STOPPED_STATES.includes(u.state)) left.units_stopped++;
-    else if (u.state === "ready") left.units_ready++;
-    else if (u.state !== "blocked") left.units_working++;
+    else if (u.state === "ready" || u.state === "blocked") left.units_queued++;
+    else left.units_working++;
   }
   const prs = squads.flatMap((s) => arr(s.prs)).filter((p: any) => p.status !== "merged" && p.status !== "closed");
   const maxB = db ? dsLimit(db, label, "max_builders") : null;

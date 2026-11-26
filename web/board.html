@@ -1156,14 +1156,14 @@ function flowTiles(flow) {
   // Open PRs by stage: the tile counts all of them, a click opens the first column that has one.
   const open = (st) => cards.filter((x) => x.stage === st && x.pr && x.pr.status !== "merged" && x.pr.status !== "closed").length;
   const split = [["pr_open", "PR open"], ["merging", "merging"], ["needs_you", "needs you"]].map(([st, w]) => [st, open(st), w]).filter((x) => x[1] > 0);
-  // The Units left detail, from the cards the number counts. A card blocked on another unit is not named.
-  const groups = { working: 0, ready: 0, parked: 0, stopped: 0 };
+  // The Units left detail: every card the number counts lands in one group. Queued is the bar's: it starts by itself.
+  const groups = { working: 0, queued: 0, parked: 0, stopped: 0 };
   for (const x of cards) {
     if (x.stuck || x.needs_you) groups.working++;
     else if (x.parked) groups.parked++;
     else if (x.paused || x.stopped || (x.stage === "queued" && x.group === "held")) groups.stopped++;
     else if (x.stage !== "queued") groups.working++;
-    else if (x.group !== "waiting on another unit") groups.ready++;
+    else groups.queued++;
   }
   return { groups, builders: c.building, stuckBuilding: cards.filter((x) => x.stage === "building" && x.stuck).length,
     left: c.queued + c.building + c.pr_open + c.needs_you + c.merging + (c.paused || 0), prs: c.open_prs,
@@ -1811,7 +1811,7 @@ function closeConfirm(s) {
 }
 
 // "2 squads · 2 working · 1 ready · 6 parked · 1 stopped": the open units by group, non-zero only.
-const unitsLeftDetail = (squads, g) => [squads + " squads", ...["working", "ready", "parked", "stopped"].filter((k) => g[k] > 0).map((k) => g[k] + " " + k)].join(" · ");
+const unitsLeftDetail = (squads, g) => [squads + (squads === 1 ? " squad" : " squads"), ...["working", "parked", "stopped", "queued"].filter((k) => g[k] > 0).map((k) => g[k] + " " + k)].join(" · ");
 
 // Stuck and needs-you counts from the Flow (board.json `flow`); nothing for a squad without an entry.
 // A stuck or needs-you unit leaves "working", so the segments still sum to the total.
@@ -4424,7 +4424,7 @@ function App() {
       <${Tile} label="Builders" value=${H.builders_total != null ? buildersSeats(H) + "/" + H.builders_total : FT ? FT.builders : H.builders_working || 0} level=${H.brake && H.brake.holding ? "crit" : H.brake && H.brake.on ? "warn" : FT && FT.stuckBuilding > 0 ? "warn" : ""} on=${FT ? () => openFlow("building") : undefined} title=${(FT ? "Open the Flow at Building" : "Builders working") + (H.builders_total != null ? ". " + buildersTip(H, FT ? FT.builders : null) : "")}
         detail=${H.builders_total != null ? (H.brake && H.brake.holding ? "⛔ host brake · " : "") + buildersDetail(H) + (FT ? " · " + FT.stuckBuilding + " stuck" : "") : H.builders_light_of > 0 ? "normal " + H.builders_normal + "/" + H.builders_of + " · light " + H.builders_light + "/" + H.builders_light_of + (FT ? " · " + FT.stuckBuilding + " stuck" : "") : FT ? FT.stuckBuilding + " stuck" : H.builders_of_kind === "max" ? "of " + H.builders_of + " max" : "of " + H.builders_of + " ready units"} />
       <${Tile} label="Units left" value=${FT ? FT.left : H.units_left || 0} on=${FT ? () => openFlow("queued") : undefined} title=${FT ? "Open the Flow at Queued: every unit not yet merged" : "Units not done or cancelled in active squads"}
-        detail=${unitsLeftDetail(H.squads_active || 0, FT ? FT.groups : { working: H.units_working, ready: H.units_ready, parked: H.units_parked, stopped: H.units_stopped })} />
+        detail=${unitsLeftDetail(H.squads_active || 0, FT ? FT.groups : { working: H.units_working, parked: H.units_parked, stopped: H.units_stopped, queued: H.units_queued })} />
       <${Tile} label="PRs" value=${FT ? FT.prs : H.prs_open || 0} level=${H.ci_failing > 0 || GHT.level === "crit" ? "crit" : GHT.level} on=${FT ? () => openFlow(FT.prsStage) : undefined} title=${(FT ? "Open the Flow at the first column with an open PR: unit PRs open now" : "Open PRs") + GHT.tip}
         detail=${GHT.detail ? GHT.detail : FT ? FT.prsDetail : html`<button class="lnk" onClick=${() => setFilter("ci")} title="Filter the squads: CI running">${H.ci_running || 0} CI running</button> · <span class=${H.ci_failing > 0 ? "red" : ""}>${H.ci_failing || 0} failing</span> · ${H.drafts || 0} drafts`} />
       <${Tile} label="Accounts" value=${AS.free + "/" + AS.total} level=${AS.level} on=${openAccounts} title="Open the Accounts section"

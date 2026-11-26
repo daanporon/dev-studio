@@ -14,6 +14,7 @@ import { basename, dirname, join, relative } from "node:path";
 import type { FactRow, Row, Store } from "../core/store.ts";
 import { discoverProjects, repoOf } from "../settings/projects.ts";
 import { isObj, sync } from "../messages/questions.ts";
+import { findKind } from "../../lib/account-kinds/index.ts";
 
 export type Kind = "text" | "json" | "bool" | "int";
 // The squad JSON fields that have a column of their own (the export overlays them back).
@@ -179,7 +180,10 @@ export function accountRows(root: string): FactRow[] {
     const dash = (s: string | undefined) => (s === undefined || s === "-" ? null : s);
     rows.push({ table: "observed_accounts", key: { agent: r[0], account: r[1] }, set: { session_pct: dash(r[2]), session_reset: dash(r[3]),
       weekly_pct: dash(r[4]), weekly_reset: dash(r[5]), limited_until: dash(r[6]), updated: dash(r[7]), label: dash(r[8]), note: dash(r[9]), skills: dash(r[10]), plan: dash(r[11]), resets: dash(r[12]), observed_at: at } });
-    rows.push({ table: "accounts", key: { agent: r[0], account: r[1] }, set: { label: dash(r[8]), observed_at: at } });
+    // A system id's row is the agent's own login (KTD4): a row this creates there is a system row; any other row
+    // it creates has no source until the Orca import or `ds account add` claims it.
+    const system = findKind(r[0])?.systemId === r[1] ? { source: "system" } : {};
+    rows.push({ table: "accounts", key: { agent: r[0], account: r[1] }, set: { label: dash(r[8]), ...system, observed_at: at } });
   }
   return rows;
 }

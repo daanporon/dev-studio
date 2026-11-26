@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { headerSummary } from "../../bin/board/board-data.ts";
 import { flowFixture, FX_NOW } from "./flow-fixture.ts";
 
 // U3: the Squads table's Units bar and the Work units list read the board's `flow` key.
@@ -77,18 +78,29 @@ test("the key line names all seven fills", () => {
   expect(t).toBe("solid: started · striped: not started yet · merged · working · stuck · needs you · stopped · parked: waits on you (Release, or approve the plan) · queued: starts by itself");
 });
 
-test("the Units left detail names the groups of the cards the number counts, never blocked", () => {
+test("the Units left detail puts every card the number counts in one group", () => {
   const card = (stage: string, o: any = {}) => ({ stage, group: null, ...o });
   const cards = [card("building"), card("pr_open"), card("queued", { group: "waiting for a slot" }),
-    card("queued", { group: "waiting on another unit" }), card("queued", { group: "held", parked: "held" }),
-    card("queued", { group: "waiting on another unit", parked: "behind" }), card("building", { paused: true }),
-    card("queued", { group: "held" }), card("building", { stopped: true })];
+    card("queued", { group: "waiting on another unit" }), // blocked on a working unit
+    card("queued", { group: "held", parked: "held" }),
+    card("queued", { group: "waiting on another unit", parked: "behind" }), // blocked behind a held unit
+    card("building", { paused: true }), card("queued", { group: "held" }), card("building", { stopped: true })];
   const c = { queued: 5, building: 2, pr_open: 1, needs_you: 0, merging: 0, paused: 1 };
   const t = mod.flowTiles({ counts: c, cards });
   expect(t.left).toBe(9);
-  expect(t.groups).toEqual({ working: 2, ready: 1, parked: 2, stopped: 3 });
-  expect(mod.unitsLeftDetail(2, t.groups)).toBe("2 squads · 2 working · 1 ready · 2 parked · 3 stopped");
-  expect(mod.unitsLeftDetail(1, { working: 0, ready: 0, parked: 4, stopped: 0 })).toBe("1 squads · 4 parked");
+  expect(t.groups).toEqual({ working: 2, queued: 2, parked: 2, stopped: 3 });
+  expect(Object.values(t.groups as Record<string, number>).reduce((n, x) => n + x, 0)).toBe(t.left);
+  expect(mod.unitsLeftDetail(2, t.groups)).toBe("2 squads · 2 working · 2 parked · 3 stopped · 2 queued");
+  expect(mod.unitsLeftDetail(1, { working: 0, queued: 0, parked: 4, stopped: 0 })).toBe("1 squad · 4 parked");
+  expect(mod.unitsLeftDetail(1, { working: 0, queued: 3, parked: 0, stopped: 0 })).toBe("1 squad · 3 queued");
+});
+
+test("the header's groups without the Flow sum to Units left", () => {
+  const units = [{ state: "working" }, { state: "ready" }, { state: "blocked" }, { state: "held", parked: "held" },
+    { state: "blocked", parked: "behind" }, { state: "paused" }, { state: "done" }, { state: "cancelled" }];
+  const h: any = headerSummary(null, "p", [{ status: "running", units }], [], null);
+  expect(h).toMatchObject({ units_left: 6, units_working: 1, units_queued: 2, units_parked: 2, units_stopped: 1, ready_units: 1 });
+  expect(h.units_working + h.units_queued + h.units_parked + h.units_stopped).toBe(h.units_left);
 });
 
 test("a squad with no merges shows no last merge", () => {
