@@ -246,8 +246,9 @@ Studio on `<x>` in a new worktree, closes the old one and switches the project. 
 is open (a paused one too), so close them first. The squads you start afterwards run on `<x>`; the Studio always follows
 the project's backend (`conventions/backend.md`).
 
-**What still needs Orca.** The Claude account list and login (until `plan-accounts` lands) and the skills install
-(`bin/host/install-skills.sh`) still go through Orca, and Muse runs only there. A project on another backend
+**What still needs Orca.** Adding a Claude login (until `plan-accounts` lands) still goes through Orca, and Muse
+runs only there; the account list and the skills install (`bin/host/install-skills.sh`) read loop.db's `accounts`
+table. A project on another backend
 launches Claude only; a roster row naming another agent is refused when you pick the backend. To try two backends
 on one repo, follow [backends/side-by-side.md](backends/side-by-side.md).
 

@@ -6,13 +6,13 @@
 # A Claude role reads the plugin registry and skills/ under the config dir of the account it was
 # launched on, and a registry entry can be "enabled" while its installPath no longer exists. The check
 # reads <cfg>/plugins/installed_plugins.json and <cfg>/skills/ directly (no `claude` call at all, so
-# the loop can run it) for every account the backend lists. Fake account homes cover the fault classes:
+# the loop can run it) for every Claude account in loop.db's accounts table. Fake account homes cover the fault classes:
 #   complete · missing plugins dir · dangling installPath (user scope; project scope with a live
 #   and with a gone projectPath) · missing ce-* skill · missing user skill · user-scope path recorded
 #   through a profile's symlinked plugins/ (a note only).
 # Asserts the verdict names the account, config dir, path and repair; --check exits non-zero only for a
 # broken account (warnings exit 0); the --tsv form; accountOwner; nothing is written; install.sh
-# --check shares the verdicts; backend unreachable -> the current env only; and that every skill
+# --check shares the verdicts; the backend is never asked for accounts; no table -> the system login only; and that every skill
 # roles/*.md names is in the check's list (or an explicit not-a-skill list).
 set -euo pipefail
 
@@ -123,28 +123,24 @@ cat > "$BACKEND_STUB" <<'FAKE'
 #!/usr/bin/env bash
 echo "$*" >> "$FAKE_BACKEND_LOG"
 case "${1:-}" in
-  status) [ "${FAKE_DOWN:-0}" = 1 ] && exit 1; echo reachable ;;
-  account-list)
-    { echo "$FAKE_ACCTS" | tr ',' '\n' | while read -r a; do [ -n "$a" ] && printf 'claude\t%s\tx@e.com\n' "$a"; done
-      printf 'muse\tdefault\tdefault\n'; } ;;
   preflight)
     [ "${FAKE_DOWN:-0}" = 1 ] && exit 1
-    echo "$FAKE_ACCTS" | tr ',' '\n' | while read -r a; do
-      [ -n "$a" ] || continue
-      case "$a" in system) d="" ;; gone) d="" ;; *) d="$FAKE_PROF/$a/home" ;; esac
-      printf 'claude\t%s\tx@e.com\t%s\n' "$a" "$d"
-    done
     printf 'muse\tdefault\tdefault\n' ;;
-  claude-config-dir)
-    case "${2:-}" in
-      system) ;;
-      gone) echo "fake backend: no Claude home for account $2" >&2; exit 1 ;;
-      *) echo "$FAKE_PROF/$2/home" ;;
-    esac ;;
   *) exit 2 ;;
 esac
 FAKE
 chmod +x "$BACKEND_STUB"
+
+# --- the accounts table ----------------------------------------------------------------------
+# shellcheck source=tests/lib/seed-accounts.sh
+. "$ROOT/tests/lib/seed-accounts.sh"
+export DS_STATE_ROOT="$TMP/state"
+accts() { # <account,account…> — each at $PROF/<account>/home; `system` is ~/.claude
+  local a list specs=()
+  IFS=, read -ra list <<<"$1"
+  for a in "${list[@]}"; do if [ "$a" = system ]; then specs+=(system); else specs+=("$a:$PROF/$a/home"); fi; done
+  seed_claude_accounts "$DS_STATE_ROOT" "${specs[@]}"
+}
 
 # --- stub PATH: real coreutils + jq, and NO claude (the check must never call it) ------------
 STUB="$TMP/stub"; mkdir -p "$STUB"
@@ -207,19 +203,19 @@ check_verdicts() { # <label> <output>
   has "$what: thru is a note" "$out" "  note claude[thru]: compound-engineering is recorded through $(basename "$(dirname "$T")")'s symlinked plugins/"
   hasnt "$what: thru is not a warning" "$out" "⚠ claude[thru]"
   hasnt "$what: thru has no repair" "$out" "env CLAUDE_CONFIG_DIR=$O claude plugin uninstall $CE_ID --scope user"
-  # an account with no config dir is flagged, not checked
-  has "$what: an account with no config dir is flagged, not checked" "$out" "⚠ claude[gone]: the backend has no Claude config dir"
+  # a missing login folder is flagged, not checked
+  has "$what: an account whose login folder is missing is flagged, not checked" "$out" "⚠ claude[gone]: its login folder $PROF/gone/home is missing"
   hasnt "$what: muse is not a Claude account" "$out" "claude[default]"
 }
 
-export FAKE_ACCTS="$BROKEN_ACCTS"
+accts "$BROKEN_ACCTS"
 
 # --- 1. install-skills.sh --check: broken accounts -> named + exit 1 ---------------------------
 before="$(snapshot)"; rm -f "$FAKE_BACKEND_LOG" "$TMP/claude-called"
 run_check install-skills.sh --check
 if [ "$rc" -eq 1 ]; then good; else bad "install-skills --check exits $rc, want 1 (broken accounts): $out"; fi
 check_verdicts "install-skills --check" "$out"
-has "install-skills --check: config dirs come from the backend" "$(cat "$FAKE_BACKEND_LOG")" "claude-config-dir dangling"
+if [ -e "$FAKE_BACKEND_LOG" ]; then bad "install-skills --check asked the backend: $(cat "$FAKE_BACKEND_LOG")"; else good; fi
 if [ -e "$TMP/claude-called" ]; then bad "the account check must not call claude: $(cat "$TMP/claude-called")"; else good; fi
 if [ "$before" = "$(snapshot)" ]; then good; else bad "install-skills --check wrote to HOME or a profile"; fi
 
@@ -229,6 +225,7 @@ run_check install.sh --check
 if [ "$rc" -eq 1 ]; then good; else bad "install.sh --check exits $rc, want 1 (broken accounts): $out"; fi
 has "install.sh --check: preflight still printed" "$out" "preflight: ok"
 check_verdicts "install.sh --check" "$out"
+if grep -qE '^(status|account-list|claude-config-dir)' "$FAKE_BACKEND_LOG"; then bad "install.sh --check asked the backend for accounts: $(cat "$FAKE_BACKEND_LOG")"; else good; fi
 if [ "$before" = "$(snapshot)" ]; then good; else bad "install.sh --check wrote to HOME or a profile"; fi
 # Both run as TypeScript behind their .sh bootstraps (U262), calling the one check (U274: accountSkillsCheck).
 for f in bin/commands/install-ts.ts bin/commands/install-skills-ts.ts; do
@@ -237,7 +234,7 @@ for f in bin/commands/install-ts.ts bin/commands/install-skills-ts.ts; do
 done
 
 # --- 3. only complete + warning accounts -> exit 0, warnings still printed ----------------------
-export FAKE_ACCTS="system,complete,nolavish,thru,thruok"
+accts "system,complete,nolavish,thru,thruok"
 run_check install-skills.sh --check
 if [ "$rc" -eq 0 ]; then good; else bad "warnings only: --check exits $rc, want 0: $out"; fi
 has "warn-only: thru noted" "$out" "  note claude[thru]: compound-engineering is recorded through"
@@ -247,7 +244,7 @@ if [ "$rc" -eq 0 ]; then good; else bad "warnings only: install.sh --check exits
 
 # --- 4. all complete -> exit 0, one ok per account, no ⚠ --------------------------------------
 reg "$O" "$(ent "$O_PATH")"
-export FAKE_ACCTS="system,complete,thruok"
+accts "system,complete,thruok"
 run_check install-skills.sh --check
 if [ "$rc" -eq 0 ]; then good; else bad "all complete: --check exits $rc, want 0: $out"; fi
 for a in system complete thruok; do has "all complete: $a ok" "$out" "claude[$a]: skills ok"; done
@@ -256,8 +253,8 @@ run_check install.sh --check
 if [ "$rc" -eq 0 ]; then good; else bad "all complete: install.sh --check exits $rc, want 0: $out"; fi
 
 # --- 5. --tsv and the per-account verdict (what U2/U3 and the sweep call) -----------------------
-export FAKE_ACCTS="$BROKEN_ACCTS"; reg "$O" "$(ent "$T_PATH")"
-tsv="$(acct check "$BACKEND_STUB" --tsv 2>/dev/null || true)"
+accts "$BROKEN_ACCTS"; reg "$O" "$(ent "$T_PATH")"
+tsv="$(acct check --tsv 2>/dev/null || true)"
 has "tsv: system ok" "$tsv" "system	ok	$SYS_PATH"
 has "tsv: complete ok" "$tsv" "complete	ok	$C_PATH"
 has "tsv: bare broken" "$tsv" "bare	broken	compound-engineering is not installed"
@@ -267,8 +264,8 @@ has "tsv: noskill broken" "$tsv" "noskill	broken	compound-engineering is install
 has "tsv: nouser broken" "$tsv" "nouser	broken	user skill(s) missing"
 has "tsv: nolavish warn" "$tsv" "nolavish	warn	optional user skill(s) missing"
 has "tsv: thru ok (a note never changes the verdict)" "$tsv" "thru	ok	"
-has "tsv: unreachable config dir is a warn, not checked" "$tsv" "gone	warn	the backend has no Claude config dir"
-if (acct check "$BACKEND_STUB" --tsv >/dev/null 2>&1); then bad "tsv: a broken account must return non-zero"; else good; fi
+has "tsv: a missing login folder is a warn, not checked" "$tsv" "gone	warn	its login folder is missing"
+if (acct check --tsv >/dev/null 2>&1); then bad "tsv: a broken account must return non-zero"; else good; fi
 reg "$O" "$(ent "$O_PATH")"
 v="$(acct verdict "$N")"; has "verdict: broken" "$v" "broken	compound-engineering is installed but lacks role skill(s): ce-work"
 v="$(acct verdict "$C")"; has "verdict: ok" "$v" "ok	$C_PATH"
@@ -278,17 +275,11 @@ for pair in "$C:$C" "$PROF/thruok/home:$O" "$BARE:$BARE" "$T:$O"; do
   if [ "$got" = "${pair#*:}" ]; then good; else bad "accountOwner ${pair%%:*} = $got, want ${pair#*:}"; fi
 done
 
-# --- 6. backend unreachable -> the current env only, as before ---------------------------------
-rm -f "$FAKE_BACKEND_LOG"
-FAKE_DOWN=1 run_check install-skills.sh --check
-if [ "$rc" -eq 0 ]; then good; else bad "unreachable backend: --check exits $rc, want 0 (current env complete)"; fi
-has "unreachable backend: current env checked" "$out" "claude: skills ok ($SYS_PATH)"
-hasnt "unreachable backend: no per-account lines" "$out" "claude["
-hasnt "unreachable backend: account-list not used" "$(cat "$FAKE_BACKEND_LOG")" "account-list"
-# The current env is whatever the caller runs with: a broken CLAUDE_CONFIG_DIR is reported, exit 1.
-rc=0; out="$(FAKE_DOWN=1 CLAUDE_CONFIG_DIR="$D" PATH="$STUB" BACKEND="$BACKEND_STUB" "$ROOT/bin/host/install-skills.sh" --check 2>&1)" || rc=$?
-if [ "$rc" -eq 1 ]; then good; else bad "unreachable backend + broken CLAUDE_CONFIG_DIR: exits $rc, want 1"; fi
-has "unreachable backend: the caller's config dir is checked" "$out" "⚠ claude: $CE_ID (user scope) is registered at a path that does not exist"
+# --- 6. no accounts table -> the system login only, whatever CLAUDE_CONFIG_DIR the caller runs with -----
+rc=0; out="$(DS_STATE_ROOT="$TMP/no-table" CLAUDE_CONFIG_DIR="$D" PATH="$STUB" BACKEND="$BACKEND_STUB" "$CHECK_ROOT/bin/host/install-skills.sh" --check 2>&1)" || rc=$?
+if [ "$rc" -eq 0 ]; then good; else bad "no table: --check exits $rc, want 0 (the system login is complete): $out"; fi
+has "no table: the system login checked" "$out" "claude[system]: skills ok ($SYS_PATH)"
+hasnt "no table: no other account" "$out" "claude[dangling]"
 
 # --- 7. every skill roles/*.md names is in the check's list (or explicitly not a skill) ---------
 # ce-pipeline is a ship mode; ce-skills-on-muse / ce-delegates-* are docs/solutions names.
