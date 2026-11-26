@@ -991,7 +991,7 @@ const u7Board = {
 };
 const texts = (el: any, sel: string) => [...el.querySelectorAll(sel)].map((n: any) => n.textContent.trim());
 
-test("accounts: the strip's tags, warnings, default chip and hidden count; Manage lists every account with its switch", async () => {
+test("accounts: the strip's tags, warnings, default chip and hidden count; Manage opens the Accounts tab with every account and its switch", async () => {
   const r = await mount(u7Board);
   try {
     const sec = r.root.querySelector("#accounts")!;
@@ -1005,14 +1005,19 @@ test("accounts: the strip's tags, warnings, default chip and hidden count; Manag
     expect(texts(sec, ".afacts")).toContain("u-o1 · folder /x/orca · source orca · login abcd1234");
     sec.querySelector(".amanage")!.dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
     await new Promise((res) => setTimeout(res, 30));
-    const panel = r.root.querySelector(".acct-panel")!;
+    expect(r.window.location.hash).toBe("#settings/accounts");
+    const panel = r.root.querySelector(".acct-pane")!;
+    expect(r.root.querySelector(".set-tab.on")!.textContent).toBe("Accounts");
+    expect(panel.querySelector(".acct-shared")!.textContent).toBe("Shared by all projects on this host — not part of this project's Export/Import.");
+    expect(r.root.querySelectorAll(".modal")).toHaveLength(1);
     expect(texts(panel, ".mrow .al .t")).toEqual(["Own", "orca@example.com", "Gone", "Idle", "Busy", "/x/lone"]);
     expect(texts(panel, ".mrow .bdg.where")).toEqual(["system", "Orca + ds", "ds only", "ds only", "ds only", "folder only"]);
     expect([...panel.querySelectorAll(".mrow")].map((m: any) => m.querySelector(".abtn")?.textContent ?? null)).toEqual(["Disable", "Disable", "Disable", "Enable", "Enable", null]);
     expect(texts(panel, ".awarn")).toHaveLength(2);
     panel.querySelector(".abtn")!.dispatchEvent(new r.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await new Promise((res) => setTimeout(res, 30));
-    expect(r.root.querySelector(".acct-panel")).toBeNull();
+    expect(r.root.querySelector(".acct-pane")).toBeNull();
+    expect(r.window.location.hash).toBe("");
     expect(r.errors).toEqual([]);
   } finally { await r.window.happyDOM.close(); }
 });
@@ -1025,9 +1030,129 @@ test("accounts: with no accounts the section and its Manage button are still the
     expect(sec.querySelector(".acct-tbl")).toBeNull();
     sec.querySelector(".amanage")!.dispatchEvent(new r.window.MouseEvent("click", { bubbles: true }));
     await new Promise((res) => setTimeout(res, 30));
-    expect(r.root.querySelector(".acct-panel")!.textContent).toContain("no accounts yet");
+    const pane = r.root.querySelector(".acct-pane")!;
+    expect(pane.textContent).toContain("no accounts yet");
+    expect(pane.querySelector(".acct-add")).not.toBeNull();
     expect(r.errors).toEqual([]);
   } finally { await r.window.happyDOM.close(); }
+});
+
+// issue #125 U9: the Accounts tab's Add, pending adds and Move. `posts` is what the page sent.
+async function accountsTab(b: any, reply: (path: string, body: any) => any = () => ({ status: 202, body: { ok: true, id: 7 } })) {
+  const r = await mount(b, false, { "api/limits": { limits: [], groups: [] } });
+  const w = r.window, doc = w.document, posts: [string, any][] = [], asked: string[] = [];
+  w.fetch = async (url: string, init?: any) => {
+    if (!init?.body) return { ok: true, status: 200, json: async () => (String(url).startsWith("board.json") ? b : { limits: [], groups: [] }), text: async () => "{}" };
+    const body = JSON.parse(init.body); posts.push([String(url), body]);
+    const x = reply(String(url), body);
+    return { ok: x.status < 400, status: x.status, json: async () => x.body, text: async () => JSON.stringify(x.body) };
+  };
+  const wait = (ms = 30) => new Promise((x) => setTimeout(x, ms));
+  const click = async (el: any) => { el.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); await wait(); };
+  const type = async (el: any, v: string) => {
+    Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, "value")!.set!.call(el, v);
+    el.dispatchEvent(new w.Event("input", { bubbles: true })); await wait();
+  };
+  const submit = async (form: any) => { form.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true })); await wait(); };
+  w.location.hash = "#settings/accounts";
+  for (let k = 0; k < 80 && !doc.querySelector(".acct-pane"); k++) await wait(25);
+  return { r, w, doc, posts, asked, wait, click, type, submit };
+}
+const addBoard = { ...u7Board, account_kinds: [{ agent: "claude" }, { agent: "codex" }] };
+
+test("accounts: a folder-only row's Add opens the dialog on that folder; the add is one POST with the board's project", async () => {
+  const d = await accountsTab(addBoard);
+  try {
+    await d.click(d.doc.querySelector(".acct-add-folder"));
+    const dlg = d.doc.querySelector('[role="dialog"][aria-label="Add account"]') as any;
+    expect(texts(dlg, ".add-agent option")).toEqual(["claude", "codex"]);
+    expect(dlg.querySelector(".add-dir").value).toBe("/x/lone");
+    expect(dlg.querySelector(".add-name").value).toBe("");
+    expect(dlg.querySelector('button[type="submit"]').disabled).toBe(true);
+    await d.type(dlg.querySelector(".add-name"), "lone");
+    await d.submit(dlg);
+    expect(d.posts).toEqual([["api/account-add", { project: "fixture", agent: "claude", name: "lone", dir: "/x/lone" }]]);
+    expect(d.doc.querySelector(".acct-dlg")).toBeNull();
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+
+test("accounts: Add account sends no dir, a refusal stays in the dialog, and Escape closes only the dialog", async () => {
+  const d = await accountsTab(addBoard, () => ({ status: 409, body: { error: "an add of claude:two is already in progress (request #3)" } }));
+  try {
+    await d.click(d.doc.querySelector(".acct-add"));
+    const dlg = d.doc.querySelector(".acct-dlg form") as any;
+    await d.type(dlg.querySelector(".add-name"), "two");
+    await d.submit(dlg);
+    expect(d.posts).toEqual([["api/account-add", { project: "fixture", agent: "claude", name: "two" }]]);
+    expect(dlg.querySelector('[role="alert"]').textContent).toBe("an add of claude:two is already in progress (request #3)");
+    dlg.querySelector(".add-name").dispatchEvent(new d.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await d.wait();
+    expect(d.doc.querySelector(".acct-dlg")).toBeNull();
+    expect(d.doc.querySelector(".acct-pane")).not.toBeNull();
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+
+const pendingAdd = (over: any) => ({ id: 5, agent: "claude", name: "two", project: "fixture", state: "waiting_login", queued: false, flow: "paste",
+  url: "https://example.test/login", device_code: null, why: null, line: null, text: null, error: null, ...over });
+
+test("accounts: a paste add shows the link and a box that is emptied once sent and never echoes the code", async () => {
+  const d = await accountsTab({ ...addBoard, account_adds: [pendingAdd({})] }, () => ({ status: 202, body: { ok: true } }));
+  try {
+    const row = d.doc.querySelector(".acct-pending") as any;
+    expect(row.textContent).toContain("waiting for login");
+    expect(row.querySelector("a").getAttribute("href")).toBe("https://example.test/login");
+    const box = row.querySelector(".acct-paste input");
+    expect([box.getAttribute("autocomplete"), box.getAttribute("spellcheck")]).toEqual(["off", "false"]);
+    box.value = "SENTINEL-code";
+    await d.submit(row.querySelector(".acct-paste"));
+    expect(d.posts).toEqual([["api/account-login-code", { request: 5, code: "SENTINEL-code" }]]);
+    expect(box.value).toBe("");
+    expect(row.querySelector('[role="status"]').textContent).toBe("sent");
+    expect(d.doc.body.innerHTML).not.toContain("SENTINEL");
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+
+test("accounts: a device add shows the link and its code with no paste box; ended and queued adds say what happened", async () => {
+  const d = await accountsTab({ ...addBoard, account_adds: [
+    pendingAdd({ id: 6, agent: "codex", flow: "device", device_code: "WXYZ-1234" }),
+    pendingAdd({ id: 4, state: "done", url: null, text: "already there as system" }),
+    pendingAdd({ id: 3, state: "failed", url: null, error: "no credentials file" }),
+    pendingAdd({ id: 2, state: "queued", queued: true, url: null }),
+    pendingAdd({ id: 1, url: "javascript:alert(1)" }),
+  ] });
+  try {
+    const rows = [...d.doc.querySelectorAll(".acct-pending")] as any[];
+    expect(rows[0].querySelector(".dcode").textContent).toBe("WXYZ-1234");
+    expect(rows[0].querySelector(".acct-paste")).toBeNull();
+    expect(texts(d.doc, ".acct-pending .al .bdg")).toEqual(["waiting for login", "added", "failed", "queued", "waiting for login"]);
+    expect(rows[1].textContent).toContain("already there as system");
+    expect(rows[2].textContent).toContain("no credentials file");
+    expect(rows[3].textContent).toContain("runs when project fixture resumes");
+    expect(rows[4].querySelector("a")).toBeNull();
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
+});
+
+test("accounts: Move's confirm carries the rotation warning and sends force only when confirmed", async () => {
+  const move = { force: true, warning: "ROTATION-RISK", pending: null };
+  const d = await accountsTab({ ...addBoard, accounts: [account({ account: "u-o1", label: "orca@example.com", source: "orca", move })], account_folders: [] });
+  try {
+    const btn = d.doc.querySelector(".acct-move") as any;
+    let answer = false;
+    d.w.confirm = (t: string) => { d.asked.push(t); return answer; };
+    await d.click(btn);
+    expect(d.posts).toEqual([]);
+    expect(d.asked[0]).toContain("Warning: ROTATION-RISK.");
+    expect(d.asked[0]).toContain("Orca still lists this account");
+    answer = true;
+    await d.click(btn);
+    expect(d.posts).toEqual([["api/account-move", { agent: "claude", account: "u-o1", force: true }]]);
+    expect(btn.textContent).toBe("Moving…");
+    expect(d.r.errors).toEqual([]);
+  } finally { await d.w.happyDOM.close(); }
 });
 
 // issue #125 U8: a moved account (source ds) whose login is still in Orca's folder: the warning says dev-studio uses

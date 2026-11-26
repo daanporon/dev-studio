@@ -165,6 +165,9 @@ test("Show all clears the search; no match says so; the box is disabled with its
       expect(p.groups()).toEqual([]);
       expect(p.status()).toBe('No setting matches "zzz"');
     }
+    await p.tab("Accounts");
+    expect(p.box().disabled).toBe(true);
+    expect(p.box().value).toBe("zzz");
     await p.tab("Pins");
     expect(p.box().disabled).toBe(true);
     expect(p.box().value).toBe("zzz");

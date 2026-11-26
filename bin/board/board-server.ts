@@ -72,8 +72,12 @@
 //   /api/account {project, agent, account, enabled}  `account`: switch one account off/on for every pick
 //   /api/account-reset {project, agent, account, grant}  `account-reset`: use one free reset grant (usable now, none
 //                 open for that account: else 400/409); the server adds the idempotency key every try reuses
-//   /api/account-add {project, name}  `account-add` (issue #125, U6): a new Claude login, its terminal beside the
-//                 project's Studio (fulfil/account-add.ts); 400 for a bad or taken name, 409 with one open for it
+//   /api/account-add {project, name, agent?, dir?}  `account-add` (issue #125, U6, U9): a new login of a kind that
+//                 keeps several (claude when no agent), its terminal beside the project's Studio
+//                 (fulfil/account-add.ts); `dir` adds a logged-in folder as it is; 400 for a bad or taken name, a
+//                 one-login agent or a folder with no login, 409 with one open for it
+//   /api/account-move {agent, account, force?}  `account-move` (issue #125, U9): `ds account move`'s request, host-wide;
+//                 409 with moveProblem's reason or with one open for it
 //   /api/account-login-code {request, code}  the pasted login code of an open paste-flow add in waiting_login, to
 //                 <state root>/account-login/<request> (0600; bin/lib/account-login-code.ts) for the add to type;
 //                 202 with no row, event or delivery, and no answer, log line or refusal ever carries the code
@@ -89,7 +93,7 @@
 // Everything else is 404, so no state file is ever reachable.
 import { createHash } from "node:crypto";
 import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { BACKEND_NAMES, squadBackendRule } from "../backend/registry.ts";
@@ -104,6 +108,7 @@ import { approvedPlans } from "../loop/squad/plan-approved.ts";
 import { squadDoc } from "../loop/db/export-json.ts";
 import { skillsJson } from "./skills-data.ts";
 import { findKind } from "../lib/account-kinds/index.ts";
+import { moveProblem } from "../loop/capacity/accounts.ts";
 import { nameProblem } from "../lib/account-folder.ts";
 import { dropLoginCode, loginCodeProblem } from "../lib/account-login-code.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
@@ -999,23 +1004,54 @@ async function accountResetPost(req: Request) {
   });
 }
 
-// account-add (issue #125, U6): the board's Add account files the request `ds account add` files, for the board's
-// project (its Studio's worktree takes the login terminal). Claude only here; the agent picker and `dir` are U9's.
+// account-add (issue #125, U6, U9): the board's Add account files the request `ds account add` files, for the board's
+// project (its Studio's worktree takes the login terminal). `dir` is checked as the CLI checks it (`~/` is $HOME).
 async function accountAddPost(req: Request) {
   const pr = await readPost(req);
   if ("r" in pr) return pr.r;
   const { project, name } = pr.b;
-  const agent = "claude", kind = findKind(agent);
+  const agent = pr.b.agent ?? "claude", kind = typeof agent === "string" ? findKind(agent) : null;
   if (!NAME.test(project ?? "") || typeof name !== "string") return json(400, { error: "need project and name" });
-  if (!kind?.multi || !kind.login) return json(400, { error: kind?.why ?? `${agent} has no login command` });
+  if (!kind) return json(400, { error: "no such agent" });
+  if (!kind.multi) return json(400, { error: kind.why ?? `${agent} keeps one login` });
+  let dir = pr.b.dir ?? "";
+  if (typeof dir !== "string" || dir.length > 1024 || /[\x00-\x1f]/.test(dir)) return json(400, { error: "dir must be one folder path" });
+  dir = dir.trim().replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
+  if (dir) {
+    if (!isAbsolute(dir)) return json(400, { error: `give the folder's full path, not ${dir}` });
+    dir = resolve(dir);
+    let isDir = false;
+    try { isDir = statSync(dir).isDirectory(); } catch { /* not there */ }
+    if (!isDir) return json(400, { error: `${dir} is not a folder` });
+    if (!existsSync(join(dir, kind.credentialsFile))) return json(400, { error: `${dir} has no ${kind.credentialsFile}: it is not logged in (log in there first, or add without a folder)` });
+  } else if (!kind.login) return json(400, { error: `${agent} has no login command` });
   return write((s) => {
     if (!one(s, "SELECT 1 FROM projects WHERE label = ?", project)) no(409, `no project ${project}`);
     const bad = nameProblem(name, (s.db.query("SELECT account FROM accounts WHERE agent = ?").all(agent) as Row[]).map((r) => String(r.account)));
     if (bad) no(400, bad);
     const open = one(s, "SELECT id FROM requests WHERE kind = 'account-add' AND done_at IS NULL AND json_extract(payload, '$.agent') = ? AND json_extract(payload, '$.name') = ?", agent, name);
     if (open) no(409, `an add of ${agent}:${name} is already in progress (request #${open.id})`);
-    const row = board(s, "account-add", { agent, name, project, by: "board" }, { project });
+    const row = board(s, "account-add", { agent, name, project, ...(dir ? { dir } : {}), by: "board" }, { project });
+    cache.at = 0; // the open add shows on the next board read, not ~2s later
     return paused(s, { project }) ? json(202, { ok: true, id: Number(row.id), queued: true }) : row;
+  });
+}
+
+// account-move (issue #125, U9): the board's Move files the request `ds account move` files, with no project: the
+// list is the host's. The checks are the CLI's (moveProblem); the loop checks again, and the live agent processes.
+async function accountMovePost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const { agent, account } = pr.b, force = pr.b.force === true;
+  if (!WORD.test(agent ?? "") || typeof account !== "string" || !account || account.length > 200) return json(400, { error: "need agent and account" });
+  return write((s) => {
+    const bad = moveProblem(s, agent, account, force);
+    if (bad) no(409, bad);
+    const open = one(s, "SELECT id FROM requests WHERE kind = 'account-move' AND done_at IS NULL AND json_extract(payload, '$.agent') = ? AND json_extract(payload, '$.account') = ?", agent, account);
+    if (open) no(409, `a move of ${agent}:${account} is already in progress (request #${open.id})`);
+    const row = s.requestAny("account-move", { agent, account, ...(force ? { force: true } : {}), by: "board" }, { by: "board", project: null }).row;
+    cache.at = 0;
+    return row;
   });
 }
 
@@ -1425,7 +1461,7 @@ async function get(req: Request, url: URL) {
 
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
-  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account-move": accountMovePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
   "/api/settings-import/preview": settingsImportPreview,
 };
 
