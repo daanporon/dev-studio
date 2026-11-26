@@ -2,7 +2,7 @@
 -- ends its work, written by `ds finish` and by finish-unit.sh (PR, --no-pr, --failed) before it sends
 -- worker_done. It is the backend-neutral "this member finished" signal that later replaces Orca's
 -- worker_done; until then the loop reads nothing here. `key` is the writer's idempotency key: the same
--- finish again (a replayed request, a re-run) is the same row. No row is ever deleted.
+-- finish again (a replayed request, a re-run) is the same row. Only `ds remove-project` deletes one.
 CREATE TABLE finishes (
   id       INTEGER PRIMARY KEY,
   key      TEXT NOT NULL UNIQUE,

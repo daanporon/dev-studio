@@ -1,7 +1,7 @@
 // exposed.ts — what squad members host for the operator to open (expose-hosted-services U1): the input
 // rules, who the caller is, and the one write path for `ds expose` / `ds unexpose` and the loop's ending
-// of an entry. Tables in migrations/0038-exposed.sql and 0048-exposed-stop.sql. Rows are never deleted: an
-// entry ends with gone_at + gone_why. exposed-cleanup U2: an entry may carry a stop command (--stop), an
+// of an entry. Tables in migrations/0038-exposed.sql and 0048-exposed-stop.sql. An entry ends with gone_at +
+// gone_why and keeps its row (only `ds remove-project` deletes it, into the project's archive). exposed-cleanup U2: an entry may carry a stop command (--stop), an
 // audience (--self) and extra ports (--ports); an entry that ends with its squad or owner queues its stop,
 // which the loop runs once (reconcilers/exposed.ts, fulfil/expose-stop.ts) before the worktree goes.
 import { execFileSync } from "node:child_process";
