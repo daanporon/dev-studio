@@ -1475,7 +1475,7 @@ function accountSwitch(a, all, project, toast) {
   return html`<button class="abtn" title=${a.disabled ? "Let picks use this account again" : "No pick uses this account until it is enabled again"} onClick=${(e) => { e.stopPropagation(); switchAccount(a, all, project, toast); }} onKeyDown=${(e) => { if (e.key !== "Escape") e.stopPropagation(); }}>${a.disabled ? "Enable" : "Disable"}</button>`;
 }
 function acctWarnings(a) {
-  return html`${a.dup_folders && html`<div class="lu awarn">same login in two or more folders: ${a.dup_folders.join(" and ")}</div>`}${a.folder_missing && html`<div class="lu awarn">folder missing: ${a.folder} · picks skip this account</div>`}`;
+  return html`${a.dup_folders && html`<div class="lu awarn">same login in two or more folders: ${a.dup_folders.join(" and ")}${a.source === "ds" ? ` · dev-studio uses its own copy (${a.folder}); the first copy to refresh the token logs the other out · remove the account in Orca to end this` : ""}</div>`}${a.folder_missing && html`<div class="lu awarn">folder missing: ${a.folder} · picks skip this account</div>`}`;
 }
 function AccountDetail({ a, all, project, toast, isDefault }) {
   const r = a.resets, grants = r && r.state === "reported" ? (r.grants || []) : [], last = a.reset_last, g = groupUsers(a.users, project);
