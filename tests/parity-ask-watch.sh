@@ -207,25 +207,25 @@ c_finished() {
 NEW=(--title "Ship it or wait" --question "Ship u1 now or wait for u2?" --option "Ship" "u1 goes out" --option "Wait" "hold for u2" --recommend 2 --why "u2 fixes a bug")
 c_ao_bad() {
   AO; AO "$S" q1 thinker maybe x; AO "$S" q1 thinker true --nope; AO "$S" q1 thinker true --title
-  AO "$S" q1 thinker true --title "$(printf 'x%.0s' $(seq 1 81))" --question q --option a b --option c d --recommend 1 --why w
-  AO "$S" q1 thinker true --title t --question q --option a b --recommend 1 --why w
-  AO "$S" q1 thinker true --title t --question q --option a b --option c d --recommend 3 --why w
-  AO "$S" q1 thinker true --title t --question q --option "a|b" x --option c d --recommend 1 --why w
-  AO "$S" q1 thinker true --title t --question q --option a b --option c d --recommend 1 --why w --unit u1 --unit u2
-  AO "$S" q1 thinker true --title t --question q --option a b --option c d --recommend 1 --why w --pr 3 --pr 4
-  AO "$S" q1 thinker true --title t --question q --option a b --option c d --recommend 1 --why w --picker t1 /p maybe
+  AO "$S" q1 thinker true --title "$(printf 'x%.0s' $(seq 1 81))" --question q --option alpha b --option gamma d --recommend 1 --why w
+  AO "$S" q1 thinker true --title t --question q --option alpha b --recommend 1 --why w
+  AO "$S" q1 thinker true --title t --question q --option alpha b --option gamma d --recommend 3 --why w
+  AO "$S" q1 thinker true --title t --question q --option "al|pha" x --option gamma d --recommend 1 --why w
+  AO "$S" q1 thinker true --title t --question q --option alpha b --option gamma d --recommend 1 --why w --unit u1 --unit u2
+  AO "$S" q1 thinker true --title t --question q --option alpha b --option gamma d --recommend 1 --why w --pr 3 --pr 4
+  AO "$S" q1 thinker true --title t --question q --option alpha b --option gamma d --recommend 1 --why w --picker t1 /p maybe
   AO "$S" q1 thinker true "question" "suggestion" ""
   AO "$W/state/proj/squads/nope.json" q1 thinker true "${NEW[@]}"
   AO "$S" q1 thinker true "${NEW[@]}" --unit nosuch
-  AO "$S" q1 thinker true --title "PR #5 and #6" --question q --option a b --option c d --recommend c --why w
+  AO "$S" q1 thinker true --title "PR #5 and #6" --question q --option alpha b --option gamma d --recommend gamma --why w
 }
 c_ao_norun()  { printf '{"units":[]}\n' > "$S"; AO "$S" q1 thinker true "${NEW[@]}"; }
 c_ao_builder() {
   printf '{"run_id":"run_1","units":[{"slug":"u1","status":"dispatched","pr":12},{"slug":"u2","status":"done","pr":13}]}\n' > "$S"
-  AO "$S" q1 builder-u1 true --title "Review #12 please" --question q --option a b --option c d --recommend 1 --why w
-  AO "$S" q1 lead true --title "about #12 and #13" --question q --option a b --option c d --recommend 1 --why w
+  AO "$S" q1 builder-u1 true --title "Review #12 please" --question q --option alpha b --option gamma d --recommend 1 --why w
+  AO "$S" q1 lead true --title "about #12 and #13" --question q --option alpha b --option gamma d --recommend 1 --why w
   AO "$S" q1 builder true "${NEW[@]}" --pr 99
-  AO "$S" q2 builder-u1 false --title "See #13 again" --question "is /pull/13 fine?" --option a b --option c d --recommend 1 --why w
+  AO "$S" q2 builder-u1 false --title "See #13 again" --question "is /pull/13 fine?" --option alpha b --option gamma d --recommend 1 --why w
 }
 c_ao_ok() {
   AO "$S" q1 thinker true "${NEW[@]}" --unit u1
@@ -235,10 +235,10 @@ c_ao_ok() {
 c_ao_noping() { FAKE_PING_RC=1 AO "$S" q1 thinker true "${NEW[@]}"; FAKE_CURRENT="" AO "$S" q2 thinker false "${NEW[@]}"; }
 c_ao_pr() {
   AO "$S" q1 thinker true "${NEW[@]}" --pr 7
-  AO "$S" q2 thinker true --title "Sign off #7" --question "Is #7 ok?" --option a b --option c d --recommend 1 --why w
+  AO "$S" q2 thinker true --title "Sign off #7" --question "Is #7 ok?" --option alpha b --option gamma d --recommend 1 --why w
   printf '{"data":{"repository":{"pullRequest":{"state":"OPEN","isDraft":false,"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","reviewDecision":null,"reviewThreads":{"nodes":[]},"baseRef":null,"commits":{"nodes":[]}}}}}\n' > "$W/gh/graphql.json"
   AO "$S" q3 thinker true "${NEW[@]}" --pr 7
-  AO "$S" q4 thinker false --title "two at once" --question "#8 or #9?" --option a b --option c d --recommend 1 --why w --picker tool_1 /t.jsonl true
+  AO "$S" q4 thinker false --title "two at once" --question "#8 or #9?" --option alpha b --option gamma d --recommend 1 --why w --picker tool_1 /t.jsonl true
 }
 # ask, then wait for the operator's answer in the asker's own inbox
 c_ao_answer() {
