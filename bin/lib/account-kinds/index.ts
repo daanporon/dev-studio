@@ -44,6 +44,8 @@ export type AccountKind = {
   /** What a freshly logged-in folder still needs before the agent starts in it without questions (Claude: the
    *  onboarding keys of the system login's `.claude.json`). Never touches the credentials. */
   afterLogin?(folder: string, env: Env): void;
+  /** API key variables that can win over a folder's login: `ds account add` warns when one is set. */
+  keyEnv?: string[];
   /** Whether usage figures and free resets can be read for an account. */
   usage: boolean;
   resets: boolean;
