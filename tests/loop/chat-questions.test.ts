@@ -46,6 +46,22 @@ test("chatJson lists the open questions of the member whose card opens its chat,
   expect(Object.fromEntries(b.crew.map((m: any) => [m.role, m.asks]))).toEqual({ lead: 1, builder: 3 });
 });
 
+test("a chat question carries its suggestion, why, repo slug and linked doc (name and markdown only)", () => {
+  const d = seed([
+    { id: "plan-md", asker: "thinker", question: "Approve?", blocking: true, since: "2026-11-25T10:00:00Z", options: ["Approve", "Change"], suggestion: "Approve", why: "it is small" },
+    { id: "q-plain", asker: "thinker", question: "Which?", blocking: false, since: "2026-11-25T11:00:00Z" },
+  ]);
+  const s = open(d); stores.push(s);
+  s.db.run("UPDATE squads SET repo = 'home' WHERE project = 'demo'");
+  s.db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES ('demo', 'github', 'repo:home', 'acme/app', 1)");
+  s.db.run("INSERT INTO documents (project, path, mtime, body, observed_at) VALUES ('demo', 'demo/squads/sq-md-plan.md', 1, '# Plan', 1)");
+  const [plan, plain] = (chatJson({ project: "demo", topic: "sq", wt: LEAD }, d) as any).questions;
+  expect(plan).toMatchObject({ suggestion: "Approve", why: "it is small", repo_slug: "acme/app" });
+  expect(plan.doc).toEqual({ name: "sq-md-plan.md", markdown: "# Plan" });
+  expect(plan.plain).toBeUndefined();
+  expect(plain).toMatchObject({ suggestion: null, why: null, doc: null });
+});
+
 test("no waiting question: an empty list", () => {
   expect((chatJson({ project: "demo", topic: "sq", wt: BUILDER }, seed([])) as any).questions).toEqual([]);
 });
