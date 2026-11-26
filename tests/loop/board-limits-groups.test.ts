@@ -9,8 +9,9 @@ const root = join(import.meta.dir, "../..");
 const keys = readFileSync(join(root, "conventions/limits.conf"), "utf8").split("\n")
   .filter((l) => l.trim() && !/^\s*#/.test(l)).map((l) => l.trim().split(/\s+/)[0]);
 const page = readFileSync(join(root, "web/board.html"), "utf8");
-const cut = (name: string) => { const i = page.indexOf(`function ${name}(`); return page.slice(i, page.indexOf("\n}\n", i) + 2); };
+const cut = (name: string) => { const i = page.indexOf(`function ${name}(`), eol = page.indexOf("\n", i), line = page.slice(i, eol); return line.endsWith("}") ? line : page.slice(i, page.indexOf("\n}\n", i) + 2); };
 const summary = new Function(`${cut("limitGroupSummary")} return limitGroupSummary;`)();
+const match = new Function(`${cut("settingWords")}\n${cut("settingMatch")} return settingMatch;`)();
 
 test("every limits.conf key has a named category, none Other", () => {
   expect(keys.length).toBe(111);
@@ -28,4 +29,14 @@ test("the folded line counts overridden, unsaved (not env) and error", () => {
   expect(summary("Review", rows.slice(1), {}, {})).toBe("Review · 2 settings");
   expect(summary("Review", rows, { a: "9", b: "2", c: "7" }, { b: "bad" })).toBe("Review · 3 settings · 1 overridden · 1 unsaved · error");
   expect(summary("X", [rows[0]], {}, {})).toBe("X · 1 setting · 1 overridden");
+});
+test("the folded line counts matches while searching", () => {
+  const rows = [{ key: "a", value: "1", source: "override" }, { key: "b", value: "2", source: "default" }];
+  expect(summary("Review", rows, {}, {}, 1)).toBe("Review · 1 of 2 match · 1 overridden");
+  expect(summary("Review", rows, {}, {}, undefined)).toBe("Review · 2 settings · 1 overridden");
+});
+test("the search matches every word in any text, with _ and - read as spaces", () => {
+  const texts = ["auto_compact_builder", "when a Review starts", "Context & compaction", "opus", "DS_AUTO_COMPACT"];
+  for (const q of ["auto compact", "auto-compact", "Review", "opus", "ds auto", "review opus", "", "  "]) expect([q, match(q, ...texts)]).toEqual([q, true]);
+  for (const q of ["review sonnet", "zzz"]) expect([q, match(q, ...texts)]).toEqual([q, false]);
 });

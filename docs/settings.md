@@ -369,7 +369,9 @@ After that the rows are the only copy:
 
 ### Copy settings with the board's Import and Export
 
-The Settings window has **Export** and **Import** (settings-export-import U3).
+The Settings window has **Export** and **Import** (settings-export-import U3). Its search box filters the
+Limits tab by key, meaning, group, value or env var name and unfolds the groups that match (Esc or ✕ clears it;
+nothing is written or stored, and Save still saves edits the search hides).
 
 - **Export** downloads `<project>-settings.txt` (`GET /api/settings-export?project=`): the export text with a
   first line `#! ds-settings 1 from=<label> rev=<commit> at=<time>` and the `skills.conf` rows.
