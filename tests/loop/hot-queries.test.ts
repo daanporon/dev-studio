@@ -96,6 +96,7 @@ const norm = (q: string) => q.replace(/\s+/g, " ").trim();
 // Statements that may scan, by file and the start of their text (a line number drifts), each with its reason.
 const ALLOW: { file: string; sql: string; why: string }[] = [
   { file: "bin/loop/messages/messages.ts", sql: "SELECT * FROM messages WHERE reply_to = ? AND kind = 'reply' ORDER BY id LIMIT 1", why: "one lookup per answered message, on a table of role mail (small, no reply_to index)" },
+  { file: "bin/loop/db/project-rows.ts", sql: "UPDATE messages SET reply_to = NULL WHERE project IS NOT ?1 AND reply_to IN (SELECT id FROM messages WHERE project = ?1)", why: "once per project removal (remove-project), one scan of role mail inside its delete" },
 ];
 
 type Found = { file: string; line: number; sql: string };
