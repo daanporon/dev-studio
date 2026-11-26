@@ -156,6 +156,19 @@ describe("refusals", () => {
   });
 });
 
+describe("pre-auth", () => {
+  test("a socket that never says hello is closed within DEAD_MS", async () => {
+    const m = await mainUp();
+    const ws = new WebSocket(`${m.url}/link`);
+    others.push({ stop: () => ws.close() });
+    let why = "", closed = false;
+    ws.onmessage = (ev) => { why = String((JSON.parse(String(ev.data)) as Row).why ?? ""); };
+    ws.onclose = () => { closed = true; };
+    await until("the close", () => closed, DEAD + 1000);
+    expect(why).toMatch(/no hello and auth/);
+  });
+});
+
 describe("join", () => {
   test("a join request over the link lands in the pending list", async () => {
     const m = await mainUp();

@@ -162,6 +162,8 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
     maxPayloadLength: MAX_FRAME_BYTES,
     idleTimeout: 0,
     sendPings: false,
+    // A socket that has not finished its hello within DEAD_MS is closed (idleTimeout is off, so nothing else would).
+    open(ws: WS) { setTimeout(() => { if (ws.data.phase === "new" || ws.data.phase === "challenged") refuse(ws, `no hello and auth within ${Math.round(deadMs() / 1000)} s`); }, deadMs()); },
     message(ws: WS, m: string | Buffer) { onMessage(ws, m).catch((e) => { console.error(`link: ${(e as Error).message}`); refuse(ws, "internal error"); }); },
     close(ws: WS) {
       const c = ws.data;

@@ -125,6 +125,7 @@ export class LinkClient {
   private dial(): void {
     if (this.state === "stopped") return;
     this.set("connecting");
+    this.refusal = null;   // a refusal from an earlier dial must not label a later unreachable main
     const ws = new WebSocket(linkUrl(this.o.main));
     this.ws = ws;
     let welcomed = false;
