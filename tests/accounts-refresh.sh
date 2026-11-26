@@ -57,7 +57,7 @@ eq "an unknown argument calls no backend" "$(calls)" ""
 
 run
 eq "a refresh exits 0" "$rc" "0"
-eq "a refresh reads the accounts, their usage and the limits" "$(calls)" "account-usage account-resets limited status account-list"
+eq "a refresh reads the accounts, their usage and the limits" "$(calls)" "account-usage account-resets limited"
 eq "a refresh writes accounts.tsv: the table's row, then muse's and codex's own login" "$(awk -F'\t' 'NR>1{print $1":"$2}' "$OUT" | tr '\n' ' ')" "claude:a1 muse:default codex:default "
 eq "a refresh releases the lock" "$([ -e "$LOCK" ] && echo held || echo free)" "free"
 
@@ -65,11 +65,11 @@ run --max-age 60
 eq "--max-age: a younger accounts.tsv is left alone" "$(calls)" ""
 touch -d '@1000000000' "$OUT"
 run --max-age 60
-eq "--max-age: an older accounts.tsv is refreshed" "$(calls)" "account-usage account-resets limited status account-list"
+eq "--max-age: an older accounts.tsv is refreshed" "$(calls)" "account-usage account-resets limited"
 
 printf '%s\n' "x 1 limited" > "$TMP/limited"
 run --limited "$TMP/limited"
-eq "--limited: the caller's rows, no backend limited read" "$(calls)" "account-usage account-resets status account-list"
+eq "--limited: the caller's rows, no backend limited read" "$(calls)" "account-usage account-resets"
 
 mkdir "$LOCK"; before="$(cat "$OUT")"
 run
@@ -80,7 +80,7 @@ eq "a held lock: the holder's lock stays" "$([ -d "$LOCK" ] && echo held || echo
 
 touch -d '@1000000000' "$LOCK"
 run
-eq "a lock older than 10 min is taken over" "$(calls)" "account-usage account-resets limited status account-list"
+eq "a lock older than 10 min is taken over" "$(calls)" "account-usage account-resets limited"
 eq "the taken-over lock is released" "$([ -e "$LOCK" ] && echo held || echo free)" "free"
 
 seed "$S"
@@ -90,8 +90,7 @@ eq "no accounts: the system login stands in" "$(awk -F'\t' 'NR==2{print $1":"$2"
 eq "no accounts: the lock is released" "$([ -e "$LOCK" ] && echo held || echo free)" "free"
 
 # --- the skills column (account-skills U3) ---
-# A complete skills home for `sys` (claude-config-dir empty -> ~/.claude), an empty one for `brk`, no
-# config dir for `nodir` (warn), and a codex row that gets `-`.
+# A complete skills home for `system` (~/.claude), empty ones for `brk` and `nodir`, and a codex row that gets `-`.
 DS_ROLE_CE_SKILLS="$("$ROOT/bin/ds" account-skills role-skills ce)"
 DS_ROLE_USER_SKILLS="$("$ROOT/bin/ds" account-skills role-skills user)"
 DS_ROLE_OPTIONAL_USER_SKILLS="$("$ROOT/bin/ds" account-skills role-skills optional)"
@@ -104,10 +103,7 @@ printf '{"enabledPlugins":{"%s":true}}' "$CE_ID" > "$SYS/settings.json"
 mkdir -p "$TMP/brk"
 cat > "$TMP/sk-backend" <<'FAKE'
 #!/usr/bin/env bash
-case "$1" in
-  account-list) printf 'claude\tsystem\tS\nclaude\tbrk\tB\nclaude\tnodir\tN\ncodex\tcx\tC\n' ;;
-  claude-config-dir) case "$2" in system) echo "" ;; brk) echo "$AR/brk" ;; *) exit 1 ;; esac ;;
-esac
+exit 0
 FAKE
 chmod +x "$TMP/sk-backend"
 seed "$TMP/sk-state" "claude:system:system:-" "claude:brk:ds:$TMP/brk" "claude:nodir:ds:$TMP/nodir" "codex:cx:ds:$TMP/cx"
@@ -118,7 +114,7 @@ eq "skills: the header gains the 11th column" "$(head -1 "$SKT" | cut -f10,11)" 
 eq "skills: every row has 13 columns" "$(awk -F'\t' '{print NF}' "$SKT" | sort -u)" "13"
 eq "skills: a complete home is ok" "$(col system 11)" "ok"
 case "$(col brk 11)" in "broken: "?*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "  FAIL: skills: an empty home is broken: <reason> (got [$(col brk 11)])" >&2 ;; esac
-case "$(col nodir 11)" in "warn: the backend has no Claude config dir"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "  FAIL: skills: no config dir is warn (got [$(col nodir 11)])" >&2 ;; esac
+case "$(col nodir 11)" in "broken: "?*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "  FAIL: skills: every listed folder is checked (got [$(col nodir 11)])" >&2 ;; esac
 eq "skills: a non-claude row gets -" "$(col cx 11)" "-"
 eq "skills: note stays as it was" "$(col system 10)" "-"
 eq "skills: no tab leaks into a reason" "$(awk -F'\t' 'NF!=13' "$SKT" | wc -l | tr -d ' ')" "0"

@@ -4,8 +4,10 @@
 // writes as the shell version it replaced (tests/parity-install.sh compares the two).
 import { mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { ROOT, writeErr, writeOut } from "../lib/shared";
+import { ROOT, stateRoot, writeErr, writeOut } from "../lib/shared";
 import { accountSkillsCheck } from "../lib/account-skills";
+import { accountFolder, listAccounts } from "../lib/account-dirs.ts";
+import { claude } from "../lib/account-kinds/claude.ts";
 import { run as wrapHooksRun } from "./wrap-hooks-ts";
 // A throw inside the port is a failed script (non-zero), as it was when wrap-hooks.sh was a child process.
 const wrapHooks = async (a: string[]): Promise<number> => { try { return await wrapHooksRun(a); } catch (e) { writeErr(`wrap-hooks: ${(e as Error).message}\n`); return 1; } };
@@ -141,16 +143,14 @@ export async function run(argv: string[]): Promise<number> {
   for (const t of Object.keys(fixes)) if (found(t) === null) { err(`install: '${t}' not found — ${fixes[t]}`); return 1; }
   out(`bun: ${Bun.version} (ok)`);
 
-  // One backend start reads the runtime and the accounts; wrap-hooks.sh gets the rows through DS_WRAP_ACCOUNTS (U246).
-  const pre = await capture([BACKEND, "preflight"]);
-  if (pre.rc !== 0) { err("install: Orca runtime not reachable — start Orca on this host, then re-run"); return 1; }
-  const claudeRows = lines(stripNl(pre.out)).filter((l) => l.startsWith("claude")).map((l) => l.split("\t"));
-  // A bare `claude system system login` row alone means no login.
-  const accts = claudeRows.map((f) => [f[0], f[1] ?? "", f[2] ?? ""].join("\t"));
-  if (accts.length === 0 || !accts.some((a) => a !== "claude\tsystem\tsystem login")) {
+  if ((await capture([BACKEND, "preflight"])).rc !== 0) { err("install: Orca runtime not reachable — start Orca on this host, then re-run"); return 1; }
+  // The accounts are the table's; wrap-hooks.sh gets them through DS_WRAP_ACCOUNTS (it adds ~/.claude itself).
+  const added = listAccounts(stateRoot(), "claude", env).filter((r) => r.account !== claude.systemId);
+  const systemDir = claude.systemDir(env);
+  if (added.length === 0 && !isFile(join(systemDir, claude.credentialsFile)) && claude.loginId(systemDir, true, env) === null) {
     out(); out("⚠ no Claude login found — run 'claude login' so squads have an account to run on; continuing anyway.");
   }
-  env.DS_WRAP_ACCOUNTS = claudeRows.filter((f) => (f[1] ?? "") !== "" && (f[3] ?? "") !== "").map((f) => `${f[1]}\t${f[3]}`).join("\n");
+  env.DS_WRAP_ACCOUNTS = added.map((r) => `${r.account}\t${accountFolder(r, env)}`).join("\n");
 
   // Soft, read-only: Orca's nested-worker depth must be >= 2 (a Lead-dispatched Builder is depth 2). Never
   // edit orca-data.json: it is mirrored to SQLite, the set-orca-depth.sh script goes through Orca's store.
@@ -179,7 +179,7 @@ export async function run(argv: string[]): Promise<number> {
     }
   }
 
-  if (check) return checkHost({ BACKEND, LOOP_UNIT, LOOP_MARK, orcaCliDir, crontabL });
+  if (check) return checkHost({ LOOP_UNIT, LOOP_MARK, orcaCliDir, crontabL });
 
   mkdirSync(dest, { recursive: true });
   // 1. The stable home pointer the command files resolve scripts through. A checkout already at
@@ -324,7 +324,7 @@ export async function run(argv: string[]): Promise<number> {
 }
 
 /** --check: the loop, its watchdog and every agent in use, read-only. */
-async function checkHost(o: { BACKEND: string; LOOP_UNIT: string; LOOP_MARK: string; orcaCliDir: string; crontabL: () => Promise<string> }): Promise<number> {
+async function checkHost(o: { LOOP_UNIT: string; LOOP_MARK: string; orcaCliDir: string; crontabL: () => Promise<string> }): Promise<number> {
   const ensure = `${ROOT}/bin/loop/loop.sh --ensure`;
   const loopCron = lines(await o.crontabL()).filter((l) => !/^[ \t\n\v\f\r]*#/.test(l) && l.includes(ensure));
   // The unit's `orca` should be Orca's own CLI (U54): an older one fails every run-switch.
@@ -351,7 +351,7 @@ async function checkHost(o: { BACKEND: string; LOOP_UNIT: string; LOOP_MARK: str
   const agents = agentsInUse(uses);
   const museRoles = uses.filter((u) => u.agent === "muse").map((u) => `${u.role} (${u.kind})`).join(", ") || "no role (roles.conf)";
   out("claude: CLI ok");
-  let rc = (await accountSkillsCheck(o.BACKEND)) === 0 ? 0 : 1;
+  let rc = accountSkillsCheck() === 0 ? 0 : 1;
   if (which("muse") === null) {
     out(); out(`⚠ muse: 'muse' CLI not found — roles using it (${museRoles}) stay on Claude; skipping Muse skill check`);
   } else {

@@ -122,7 +122,7 @@ are not stored. The indented example above is the one to copy.
 commas (a tracker issue, a GitHub issue, any page with more context):
 `  Link: https://tracker.example/issue/ABC-1, https://github.com/acme/app/issues/7`
 `register-plan` stores them as the unit's `links`, and they follow the plan on every re-registration (drop the line,
-drop the links). `Link:` is a reserved label: only `http://` and `https://` URLs, at most 5 per unit and 500 characters
+drop the links). `Link:` is a reserved label: only `http://` and `https://` URLs without a login (`user:password@`), at most 5 per unit and 500 characters
 each, and anything else refuses the whole plan naming the line. Put notes under another label (e.g. `Files:`).
 `Links:` is not read.
 A leading `[ID]` in the unit title (or a single one at its end) links by itself when the project sets `ticket_url` (`docs/settings.md`). Keep the `Link:` line anyway: only it reaches the Builder (the board shows the same URL once).

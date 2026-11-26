@@ -12,7 +12,8 @@
 # Asserts: installs run only under each owner's env (never a symlinked profile's), once per owner;
 # user skills are symlinked into accounts whose skills/ is elsewhere; one line per account; --check
 # exits 0 after; a second run makes no claude plugin call and changes no file; a non-link skill entry
-# is never replaced; backend unreachable -> the current env only.
+# is never replaced; the accounts are loop.db's table (a missing login folder is skipped, no table is the system
+# login only) and the backend is never asked.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
@@ -81,25 +82,19 @@ reg "$O" "$(ent "$T/$CE_REL/3.34.0")"
 E="$PROF/noenable/home"; mk_plugin "$E/$CE_REL/3.34.0"; mk_user_skills "$E"
 printf '{"enabledPlugins":{"%s":false},"theme":"dark"}' "$CE_ID" > "$E/settings.json"; reg "$E" "$(ent "$E/$CE_REL/3.34.0")"
 
-# --- fake backend ----------------------------------------------------------------------------
-export FAKE_PROF="$PROF"
+# --- the accounts table ----------------------------------------------------------------------
+# shellcheck source=tests/lib/seed-accounts.sh
+. "$ROOT/tests/lib/seed-accounts.sh"
+export DS_STATE_ROOT="$TMP/state"
+accts() { # <account>… — each at $PROF/<account>/home; `system` is ~/.claude
+  local a specs=()
+  for a in "$@"; do if [ "$a" = system ]; then specs+=(system); else specs+=("$a:$PROF/$a/home"); fi; done
+  seed_claude_accounts "$DS_STATE_ROOT" "${specs[@]}"
+}
+# a backend that only logs: the account list must come from the table
+export BACKEND_LOG="$TMP/backend.log"
 BACKEND_STUB="$TMP/backend.sh"
-cat > "$BACKEND_STUB" <<'FAKE'
-#!/usr/bin/env bash
-case "${1:-}" in
-  status) [ "${FAKE_DOWN:-0}" = 1 ] && exit 1; echo reachable ;;
-  account-list)
-    { echo "$FAKE_ACCTS" | tr ',' '\n' | while read -r a; do [ -n "$a" ] && printf 'claude\t%s\tx@e.com\n' "$a"; done
-      printf 'muse\tdefault\tdefault\n'; } ;;
-  claude-config-dir)
-    case "${2:-}" in
-      system) ;;
-      gone) exit 1 ;;
-      *) echo "$FAKE_PROF/$2/home" ;;
-    esac ;;
-  *) exit 2 ;;
-esac
-FAKE
+printf '#!/usr/bin/env bash\necho "$*" >> "$BACKEND_LOG"\nexit 127\n' > "$BACKEND_STUB"
 chmod +x "$BACKEND_STUB"
 
 # --- stub claude: logs `<CLAUDE_CONFIG_DIR or -unset->|<argv>` and writes the registry like the CLI ---
@@ -140,7 +135,7 @@ run() { # <args…>; sets rc, out
 }
 calls() { grep -E "\|plugin $1( |$)" "$CLAUDE_LOG" 2>/dev/null || true; }
 
-export FAKE_ACCTS="system,linked,complete,bare,dangling,noskill,thru,noenable,gone"
+accts system linked complete bare dangling noskill thru noenable gone
 
 # --- 0. before: --check fails (the fixture is broken) -----------------------------------------
 run --check
@@ -196,7 +191,8 @@ has "line: dangling" "$out" "claude[dangling]: installed (linked lavish)"
 has "line: noskill" "$out" "claude[noskill]: installed (linked lavish)"
 has "line: thru shares own" "$out" "claude[thru]: shares $O (installed; linked no-mistakes lavish)"
 has "line: noenable enabled" "$out" "claude[noenable]: installed (enabled)"
-has "line: an account with no config dir is skipped" "$out" "⚠ claude[gone]: the backend has no Claude config dir"
+has "line: an account whose login folder is missing is skipped" "$out" "⚠ claude[gone]: its login folder $PROF/gone/home is missing"
+if [ -e "$BACKEND_LOG" ] && grep -qE '^(status|account-list|claude-config-dir)' "$BACKEND_LOG"; then bad "the backend was asked for accounts: $(cat "$BACKEND_LOG")"; else good; fi
 # the verdict that follows is green
 for a in system linked complete bare dangling noskill thru noenable; do has "verdict after: $a ok" "$out" "claude[$a]: skills ok"; done
 
@@ -218,35 +214,35 @@ has "re-run: thru shares, already ok" "$out" "claude[thru]: shares $O (already o
 # --- 4. a non-link entry is never replaced (warned instead) -----------------------------------
 B2="$PROF/blocked/home"; mk_plugin "$B2/$CE_REL/3.35.0"; reg "$B2" "$(ent "$B2/$CE_REL/3.35.0")"
 mkdir -p "$B2/skills/no-mistakes"; : > "$B2/skills/no-mistakes/README"
-export FAKE_ACCTS="blocked"; rm -f "$CLAUDE_LOG"
+accts blocked; rm -f "$CLAUDE_LOG"
 run
 has "blocked: warned, not replaced" "$out" "$B2/skills/no-mistakes exists, is not a link and has no SKILL.md — not replaced"
 if [ -d "$B2/skills/no-mistakes" ] && [ ! -L "$B2/skills/no-mistakes" ] && [ -f "$B2/skills/no-mistakes/README" ]; then good; else bad "blocked: the non-link entry was replaced"; fi
 has "blocked: lavish still linked" "$out" "claude[blocked]: installed (linked lavish)"
 has "blocked: the verdict names the missing skill" "$out" "⚠ claude[blocked]: user skill(s) missing"
 
-# --- 5. backend unreachable -> the current env only, labelled `claude` ------------------------
-H2="$TMP/home2"; mkdir -p "$H2/.claude"; mk_user_skills "$H2/.claude"; rm -f "$CLAUDE_LOG"
-rc=0; out="$(FAKE_DOWN=1 HOME="$H2" PATH="$STUB" BACKEND="$BACKEND_STUB" "$ROOT/bin/host/install-skills.sh" 2>&1)" || rc=$?
-if [ "$rc" -eq 0 ]; then good; else bad "unreachable backend: install exits $rc, want 0: $out"; fi
-has "unreachable: installed into the default home, CLAUDE_CONFIG_DIR unset" "$(calls install)" "-unset-|plugin install $CE_ID --scope user"
-has "unreachable: one line, labelled claude" "$out" "claude: installed"
-hasnt "unreachable: no per-account lines" "$out" "claude[system]"
-if [ "$(grep -c '|plugin install' "$CLAUDE_LOG")" -eq 1 ]; then good; else bad "unreachable: want exactly one install: $(cat "$CLAUDE_LOG")"; fi
+# --- 5. no accounts table -> the system login only --------------------------------------------
+H2="$TMP/home2"; mkdir -p "$H2/.claude"; : > "$CLAUDE_LOG"
+rc=0; out="$(DS_STATE_ROOT="$TMP/no-table" HOME="$H2" PATH="$STUB" BACKEND="$BACKEND_STUB" "$ROOT/bin/host/install-skills.sh" 2>&1)" || rc=$?
+if [ "$rc" -eq 0 ]; then good; else bad "no table: install exits $rc, want 0: $out"; fi
+has "no table: installed into the default home, CLAUDE_CONFIG_DIR unset" "$(calls install)" "-unset-|plugin install $CE_ID --scope user"
+has "no table: the system login's line" "$out" "claude[system]: installed"
+hasnt "no table: no other account" "$out" "claude[complete]"
+if [ "$(grep -c '|plugin install' "$CLAUDE_LOG")" -eq 1 ]; then good; else bad "no table: want exactly one install: $(cat "$CLAUDE_LOG")"; fi
 
 # --- 6. a failed claude plugin install: the run finishes, exits 1, names it ------------------
 H3="$TMP/home3"; mkdir -p "$H3/.claude"
 # shellcheck disable=SC2016 # a literal script body, not an expansion
 printf '#!/usr/bin/env bash\necho "${CLAUDE_CONFIG_DIR--unset-}|$*" >> "$CLAUDE_LOG"\ncase "$2" in install) exit 1 ;; esac\nexit 0\n' > "$TMP/fail-claude"
 FSTUB="$TMP/fstub"; cp -a "$STUB" "$FSTUB"; rm "$FSTUB/claude"; cp "$TMP/fail-claude" "$FSTUB/claude"; chmod +x "$FSTUB/claude"
-rc=0; out="$(FAKE_DOWN=1 HOME="$H3" PATH="$FSTUB" BACKEND="$BACKEND_STUB" "$ROOT/bin/host/install-skills.sh" 2>&1)" || rc=$?
+rc=0; out="$(DS_STATE_ROOT="$TMP/no-table" HOME="$H3" PATH="$FSTUB" BACKEND="$BACKEND_STUB" "$ROOT/bin/host/install-skills.sh" 2>&1)" || rc=$?
 if [ "$rc" -eq 1 ]; then good; else bad "failed install: exits $rc, want 1: $out"; fi
-has "failed install: named" "$out" "claude: install FAILED"
+has "failed install: named" "$out" "claude[system]: install FAILED"
 has "failed install: the rest still ran" "$out" "== done =="
 
 # --- 7. a reinstall that exits 0 but leaves the fault (uninstall failed): not "installed", exit 1 ---
 D2="$PROF/stuck/home"; mk_user_skills "$D2"; reg "$D2" "$(ent "$PROF/gone2/home/$CE_REL/3.34.0")"
-export FAKE_ACCTS="stuck"; rm -f "$CLAUDE_LOG"
+accts stuck; rm -f "$CLAUDE_LOG"
 rc=0; out="$(FAKE_UNINSTALL_FAIL=1 PATH="$STUB" BACKEND="$BACKEND_STUB" "$ROOT/bin/host/install-skills.sh" 2>&1)" || rc=$?
 if [ "$rc" -eq 1 ]; then good; else bad "stuck reinstall: exits $rc, want 1: $out"; fi
 has "stuck reinstall: the line says it is still broken" "$out" "claude[stuck]: install FAILED (still broken after it"
@@ -256,7 +252,7 @@ has "stuck reinstall: the check names the dangling entry" "$out" "⚠ claude[stu
 # --- 8. only an enable that fails, on a healthy owner: "FAILED", not "installed", exit 1 -----
 E2="$PROF/noenable2/home"; mk_plugin "$E2/$CE_REL/3.34.0"; mk_user_skills "$E2"
 printf '{"enabledPlugins":{}}' > "$E2/settings.json"; reg "$E2" "$(ent "$E2/$CE_REL/3.34.0")"
-export FAKE_ACCTS="noenable2"; rm -f "$CLAUDE_LOG"
+accts noenable2; rm -f "$CLAUDE_LOG"
 rc=0; out="$(FAKE_ENABLE_FAIL=1 PATH="$STUB" BACKEND="$BACKEND_STUB" "$ROOT/bin/host/install-skills.sh" 2>&1)" || rc=$?
 if [ "$rc" -eq 1 ]; then good; else bad "failed enable: exits $rc, want 1: $out"; fi
 has "failed enable: the line says FAILED" "$out" "claude[noenable2]: FAILED (enable FAILED)"

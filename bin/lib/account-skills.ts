@@ -2,9 +2,12 @@
 // twins of the old shell lib's ds_account_skills_scan / _verdict / _check, ds_ce_repair_cmd and ds_account_plan,
 // which are gone). Reads each account's config dir only (no `claude` call), so the loop can run it.
 // Kept apart from lib.ts so the hook ports that import lib.ts don't load it.
-import { readFileSync, readlinkSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import { hostBackendPath, readIfs, run, shq, writeErr, writeOut } from "./shared";
+import { readIfs, run, shq, stateRoot, writeErr, writeOut } from "./shared";
+import { accountFolder, listAccounts, readAccountsTable, type AccountRow } from "./account-dirs.ts";
+import { claude } from "./account-kinds/claude.ts";
+import type { Env } from "./account-kinds/index.ts";
 import { accountOwner, canon, exists, isDir, isFile, isLink } from "./install";
 
 /** The skills the roles invoke (roles/*.md). ONE list: the check reads it, and tests/install-ce-accounts.sh
@@ -187,37 +190,34 @@ async function adapterOut(adapter: string, args: string[]): Promise<{ ok: boolea
   return { ok: r.rc === 0, out: r.out.replace(/\n+$/, "") };
 }
 
-/** ds_account_skills_check <backend> [--tsv]: the install --check verdict per Claude account (`claude[<account>]:
- *  skills ok (<path>)` or a ⚠ block; with tsv `<account>\t<ok|broken|warn>\t<reason>` per account). Accounts
- *  come from the backend's account-list with their claude-config-dir (empty = ~/.claude); backend unreachable or
- *  no Claude account -> the current env only (`claude`, account `current` in tsv). Returns 1 when any is broken. */
-export async function accountSkillsCheck(adapter: string = hostBackendPath(), tsv = false, io: Sink = stdio): Promise<number> {
-  let accts: string[] = [];
-  if ((await run([adapter, "status"])).rc === 0) {
-    const list = (await run([adapter, "account-list"])).out;
-    accts = list.split("\n").map((l) => l.split("\t")).filter((f) => f[0] === "claude" && (f[1] ?? "") !== "").map((f) => f[1]);
-  }
-  if (accts.length === 0) {
-    const dir = process.env.CLAUDE_CONFIG_DIR || `${home()}/.claude`;
-    if (!tsv) return accountReport("claude", dir, io) ? 0 : 1;
-    const v = accountSkillsVerdict(dir);
-    io.out(`current\t${v}\n`);
-    return v.startsWith("broken\t") ? 1 : 0;
-  }
+/** A Claude account and its config dir; `missing`: a table row whose login folder is gone. */
+export type SkillAccount = { account: string; dir: string; missing?: boolean };
+
+/** Every Claude account in loop.db's accounts table with its login folder (bin/lib/account-dirs.ts), so no backend
+ *  is asked: the listed ones, the default first, then the rows whose folder is gone. No table: the system login. */
+export function claudeSkillAccounts(root: string = stateRoot(), env: Env = process.env): SkillAccount[] {
+  const at = (r: AccountRow, missing?: boolean): SkillAccount => ({ account: r.account, dir: accountFolder(r, env), ...(missing ? { missing } : {}) });
+  const t = readAccountsTable(root);
+  const gone = ("rows" in t ? t.rows : []).filter((r) => r.agent === "claude" && r.source && r.removed_at == null
+    && r.account !== claude.systemId && !existsSync(accountFolder(r, env)));
+  return [...listAccounts(root, "claude", env).map((r) => at(r)), ...gone.map((r) => at(r, true))];
+}
+
+/** ds_account_skills_check [--tsv]: the install --check verdict per Claude account (`claude[<account>]: skills ok
+ *  (<path>)` or a ⚠ block; with tsv `<account>\t<ok|broken|warn>\t<reason>` per account). `accounts` is the
+ *  table's list unless the caller has its own (the accounts refresh adds this run's Orca profiles). A missing
+ *  login folder only warns. Returns 1 when any is broken. */
+export function accountSkillsCheck(tsv = false, io: Sink = stdio, accounts: SkillAccount[] = claudeSkillAccounts()): number {
   let rc = 0;
-  for (const acct of accts) {
-    const d = await adapterOut(adapter, ["claude-config-dir", acct]);
-    if (!d.ok) {
-      if (tsv) io.out(`${acct}\twarn\tthe backend has no Claude config dir for this account — not checked\n`);
-      else io.err(`⚠ claude[${acct}]: the backend has no Claude config dir for this account — not checked\n`);
-      continue;
-    }
-    const dir = d.out || `${home()}/.claude`; // system: ~/.claude with CLAUDE_CONFIG_DIR unset
-    if (tsv) {
+  for (const { account, dir, missing } of accounts) {
+    if (missing) {
+      if (tsv) io.out(`${account}\twarn\tits login folder is missing — not checked\n`);
+      else io.err(`⚠ claude[${account}]: its login folder ${dir} is missing — not checked\n`);
+    } else if (tsv) {
       const v = accountSkillsVerdict(dir);
-      io.out(`${acct}\t${v}\n`);
+      io.out(`${account}\t${v}\n`);
       if (v.startsWith("broken\t")) rc = 1;
-    } else if (!accountReport(`claude[${acct}]`, dir, io)) rc = 1;
+    } else if (!accountReport(`claude[${account}]`, dir, io)) rc = 1;
   }
   return rc;
 }

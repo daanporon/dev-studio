@@ -99,7 +99,7 @@ export function backendFor(verb: string): string {
 
 /** U58: the non-member verbs a Studio off Orca still calls (`grep -n 'backend(\[' bin/commands bin/lib`), and where
  *  each goes once no part of its project is on Orca (contract-here.ts projectOffOrca). `host`: the host's adapter all
- *  the same (`preflight` reads the host's accounts for wrap-hooks, Orca's until issue #125). `orca`: Orca's alone, so
+ *  the same (`preflight` checks the host's Orca runtime for install and reads the accounts for a lone wrap-hooks). `orca`: Orca's alone, so
  *  it is refused with one line: `ps` (lib.ts worktreePath reads a `local::` worktree as its own path), and `ds up`'s
  *  Orca steps (`up-ts.ts` calls the host's adapter itself for them when it moves a project to Orca). A verb not
  *  listed is refused the same way. While an open squad of the project is on Orca every verb stays on the host's. */
