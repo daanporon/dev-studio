@@ -100,7 +100,8 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
       const groups: Group[] = squads.map((sq) => ({ topic: String(sq.topic), backend: String(sq.backend), members: (store.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND wt LIKE 'local::%' AND COALESCE(host, '') NOT IN (SELECT name FROM hosts)
             AND COALESCE(status, '') != 'gone' ORDER BY id`).all(project, String(sq.topic)) as Row[]).filter((m) => localPath(String(m.wt))) }));
       // U51: a Studio off Orca, read whether or not the project has a squad off Orca.
-      const studio = studioGroup(store, project);
+      // A side host runs no Studio: its copy of the projects row names main's.
+      const studio = ctx.role === "side" ? null : studioGroup(store, project);
       if (studio) groups.push(studio);
       if (!groups.some((g) => g.members.length)) return;
       const procs = await host(ctx.tick, now);
