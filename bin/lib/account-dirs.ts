@@ -93,6 +93,20 @@ function tableRows(root: string): AccountRow[] {
   return [];
 }
 
+/** The login folder of `account`: its row's, removed or not (a running agent can still be on it); an id the
+ *  table does not know is an Orca profile for Claude (KTD2), else the folder `ds account add` would make. */
+export function folderOf(root: string, agent: string, account: string, env: Env = process.env): string {
+  const row = tableRows(root).find((r) => r.agent === agent && r.account === account);
+  return accountFolder(row ?? { agent, account, config_dir: null, source: agent === "claude" ? null : "ds" }, env);
+}
+
+/** [folder, account] for every row of `agent` with a source, rows not removed first. */
+export function knownFolders(root: string, agent: string, env: Env = process.env): [string, string][] {
+  return tableRows(root).filter((r) => r.agent === agent && r.source)
+    .sort((a, b) => Number(a.removed_at != null) - Number(b.removed_at != null))
+    .map((r) => [accountFolder(r, env), r.account]);
+}
+
 /** The account list of `agent`: default first. */
 export const listAccounts = (root: string, agent: string, env: Env = process.env): AccountRow[] =>
   listFromRows(tableRows(root), agent, env);

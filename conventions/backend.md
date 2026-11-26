@@ -483,7 +483,8 @@ Orca CLI variable to `DS_ORCA_CLI_BIN_DIR` before stripping `ORCA_*` from childr
 and install preserves an explicit CLI directory across reinstalls in its systemd
 unit and cron command. Tests that
 fake `orca` must pin their fake directory with `DS_ORCA_CLI_BIN_DIR`.
-The local `claude-config-dir` and `agent-accounts` lookups, plus `pr-close`,
+The local `claude-config-dir`, `agent-accounts`, `account-list`, `account-usage`
+and `account-resets` lookups, plus `pr-close`,
 still work while the CLI is unavailable; operations that use Orca fail before a
 best-effort read can hide a missing pin.
 
@@ -516,7 +517,7 @@ Script-callable (implemented by the adapter, used by the loop's observers and fu
 | `account-list` | — | `<agent>\t<account_id>\t<label>` per account; **the first line per agent is that agent's default login** (a one-account backend: one line per agent, id `default`) |
 | `claude-config-dir` | `<account_id>` | the `CLAUDE_CONFIG_DIR` a Claude role on that account runs with (its plugin registry lives under it); **empty** = run with `CLAUDE_CONFIG_DIR` unset (Orca's `system`); exit 1 when the account's config dir is missing. `install-skills.sh --check` / `install.sh --check` probe each account's compound-engineering install under it. A one-login backend prints nothing |
 | `preflight` | — | install.sh's one read (U246): exit 1 with nothing on stdout when the runtime is unreachable, else the `account-list` rows, each Claude row with a fourth column, its `claude-config-dir` (empty = unset or no home); `wrap-hooks.sh` reads the same rows. A backend without it fails install, so implement it alongside `status` |
-| `agent-accounts` | — | Per live agent process on this host, whoever started it (a hand restart, `/ds-restart`, an Orca restart). A top-level agent (no agent above it) prints a main line, `<cwd>\tmain\t<agent>\t<model>\t<account_id>\t<effort>\t<pid>\t<start>\t<rss_kb>` (muse/codex: `default`; the model and effort are its `--model`/`--effort` flags, the start is epoch seconds from the process table, each `-` when unread; U149, a backend may still print the older `<cwd>\t<agent>\t<account_id>`); the loop's Orca observer maps the cwd to a worktree (`observed_workers` presence, agent, account, pid, start, RSS and live model) and the record reconciler makes the member's record follow it (U55, U149). An agent under another agent (a review-unit `claude -p` under a muse Builder) prints a sub line, `<cwd>\tsub\t<agent>\t<model>\t<account_id>[\t<effort>]` (`-` when its `--model` flag can't be read; the effort is its `--effort` flag, left off when it has none, U105); the observer keeps those in `observed_workers.sub_agents` and a sub line never overwrites the main account (U90). So does a headless `claude -p` anywhere (U98: review-unit.sh runs detached, or under a claude Builder's own claude); a claude without `-p` under another claude stays skipped; a backend that can't tell prints nothing |
+| `agent-accounts` | — | Per live agent process on this host, whoever started it (a hand restart, `/ds-restart`, an Orca restart). A top-level agent (no agent above it) prints a main line, `<cwd>\tmain\t<agent>\t<model>\t<account_id>\t<effort>\t<pid>\t<start>\t<rss_kb>` (`<account_id>` comes from the process's folder env, `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, matched against the `accounts` table; muse: `default`; the model and effort are its `--model`/`--effort` flags, the start is epoch seconds from the process table, each `-` when unread; U149, a backend may still print the older `<cwd>\t<agent>\t<account_id>`); the loop's Orca observer maps the cwd to a worktree (`observed_workers` presence, agent, account, pid, start, RSS and live model) and the record reconciler makes the member's record follow it (U55, U149). An agent under another agent (a review-unit `claude -p` under a muse Builder) prints a sub line, `<cwd>\tsub\t<agent>\t<model>\t<account_id>[\t<effort>]` (`-` when its `--model` flag can't be read; the effort is its `--effort` flag, left off when it has none, U105); the observer keeps those in `observed_workers.sub_agents` and a sub line never overwrites the main account (U90). So does a headless `claude -p` anywhere (U98: review-unit.sh runs detached, or under a claude Builder's own claude); a claude without `-p` under another claude stays skipped; a backend that can't tell prints nothing |
 | `account-usage` | — | `<agent>\t<account_id>\t<session_pct>\t<session_reset>\t<weekly_pct>\t<weekly_reset>` (resets as epoch s, `-` = unknown; a backend with no usage data prints nothing) |
 | `account-resets` | — | `<agent>\t<account_id>\t<json>` per `account-list` account: its free limit resets in one generic shape, `{"state":"reported"\|"not_reported"\|"unknown", "count", "grants":[{"id","label","left","total","use_by","refills","usable_now"}], "reason"?, "at"?}` (`use_by` epoch s or null; `refills` from `session`, `weekly`, `weekly_model`, or the provider's own word; `count` = resets left over all grants). `not_reported` = the provider has no such thing; `unknown` = not read or not readable, never 0 |
 | `account-reset-use` | `<agent> <account_id> <grant_id> <key>` | `<outcome>\t<detail>`: uses that one free reset grant (account-free-resets U4). `outcome` is `used`, `nothing_to_reset`, `no_grant`, `already_used` or `failed` (detail = the provider's words); exit 0 once the provider answered, or when the call is refused before it (an agent with no free resets, a bad id, no login). No answer at all (network, timeout) is exit 1 with no outcome: the claim is in doubt and the caller retries with the **same** `key`, which the provider uses to make the retry the same claim. After `used`, `already_used` or `no_grant` the account's cached usage and resets are dropped. Only the loop's `account-reset` fulfiller calls it |
@@ -573,6 +574,13 @@ outranks `~/.claude/settings.json` (an env var on the command does not). `worker
 no Claude flags, so a windowed start opens a claude tab and supervises it (`--terminal`), the same
 path a non-default account uses. With `--on <host>` the window is dropped. Muse and Codex ignore it.
 
+Orca reads its account list and each login's folder from loop.db's `accounts` table
+(`bin/lib/account-dirs.ts`), never from `orca account list` (only `orca-accounts` calls that). A Codex
+or Muse start on an account other than its system row is a tab too: its kind's folder env
+(`CODEX_HOME`) on the agent's own launch line (`bin/lib/account-kinds/`), then `worker-start
+--terminal`. It is refused for an agent with no folder env, and with `--on`. A system-row start keeps
+`worker-start --agent`.
+
 **A start under a crash.** A killed loop's `role-start` child keeps running while the restarted loop
 replays it, so two runs do one start. Orca's adapter keeps them to one worktree and one tab, so Orca
 sees the same input under the retry id: `wt_create` holds a lock per name across its check and create
@@ -583,7 +591,7 @@ yet (a live holder past the wait, a failed worktree or terminal list) says `stil
 then keeps the id and waits. A live holder is said as `pid N holds its lock`, which the actuator reads to try again only every 5 minutes and to name the pid in its one Studio alert after 10. A replay sends the args of the first try and the member records its pick.
 
 Orca's `account-usage` reads each Claude account's OAuth token (`<home>/.credentials.json`;
-`system` = `~/.claude`, a managed account = Orca's `claude-profiles/<id>/home`) and calls the
+`system` = `~/.claude`, any other account = the folder its `accounts` row names) and calls the
 usage endpoint Orca's own credits poll uses. The endpoint is undocumented and rate-limited, so
 the adapter calls it at most once per account per `DS_USAGE_TTL_S` (300 s), in a host-wide cache
 that every project's loop shares. It never refreshes a token. A failure (no token, expired, 429,

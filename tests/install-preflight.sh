@@ -53,9 +53,13 @@ if [ "$rc" -eq 0 ]; then good; else bad "no login is soft — the install should
 if grep -qF 'no Claude login found' <<<"$out"; then good; else bad "no login should warn: $out"; fi
 # Soft: a system login with an email is a real login — no warning. (Its row contains the
 # bare `system login` row as a substring, so the no-login match must be whole-line.)
-out="$(cd "$REPO" && FAKE_ORCA_SYSLOGIN=1 PATH="$STUB" ./bin/host/install.sh "$DEST" 2>&1)"
+printf '{"oauthAccount":{"emailAddress":"s@e.com"}}\n' > "$HOME/.claude.json"
+out="$(cd "$REPO" && PATH="$STUB" ./bin/host/install.sh "$DEST" 2>&1)"
 if grep -qF 'no Claude login found' <<<"$out"; then bad "a system login should not warn: $out"; else good; fi
+rm -f "$HOME/.claude.json"
 # Soft: a managed account alongside the system row is a login too — no warning.
+mkdir -p "$HOME/.config/orca/claude-profiles/a1/home"
+bun "$ROOT/tests/lib/accounts-table.ts" "$REPO/state" claude system "system login" system - 0 claude a1 t@e.com orca - 0
 out="$(cd "$REPO" && PATH="$STUB" ./bin/host/install.sh "$DEST" 2>&1)"
 if grep -qF 'no Claude login found' <<<"$out"; then bad "a managed account should not warn: $out"; else good; fi
 

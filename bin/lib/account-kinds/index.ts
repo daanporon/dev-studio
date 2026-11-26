@@ -38,6 +38,9 @@ export type AccountKind = {
   loginId(folder: string, system: boolean, env: Env): string | null;
   /** The login command, null until its unit lands it (Claude U5, Codex U11, Muse U12). */
   login: KindLogin | null;
+  /** The agent's own launch line, as Orca types it for a worker: an Orca tab on a non-system account runs it
+   *  with the kind's env (KTD17). Absent for Claude, whose line is bin/loop/drivers/claude-launch.ts. */
+  command?(model: string, effort: string): string[];
   /** Whether usage figures and free resets can be read for an account. */
   usage: boolean;
   resets: boolean;

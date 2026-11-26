@@ -221,7 +221,6 @@ case "$sub" in
   "terminal create")  [ -z "${FAKE_TC_FAIL:-}" ] || { echo '{"ok":false}'; echo "orca: worktree is not ready" >&2; exit 1; }
                       echo '{"result":{"terminal":{"handle":"tab_new"}}}' ;;
   "terminal wait")    [ -z "${FAKE_TUI_FAIL:-}" ] || { echo "orca: wait timed out" >&2; exit 1; }; echo '{"result":{"ok":true}}' ;;
-  "account list")     printf '%s' "${ORCA_ACCOUNTS:-$EMPTY_RESULT}" ;;
   "status --json")     printf '%s' "${ORCA_STATUS:-$STATUS_OK}" ;;
   "terminal close")
     if [ -n "${ORCA_PAUSE_TABS_FILE:-}" ]; then
@@ -771,7 +770,7 @@ chmod +x "$TMP/muse"; export MUSE_LOG="$TMP/muse.log"
 # $CODEX_LOG.pid).
 cat > "$TMP/codex" <<'FAKE'
 #!/usr/bin/env bash
-printf 'argv %s\ncwd %s\n' "$*" "$PWD" >> "$CODEX_LOG"
+printf 'argv %s\ncwd %s\nhome %s\n' "$*" "$PWD" "${CODEX_HOME:-}" >> "$CODEX_LOG"
 echo "WARNING: bubblewrap not found" >&2
 mode="${FAKE_CODEX_MODE:-exit}"
 [ "$mode" = exit ] && exit 1
@@ -1022,6 +1021,22 @@ eq  "account-usage codex: a failure after a good read keeps the figures, noted s
 eq  "account-resets codex: a failure after a good read keeps the last resets" "$(cxjq '[.state, .count]')" '["reported",2]'
 touch -d '2 minutes ago' "$DS_USAGE_CACHE/codex-default.tsv"; : > "$CODEX_LOG"; "$ADAPTER" account-usage >/dev/null 2>&1
 has "account-usage codex: a stale row is retried after DS_USAGE_FAIL_TTL_S" "$(cat "$CODEX_LOG")" "argv app-server"
+# Each account is read from its own folder (issue #125 U2): a dev-studio Claude account's token, and a second
+# Codex account's app-server under its CODEX_HOME with its own cache file. No orca CLI is needed.
+mkdir -p "$TMP/ds-claude" "$TMP/ds-codex" "$TMP/nocli"
+cp "$DS_CLAUDE_HOME/.credentials.json" "$TMP/ds-claude/"; rm "$DS_CLAUDE_HOME/.credentials.json"
+bun "$ROOT/tests/lib/accounts-table.ts" "$DS_STATE_ROOT" \
+  claude dsA "A" ds "$TMP/ds-claude" 0 codex default "codex" system - 1 codex work "Work" ds "$TMP/ds-codex" 0
+: > "$ORCA_LOG"; : > "$CODEX_LOG"; rm -rf "$DS_USAGE_CACHE"
+got="$(DS_ORCA_CLI_BIN_DIR="$TMP/nocli" "$ADAPTER" account-usage 2>/dev/null || true)"
+eq  "account-usage: a ds Claude account's own credentials file" "$(printf '%s\n' "$got" | awk -F'\t' '$2=="dsA"{print $3}')" "72"
+eq  "account-usage: one row per Codex account" "$(printf '%s\n' "$got" | awk -F'\t' '$1=="codex"{printf "%s ", $2}')" "default work "
+has "account-usage codex: the second account's app-server runs under its folder" "$(cat "$CODEX_LOG")" "home $TMP/ds-codex"
+eq  "account-usage codex: each account has its own cache files" "$(cd "$DS_USAGE_CACHE" && printf '%s ' codex-*)" "codex-default.resets.json codex-default.tsv codex-work.resets.json codex-work.tsv "
+eq  "account-usage: Orca is not asked" "$(cat "$ORCA_LOG")" ""
+eq  "account-resets: a row for each Codex account" "$(DS_ORCA_CLI_BIN_DIR="$TMP/nocli" "$ADAPTER" account-resets 2>/dev/null | awk -F'\t' '$1=="codex"{printf "%s ", $2}')" "default work "
+cp "$TMP/ds-claude/.credentials.json" "$DS_CLAUDE_HOME/"
+bun "$ROOT/tests/lib/accounts-table.ts" "$DS_STATE_ROOT"
 unset FAKE_CODEX_MODE FAKE_CODEX_OUT FAKE_USAGE_BODY
 rm -rf "$DS_USAGE_CACHE"
 
@@ -1363,19 +1378,26 @@ unset ORCA_SCREEN
 # is reused until its state or output changes).
 eq  "limited: a recently idle worker's screen is read once (credits count at once)"    "$(grep -c 'terminal read' "$ORCA_LOG" || true)" "1"
 
-# Claude accounts: every host profile Orca manages plus the system login; the default (what a plain
-# launch runs on: the selected host account, else system) comes first.
-accts() { printf '{"ok":true,"result":{"claude":{"accounts":[{"id":"acctB","managedAuthRuntime":"host","organizationName":"B org"},{"id":"acctW","managedAuthRuntime":"wsl"}],"activeAccountId":null,"activeAccountIdsByRuntime":{"host":%s},"systemDefaultEmail":"a@x"}}}' "$1"; }
-export ORCA_ACCOUNTS; ORCA_ACCOUNTS="$(accts null)"
-al="$("$ADAPTER" account-list 2>/dev/null || true)"
-eq  "account-list: system login first, then each host profile" "$(printf '%s\n' "$al" | awk -F'\t' '$1=="claude"{printf "%s=%s;", $2,$3}')" "system=system login (a@x);acctB=B org;"
+# Claude accounts come from loop.db's accounts table (never `orca account list`): the default first.
+# seed_accounts [acctB]: the system login and Orca profile acctB (NULL folder), that one marked default.
+seed_accounts() {
+  bun "$ROOT/tests/lib/accounts-table.ts" "$DS_STATE_ROOT" \
+    claude system "system login (a@x)" system - 0 claude acctB "B org" orca - "$([ "${1:-}" = acctB ] && echo 1 || echo 0)"
+}
+export DS_ORCA_DATA="$TMP/orcadata"
+mkdir -p "$DS_ORCA_DATA/claude-profiles/acctB/home"
+seed_accounts
+: > "$ORCA_LOG"; al="$("$ADAPTER" account-list 2>/dev/null || true)"
+eq  "account-list: system login first, then the table's accounts" "$(printf '%s\n' "$al" | awk -F'\t' '$1=="claude"{printf "%s=%s;", $2,$3}')" "system=system login (a@x);acctB=B org;"
 eq  "account-list: still three TSV columns"       "$(printf '%s\n' "$al" | awk -F'\t' 'NF!=3' | wc -l | tr -d ' ')" "0"
-eq  "account-list: a selected host account is the default login" "$(ORCA_ACCOUNTS="$(accts '"acctB"')" "$ADAPTER" account-list | awk -F'\t' '$1=="claude"{printf "%s ", $2}')" "acctB system "
+eq  "account-list: Orca is not asked"             "$(cat "$ORCA_LOG")" ""
+seed_accounts acctB
+eq  "account-list: the table's default comes first" "$("$ADAPTER" account-list | awk -F'\t' '$1=="claude"{printf "%s ", $2}')" "acctB system "
+seed_accounts
 
 # start ops take a trailing `account` and `-` for a skipped optional positional.
-export DS_ORCA_DATA="$TMP/orcadata" DS_CLAUDE_SYSTEM_JSON_DIR="$TMP/sysjson"
+export DS_CLAUDE_SYSTEM_JSON_DIR="$TMP/sysjson"
 mkdir -p "$DS_CLAUDE_SYSTEM_JSON_DIR"
-mkdir -p "$DS_ORCA_DATA/claude-profiles/acctB/home"
 BHOME="$DS_ORCA_DATA/claude-profiles/acctB/home"
 # claude-config-dir: the CLAUDE_CONFIG_DIR a claude on that account runs with (install --check probes
 # each account's plugin registry under it); `system` = empty (run with it unset).
@@ -1434,23 +1456,59 @@ has "lead-worker-start on account B: keeps the task" "$(cat "$ORCA_LOG")" "worke
 : > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec claude opus - - acctB >/dev/null 2>&1 || true
 has "worker-start (restart) on account B"        "$(cat "$ORCA_LOG")" "--command CLAUDE_CONFIG_DIR=$BHOME $SHIMP claude --dangerously-skip-permissions --model opus"
 hasnt "worker-start: '-' host/effort skipped"  "$(cat "$ORCA_LOG")" "--on"
+# An account `ds account add` made: the tab's CLAUDE_CONFIG_DIR is its row's folder.
+mkdir -p "$TMP/ds-accounts/claude/acctD"
+bun "$ROOT/tests/lib/accounts-table.ts" "$DS_STATE_ROOT" claude system "system login (a@x)" system - 1 claude acctD "D" ds "$TMP/ds-accounts/claude/acctD" 0
+: > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec claude opus - - acctD >/dev/null 2>&1 || true
+has "worker-start on a ds row: its folder"      "$(cat "$ORCA_LOG")" "--title claude@acctD --command CLAUDE_CONFIG_DIR=$TMP/ds-accounts/claude/acctD $SHIMP claude --dangerously-skip-permissions --model opus"
+seed_accounts
 : > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec claude opus - - system >/dev/null 2>&1 || true
 hasnt "the system login is a plain launch while it is the default" "$(cat "$ORCA_LOG")" "CLAUDE_CONFIG_DIR"
-: > "$ORCA_LOG"; ORCA_ACCOUNTS="$(accts '"acctB"')" "$ADAPTER" worker-start run_1 wtX spec claude opus - - system >/dev/null 2>&1 || true
+seed_accounts acctB
+: > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec claude opus - - system >/dev/null 2>&1 || true
 SYSCMD="env -u CLAUDE_CONFIG_DIR $SHIMP claude --dangerously-skip-permissions"
 has   "system with B selected: launched with no config dir" "$(cat "$ORCA_LOG")" "--command $SYSCMD --model opus"
 hasnt "system with B selected: no CLAUDE_CONFIG_DIR=" "$(cat "$ORCA_LOG")" "CLAUDE_CONFIG_DIR="
 printf '{"hasCompletedOnboarding":true}\n' > "$DS_CLAUDE_SYSTEM_JSON_DIR/.claude.json"; printf '{"theme":"b"}\n' > "$BHOME/.claude.json"
-: > "$ORCA_LOG"; ORCA_ACCOUNTS="$(accts '"acctB"')" "$ADAPTER" worker-start run_1 "id:repo1::/w/sys" spec claude opus - - system >/dev/null 2>&1 || true
+: > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 "id:repo1::/w/sys" spec claude opus - - system >/dev/null 2>&1 || true
 eq  "system: worktree trusted in the system .claude.json" "$(jq -r '.projects["/w/sys"].hasTrustDialogAccepted' "$DS_CLAUDE_SYSTEM_JSON_DIR/.claude.json")" "true"
 eq  "system: B's .claude.json untouched" "$(cat "$BHOME/.claude.json")" '{"theme":"b"}'
-: > "$ORCA_LOG"; ORCA_ACCOUNTS="$(accts '"acctB"')" "$ADAPTER" worker-resume run_1 wtX spec opus system claude >/dev/null 2>&1 || true
+: > "$ORCA_LOG"; "$ADAPTER" worker-resume run_1 wtX spec opus system claude >/dev/null 2>&1 || true
 has "system with B selected: resume keeps no config dir" "$(cat "$ORCA_LOG")" "$SYSCMD --continue --model opus"
-: > "$ORCA_LOG"; ORCA_ACCOUNTS="$(accts '"acctB"')" "$ADAPTER" worker-start run_1 wtX spec claude opus - - system 200000 >/dev/null 2>&1 || true
+: > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec claude opus - - system 200000 >/dev/null 2>&1 || true
 has "system with B selected: window on the same launch" "$(cat "$ORCA_LOG")" "$SYSCMD --model opus --settings"
 rm -f "$DS_CLAUDE_SYSTEM_JSON_DIR/.claude.json" "$BHOME/.claude.json"
+seed_accounts
 : > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec muse muse-spark-1.3 - - default >/dev/null 2>&1 || true
 has "muse starts by Orca's native --agent muse"  "$(cat "$ORCA_LOG")" "--agent muse --model muse-spark-1.3"
+# KTD17: a Codex account other than the system login is a tab with its folder env, then supervised.
+CXH="$TMP/codex-work"; mkdir -p "$CXH"
+seed_codex() { bun "$ROOT/tests/lib/accounts-table.ts" "$DS_STATE_ROOT" claude system "system login" system - 0 \
+  claude acctB "B org" orca - 0 codex default codex system - 0 codex work Work ds "$CXH" "${1:-0}" codex gone Gone ds "$TMP/no-such" 0; }
+seed_codex
+CXLINE="env CODEX_HOME=$CXH codex -c disable_paste_burst=true --dangerously-bypass-approvals-and-sandbox --model gpt-x"
+: > "$ORCA_LOG"; rc=0; "$ADAPTER" worker-start run_1 "repo1::/w/cx" spec codex gpt-x - high work >/dev/null 2>&1 || rc=$?
+eq  "codex on a ds account: ok" "$rc" "0"
+has "codex on a ds account: its folder env on Codex's own line" "$(cat "$ORCA_LOG")" "--title codex@work --command $CXLINE -c model_reasoning_effort=high"
+has "codex on a ds account: that tab is supervised" "$(cat "$ORCA_LOG")" "worker-start --worktree id:repo1::/w/cx --spec spec --run run_1 --terminal tab_new"
+hasnt "codex on a ds account: no --agent launch" "$(cat "$ORCA_LOG")" "--agent"
+"$ADAPTER" worker-start run_1 "repo1::/w/cx" spec codex gpt-x - - work >/dev/null 2>&1 || true
+eq  "codex on a ds account: the worktree is trusted there, once" "$(grep -cxF '[projects."/w/cx"]' "$CXH/config.toml"):$(grep -c 'trust_level = "trusted"' "$CXH/config.toml")" "1:1"
+: > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec codex gpt-x - - default >/dev/null 2>&1 || true
+has "codex on its system login: Orca's own --agent launch" "$(cat "$ORCA_LOG")" "--agent codex --model gpt-x"
+hasnt "codex on its system login: no tab of ours" "$(cat "$ORCA_LOG")" "terminal create"
+seed_codex 1
+: > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec codex gpt-x >/dev/null 2>&1 || true
+has "codex with no account: the table's default" "$(cat "$ORCA_LOG")" "--command $CXLINE"
+: > "$ORCA_LOG"; rc=0; err="$("$ADAPTER" worker-start run_1 wtX spec codex gpt-x laptop - work 2>&1 >/dev/null)" || rc=$?
+eq  "codex on a ds account with --on: refused, nothing started" "$([ "$rc" != 0 ] && echo refused):$(grep -c 'terminal create\|worker-start' "$ORCA_LOG" || true)" "refused:0"
+: > "$ORCA_LOG"; rc=0; err="$("$ADAPTER" worker-start run_1 wtX spec codex gpt-x - - gone 2>&1 >/dev/null)" || rc=$?
+has "codex account with no folder: says which" "$err" "no codex home for account gone ($TMP/no-such)"
+hasnt "codex account with no folder: no tab" "$(cat "$ORCA_LOG")" "terminal create"
+: > "$ORCA_LOG"; rc=0; err="$("$ADAPTER" worker-start run_1 wtX spec muse muse-spark-1.3 - - other 2>&1 >/dev/null)" || rc=$?
+has "muse on another account: refused, it has no folder variable" "$err" "muse has no folder variable"
+hasnt "muse on another account: nothing started" "$(cat "$ORCA_LOG")" "worker-start"
+seed_accounts
 # Failures stay loud and leave no tab behind.
 : > "$ORCA_LOG"; rc=0; "$ADAPTER" worker-start run_1 wtX spec claude opus - - acctZ >/dev/null 2>&1 || rc=$?
 eq  "an account with no Claude home -> exit 1"  "$rc:$(grep -c 'worker-start' "$ORCA_LOG" || true)" "1:0"
@@ -1524,9 +1582,11 @@ hasnt "window on the default login: no CLAUDE_CONFIG_DIR" "$(cat "$ORCA_LOG")" "
 hasnt "window on the default login: no --agent launch" "$(cat "$ORCA_LOG")" "--agent"
 : > "$ORCA_LOG"; "$ADAPTER" role-start run_1 repo1 - spec claude opus nm - high acctB 200000 >/dev/null 2>&1 || true
 has "window on account B: B's config dir, effort, then the window" "$(cat "$ORCA_LOG")" "--command CLAUDE_CONFIG_DIR=$BHOME $SHIMP claude --dangerously-skip-permissions --model opus --effort high $W"
-: > "$ORCA_LOG"; ORCA_ACCOUNTS="$(accts '"acctB"')" "$ADAPTER" lead-worker-start run_1 task_1 wtL claude sonnet - - - 200000 >/dev/null 2>&1 || true
+seed_accounts acctB
+: > "$ORCA_LOG"; "$ADAPTER" lead-worker-start run_1 task_1 wtL claude sonnet - - - 200000 >/dev/null 2>&1 || true
 has "window when a managed account is the default: its config dir" "$(cat "$ORCA_LOG")" "--command CLAUDE_CONFIG_DIR=$BHOME $SHIMP claude --dangerously-skip-permissions --model sonnet $W"
 has "window on lead-worker-start: keeps the task" "$(cat "$ORCA_LOG")" "worker-start --worktree id:wtL --task task_1 --run run_1 --keep-open --terminal tab_new"
+seed_accounts
 : > "$ORCA_LOG"; "$ADAPTER" lead-start run_1 task_1 repo1 claude opus nm - - - - 150000 >/dev/null 2>&1 || true
 has "lead-start carries the window"               "$(cat "$ORCA_LOG")" "CLAUDE_CODE_AUTO_COMPACT_WINDOW\\\":\\\"150000"
 : > "$ORCA_LOG"; "$ADAPTER" worker-start run_1 wtX spec claude opus - - - 200000 >/dev/null 2>&1 || true
@@ -1579,9 +1639,11 @@ hasnt "studio-start: no fresh-start guard (no terminal list)"  "$(cat "$ORCA_LOG
 hasnt "studio-start: default login: no CLAUDE_CONFIG_DIR" "$(cat "$ORCA_LOG")" "CLAUDE_CONFIG_DIR"
 : > "$ORCA_LOG"; "$ADAPTER" studio-start wtS acctB opus - 200000 "$P" >/dev/null 2>&1 || true
 has "studio-start --account B: B's config dir, no effort" "$(cat "$ORCA_LOG")" "--command CLAUDE_CONFIG_DIR=$BHOME $SHIMP claude --dangerously-skip-permissions --model opus $W"
-: > "$ORCA_LOG"; ORCA_ACCOUNTS="$(accts '"acctB"')" "$ADAPTER" studio-start wtS - - - - "$P" >/dev/null 2>&1 || true
+seed_accounts acctB
+: > "$ORCA_LOG"; "$ADAPTER" studio-start wtS - - - - "$P" >/dev/null 2>&1 || true
 has "studio-start: a managed default login: its config dir" "$(cat "$ORCA_LOG")" "--command CLAUDE_CONFIG_DIR=$BHOME $SHIMP claude --dangerously-skip-permissions"
 hasnt "studio-start: no model, no window: neither flag" "$(cat "$ORCA_LOG")" "--model"
+seed_accounts
 : > "$ORCA_LOG"; rc=0; out="$(FAKE_TUI_FAIL=1 "$ADAPTER" studio-start wtS acctB opus - 200000 "$P" 2>/dev/null)" || rc=$?
 eq  "studio-start: claude never came up -> exit 1, no handle" "$rc:$out" "1:"
 has "studio-start: claude never came up -> its tab is closed" "$(cat "$ORCA_LOG")" "terminal close --terminal tab_new"
@@ -1623,7 +1685,7 @@ for c in "role-start run_1 repo1 - spec claude opus nm - - system - builder" \
   : > "$ORCA_LOG"; read -ra argv <<< "$c"; "$ADAPTER" "${argv[@]}" >/dev/null 2>&1 || true
   eq  "not standing: $c starts once, without --keep-open" "$(ws_line | wc -l | tr -d ' '):$(ws_line | grep -c -- --keep-open || true)" "1:0"
 done
-unset ORCA_ACCOUNTS DS_CLAUDE_SYSTEM_JSON_DIR
+unset DS_CLAUDE_SYSTEM_JSON_DIR
 
 # run-dispatches (U64): each worktree's newest dispatch in the Run with its status, for liveness to see a
 # standing role's dispatch settle. Scoped by --run (an unscoped worker-list is the caller's own Run).
@@ -1837,7 +1899,7 @@ has "worker-done with refused send names the task" "$(cat "$TMP/out")" "task_sel
 # --- one worktree per name under a crash (U38) --------------------------------
 # The killed loop's adapter child (the orphan) and the restarted loop's replay run at once.
 # Every case gets its own world and state root, so no lock or mark carries over.
-export DS_ORCA_DATA="$TMP/orcadata" DS_CLAUDE_SYSTEM_JSON_DIR="$TMP/sysjson" ORCA_ACCOUNTS; ORCA_ACCOUNTS="$(accts null)"
+export DS_ORCA_DATA="$TMP/orcadata" DS_CLAUDE_SYSTEM_JSON_DIR="$TMP/sysjson"
 mkdir -p "$DS_ORCA_DATA/claude-profiles/acctB/home" "$DS_CLAUDE_SYSTEM_JSON_DIR"
 fresh_world() {
   W="$(mktemp -d "$TMP/world.XXXXXX")"; mkdir -p "$W/wts" "$W/req"; : > "$W/workers"; : > "$W/tabs"
@@ -2101,7 +2163,7 @@ eq "an abandoned empty lock: all have its id"   "$(cat "$W"/o? | sed 's/wt:nm/x/
 eq "an abandoned empty lock: no lock left"      "$(locks)" "0"
 
 # --- every account's projects is a link to the system login's (U39) -------------
-unset FAKE_WT_DIR ORCA_ACCOUNTS
+unset FAKE_WT_DIR
 lp_world() {
   LP="$(mktemp -d "$TMP/lp.XXXXXX")"
   export DS_ORCA_DATA="$LP/orca" DS_CLAUDE_HOME="$LP/sys" DS_STATE_ROOT="$LP/state"
@@ -2195,7 +2257,7 @@ lp_world; mkdir -p "$PP/-w-a"; printf s > "$PP/-w-a/s.jsonl"
 "$ADAPTER" worker-resume run_1 "id:repo1::/w/lp" spec opus >/dev/null 2>&1 || true
 eq  "a resume links too"                        "$(readlink "$PP")" "$SYSP"
 lp_world; mkdir "$DS_ORCA_DATA/claude-profiles/acctD"; mkdir -p "$DS_ORCA_DATA/claude-profiles/acctE/home"
-ORCA_ACCOUNTS="$(accts null)" "$ADAPTER" worker-start run_1 "id:repo1::/w/lp" spec claude opus - - acctC >/dev/null 2>&1 || true
+"$ADAPTER" worker-start run_1 "id:repo1::/w/lp" spec claude opus - - acctC >/dev/null 2>&1 || true
 eq  "every account is linked, not only the one starting" "$(readlink "$DS_ORCA_DATA/claude-profiles/acctE/home/projects")" "$SYSP"
 eq  "a profile with no home gets none"          "$(find "$DS_ORCA_DATA/claude-profiles/acctD" -mindepth 1 | wc -l | tr -d ' ')" "0"
 
