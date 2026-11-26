@@ -145,7 +145,7 @@ const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.que
     if (JSON.stringify(kids.map((k) => k.replace("pri chat-send", "chat-send pri"))) !== JSON.stringify(okKids)) bad.push("card buttons " + kids);
     const r = card.getBoundingClientRect(); if (r.height > 200) bad.push("card is " + Math.round(r.height) + " px tall");
     if (parseFloat(getComputedStyle(card).borderTopLeftRadius) < 16) bad.push("card radius");
-    for (const b of card.querySelectorAll("button:not(.chat-scrtog)")) { const x = b.getBoundingClientRect(); if (x.width < 32 || x.height < 32 || x.width > 34 || (b.className.indexOf("chat-attach") < 0 && x.width !== x.height)) bad.push("round button " + b.className + " " + Math.round(x.width) + "x" + Math.round(x.height)); }
+    for (const b of card.querySelectorAll("button")) { const x = b.getBoundingClientRect(); if (x.width < 32 || x.height < 32 || x.width > 34 || (b.className.indexOf("chat-attach") < 0 && x.width !== x.height)) bad.push("round button " + b.className + " " + Math.round(x.width) + "x" + Math.round(x.height)); }
   }
   const keys = q(".chat-keys"), scr = q(".chat-row .chat-scrtog");
   if (want === "screen") { const n = keys ? keys.querySelectorAll("button").length : 0; if (n !== 8) bad.push("Screen shows " + n + " keys, not Esc ↑ ↓ ⏎ ⇥ 1 2 3"); if (keys && card && keys.getBoundingClientRect().bottom > card.getBoundingClientRect().top + 1) bad.push("keys not above the card"); }
