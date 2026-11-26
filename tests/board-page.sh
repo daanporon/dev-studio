@@ -801,5 +801,16 @@ eq "U6 page: the PR number stops the click, so it opens the PR and not the windo
 eq "U6 page: the Merged column renders FlowCard, not its own div" "$(grep -cF 'FlowCard({ card: { ...m, stage: "merged", merged: true }' "$BP")$(grep -c 'class="fcard merged"' "$BP")" "10"
 eq "U6 page: a card whose unit is not on the board opens FlowCardDetails (squad, stage, PR, merged ago, took, gone line, Answer)" "$(grep -cF ': html`<${FlowCardDetails} card=${flowUnit.card}' "$BP")$(sed -n '/^function FlowCardDetails(/,/^}/p' "$BP" | grep -c 'fcd-squad\|fcd-stage\|fcd-pr\|fcd-merged\|fcd-took\|fcd-gone\|fcd-answer')" "16"
 
+# issue #125 U9: accounts live in Settings' Accounts tab; the strip's Manage button sits above the table and only opens it.
+eq "U9 page: the Accounts tab mounts its pane, with the shared-by-all-projects note" "$(grep -cF '["accounts", "Accounts"]]' "$W")$(grep -cF 'tab === "accounts" && html`<${AccountsPane}' "$W")$(grep -cF "Shared by all projects on this host — not part of this project's Export/Import." "$W")" "111"
+eq "U9 page: #settings/<tab> opens Settings on that tab" "$(grep -cF '/^#settings(?:\/([a-z]+))?$/.exec(location.hash)' "$W")$(grep -cF 'at=${settingsAt}' "$W")" "11"
+acc_summary=$(grep -F '<summary>Accounts<small>' "$W")
+eq "U9 page: the summary line has no Manage button" "$(printf '%s' "$acc_summary" | grep -c 'amanage\|<button')" "0"
+eq "U9 page: Manage sits in the control row above the table and only opens the tab" "$(awk '/<summary>Accounts<small>/{s=NR} /class="btn sm amanage"/{m=NR; l=$0} /class="acct-tbl tbl"/{t=NR} END{print (s < m && m < t && l ~ /sqctl/ && l ~ /location.hash = "#settings\/accounts"/) ? "above" : "no"}' "$W")" "above"
+eq "U9 page: no accounts pop-up remains" "$(grep -c 'acct-panel\|AccountsPanel\|setManage' "$W")" "0"
+paste_fn=$(sed -n '/^function PasteCode(/,/^}/p' "$W")
+eq "U9 page: the paste box has autocomplete and spellcheck off, is emptied before it is sent, and no state holds the code" "$(printf '%s' "$paste_fn" | grep -c 'autocomplete="off".*autocapitalize="off" spellcheck="false"')$(printf '%s' "$paste_fn" | awk '/box.current.value = ""/{c=NR} /await post\(/{p=NR} END{print (c && c < p) ? 1 : 0}')$(printf '%s' "$paste_fn" | grep -c 'setCode\|console\.')" "110"
+eq "U9 page: the picker's agents come from the board data, never named in the page" "$(sed -n '/^function AddAccountDialog(/,/^}/p' "$W" | grep -c "claude\|codex\|muse")" "0"
+
 echo "board-page: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

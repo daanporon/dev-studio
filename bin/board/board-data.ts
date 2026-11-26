@@ -20,7 +20,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { familyOf, familyRel, fileMtime, isFile, pageFiles, savedCopy, underRoot } from "./saved-pages.ts";
 import { ROOT } from "../lib/shared.ts";
 import { accountFolder } from "../lib/account-dirs.ts";
-import { findKind } from "../lib/account-kinds/index.ts";
+import { findKind, KINDS } from "../lib/account-kinds/index.ts";
+import { moveProblem, ROTATION } from "../loop/capacity/accounts.ts";
 import { ticketLink, unitLinks } from "./unit-links.ts";
 import { archiveHint, otherBoards, removalRecordCmd } from "../loop/squad/project-removal.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
@@ -1070,6 +1071,51 @@ function resetsPending(db: Db): Map<string, ResetPending> {
   return out;
 }
 
+// issue #125 U9: the kinds the Add dialog offers (a login command and more than one login), Claude first.
+const addKinds = () => KINDS.filter((k) => k.multi && k.login).map((k) => ({ agent: k.agent }));
+
+// Every project's open `account-add` requests, and the ones that ended a short while ago (a failed one longer),
+// as their staged `result` says (fulfil/account-add.ts). The list is the host's. A pasted code is never in it.
+const ADD_FAILED_S = 3600;
+const ADD_DONE_S = 300;
+function accountAdds(db: Db, now = NOW()) {
+  let rows: any[] = [];
+  try { rows = db.all("SELECT id, project, payload, result, done_at FROM requests WHERE kind = 'account-add' AND (done_at IS NULL OR done_at > ?) ORDER BY id DESC", now - ADD_FAILED_S); } catch { return []; }
+  const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+  return rows.flatMap((q) => {
+    const p = parse(q.payload) ?? {}, res = parse(q.result) ?? {};
+    const open = q.done_at == null;
+    const state = open ? String(res.state ?? "queued") : res.ok === true ? "done" : "failed";
+    if (state === "done" && now - Number(q.done_at) > ADD_DONE_S) return [];
+    let queued = false;
+    try { queued = open && !res.state && !!q.project && paused(db.s, { project: String(q.project) }); } catch { /* unknown pause state: not queued */ }
+    return [{
+      id: Number(q.id), agent: String(p.agent ?? ""), name: String(p.name ?? ""), project: text(q.project), state, queued,
+      flow: findKind(String(p.agent))?.login?.flow ?? null,
+      url: open ? text(res.url) : null, device_code: open ? text(res.device_code) : null,
+      why: open ? text(res.why) : null, line: open ? text(res.line) : null, text: text(res.text), error: text(res.error),
+    }];
+  });
+}
+
+// Whether the board offers `ds account move` for a row (fulfil/account-move.ts refuses the rest): `force` is sent
+// while Orca still lists it, and `pending` is the open move's request id.
+function moveOffer(db: Db, agent: string, account: string, orcaListed: boolean, pending: Map<string, number>) {
+  try {
+    const id = pending.get(`${agent}/${account}`) ?? null;
+    if (id == null && moveProblem(db.s, agent, account, true) != null) return null;
+    return { force: orcaListed, warning: ROTATION, pending: id };
+  } catch { return null; } // an older loop.db: no move
+}
+function movesPending(db: Db): Map<string, number> {
+  try {
+    return new Map(db.all("SELECT id, payload FROM requests WHERE kind = 'account-move' AND done_at IS NULL ORDER BY id").map((r) => {
+      const p = parse(r.payload) ?? {};
+      return [`${p.agent}/${p.account}`, Number(r.id)] as [string, number];
+    }));
+  } catch { return new Map(); }
+}
+
 // issue #125 U7: the strip's rows are logins. The `accounts` table says what is listed (a removed row goes),
 // observed_accounts has its usage, and observed_account_folders every login folder the refresh scanned.
 const whereTag = (r: any): "system" | "Orca + ds" | "ds only" | null =>
@@ -1170,7 +1216,7 @@ function accounts(db: Db, now = NOW()) {
   // claude-login-ended U4: a live login hold (login.ts) reads `login ended · run /login`, no percentages.
   const logins = new Map(liveLoginHolds(db.s, now).map((h) => [`${h.agent}/${h.account}`, h]));
   const multi = new Set(rows.map((c) => c.agent)).size > 1;
-  const lastReset = resetsUsed(db, now), pending = resetsPending(db);
+  const lastReset = resetsUsed(db, now), pending = resetsPending(db), moves = movesPending(db);
   const dash = (v: unknown) => (typeof v === "string" && v && v !== "-" ? v : null);
   // The agent's default: the marked row, else its system login, else its first row.
   const defaults = new Map<string, string>();
@@ -1199,6 +1245,7 @@ function accounts(db: Db, now = NOW()) {
       tag: place.tag, folder: place.folder, source: place.source, login_short: place.login?.slice(0, 8) ?? null, dup_folders: place.dup_folders,
       folder_missing: place.missing, default: defaults.get(agent) === account,
       is_default: place.is_default, orca_listed: place.orca_listed, login_id: place.login, seq: place.seq,
+      move: place.source === "orca" || moves.has(`${agent}/${account}`) ? moveOffer(db, agent, account, place.orca_listed, moves) : null,
       skills, text: `${text}${resets.state === "reported" ? ` · free resets ${resets.count}` : ""}${skills ? ` · skills ${skills}` : ""}` };
   });
   return { accounts: out as any[], folderOnly: places.folderOnly };
@@ -2216,7 +2263,7 @@ function fromDb(db: Db, label: string, topic: string, liveRoot = false) {
   accountUsers(db, accts, label, squads);
   stripRows(accts);
   const labels = label ? [label] : db.all("SELECT label FROM projects UNION SELECT project AS label FROM squads ORDER BY label").map((r) => String(r.label)).filter((l) => !(liveRoot && !label && isTestProject(l)));
-  return { ...board(db, label, labels, squads, accts, live), account_folders: folderOnly, project_controls: !topic };
+  return { ...board(db, label, labels, squads, accts, live), account_folders: folderOnly, account_adds: accountAdds(db), account_kinds: addKinds(), project_controls: !topic };
 }
 
 // The Studio's morning briefs (documents rows of <label>/briefings/<date>.md), newest first; only the
