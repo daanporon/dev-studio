@@ -77,6 +77,10 @@
 //                 with the fingerprint the operator saw (archive-leftovers U4)
 //   /api/override {project, topic, wt, scope?(member|squad|role|project), role?, model?, effort?, plan?, account? | clear:true}  `override`: this member's
 //                 model/account "until done", or back to auto
+//   GET /api/remove-project?project=  what blocks removing the project (removalBlockers), where the archive
+//                 goes and the other running boards; POST /api/remove-project {project, confirm}  `remove-project`
+//                 (project NULL, by board) when `confirm` is the label (409: it is not, a removal is already
+//                 open, or something blocks it). A board of one project takes only its own, a topic board none (403)
 // Everything else is 404, so no state file is ever reachable.
 import { createHash } from "node:crypto";
 import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -100,6 +104,7 @@ import { dbPath, open, openReadOnly, stateRoot, type Row, type Store } from "../
 import { checkExportText, exportTransfer, IMPORT_FILES, planImport, readGet, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
 import { canRestartRole } from "../loop/pause/restart-roles.ts";
 import { paused, type PauseTarget, type Prerequisite } from "../loop/pause/pause.ts";
+import { archiveHint, blockedText, invalidLabel, openRemoval, otherBoards, removalBlockers, removalRecordCmd, validLabel } from "../loop/squad/project-removal.ts";
 
 const CACHE_MS = 2000;
 const MAX_BODY = 128 * 1024; // a 32 KiB brief doubles at worst under JSON escaping
@@ -1290,6 +1295,41 @@ async function lavish(key: string) {
   return r.status === 202 ? waitPage(`request ${id}`) : r;
 }
 
+// remove-project U4: the board's half of `ds remove-project`. The refusal for a label this board may not
+// remove, or null.
+function removalRefusal(project: unknown): Response | null {
+  if (typeof project !== "string" || !validLabel(project)) return json(400, { error: invalidLabel(String(project ?? "")).text });
+  return scope.topic || (scope.project && scope.project !== project) ? json(403, { error: "target is outside this board's scope" }) : null;
+}
+function removalGet(url: URL): Response {
+  const project = url.searchParams.get("project") ?? "";
+  const refused = removalRefusal(project);
+  if (refused) return refused;
+  if (!existsSync(dbPath())) return json(503, NO_DB);
+  let s: Store | null = null;
+  try {
+    s = openReadOnly();
+    return json(200, { project, blockers: removalBlockers(s, project), removing: openRemoval(s, project),
+      archive_hint: archiveHint(s.root, project), record_cmd: removalRecordCmd(s.root, project), boards: otherBoards(s, project) });
+  } catch (e) { return json(503, { error: `loop.db: ${e}` }); }
+  finally { s?.close(); }
+}
+async function removalPost(req: Request): Promise<Response> {
+  const p = await readPost(req);
+  if ("r" in p) return p.r;
+  const { project, confirm } = p.b;
+  const refused = removalRefusal(project);
+  if (refused) return refused;
+  if (confirm !== project) return json(409, { error: `type the project's name, ${project}, to confirm` });
+  return write((s) => {
+    const open = openRemoval(s, project);
+    if (open !== null) no(409, `already removing ${project} (request ${open})`);
+    const blocked = blockedText(s, project);
+    if (blocked) no(409, blocked);
+    return s.requestAny("remove-project", { label: project, by: "board" }, { by: "board" }).row;
+  });
+}
+
 async function get(req: Request, url: URL) {
   if (url.pathname === "/api/stream") return stream(req, url);
   const path = url.pathname;
@@ -1299,6 +1339,7 @@ async function get(req: Request, url: URL) {
   if (path === "/api/settings-export") return settingsExportGet(url);
   if (path === "/api/settings-import") return settingsImportGet(url);
   if (path === "/api/briefing") return briefingGet(url);
+  if (path === "/api/remove-project") return removalGet(url);
   if (path === "/api/events") return eventsGet(url);
   if (path === "/api/events/lists") return eventsListsGet(url);
   if (path === "/api/chat") return chatGet(url);
@@ -1340,6 +1381,7 @@ async function handle(req: Request) {
   if (path === "/api/skills" && req.method === "POST") return skillsPost(req);
   if (path === "/api/settings-import" && req.method === "POST") return settingsImportPost(req);
   if (path === "/api/chat" && req.method === "POST") return chatPost(req);
+  if (path === "/api/remove-project" && req.method === "POST") return removalPost(req);
   if (path === "/api/feedback" && req.method === "POST") return feedbackPost(req);
   if (path === "/api/keys" && req.method === "POST") return keysPost(req);
   if (path === "/api/chat-cancel" && req.method === "POST") return chatControl(req, "chat-cancel");

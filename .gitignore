@@ -49,3 +49,5 @@ node_modules/
 *.db-shm
 *.sqlite
 *.sqlite3
+# `ds account add`'s login folders (~/.dev-studio/accounts, KTD7)
+/accounts/

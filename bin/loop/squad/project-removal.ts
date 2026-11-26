@@ -188,6 +188,17 @@ export function removalBlockers(store: Store, label: string): Blocker[] {
   return out;
 }
 
+/** Where a removal of `label` puts the archive, before the loop has picked the dated folder. */
+export const archiveHint = (root: string, label: string): string => `${join(root, ".removed", `${label}-<YYYY-MM-DD>`)}/`;
+/** The read-only command that prints a finished removal's record; nothing matches while it was not removed. */
+export const removalRecordCmd = (root: string, label: string): string => `cat ${join(root, ".removed", `${label}-*`, "removed.json")}`;
+
+/** The other running boards (project "" is the all-projects one), as ports the page turns into links. */
+export function otherBoards(store: Store, label: string): { project: string; port: number }[] {
+  return (store.db.query("SELECT project, port FROM services WHERE name = 'board' AND topic = '' AND status = 'running' AND port IS NOT NULL AND project != ? ORDER BY project").all(label) as Row[])
+    .map((r) => ({ project: String(r.project), port: Number(r.port) }));
+}
+
 export type RemovalSummary = {
   studioWorktree: string | null;
   services: { name: string; topic: string; port: number | null; status: string | null }[];
@@ -212,7 +223,7 @@ export function removalSummary(store: Store, label: string): RemovalSummary {
     closedSquads: closed.length,
     memberRows: rows(store, `SELECT squad FROM members WHERE project = ? AND squad != '${STUDIO}'`, label).filter((m) => !openTopics.has(String(m.squad))).length,
     moves: [
-      `${join(store.root, label)}/ to ${join(store.root, ".removed", `${label}-<YYYY-MM-DD>`)}/`,
+      `${join(store.root, label)}/ to ${archiveHint(store.root, label)}`,
       "the project's loop.db rows into loop-rows.db in that folder",
     ],
     keeps: [
