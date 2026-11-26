@@ -87,11 +87,14 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .pill.retest{background:var(--amber-bg);color:var(--amber)} .pill.planning{background:#262a3a;color:#c5c9ff} .pill.waiting-on-you,.pill.blocked{background:var(--amber-bg);color:var(--amber)}
 .pill.queued{background:#2a2733;color:#d4b8ff} .pill.archiving,.pill.suspending,.pill.resuming{background:var(--amber-bg);color:var(--amber)} .pill.stuck{background:var(--red-bg);color:var(--red)}
 .pill.implementing{background:var(--blue-bg);color:var(--blue)} .pill.fixing,.pill.testing{background:#1c2c2a;color:#7fd8c0}
-.pill.done{background:var(--green-bg);color:var(--green)} .pill.failed{background:var(--red-bg);color:var(--red)} .pill.on-hold,.pill.suspended{color:var(--mut)} .pill.held-only{background:#2e2a1c;color:#d9b866} .pill.wrapping-up{background:var(--blue-bg);color:var(--blue)} .pill.done{box-shadow:inset 0 0 0 1px var(--green)} .statelegend{font-size:11px;color:var(--mut);padding:8px 16px;border-top:1px solid var(--line,#2a2f38)} .explain{font-size:12px;color:var(--mut);margin:4px 0} .pill.broken{background:var(--red-bg);color:var(--red)}
+.pill.done{background:var(--green-bg);color:var(--green)} .pill.failed{background:var(--red-bg);color:var(--red)} .pill.on-hold,.pill.suspended{color:var(--mut)} .pill.held-only{background:#2e2a1c;color:#d9b866} .pill.wrapping-up{background:var(--blue-bg);color:var(--blue)} .pill.done{box-shadow:inset 0 0 0 1px var(--green)} .statelegend,.unitkey{font-size:11px;color:var(--mut);padding:8px 16px;border-top:1px solid var(--line,#2a2f38)} .explain{font-size:12px;color:var(--mut);margin:4px 0} .pill.broken{background:var(--red-bg);color:var(--red)}
 .lead{font-size:13px;white-space:nowrap} .lead::before{content:"●";margin-right:6px;font-size:10px;vertical-align:1px}
 .lead.ok{color:var(--green)} .lead.idle{color:var(--mut)} .lead.warn{color:var(--amber)} .lead.bad{color:var(--red)}
 .bar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#2a303b} .bar i{display:block}
-.bar .d{background:var(--green)} .bar .w{background:var(--blue)} .bar .r{background:#b9bfca} .bar .s{background:var(--red,#e5534b)} .bar .n{background:var(--amber)}
+.bar .d,.sw.d{background:var(--green)} .bar .w,.sw.w{background:var(--blue)} .bar .s,.sw.s{background:var(--red,#e5534b)} .bar .n,.sw.n{background:var(--amber)} .bar .x,.sw.x{background:var(--dim)}
+/* Solid: started. Striped: not started yet (gold: parked, waits on you; grey: queued, starts by itself). */
+.bar .p,.sw.p{background:repeating-linear-gradient(135deg,#9a8750 0 3px,#5e5236 3px 6px)} .bar .q,.sw.q{background:repeating-linear-gradient(135deg,#4a5260 0 3px,#353c48 3px 6px)}
+.sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
 .ucount .bad{color:var(--red,#e5534b)} .ucount .warn{color:var(--amber)}
 .ucount{font:12px var(--mono);color:var(--mut);margin-top:5px}
 .prs{font:13px var(--mono)} .prs .bad{color:var(--red)}
@@ -384,7 +387,7 @@ button.fchip,button.gtog{display:inline-flex;align-items:center;justify-content:
 @media (max-width:1000px){.qrow{grid-template-columns:80px minmax(0,1fr) 48px}.qrow .sq,.qrow .fr{display:none}
   .box .qrow{grid-template-columns:72px minmax(0,1fr) 48px}.box .qrow .fr{display:none}
   .dgrid{grid-template-columns:1fr}
-  .row{grid-template-columns:20px minmax(0,1fr) 110px 36px;}.row>.c-lead,.row>.c-units,.row>.c-prs,.row>.c-open,.row>.c-spent{display:none}.detail{padding-left:16px}.wrap{padding:16px}}
+  .row{grid-template-columns:20px minmax(0,1fr) 110px 36px;}.row>.c-lead,.row>.c-units,.row>.c-prs,.row>.c-open,.row>.c-spent,.unitkey{display:none}.detail{padding-left:16px}.wrap{padding:16px}}
 /* Flow section: the project-wide stage kanban (U2). Tokens are the page's own. */
 .flow-sec{margin:22px 0 0} .flow-sec>summary{cursor:pointer;font-size:15px;font-weight:600;margin-bottom:10px} .flow-sec>summary small{font:12px var(--mono);color:var(--mut);margin-left:8px;font-weight:400}
 .flow-sec .fhead{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;font:12px var(--mono);color:var(--mut);margin:0 0 6px}
@@ -1150,7 +1153,16 @@ function flowTiles(flow) {
   // Open PRs by stage: the tile counts all of them, a click opens the first column that has one.
   const open = (st) => cards.filter((x) => x.stage === st && x.pr && x.pr.status !== "merged" && x.pr.status !== "closed").length;
   const split = [["pr_open", "PR open"], ["merging", "merging"], ["needs_you", "needs you"]].map(([st, w]) => [st, open(st), w]).filter((x) => x[1] > 0);
-  return { builders: c.building, stuckBuilding: cards.filter((x) => x.stage === "building" && x.stuck).length,
+  // The Units left detail, from the cards the number counts. A card blocked on another unit is not named.
+  const groups = { working: 0, ready: 0, parked: 0, stopped: 0 };
+  for (const x of cards) {
+    if (x.stuck || x.needs_you) groups.working++;
+    else if (x.parked) groups.parked++;
+    else if (x.paused || x.stopped || (x.stage === "queued" && x.group === "held")) groups.stopped++;
+    else if (x.stage !== "queued") groups.working++;
+    else if (x.group !== "waiting on another unit") groups.ready++;
+  }
+  return { groups, builders: c.building, stuckBuilding: cards.filter((x) => x.stage === "building" && x.stuck).length,
     left: c.queued + c.building + c.pr_open + c.needs_you + c.merging + (c.paused || 0), prs: c.open_prs,
     prsDetail: split.map(([, k, w]) => `${k} ${w}`).join(" · ") || "no PRs open", prsStage: split.length ? split[0][0] : "pr_open" };
 }
@@ -1634,7 +1646,7 @@ function UnitsBox({ s, flow, toast, onPlan }) {
   const [det, setDet] = useState(null);
   const nDone = s.units.filter(finished).length;
   const shown = showDone ? s.units : s.units.filter((u) => !finished(u));
-  return html`<div class="box units"><h3>Work units <span>spent, 7 days · ${stats(s).merged}/${s.units.length} merged</span>${nDone > 0 && html` <button class="gtog" onClick=${toggle}>${showDone ? "hide" : "show"} ${nDone} finished</button>`}</h3>
+  return html`<div class="box units"><h3>Work units <span>spent, 7 days · ${stats(s).merged} of ${stats(s).total} merged</span>${nDone > 0 && html` <button class="gtog" onClick=${toggle}>${showDone ? "hide" : "show"} ${nDone} finished</button>`}</h3>
     <div class="u head"><span></span><span>Unit</span><span>Tier</span><span class="num">Spent</span><span class="num" title="CPU-hours its Builders used, reaped child processes included">CPU-h</span><span>State</span><span>PR</span><span></span></div>
     ${shown.length === 0 && html`<div class="tier">all ${nDone} units finished</div>`}
     ${shown.map((u) => html`<div key=${u.slug} class="u openable" onClick=${(e) => { if (!e.target.closest("a,button,.acts")) setDet(u.slug); }}><span class=${"dot " + u.state.replace(" ", "") + (u.busy ? " spin" : "")} title=${u.busy ? "Builder is working" : ""}></span><span class="un" title=${u.slug}><${UnitMarks} u=${u} /><button class="unit-open" aria-haspopup="dialog" onClick=${() => setDet(u.slug)}>${u.slug}</button><${UnitLinkChip} u=${u} /></span>
@@ -1789,16 +1801,15 @@ function closeConfirm(s) {
   return "Archive " + s.topic + "? Its worktrees are removed and it moves to Archived — it can't be resumed. Unmerged branches are kept." + warn;
 }
 
+// "2 squads · 2 working · 1 ready · 6 parked · 1 stopped": the open units by group, non-zero only.
+const unitsLeftDetail = (squads, g) => [squads + " squads", ...["working", "ready", "parked", "stopped"].filter((k) => g[k] > 0).map((k) => g[k] + " " + k)].join(" · ");
+
 // Stuck and needs-you counts from the Flow (board.json `flow`); nothing for a squad without an entry.
 // A stuck or needs-you unit leaves "working", so the segments still sum to the total.
-function flowStats(s, flow, u) {
+function flowStats(s, flow) {
   const f = flow && flow.squads && flow.squads[s.label + "/" + s.topic];
   if (!f) return {};
-  const cards = (flow.cards || []).filter((c) => c.project === s.label && c.squad === s.topic && (c.stuck || c.needs_you));
-  const flagged = new Set(cards.map((c) => c.slug));
-  const out = u.filter((x) => flagged.has(x.slug) && !WORKING_NOT.includes(x.state)).length;
-  return { stuck: f.stuck, slow: f.slow, longestStuck: f.longest_stuck_s, needsYou: f.needs_you, lastMergeAt: f.last_merge_at,
-    barStuck: cards.filter((c) => c.stuck).length, barNeeds: cards.filter((c) => !c.stuck).length, flaggedWorking: out };
+  return { stuck: f.stuck, slow: f.slow, longestStuck: f.longest_stuck_s, needsYou: f.needs_you, lastMergeAt: f.last_merge_at };
 }
 
 // Per-squad numbers the table and tiles share.
@@ -1810,19 +1821,37 @@ function flowLabel(card) {
   const what = (card.stage === "building" || card.stage === "pr_open" || card.stage === "queued") && card.group ? card.group : card.stage.replace("_", " ");
   return card.in_stage_s == null ? what : what + " · " + fmtSpan(card.in_stage_s);
 }
-const WORKING_NOT = ["done", "blocked", "ready", "held", "gone", "suspended", "cancelled", "pausing", "paused", "resuming"];
+const STOPPED = ["paused", "pausing", "resuming", "suspended", "gone"];
+// The one bar segment of a unit (null: cancelled, not on the bar). Its Flow card's stuck and needs-you win.
+function segmentOf(x, card) {
+  if (x.state === "cancelled") return null;
+  if (x.state === "done") return "merged";
+  if (card && card.stuck) return "stuck";
+  if (card && card.needs_you) return "needs";
+  if (x.parked) return "parked";
+  if ((card && card.paused) || STOPPED.includes(x.state)) return "stopped";
+  return x.state === "ready" || x.state === "blocked" || x.state === "held" ? "queued" : "working";
+}
 function stats(s, flow) {
   const u = s.units || [];
-  const n = (f) => u.filter(f).length;
   const prOpen = (s.prs || []).filter((p) => p.status !== "merged" && p.status !== "closed");
+  const inFlow = flow && flow.squads && flow.squads[s.label + "/" + s.topic];
+  const cards = new Map((inFlow ? flow.cards || [] : []).filter((c) => c.project === s.label && c.squad === s.topic).map((c) => [c.slug, c]));
+  const seg = { merged: 0, working: 0, stuck: 0, needs: 0, stopped: 0, parked: 0, queued: 0 };
+  let gone = 0, parkedHeld = 0;
+  for (const x of u) {
+    const k = segmentOf(x, cards.get(x.slug));
+    if (!k) continue;
+    seg[k]++;
+    if (k === "stopped" && x.state === "gone") gone++;
+    if (k === "parked" && x.parked === "held") parkedHeld++;
+  }
   return {
-    total: n((x) => x.state !== "cancelled"), merged: n((x) => x.state === "done"),
-    working: n((x) => !WORKING_NOT.includes(x.state)),
-    blocked: n((x) => x.state === "blocked"), ready: n((x) => x.state === "ready"), gone: n((x) => x.state === "gone"),
+    total: u.filter((x) => x.state !== "cancelled").length, merged: seg.merged, seg, gone, parkedHeld,
     ciRunning: (s.prs || []).filter((p) => p.status === "running").length,
     drafts: prOpen.filter((p) => p.status === "draft").length,
     failing: prOpen.filter((p) => p.status === "failing").length,
-    ...flowStats(s, flow, u),
+    ...flowStats(s, flow),
     needs: !suspendedLike(s) && ((s.questions || []).length + (s.proposals || []).length > 0 || s.display_status === "waiting-on-you" || s.status === "blocked"),
   };
 }
@@ -1847,17 +1876,33 @@ function LeadCell({ s }) {
 function UnitsCell({ st }) {
   if (!st.total) return html`<div><div class="bar"></div><div class="ucount">no units yet</div></div>`;
   const pct = (x) => (100 * x / st.total) + "%";
-  const working = Math.max(0, st.working - (st.flaggedWorking || 0));
-  const bits = [st.merged + "/" + st.total + " merged"];
-  if (working) bits.push(working + " working");
-  if (st.stuck) bits.push(html`<span class="bad">${st.stuck} stuck${st.longestStuck ? " " + fmtSpan(st.longestStuck) : ""}</span>`);
+  // An archived row has no segments, only its merged count.
+  const g = st.seg || { merged: st.merged };
+  const n = (k) => g[k] || 0;
+  const sw = (c) => html`<i class=${"sw " + c}></i>`;
+  const bit = (c, text) => html`<span>${sw(c)}${text}</span>`;
+  const bits = [bit("d", st.merged + " of " + st.total + " merged")];
+  if (n("working")) bits.push(bit("w", n("working") + " working"));
+  if (n("stuck")) bits.push(bit("s", html`<span class="bad">${n("stuck")} stuck${st.longestStuck ? " " + fmtSpan(st.longestStuck) : ""}</span>`));
   if (st.slow) bits.push(html`<span class="warn">${st.slow} slow</span>`);
-  if (st.needsYou) bits.push(html`<span class="warn">${st.needsYou} needs you</span>`);
-  if (st.ready) bits.push(st.ready + " ready");
-  if (st.blocked) bits.push(st.blocked + " blocked"); if (st.gone) bits.push(st.gone + " gone");
+  if (n("needs")) bits.push(bit("n", html`<span class="warn">${n("needs")} needs you</span>`));
+  if (n("stopped")) bits.push(bit("x", n("stopped") + " stopped"));
+  if (st.gone) bits.push(html`<span class="bad">${st.gone} gone</span>`);
+  if (n("parked")) {
+    const behind = n("parked") - st.parkedHeld;
+    const why = [st.parkedHeld && st.parkedHeld + " held", behind && behind + " behind them"].filter(Boolean).join(", ");
+    bits.push(bit("p", n("parked") + " parked" + (behind ? " (" + why + ")" : "")));
+  }
+  if (n("queued")) bits.push(bit("q", n("queued") + " queued"));
   if (st.lastMergeAt) bits.push("last merge " + fmtSpan(Math.max(0, Date.now() / 1000 - st.lastMergeAt)) + " ago");
-  return html`<div><div class="bar"><i class="d" style=${{ width: pct(st.merged) }}></i><i class="w" style=${{ width: pct(working) }}></i><i class="s" style=${{ width: pct(st.barStuck || 0) }}></i><i class="n" style=${{ width: pct(st.barNeeds || 0) }}></i><i class="r" style=${{ width: pct(st.ready) }}></i></div>
+  return html`<div><div class="bar"><i class="d" style=${{ width: pct(n("merged")) }}></i><i class="w" style=${{ width: pct(n("working")) }}></i><i class="s" style=${{ width: pct(n("stuck")) }}></i><i class="n" style=${{ width: pct(n("needs")) }}></i><i class="x" style=${{ width: pct(n("stopped")) }}></i><i class="p" style=${{ width: pct(n("parked")) }}></i><i class="q" style=${{ width: pct(n("queued")) }}></i></div>
     <div class="ucount">${bits.map((b, i) => html`<span key=${i}>${i ? " · " : ""}${b}</span>`)}</div></div>`;
+}
+
+// The names of the bar's fills, under the Squads table.
+const UNIT_KEY = [["d", "merged"], ["w", "working"], ["s", "stuck"], ["n", "needs you"], ["x", "stopped"], ["p", "parked: waits on you (Release, or approve the plan)"], ["q", "queued: starts by itself"]];
+function UnitKey() {
+  return html`<div class="unitkey">solid: started · striped: not started yet${UNIT_KEY.map(([c, words]) => html`<span key=${c}> · <i class=${"sw " + c}></i>${words}</span>`)}</div>`;
 }
 
 function PrsCell({ s, st }) {
@@ -4265,7 +4310,7 @@ function App() {
       <${Tile} label="Builders" value=${H.builders_total != null ? buildersSeats(H) + "/" + H.builders_total : FT ? FT.builders : H.builders_working || 0} level=${H.brake && H.brake.holding ? "crit" : H.brake && H.brake.on ? "warn" : FT && FT.stuckBuilding > 0 ? "warn" : ""} on=${FT ? () => openFlow("building") : undefined} title=${(FT ? "Open the Flow at Building" : "Builders working") + (H.builders_total != null ? ". " + buildersTip(H, FT ? FT.builders : null) : "")}
         detail=${H.builders_total != null ? (H.brake && H.brake.holding ? "⛔ host brake · " : "") + buildersDetail(H) + (FT ? " · " + FT.stuckBuilding + " stuck" : "") : H.builders_light_of > 0 ? "normal " + H.builders_normal + "/" + H.builders_of + " · light " + H.builders_light + "/" + H.builders_light_of + (FT ? " · " + FT.stuckBuilding + " stuck" : "") : FT ? FT.stuckBuilding + " stuck" : H.builders_of_kind === "max" ? "of " + H.builders_of + " max" : "of " + H.builders_of + " ready units"} />
       <${Tile} label="Units left" value=${FT ? FT.left : H.units_left || 0} on=${FT ? () => openFlow("queued") : undefined} title=${FT ? "Open the Flow at Queued: every unit not yet merged" : "Units not done or cancelled in active squads"}
-        detail=${(H.squads_active || 0) + " squads · " + (H.ready_units || 0) + " ready"} />
+        detail=${unitsLeftDetail(H.squads_active || 0, FT ? FT.groups : { working: H.units_working, ready: H.units_ready, parked: H.units_parked, stopped: H.units_stopped })} />
       <${Tile} label="PRs" value=${FT ? FT.prs : H.prs_open || 0} level=${H.ci_failing > 0 || GHT.level === "crit" ? "crit" : GHT.level} on=${FT ? () => openFlow(FT.prsStage) : undefined} title=${(FT ? "Open the Flow at the first column with an open PR: unit PRs open now" : "Open PRs") + GHT.tip}
         detail=${GHT.detail ? GHT.detail : FT ? FT.prsDetail : html`<button class="lnk" onClick=${() => setFilter("ci")} title="Filter the squads: CI running">${H.ci_running || 0} CI running</button> · <span class=${H.ci_failing > 0 ? "red" : ""}>${H.ci_failing || 0} failing</span> · ${H.drafts || 0} drafts`} />
       <${Tile} label="Accounts" value=${AS.free + "/" + AS.total} level=${AS.level} on=${openAccounts} title="Open the Accounts section"
@@ -4336,6 +4381,7 @@ function App() {
           </div>
           ${isOpen && html`<${Detail} s=${s} onPlan=${setPlan} toast=${setToast} setAsk=${setAsk} askKeys=${askKeys} prerequisites=${data.prerequisites} flow=${data.flow} />`}
         </${React.Fragment}>`; })}
+      ${shown.some((s) => st.get(key(s)).total > 0) && html`<${UnitKey} />`}
       ${shown.some((s) => suspendedLike(s) || ["pausing", "paused", "resuming", "held-only"].includes(s.display_key || s.display_status)) && html`<div class="statelegend">${STATE_LEGEND.join(" · ")}</div>`}
       ${data.archived.length > 0 && html`<${React.Fragment}><div class="arch">Archived (${data.archived.length}) · ${data.archived.slice(0, 6).map((a) => a.topic).join(", ")}${data.archived.length > 6 ? "…" : ""}
         <button onClick=${() => setShowArch(!showArch)}>${showArch ? "hide" : "show"}</button></div>
