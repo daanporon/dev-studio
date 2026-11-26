@@ -14,7 +14,7 @@
 // READ_WINDOW before the end, never at byte 0, and drops the cut first line; a half-written last line
 // is held back until it completes. Text is redacted
 // before it is written (chat/redact.ts) and capped to 20 turns / 16 KB (chat/turns.ts).
-// A member that ended keeps its row with gone_at set and turns emptied; no row is deleted.
+// A member that ended keeps its row with gone_at set and turns emptied (only `ds remove-project` deletes it).
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import * as claude from "../chat/claude.ts";
 import * as codex from "../chat/codex.ts";

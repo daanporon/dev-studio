@@ -49,9 +49,12 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id"
   '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_3","is_error":true,"content":"dismissed"}]}}' > "$TMP/t.jsonl"
 pk(){ jq -nc --arg id "$1" --arg tu "$2" --arg tp "$3" --argjson ok "$4" '{id:$id,asker:"thinker",blocking:true,question:"Which color?",title:"Style: Which color?",since:"2026-10-08T09:00:00Z",card_wt:"wTh",suggestion:"Blue",choices:[{label:"Blue",does:"calm"},{label:"Red (warm)",does:"bold"}],source:"picker",tool_use_id:$tu,transcript_path:$tp,picker_answerable:$ok}'; }
 T="$TMP/t.jsonl"
+# permission-prompt-needs-you U2: a safety-check prompt mirrored as a picker (pp1, pp2).
+PERM='. + {picker_kind:"permission",tool:"Bash",shown:"git push origin work",choices:[{label:"Yes",does:"run it once"},{label:"No",does:"refuse it"}]}'
 jq --arg t "$T" --argjson a "$(pk qp2 toolu_1 "$T" true)" --argjson b "$(pk qp3 toolu_3 "$T" true)" --argjson c "$(pk qp4 toolu_1 "$T" false)" \
   --argjson d "$(pk qp5 toolu_1 "$T" true)" --argjson e "$(pk qp6 toolu_6 "$T" true)" --argjson u "$(pk qpu toolu_1 "$TMP/nope.jsonl" true)" \
-  '(.waiting_on_you[] | select(.id=="qp1") | .transcript_path) = $t | .waiting_on_you += [$a,$b,$c,$d,$e,$u,
+  --argjson p1 "$(pk pp1 toolu_1 "$T" true | jq -c "$PERM")" --argjson p2 "$(pk pp2 toolu_1 "$T" true | jq -c "$PERM")" \
+  '(.waiting_on_you[] | select(.id=="qp1") | .transcript_path) = $t | .waiting_on_you += [$a,$b,$c,$d,$e,$u,$p1,$p2,
     {"id":"qc","asker":"lead","blocking":false,"question":"c?","since":"2026-10-08T09:00:00Z"},
     {"id":"qr","asker":"lead","blocking":false,"question":"r?","since":"2026-10-08T09:00:00Z"},
     {"id":"qa1","asker":"lead","blocking":false,"title":"Pick a name","question":"name?","since":"2026-10-08T09:00:00Z"},
@@ -310,6 +313,19 @@ eq "picker: the text goes to the asker" "$(tail -n1 "$TMP/keys.log")" "$(printf 
 eq "picker: non-answerable is 409"    "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"qp4\",\"answer\":\"Blue\"}" "$U")" "409"
 has "picker: non-answerable says terminal" "$(cat "$TMP/post.out")" "answer it in the terminal"
 eq "picker: a refusal files nothing"  "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'answer' AND json_extract(payload, '\$.id') = 'qp4'" | jq '.[0].n')" "0"
+# permission-prompt-needs-you U2: a safety-check prompt takes Yes or No only, and nothing once the loop refused
+# to press for its tool call (the screen no longer showed it); the board then offers only the terminal.
+eq "permission: other text is 409"    "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"pp1\",\"answer\":\"Yes, and don't ask again\"}" "$U")" "409"
+has "permission: other text says Yes or No" "$(cat "$TMP/post.out")" "takes Yes or No"
+bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.argv[1]);
+  d.run("INSERT INTO requests (project, squad, member, kind, payload, requested_by, created_at, done_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [process.argv[2], "ans", "wTh", "answer", JSON.stringify({ id: "pp2", answer: "Yes", tool_use_id: "toolu_1", via: "board" }), "board", 1, 2,
+     JSON.stringify({ ok: false, error: "not pressed", why: "the screen shows a different command", prompt_changed: true })]);' "$DBR/loop.db" "$LBL"
+eq "permission: refused press is 409" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"pp2\",\"answer\":\"Yes\"}" "$U")" "409"
+has "permission: refused says the prompt changed" "$(cat "$TMP/post.out")" "the prompt changed"
+eq "permission: a refusal files nothing" "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'answer' AND json_extract(payload, '\$.id') IN ('pp1', 'pp2')" | jq '.[0].n')" "1"
+curl -s -o "$TMP/perm.json" "http://127.0.0.1:$PORT/board.json"
+jt "permission: a refused prompt is terminal-only on the board" "$TMP/perm.json" '[.squads[] | select(.topic=="ans") | .questions[] | select(.id=="pp1" or .id=="pp2") | [.id, .picker_answerable, .picker_refused]] | sort == [["pp1",true,null],["pp2",false,"the screen shows a different command"]]'
 # Keys typed after a picker closed would land in the agent's prompt: the board refuses one whose
 # mirror says closed or can't tell, and the loop checks the transcript again before each key.
 eq "picker: closed picker is 409"     "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"qp3\",\"answer\":\"Blue\"}" "$U")" "409"
@@ -334,7 +350,7 @@ rm -f "$TMP/keys.rc"
 eq "picker: a failed press can be retried" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"qp5\",\"answer\":\"Blue\"}" "$U")" "202"
 ff
 eq "picker: retry pressed option 1"   "$(tail -n1 "$TMP/keys.log")" "$(printf 'wTh\t1')"
-eq "picker: the board leaves the squad file alone" "$(jq '[.waiting_on_you[] | select(.source=="picker")] | length' "$SD/ans.json")" "7"
+eq "picker: the board leaves the squad file alone" "$(jq '[.waiting_on_you[] | select(.source=="picker")] | length' "$SD/ans.json")" "9"
 jt "board: picker source passes through" "$TMP/served.json" '.squads[] | select(.topic=="ans") | .questions[] | select(.id=="qp1") | .source=="picker" and .picker_answerable==true'
 jt "board: inbox carries picker source"  "$TMP/served.json" '.needs_you[] | select(.id=="qp1") | .source=="picker"'
 TX="$(tb "$LBL" 2>/dev/null)"

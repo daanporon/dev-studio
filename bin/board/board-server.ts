@@ -99,7 +99,7 @@ import { squadDoc } from "../loop/db/export-json.ts";
 import { skillsJson } from "./skills-data.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
 import { servePage } from "./saved-pages.ts";
-import { answer as answerQuestion } from "../loop/messages/questions.ts";
+import { answer as answerQuestion, pressRefused } from "../loop/messages/questions.ts";
 import { dbPath, open, openReadOnly, stateRoot, type Row, type Store } from "../loop/core/store.ts";
 import { checkExportText, exportTransfer, IMPORT_FILES, planImport, readGet, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
 import { canRestartRole } from "../loop/pause/restart-roles.ts";
@@ -1094,6 +1094,12 @@ async function answer(req: Request) {
     const picker = e.source === "picker";
     // Only a one-question, single-select picker maps onto one keystroke answer.
     if (picker && e.picker_answerable !== true) no(409, "answer it in the terminal");
+    // permission-prompt-needs-you U2: a safety-check prompt takes Yes or No only, and none once the loop
+    // refused to press for it (the screen no longer matched): the fulfiller reads the screen before each key.
+    if (picker && e.picker_kind === "permission") {
+      if (ans !== "Yes" && ans !== "No") no(409, "a permission prompt takes Yes or No — answer it in the terminal");
+      if (pressRefused(s, project, topic, id, e.tool_use_id)) no(409, "the prompt changed — answer it in the terminal");
+    }
     // Keys typed after the picker closed would land in the agent's prompt: the state observer's mirror
     // must say it is open (the answer fulfiller checks the transcript again before each key).
     if (picker) {

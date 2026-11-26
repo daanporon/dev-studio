@@ -36,6 +36,28 @@ const CLAUDE_ASKS = /^Do you want to .*\?$/;
 const CODEX_ASKS = /^Would you like to (run the following command|make the following edits|grant these permissions|send input to terminal)\b/;
 const CODEX_ABOVE = 15;
 
+// Claude's permission dialog on a screen (fulfil/answer.ts presses Yes or No only after reading it): the
+// "Do you want to …?" line among the 4 non-blank lines above the menu, the dialog's lines between it and the
+// nearest line above that opens the dialog or belongs to the conversation (a rule or a corner, or a line that
+// starts with ● ⏺ ⎿ ❯ ✻ ✢: a pending tool call is shown there, maybe another call's command), and the options.
+// A side border (│) is no boundary.
+// Border characters at either end of a line are dropped. `dialog` is null when no such boundary is on screen.
+const BOX = /^[\s─-╿]+|[\s─-╿]+$/g;
+const unbox = (l: string) => l.replace(BOX, "");
+const BOUNDARY = /^[─━═┄┅┈┉╌╍╭╮╰╯┌┐└┘●⏺⎿❯✻✢]/;
+export function claudePrompt(tail: string): { question: string; dialog: string | null; options: string[] } | null {
+  const all = tail.split("\n").filter((l) => l.trim() !== "");
+  const { lines, run } = scan(tail);
+  if (!run.length) return null;
+  const first = all.length - lines.length + run[0].at;
+  let q = first - 1;
+  while (q >= Math.max(0, first - 4) && !CLAUDE_ASKS.test(unbox(all[q]))) q--;
+  if (q < Math.max(0, first - 4)) return null;
+  let top = q - 1;
+  while (top >= 0 && !BOUNDARY.test(all[top].trim())) top--;
+  return { question: unbox(all[q]), dialog: top < 0 ? null : all.slice(top + 1, q).join("\n"), options: run.map((o) => unbox(o.label)) };
+}
+
 export function permissionMenu(tail: string): { prompt: string[]; options: string[] } | null {
   const { lines, run } = scan(tail);
   if (!run.length) return null;

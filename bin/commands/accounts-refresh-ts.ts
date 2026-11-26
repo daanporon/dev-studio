@@ -11,6 +11,7 @@ import { accountSkillsCheck, claudePlan } from "../lib/account-skills";
 import { hostBackendPath, globJson, readIfs, run as runCmd, stateRoot, writeErr } from "../lib/shared";
 import { globNames } from "../lib/install";
 import { accountList } from "../lib/accounts-list";
+import { claude } from "../lib/account-kinds/claude.ts";
 import { systemJsonDir } from "../loop/drivers/claude-launch.ts";
 import { dbPath, open } from "../loop/core/store.ts";
 import { contractLimited } from "../loop/capacity/contract-limited.ts";
@@ -128,7 +129,9 @@ export async function run(argv: string[]): Promise<number> {
 
     // Per-account skills verdict: "<account>\t<ok|broken|warn>\t<reason>".
     let SKILLS = "";
-    await accountSkillsCheck(be, true, { out: (s) => { SKILLS += s; }, err: () => {} });
+    const claudes = lines(LIST).map((l) => l.split("\t")).filter((f) => f[0] === "claude" && f[1])
+      .map((f) => ({ account: f[1], dir: f[3] || claude.systemDir(process.env) }));
+    accountSkillsCheck(true, { out: (s) => { SKILLS += s; }, err: () => {} }, claudes);
     // Per-account plan: "<agent>\t<account>\t<plan>" for the accounts that have one, from each login folder.
     const plans: string[] = []; // awk reads them as `printf '%s\n' "$PLANS"`: none is one empty line
     for (const l of lines(LIST)) {

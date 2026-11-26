@@ -92,18 +92,26 @@ export function isWebUrl(x: string): boolean {
   if (!/^https?:\/\/[^\s/?#]/i.test(x)) return false;
   try { return new URL(x).hostname !== ""; } catch { return false; }
 }
+/** Whether a URL that parses carries a user name or password. */
+export function hasLogin(x: string): boolean {
+  const u = new URL(x);
+  return u.username !== "" || u.password !== "";
+}
 /** Why `v` is not a `ticket_url` setting (`-` = unset), or null: an http(s) URL holding `{id}`, in plain URL characters. */
 export function ticketUrlProblem(v: string): string | null {
   if (v === "-") return null;
   const filled = v.replaceAll("{id}", "1");
   const ok = v.includes("{id}") && v.length <= LINK_CHARS && /^[A-Za-z0-9._~:/?#\[\]@!&()*+,;=%-]*$/.test(filled) && isWebUrl(filled)
-    && !new URL(filled).username && !new URL(filled).password;
+    && !hasLogin(filled);
   return ok ? null : `ticket_url must be an http(s) URL holding {id}, without spaces, quotes or a login, or - for none (got '${v.slice(0, 80)}')`;
 }
 /** Why these links are refused, or null. */
 export function linksProblem(links: string[]): string | null {
   const bad = links.find((x) => !isWebUrl(x));
-  if (bad !== undefined) return `Link: takes http(s) URLs — use another label (e.g. Files:) for notes (got '${bad.slice(0, 80)}')`;
+  // A refusal is printed and logged. register-plan splits a line on commas and spaces, so a password can end up in pieces: with an `@` in any value, none is quoted.
+  const got = links.some((x) => x.includes("@")) ? "a value not shown: it may hold a login" : `got '${bad?.slice(0, 80)}'`;
+  if (bad !== undefined) return `Link: takes http(s) URLs — use another label (e.g. Files:) for notes (${got})`;
+  if (links.some(hasLogin)) return "Link: a URL must not carry a login (user:password@)";
   if (links.some((x) => x.length > LINK_CHARS)) return `Link: a URL is longer than ${LINK_CHARS} characters`;
   return links.length > LINKS_MAX ? `Link: at most ${LINKS_MAX} links per unit (got ${links.length})` : null;
 }
