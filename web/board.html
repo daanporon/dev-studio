@@ -2721,14 +2721,18 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
     if ((!t && !ids.length) || busy === to || uploading) return;
     const n = chatCount(text);
     if (n > CHAT_MAX) { setErr("not sent: " + n + " characters, the limit is " + CHAT_MAX); return; }   // the text stays in the box
+    const raw = text;   // the box as it was sent
     setBusy(to); setErr("");
     try {
       await post("api/chat", ids.length ? { project, topic, wt, text: t, files: ids } : { project, topic, wt, text: t });
-      store.del(chatDraftKey(project, topic, to));   // a send clears that member's whole draft
-      held.current[to] = [];
+      // Only what was sent leaves: text typed and images attached while the post was pending stay. An edit to the sent text keeps it all.
+      const now = cur.current === to && input.current ? String(input.current.value) : String(chatDraft(project, topic, to).text || "");
+      const rest = now.startsWith(raw) ? now.slice(raw.length) : now;
+      chatDraftSet(project, topic, to, rest);
+      putHeld(to, heldOf(to).filter((f) => !ids.includes(f.id)));
       if (cur.current === to) {
-        setText(""); setFiles([]); setNote("");
-        if (input.current) { input.current.value = ""; grow(input.current); }   // setText has not rendered yet: empty the box before it is measured
+        setText(rest); setNote("");
+        if (input.current) { input.current.value = rest; grow(input.current); }   // setText has not rendered yet: set the box before it is measured
         setPinned(true); load();
       }
     } catch (e) {
