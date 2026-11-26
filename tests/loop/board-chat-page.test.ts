@@ -303,6 +303,27 @@ const toScreen = (p: any) => {
 };
 const idle = { agent: "claude", source: "transcript", sends: [], turns: [], working: false };
 
+test("mobile-chat-close-hidden U1: on a phone a member with a screen gets the Chat/Screen switch, not the lone toggle; none without a screen", () => {
+  const had = (globalThis as any).matchMedia;
+  (globalThis as any).matchMedia = (q: string) => ({ matches: q === "(max-width:600px)" });
+  try {
+    const p = panel();
+    p.render();
+    p.setData(idle);
+    expect(segBtn(p.render(), "chat")).toBeUndefined();
+    p.setData({ ...idle, screen: { tail: "x", menu: 0, at: T, age_s: 1 } });
+    let root = p.render();
+    expect(nodes(root).some((n) => n.strings.includes('class="btn sm chat-scr"'))).toBe(false);
+    expect(segBtn(root, "question")).toBeUndefined();
+    expect(segBtn(root, "chat")).toBeDefined();
+    fnIn(segBtn(root, "screen"))();
+    root = p.render();
+    expect(hasKeyRow(root)).toBe(true);
+    fnIn(segBtn(root, "chat"))();
+    expect(hasKeyRow(p.render())).toBe(false);
+  } finally { (globalThis as any).matchMedia = had; }
+});
+
 test("U19: Chat never shows a key row; idle has no Stop; working has a round ■ Stop in the card before Send that posts Escape", async () => {
   const p = panel();
   p.render();

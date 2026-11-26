@@ -16,8 +16,18 @@ d = json.load(open(sys.argv[1]))
 w = {x[0]: x for x in d["workers"]}
 w["wtTe"] = ["wtTe", "waiting", "ds-tester", None, None, None, None, None, None, "● Done.\n\n> "]
 w["wtBp"] = ["wtBp", "working", "ds-bp", None, None, None, None, None, None, " Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again\n   3. No, and tell Claude what to do differently (esc)\n"]
+# A long unit-named builder (mobile-chat-close-hidden U1) with a live screen: its name must never push the chat's ✕ off a phone.
+w["wtLong"] = ["wtLong", "working", "ds-long", None, None, None, None, None, None, " compiling\n"]
 d["workers"] = list(w.values())
+d["worktrees"].append(["wtLong", None])
 d["events"] = [{"ago": 60 * i, "squad": "manual-testing", "kind": k} for i, k in enumerate(["unit_dispatched", "pr_opened", "merge_waiting_on_a_long_named_reconciler_check", "member_started"])]
+json.dump(d, open(sys.argv[1], "w"))
+PY
+python3 - "$SD/manual-testing.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["worktrees"].append("wtLong")
+d["members"].append({"role": "builder", "suffix": "u51-compliance-manager-scope", "wt": "wtLong", "owns": [], "for": ""})
 json.dump(d, open(sys.argv[1], "w"))
 PY
 mkdb "$LBL"

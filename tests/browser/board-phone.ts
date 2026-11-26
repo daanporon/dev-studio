@@ -82,12 +82,29 @@ const openChatOf = (label: string): Open => async (p) => {
   if (await p.locator(".chat-swbtn").count()) { await click(p, ".chat-swbtn"); return click(p, ".chat-mi", new RegExp("^" + label)); }
   return click(p, ".chat-tab", new RegExp("^" + label.slice(0, 12)))   // a long tab label is cut at 14;
 };
+// mobile-chat-close-hidden U1: a long unit name, with mail and a new reply on another member (set on the api/chat reply), so
+// the switcher carries its badge and dot beside the Screen switch.
+const LONG = "builder-u51-compliance-manager-scope";
+const openLongName: Open = async (p) => {
+  await p.route("**/api/chat?*", async (r: any) => {
+    const res = await r.fetch(), j = await res.json();
+    for (const m of j.crew ?? []) if (m.label === "tester") { m.unread = 12; m.reply_at = Date.now(); }
+    await r.fulfill({ response: res, json: j });
+  });
+  if (!(await openChatOf(LONG)(p))) return false;
+  await p.waitForTimeout(3500);   // the next poll brings a reply newer than the seen mark
+  if (await p.locator(".chat .mhd .chat-segb").count()) {   // the phone's switch toggles the view both ways
+    await click(p, ".chat-segb", /^Screen/); if (!(await p.locator("pre.chat-screen").count())) return false;
+    await click(p, ".chat-segb", /^Chat/); if (await p.locator("pre.chat-screen").count()) return false;
+  }
+  return true;
+};
 // chat-key-buttons U1: what each chat view must show, run in the page; returns the list of problems.
 const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.querySelector(".chat " + s), all = (s) => [...document.querySelectorAll(".chat " + s)], bad = [];
   const card = q(".chat-card"), vis = (e) => e && e.getBoundingClientRect().width > 0;
   if (!card) bad.push("no .chat-card"); else {
     const kids = [...card.querySelectorAll("button")].map((b) => b.className.replace(/btn |chat-round /g, "").trim());
-    const okKids = want === "working" || want === "menu" || want === "screen" || want === "question" ? ["chat-attach", "chat-stop", "chat-send pri"] : ["chat-attach", "chat-send pri"];
+    const okKids = want === "long" || want === "working" || want === "menu" || want === "screen" || want === "question" ? ["chat-attach", "chat-stop", "chat-send pri"] : ["chat-attach", "chat-send pri"];
     if (JSON.stringify(kids.map((k) => k.replace("pri chat-send", "chat-send pri"))) !== JSON.stringify(okKids)) bad.push("card buttons " + kids);
     const r = card.getBoundingClientRect(); if (r.height > 200) bad.push("card is " + Math.round(r.height) + " px tall");
     if (parseFloat(getComputedStyle(card).borderTopLeftRadius) < 16) bad.push("card radius");
@@ -101,6 +118,19 @@ const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.que
   if (want === "question") { const qv = q(".chat-q"); if (!qv) bad.push("no Question view"); else { for (const b of qv.querySelectorAll(".chat-qopt")) { const x = b.getBoundingClientRect(); if (x.height < 44) bad.push("choice " + Math.round(x.height) + " px tall"); } if (!qv.querySelector(".chat-qopt")) bad.push("no choices"); } if (keys) bad.push("Question shows a key row"); }
   if (want === "menu") { const b = q(".chat-banner"); if (!b || !/Open ›/.test(b.textContent)) bad.push("no menu banner"); }
   if (want !== "working" && !scr) bad.push("Screen toggle is not in the header");
+  // mobile-chat-close-hidden U1: on a phone the switch is its own full-width row of 44 px buttons and the header never overflows.
+  if (want === "long" && innerWidth <= 600) {
+    const hd = q(".mhd"), seg = q(".mhd .chat-seg"), x = q(".mhd .mclose").getBoundingClientRect(), dot = q(".chat-swbtn .chat-new"), mailBadge = q(".chat-swbtn .msg-badge");
+    if (!vis(dot) || !vis(mailBadge)) bad.push("the switcher shows no mail badge and new-reply dot");
+    else if (mailBadge.scrollWidth > mailBadge.clientWidth) bad.push("the mail badge is squeezed");
+    if (x.right > innerWidth) bad.push("✕ right edge " + Math.round(x.right) + " past " + innerWidth);
+    if (hd.scrollWidth !== innerWidth) bad.push("header scrollWidth " + hd.scrollWidth + " is not " + innerWidth);
+    if (!seg) bad.push("no Chat/Screen switch"); else {
+      const g = seg.getBoundingClientRect(); if (g.top < x.bottom - 1 || g.width < innerWidth - 40) bad.push("the switch is not on its own row " + Math.round(g.top) + " " + Math.round(g.width));
+      const bs = [...seg.querySelectorAll("button")]; if (bs.map((b) => b.textContent) + "" !== "Chat,Screen" || bs.some((b) => b.getBoundingClientRect().height < 44)) bad.push("switch buttons " + bs.map((b) => b.textContent + " " + Math.round(b.getBoundingClientRect().height)));
+    }
+  }
+  const lab = q(".chat-swbtn .chat-swlabel"); if (lab && lab.textContent === "tester" && lab.scrollWidth > lab.clientWidth) bad.push("the short label tester is cut");
   if (scr && q(".qfoot .chat-scr")) bad.push("Screen toggle still in the footer");
   return bad; })(${JSON.stringify(want)})`;
 const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; chat?: string; open: Open }[] = [
@@ -111,6 +141,7 @@ const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; cha
   { name: "chat-menu", strict: true, chat: "menu", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-segb", /^Chat/)) },
   { name: "chat-question", strict: true, chat: "question", open: openChatOf("builder-platform") },
   { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-segb", /^Screen/)) },
+  { name: "long-name-chat", strict: true, chat: "long", open: openLongName },   // not ^chat: its 1280 measures must equal the base
   { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
   { name: "page", strict: true, kind: "page", open: async () => true },
   { name: "squad", strict: true, kind: "page", open: (p) => click(p, ".row.squad") },
@@ -203,7 +234,9 @@ const shoot = async (size: any, view: string, base: boolean) => {
   return { opened, m } as any;
 };
 
-for (const size of SIZES) for (const v of VIEWS) {
+// The long name is also measured at 390 px (the middle phone width).
+const RUNS = [...SIZES.flatMap((size) => VIEWS.map((v) => ({ size, v }))), { size: { w: 390, h: 844, phone: true }, v: VIEWS.find((v) => v.name === "long-name-chat")! }];
+for (const { size, v } of RUNS) {
   if (v.kind === "keyboard" && !size.phone) continue;
   const key = `${size.w}/${v.name}`; const { opened, m, kb, back, cover, stays, hide, after, y0 } = await shoot(size, v.name, false);
   report[key] = { opened, m, kb, back, cover, stays };
@@ -269,8 +302,7 @@ const TITLE = `(() => { const lead = document.querySelector(".chat .mhd .chat-le
   const alone = r(probe).width, aloneH = r(probe).height; probe.remove();
   const sub = hd.querySelector(".chat-sub"), close = hd.querySelector(".mclose");
   return { text: lead.textContent, h: r(lead).height, lh: aloneH, w: r(lead).width, alone, closeMid: r(close).top + r(close).height / 2, leadMid: r(lead).top + r(lead).height / 2, subEllipsis: !sub || getComputedStyle(sub).textOverflow === "ellipsis" || sub.scrollWidth <= sub.clientWidth + 1, hdH: r(hd).height,
-    seg: !!hd.querySelector(".chat-seg"),   // a member with a question or menu has the three-way control (on its own row on a phone), not the lone toggle
-    scr: (() => { const b = hd.querySelector(".chat-scr"); return b ? { w: r(b).width, h: r(b).height, mid: r(b).top + r(b).height / 2, right: r(b).right, closeLeft: r(close).left, vw: innerWidth } : null; })() }; })()`;
+    seg: !!hd.querySelector(".chat-seg") }; })()`;   // on a phone a member with a screen has the switch, on its own row
 for (const w of [390, 320]) for (const who of ["member", "studio"]) {
   const key = `${w}/chat-title-${who}`;
   const ctx = await browser.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
@@ -286,10 +318,7 @@ for (const w of [390, 320]) for (const who of ["member", "studio"]) {
   need(Math.abs(t.h - t.lh) <= 1, "the Chat · title is not one line");
   need(t.w >= t.alone - 1, "the Chat · title is narrower than its own text");
   need(Math.abs(t.closeMid - t.leadMid) <= 4, "the ✕ is not on the title's row");
-  if (who === "member") {   // the Screen toggle (this member has a screen read) sits in the header, before ✕, on the title's row, 44 px to tap
-    need(!!t.scr || t.seg, "the Screen toggle is not in the header");
-    if (t.scr) { need(t.scr.h >= 44 && t.scr.w >= 44, "the Screen toggle is under 44 px"); need(Math.abs(t.scr.mid - t.leadMid) <= 4, "the Screen toggle is not on the title's row"); need(t.scr.right <= t.scr.closeLeft + 1, "the Screen toggle is not before ✕"); }
-  }
+  if (who === "member") need(t.seg, "the Chat/Screen switch is not in the header");   // this member has a screen read
   need(t.subEllipsis, "the .chat-sub neither fits nor ends in an ellipsis");
   console.log(`ok   ${key}: title ${Math.round(t.w)}x${Math.round(t.h)}`);
 }
