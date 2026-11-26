@@ -3,7 +3,7 @@
 // counts the same units the Lead later registers. A bad line throws PlanLineError; register-plan turns it
 // into its exit 1, planUnitFacts into null.
 
-export type UnitText = { about?: string; done?: string; check?: string };
+export type UnitText = { about?: string; done?: string; check?: string; links?: string[] };
 export type PlanUnit = { n: number; id: string; title: string; deps: string[]; ext: string[]; tier: string; held: boolean; blocks: string[]; lane: string | null; laneRule: string | null; text: UnitText };
 
 export class PlanLineError extends Error {}
@@ -83,4 +83,19 @@ export function planUnitFacts(text: string): { steps: number; hard: number; star
     if (!us.length) return null;
     return { steps: us.length, hard: us.filter((u) => u.tier === "hard").length, start_now: us.filter((u) => !u.deps.length && !u.held).length };
   } catch (e) { if (e instanceof PlanLineError) return null; throw e; }
+}
+
+// A unit's links (`Link:` in its block, add-unit --link): web URLs only, since the board renders them as anchors.
+export const LINKS_MAX = 5;
+export const LINK_CHARS = 500;
+export function isWebUrl(x: string): boolean {
+  if (!/^https?:\/\/[^\s/?#]/i.test(x)) return false;
+  try { return new URL(x).hostname !== ""; } catch { return false; }
+}
+/** Why these links are refused, or null. */
+export function linksProblem(links: string[]): string | null {
+  const bad = links.find((x) => !isWebUrl(x));
+  if (bad !== undefined) return `Link: takes http(s) URLs — use another label (e.g. Files:) for notes (got '${bad.slice(0, 80)}')`;
+  if (links.some((x) => x.length > LINK_CHARS)) return `Link: a URL is longer than ${LINK_CHARS} characters`;
+  return links.length > LINKS_MAX ? `Link: at most ${LINKS_MAX} links per unit (got ${links.length})` : null;
 }
