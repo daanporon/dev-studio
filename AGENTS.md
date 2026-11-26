@@ -196,6 +196,7 @@ A unit documents its scripts, tables and events in `docs/scripts.md`. AGENTS.md 
 - `bin/ds update <project>` — the operator's or Studio's update, never a squad role's: the loop pulls, reinstalls, restarts itself and refreshes the project's squads, no Studio turn.
 - `bin/ds remove-project <label> [--dry-run]` — the operator's command, never a squad role's: archives a project under `state/.removed/` and frees its label (`docs/USAGE.md`, "Remove a project").
 - `bin/ds expose <name> <url> [--stop "<cmd>"] [--squad] [--self]` — publish a URL you host so the board lists it.
+- `DS_MAIN_URL` (a worker on a side host) — `bin/ds` runs your call on main through the side loop: exit 75 is main unreachable (nothing ran, retry), 78 is "you were replaced" (stop).
 - `bin/lib/directory.sh list|reach <squad> <role>` — the phone book: who a member is and how to reach it.
 - `bin/board/board.sh` — the board (text, `--json`, `--serve`).
 - `bin/ds` — the loop's CLI over `state/loop.db` (`want`, `nudge`, `account`, `config`, `focus`, `override`, `lanes`, `shadow`, …); `bin/ds help` lists it.

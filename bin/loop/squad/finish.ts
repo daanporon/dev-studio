@@ -31,10 +31,21 @@ export function finishKey(f: Finish): string {
   return `finish:${memberName(f.member)}:${h.digest("hex").slice(0, 12)}`;
 }
 
-/** Write one finish row (and a `finish_recorded` event); the same key again returns the row it wrote, created false. */
+/** side-loop-host U7 (KTD12): the member's current generation when a finish carrying `gen` is not it, else null.
+ *  A member with no generation on its row (a start Orca typed itself) and a finish with none are not checked. */
+export function staleGen(s: Store, f: Finish): string | null {
+  if (!f.gen) return null;
+  const m = s.db.query("SELECT gen FROM members WHERE project = ? AND squad = ? AND role = ? AND COALESCE(suffix, '') = ? AND COALESCE(status, '') != 'gone' ORDER BY id DESC")
+    .get(f.member.project, f.member.squad, f.member.role, f.member.suffix) as Row | null;
+  return m?.gen && String(m.gen) !== f.gen ? String(m.gen) : null;
+}
+
+/** Write one finish row (and a `finish_recorded` event); the same key again returns the row it wrote, created false.
+ *  A finish from a replaced generation throws ("you were replaced") and writes nothing. */
 export function recordFinish(s: Store, f: Finish, at = now()): { created: boolean; row: Row } {
   if (!isOutcome(f.outcome)) throw new Error(`finish: outcome is one of ${OUTCOMES.join(", ")}, not '${f.outcome}'`);
   if (!f.body.trim()) throw new Error("finish: the body is empty");
+  if (staleGen(s, f)) throw new Error(`finish: you were replaced (generation ${f.gen} is not ${memberName(f.member)}'s current one); no finish recorded`);
   const key = f.key ?? finishKey(f);
   const had = s.get("finishes", { key });
   if (had) return { created: false, row: had };

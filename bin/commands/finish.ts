@@ -63,7 +63,7 @@ export async function run(args: string[]): Promise<number> {
     const m = who(s, opt);
     if ("error" in m) { console.error(`ds finish: ${m.error}`); return 2; }
     const unit = pos[0] === "-" ? null : pos[0];
-    const r = recordFinish(s, { member: m, unit, outcome, body, gen: process.env.DS_GEN || null, wt: toplevel(), key: opt.key || undefined });
+    const r = recordFinish(s, { member: m, unit, outcome, body, gen: process.env.DS_GEN || null, wt: process.env.DS_WT || toplevel(), key: opt.key || undefined });
     if (flag.has("json")) print({ created: r.created, finish: r.row });
     else console.log(`${r.created ? "finish recorded" : "finish already recorded"}: #${r.row.id} ${memberName(m)} ${unit ?? "-"} ${outcome}${r.row.gen ? ` gen=${r.row.gen}` : ""}`);
     // U11: a squad on a contract backend has no Run to send worker_done to: this row is the whole report.
