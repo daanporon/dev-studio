@@ -13,7 +13,6 @@ type Env = Record<string, string | undefined>;
 export const orcaData = (env: Env): string =>
   env.DS_ORCA_DATA || env.ORCA_USER_DATA_PATH || join(env.XDG_CONFIG_HOME || `${env.HOME}/.config`, "orca");
 /** A managed account's Claude config dir (CLAUDE_CONFIG_DIR); the system login's .claude.json is in $HOME. */
-export const accountHome = (env: Env, acct: string): string => `${orcaData(env)}/claude-profiles/${acct}/home`;
 export const systemJsonDir = (env: Env): string => env.DS_CLAUDE_SYSTEM_JSON_DIR || env.HOME || "";
 
 /** jq's JSON text: JSON.stringify, plus the one escape jq adds (DEL). */

@@ -14,6 +14,8 @@ export const muse: AccountKind = {
   credentialsFile: "auth.json",
   loginId: () => null,
   login: null,
+  command: (model, effort) => ["muse", "--trust-workspace", "--yolo", "--model", model,
+    ...(effort ? ["--reasoning-effort", effort] : [])],
   usage: true,
   resets: false,
 };

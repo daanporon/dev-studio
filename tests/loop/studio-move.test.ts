@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import type { Action, Actuator } from "../../bin/loop/core/plugins.ts";
@@ -664,7 +664,7 @@ describe("studio-hung-agent-broken U2: the operator's Restart Studio", () => {
 // U52a (project-start): a Studio off Orca (dispatcher.json studio_backend tmux, a `local::` studio_wt) is closed
 // by its own terminal id and started through the contract driver on the fake tmux; a shell beside it stays.
 describe("U52a: start and restart a Studio off Orca", () => {
-  const env = ["DS_ORCA_DATA", "DS_CLAUDE_SYSTEM_JSON_DIR", "DS_LOOP_STUDIO_PROMPT_S"] as const;
+  const env = ["DS_ORCA_DATA", "DS_CLAUDE_SYSTEM_JSON_DIR", "DS_LOOP_STUDIO_PROMPT_S", "DS_STATE_ROOT"] as const;
   const saved = Object.fromEntries(env.map((k) => [k, process.env[k]]));
   afterEach(() => { for (const k of env) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; });
 
@@ -686,6 +686,7 @@ describe("U52a: start and restart a Studio off Orca", () => {
     mkdirSync(join(dir, "orca", "claude-profiles", "acct-b", "home"), { recursive: true });
     mkdirSync(join(dir, "orca", "claude-profiles", "acct-a", "home"), { recursive: true });
     process.env.DS_ORCA_DATA = join(dir, "orca");
+    process.env.DS_STATE_ROOT = dirname(s.db.filename);   // the launch line reads this loop.db's accounts table
     process.env.DS_CLAUDE_SYSTEM_JSON_DIR = join(dir, "orca");
     const path = join(dir, "studio"); mkdirSync(path);
     const wt = `local::${path}`, proj = s.get("projects", { label: "fx" })!;
@@ -738,6 +739,17 @@ describe("U52a: start and restart a Studio off Orca", () => {
     expect(readFileSync(/^exec bash '(.*)'$/.exec(String(ops(r.fake, "terminal.send").at(-1)!.text))![1]!, "utf8")).toContain(join("claude-profiles", "acct-b", "home"));
     expect(r.fake.terms.has(r.shell)).toBe(true);
     expect(r.fake.terms.has(r.old)).toBe(false);
+  });
+
+  test("a move to an account `ds account add` made launches on its row's folder", async () => {
+    const r = await offRig(), folder = join(r.path, "..", "ds", "acct-d");
+    mkdirSync(folder, { recursive: true });
+    r.s.upsert("accounts", { agent: "claude", account: "acct-d" }, { label: "d", source: "ds", config_dir: folder, observed_at: T });
+    await move(r, { account: "acct-d", from: "claude:acct-a" });
+    const typed = String(ops(r.fake, "terminal.send").at(-1)!.text);
+    const line = readFileSync(/^exec bash '(.*)'$/.exec(typed)![1]!, "utf8");
+    expect(line).toContain(`CLAUDE_CONFIG_DIR=${folder}`);
+    expect(line).not.toContain("claude-profiles");
   });
 
   test("a replay after the start began gets that terminal back: no second Studio", async () => {

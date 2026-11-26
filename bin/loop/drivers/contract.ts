@@ -6,9 +6,10 @@
 // such a roster (bin/commands/spawn-squad-ts.ts), and a start of one fails.
 import { join } from "node:path";
 import { existsSync, statSync } from "node:fs";
-import { ROOT } from "../core/store.ts";
+import { ROOT, stateRoot } from "../core/store.ts";
+import { folderOf } from "../../lib/account-dirs.ts";
 import { answerMenu, resumeSpec } from "./claude.ts";
-import { accountHome, claudeLine, markTrusted, systemJsonDir, utf8Locale, type ClaudeConfig } from "./claude-launch.ts";
+import { claudeLine, markTrusted, systemJsonDir, utf8Locale, type ClaudeConfig } from "./claude-launch.ts";
 import type { ContractSeat, Driver, DriverModule, Keyed, Member, Poked, Seat, StartMeta, Started } from "./types.ts";
 
 export const LOCAL = "local::";
@@ -21,12 +22,13 @@ export const wtFolder = (wt: string | null | undefined): string | null => {
 const isDir = (p: string) => { try { return statSync(p).isDirectory(); } catch { return false; } };
 
 // The account's config for the launch line and the folder its .claude.json is in: none or `-` is
-// the default login, `system` the system login without CLAUDE_CONFIG_DIR, any other a managed profile.
+// the default login, `system` the system login without CLAUDE_CONFIG_DIR, any other the folder the
+// accounts table names for it (bin/lib/account-dirs.ts).
 function account(acct: string | null): { config: ClaudeConfig; dir: string } | { error: string } {
   const env = process.env;
   if (!acct || acct === "-") return { config: null, dir: systemJsonDir(env) };
   if (acct === "system") return { config: { system: true }, dir: systemJsonDir(env) };
-  const home = accountHome(env, acct);
+  const home = folderOf(stateRoot(), "claude", acct, env);
   return isDir(home) ? { config: { home }, dir: home } : { error: `no Claude home for account ${acct} (${home})` };
 }
 
