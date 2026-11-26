@@ -23,6 +23,7 @@ import { rolePrompt } from "../reconcilers/requests.ts";
 import { approvedPlans, REVALIDATE_WHY } from "../reconcilers/ready.ts";
 import { ensureTransition, intents, type Target } from "../pause/pause.ts";
 import { ROOT, type Row, type Store } from "../core/store.ts";
+import { openRemoval } from "../squad/project-removal.ts";
 import { spawn } from "../io/orca.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 import { limitInt } from "../settings/limits.ts";
@@ -294,6 +295,9 @@ const squad: Fulfiller & { scope: "host" } = {
     const op = (a.payload as { op?: string }).op;
     // A wish that still carries a script replay (written before U158) is not run again.
     if (payloadOf(r).argv) return { failed: "this squad wish carries a pre-U158 script replay; ask again" };
+    // remove-project KTD6: no squad starts in a project that is being removed.
+    const removing = op === "create" || op === "resume" ? openRemoval(x.store, a.project) : null;
+    if (removing !== null) return { failed: `'${a.project}' is being removed (request ${removing})` };
     if (op === "create") return create(a, x, r);
     if (op === "archive") return archive(a, x, r);
     if (op === "suspend") {

@@ -246,13 +246,16 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .tab.on{background:#283040;border-color:#3a4458;color:var(--fg)} .tab.blk{color:var(--red)} .tab.done{color:var(--green)}
 .qbody{padding:16px 20px;overflow:auto;display:flex;flex-direction:column;gap:12px}
 .qbody .top{display:flex;align-items:center;gap:8px;font:12px var(--mono);color:var(--mut)} .qbody h3{margin:0;font-size:17px}
-.qbody .qtxt{font-size:14px;color:#c9cdd6;white-space:pre-wrap}
+.qbody .qtxt{font-size:14px;color:#c9cdd6}
+.md.qmd{padding:0;overflow:visible;overflow-wrap:anywhere;min-width:0;max-width:100%} .md.qmd>:first-child{margin-top:0} .md.qmd>:last-child{margin-bottom:0}
+.md.qmd ul,.md.qmd ol{margin:4px 0;padding-left:20px} .md.qmd :is(h3,h4,h5,h6){margin:8px 0 4px;font-size:inherit;font-weight:700}
+.qbody h3,.chat-q h3,.opt,.sugg{overflow-wrap:anywhere}
 .qbody .prline{display:flex;align-items:center;font-size:13px;color:var(--mut)} .qbody .prline .prchip{margin-left:0}
 .opts{display:flex;flex-direction:column;gap:6px}
 .pnote{font-size:13px;color:var(--amber);background:var(--amber-bg);border:1px solid #4a3a1e;border-radius:7px;padding:9px 12px}
 .opt{display:flex;gap:10px;text-align:left;border:1px solid var(--line);background:var(--panel2);border-radius:7px;padding:9px 12px;cursor:pointer}
 .opt:hover{border-color:#3a4458} .opt.on{border-color:var(--amber);background:var(--amber-bg)} .opt .n{font:600 13px var(--mono);color:var(--mut)}
-.opt .l{font-weight:600} .opt .d{font-size:12px;color:var(--mut);margin-top:2px} .opt .rec{font:600 10px var(--mono);color:var(--amber);letter-spacing:.06em;text-transform:uppercase;margin-left:8px}
+.opt .l{font-weight:600} .opt .d{font-size:12px;color:var(--mut);margin-top:2px} .opt .rec{font:600 10px var(--mono);color:var(--amber);letter-spacing:.06em;text-transform:uppercase;margin-left:8px} .opt .n{flex:none} .opt .n+*{min-width:0}
 .qbody textarea{width:100%;min-height:60px;resize:vertical;background:#0f1218;border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:8px 10px;font:13px var(--sans)}
 .qfoot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line);flex-wrap:wrap} .qfoot .sp{flex:1}
 .link-chip{display:inline-block;margin-left:6px;font:600 11px var(--mono);opacity:.8}
@@ -264,7 +267,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .msg .sj{font-weight:600;color:var(--fg)} .msg .bd{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin-top:4px} .msg .due{color:var(--red)} .msg .un{color:var(--amber)}
 .start-err{font-size:12px} .start-count{font-size:12px;margin-top:2px} .bad{color:var(--red)}
 @media (max-width:600px){.startsq{padding:0} .startsq .mbox{width:100%!important;height:100%;max-height:none;border:0;border-radius:0}}
-.chat-modal{z-index:55} .mbox.chat{width:min(760px,100%);height:85vh} .chat-wrap{flex:1;min-height:120px;position:relative;display:flex;flex-direction:column}
+.chat-modal{z-index:55} .doc-modal{z-index:57} .mbox.chat{width:min(760px,100%);height:85vh} .chat-wrap{flex:1;min-height:120px;position:relative;display:flex;flex-direction:column}
 .chat-log{flex:1;min-height:0;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:10px}
 .chat-turn{display:flex;flex-direction:column;font-size:13px;line-height:1.5;min-width:0} .chat-time{font:11px var(--mono);color:var(--dim);margin-top:3px}
 .chat-turn.op{align-items:flex-end} .chat-turn.op .bubble{max-width:80%;background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:8px 12px;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -292,7 +295,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-scr{flex:none;min-height:32px;margin-left:8px} .mbox.chat>.mhd{flex-wrap:nowrap}
 .chat-seg{flex:none;display:inline-flex;margin-left:8px;border:1px solid var(--line);border-radius:8px;overflow:hidden} .chat-segb{margin:0;border:0;border-radius:0;min-height:32px;padding:0 9px} .chat-segb.on{background:var(--amber-bg);color:var(--amber)}
 .chat-q{display:flex;flex-direction:column;gap:8px;padding:4px 0} .chat-q h3{margin:0;font-size:15px} .chat-qnav{display:flex;align-items:center;gap:8px;font:12px var(--mono);color:var(--dim)}
-.chat-qprompt{font:13px/1.45 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere} .chat-qopt{display:block;width:100%;text-align:left;min-height:44px;white-space:normal} .chat-qesc{align-self:flex-start;background:none;border:0;color:var(--dim);font:12px var(--mono);text-decoration:underline;cursor:pointer;padding:8px 0}
+.chat-qprompt{font:13px/1.45 var(--sans);white-space:pre-wrap;overflow-wrap:anywhere} .chat-qprompt.md{white-space:normal} .chat-qopt{display:block;width:100%;text-align:left;min-height:44px;white-space:normal} .chat-qesc{align-self:flex-start;background:none;border:0;color:var(--dim);font:12px var(--mono);text-decoration:underline;cursor:pointer;padding:8px 0}
 .chat-ask{color:var(--amber);font-weight:700;margin-left:4px}
 .chat-screen{margin:0;padding:8px;font:11px/1.35 var(--mono);white-space:pre;overflow-x:auto;background:var(--bg);border:1px solid var(--line);border-radius:6px} .chat-screen-at{display:block;margin-top:4px}
 .chat-note{flex:1 1 100%;font:11px var(--mono);color:var(--dim)} .chat-strip{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:6px;min-width:0}
@@ -1556,7 +1559,17 @@ function fallbackCopy(text) {
 // stripped so none can be forged), bold runs on what is left, and the placeholders come back newest first.
 // So a URL in backticks stays code, a link's URL is never linked twice and no anchor lands inside another's href.
 function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
-function mdToHtml(src, soft) {
+// A bare URL's trailing punctuation, unbalanced ")" and escaped entity belong to the sentence: [url, tail].
+function urlTail(u) {
+  let tail = "";
+  for (;;) {
+    const c = u.slice(-1), ent = u.match(/&[a-z]+;$/i);   // a trailing escaped entity (&amp; from a bare &) leaves whole
+    if (ent) { tail = ent[0] + tail; u = u.slice(0, -ent[0].length); continue; }
+    if (/[.,;:!?]/.test(c) || (c === ")" && u.split("(").length < u.split(")").length)) { tail = c + tail; u = u.slice(0, -1); } else return [u, tail];
+  }
+}
+// slug (a question card): a #NN of 2+ digits outside code and links is that repo's PR.
+function mdToHtml(src, soft, slug) {
   const lines = esc(String(src ?? "").replace(/\u0000/g, "")).split(/\r?\n/), out = []; let code = [], inCode = false, list = "", para = [];
   const bold = (s) => s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   const a = (href, text) => '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + text + "</a>";
@@ -1567,15 +1580,11 @@ function mdToHtml(src, soft) {
       // A bare URL: no space, < > " ` * or placeholder, and it stops at the escaped &lt; &gt; &quot;
       // (an <https://…> autolink drops its brackets).
       .replace(/&lt;(https?:\/\/(?:(?!&lt;|&gt;|&quot;)[^\s<>"`*\u0000])+)&gt;/gi, (m, u) => put(a(u, u)))
-      .replace(/https?:\/\/(?:(?!&lt;|&gt;|&quot;)[^\s<>"`*\u0000])+/gi, (u) => {
-        let tail = "";
-        for (;;) {
-          const c = u.slice(-1), ent = u.match(/&[a-z]+;$/i);   // a trailing escaped entity (&amp; from a bare &) leaves whole
-          if (ent) { tail = ent[0] + tail; u = u.slice(0, -ent[0].length); continue; }
-          if (/[.,;:!?]/.test(c) || (c === ")" && u.split("(").length < u.split(")").length)) { tail = c + tail; u = u.slice(0, -1); } else break;
-        }
+      .replace(/https?:\/\/(?:(?!&lt;|&gt;|&quot;)[^\s<>"`*\u0000])+/gi, (found) => {
+        const [u, tail] = urlTail(found);
         return (/^https?:\/\/./i.test(u) ? put(a(u, u)) : u) + tail;
       });
+    if (slug) s = s.replace(/(?<![A-Za-z0-9_.])#(\d{2,})\b/g, (m, n) => put(a("https://github.com/" + esc(String(slug)) + "/pull/" + n, m)));
     s = bold(s);
     for (let k = ph.length - 1; k >= 0; k--) s = s.replace("\u0000" + k + "\u0000", () => ph[k]);
     return s;
@@ -1638,7 +1647,7 @@ function markCrewRow(s, m) {
   }, 120);
 }
 function showCrewRow(s, m) { bus.dispatchEvent(new CustomEvent("show-crew", { detail: { s, m } })); }
-function UnitsBox({ s, flow, toast, onPlan }) {
+function UnitsBox({ s, flow, toast, onPlan, planOpen }) {
   const cards = new Map(((flow && flow.cards) || []).map((c) => [c.key, c]));
   const key = "units-done:" + s.label + "/" + s.topic;
   const [showDone, setShowDone] = useState(() => lstore.get(key, false));
@@ -1654,7 +1663,7 @@ function UnitsBox({ s, flow, toast, onPlan }) {
       <span class="num tok" title=${u.tokens ? tokTip(u.tokens) : ""}>${u.tokens ? "≈" + fmtTok(u.tokens.spent) : ""}${u.review_tokens ? html`<span class="muted" title="its headless review session and sub-agents"> +review ≈${fmtTok(u.review_tokens.spent)}</span>` : ""}</span>
       <span class="num cpuh" title=${u.cpu ? "CPU-hours its Builders used (reaped child processes included) · peak " + (u.cpu.peak_cpu_pct == null ? "?" : Math.round(u.cpu.peak_cpu_pct) + "%") + " CPU · peak " + kbText(u.cpu.peak_rss_kb) + " RAM" : ""}>${cpuH(u.cpu)}</span>
       <span class=${"ust " + u.state.replace(" ", "")} title=${u.state === "blocked" ? "waiting on: " + [...u.deps, ...(u.ext_deps || []).filter((d) => d.status !== "done" && d.status !== "closed-done").map((d) => d.ref + " (" + d.status + ")")].join(", ") : ""}>${flowLabel(cards.get(s.label + "/" + s.topic + "/" + u.slug)) || u.wait_label || (u.state === "blocked" && (u.deps.length || (u.ext_deps || []).length) ? ((u.ext_deps || []).find((d) => d.status === "missing") ? "blocked · missing " + u.ext_deps.find((d) => d.status === "missing").ref : "blocked · " + (u.deps.length + (u.ext_deps || []).length) + " dep" + (u.deps.length + (u.ext_deps || []).length > 1 ? "s" : "")) : (u.state === "stale" && u.reasons ? u.state + ": " + u.reasons : u.state))}</span><span><${PrChip} pr=${u.pr} /></span><${UnitActions} s=${s} u=${u} toast=${toast} onDetails=${() => setDet(u.slug)} /></div>`)}
-    ${det && s.units.find((x) => x.slug === det) && html`<${UnitDetails} s=${s} u=${s.units.find((x) => x.slug === det)} toast=${toast} onClose=${() => setDet(null)} onShow=${showCrewRow} onPlan=${onPlan} />`}
+    ${det && s.units.find((x) => x.slug === det) && html`<${UnitDetails} s=${s} u=${s.units.find((x) => x.slug === det)} toast=${toast} onClose=${() => setDet(null)} onShow=${showCrewRow} onPlan=${onPlan} planOpen=${planOpen} />`}
         ${s.unit_tokens && s.unit_tokens.spent > 0 && html`<div class="tier" title="price-weighted tokens (cache write ×2 on 1h, ×1.25 on 5m; cache read ×0.05 Opus, ×0.1 other; output ×5; input ×1), review included: the sum of the unit rows above">spent ≈${fmtTok(s.unit_tokens.spent)} over ${s.unit_tokens.units} units (7 days)</div>`}</div>`;
 }
 
@@ -1940,23 +1949,36 @@ function QPr({ pr }) {
   return html`<span onClick=${(e) => e.stopPropagation()}><${PrChip} pr=${{ num: pr.num, status: pr.state, url: pr.url }} /></span>`;
 }
 
-// #<n> in a question's text is a link too when the squad has a repo slug (U87). Not a PR
-// reference: a plan path, an issue key such as PRD-18424, a unit, or a bare # with no number.
+// A question's one-line text: a bare http(s) URL is a link, and #<n> is one when the squad has a repo slug (U87).
+// Not a PR reference: a plan path, an issue key such as PRD-18424, a unit, or a bare # with no number.
 function linkedQ(text, slug) {
-  if (text == null || !slug) return text;
-  const re = /(?<![A-Za-z0-9_.])#(\d{2,})\b/g;
+  if (text == null) return text;
+  const re = /(https?:\/\/[^\s<>"`*]+)|(?<![A-Za-z0-9_.])#(\d{2,})\b/gi;
   const s = String(text);
-  if (!re.test(s)) return text;
-  re.lastIndex = 0;
   const out = [];
   let last = 0, m;
   while ((m = re.exec(s))) {
+    const shown = m[1] ? urlTail(m[1])[0] : m[0];
+    if (m[1] ? !/^https?:\/\/./i.test(shown) : !slug) continue;
     if (m.index > last) out.push(s.slice(last, m.index));
-    out.push(html`<a key=${m.index} href=${"https://github.com/" + slug + "/pull/" + m[1]} target="_blank" rel="noopener" onClick=${(e) => e.stopPropagation()}>${m[0]}</a>`);
-    last = m.index + m[0].length;
+    out.push(html`<a key=${m.index} href=${m[1] ? shown : "https://github.com/" + slug + "/pull/" + m[2]} target="_blank" rel="noopener" onClick=${(e) => e.stopPropagation()}>${shown}</a>`);
+    last = m.index + shown.length;
   }
+  if (!out.length) return text;
   if (last < s.length) out.push(s.slice(last));
   return out;
+}
+
+// A question's markdown as one plain line, for list rows and tooltips, so they never show raw markers.
+function mdPlain(text) {
+  if (text == null) return text;
+  return String(text).replace(/\[([^\]]+)\]\(https?:\/\/[^)\s]+\)/gi, "$1").replace(/^[ \t]*(?:#{1,6}|[-*+])[ \t]+/gm, "")
+    .replace(/\*\*|`/g, "").replace(/\s*\n\s*/g, " ").trim();
+}
+
+// A question's text, drawn like a chat reply. Soft mode keeps a single newline as a line break; mdToHtml escapes first.
+function QMd({ cls, text, slug }) {
+  return html`<div class=${"md qmd " + cls} dangerouslySetInnerHTML=${{ __html: mdToHtml(text, true, slug) }}></div>`;
 }
 
 // studio(): close and start file a request the Studio runs (POST /api/request: a requests row the loop
@@ -2168,8 +2190,8 @@ function LoopNotes({ notes, open, setOpen, sq, setSq, toast, onShow }) {
         ${n.act && html`<${ActBtn} n=${n} toast=${toast} />`}
         <button class="btn sm" disabled=${busy} onClick=${() => dismiss([n])}>Dismiss</button></div>
       <div class="l2">${linkedQ(noteTitle(n), n.repo_slug)}</div>
-      ${n.text && n.text !== n.title && n.text !== noteTitle(n) && html`<div class="lndet">${linkedQ(n.text, n.repo_slug)}</div>`}
-      ${n.why && html`<div class="lndet">Why: ${linkedQ(n.why, n.repo_slug)}</div>`}
+      ${n.text && n.text !== n.title && n.text !== noteTitle(n) && html`<div class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}</div>`}
+      ${n.why && html`<div class="lndet">Why: ${linkedQ(mdPlain(n.why), n.repo_slug)}</div>`}
     </div>`)}
   </div>`;
 }
@@ -2189,11 +2211,11 @@ const docLabel = (n) => /^plan-/.test(n.id || "") ? "Open plan" : "Open doc";
 function QOptions({ n, val, rec, termOnly, onPick, disabled }) {
   return html`<div class="opts">${n.choices.map((c, j) => termOnly
     ? html`<div key=${c.label} class="opt" style=${{ cursor: "default" }}><span class="n">${j + 1}.</span><span><span class="l">${c.label}</span>
-        ${c.does && html`<div class="d">${c.does}</div>`}</span></div>`
+        ${c.does && html`<div class="d">${linkedQ(c.does, n.repo_slug)}</div>`}</span></div>`
     : html`<button key=${c.label} class=${"opt" + (c.label === val ? " on" : "")} disabled=${!!disabled} onClick=${() => onPick(c.label)}>
         <span class="n">${j + 1}.</span><span><span class="l">${c.label}</span>${c.label === rec && html`<span class="rec">recommended</span>`}
-          ${c.does && html`<div class="d">${c.does}</div>`}
-          ${c.label === rec && n.why && html`<div class="d">Why: ${n.why}</div>`}</span></button>`)}</div>`;
+          ${c.does && html`<div class="d">${linkedQ(c.does, n.repo_slug)}</div>`}
+          ${c.label === rec && n.why && html`<div class="d">Why: ${linkedQ(n.why, n.repo_slug)}</div>`}</span></button>`)}</div>`;
 }
 // U278: the read-only View of a member's (or a squad's) messages: the rows as stored, newest first. It
 // only reads GET api/messages, so opening it never marks a message read or acks it.
@@ -2446,7 +2468,8 @@ const chatDraftFiles = (project, topic, wt) => (Array.isArray(chatDraft(project,
 const chatNewReply = (project, m) => m.reply_at != null && lstore.get(chatSeenKey(project, m.wt), m.reply_at) < m.reply_at;
 const chatMailTip = (m) => m.unread + " unread · " + m.reply_due + " waiting for a reply";
 const chatMemberAria = (m, mail, fresh) => m.label + (mail > 0 ? ", " + mail + " mail" : "") + (fresh ? ", new reply" : "");
-function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
+// planOpen: the doc modal (onPlan) is stacked over this panel, so Esc closes the doc only.
+function ChatPanel({ project, topic, wt, label, onClose, onSeen, onPlan, planOpen }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [text, setText] = useState(String(chatDraft(project, topic, wt).text || ""));
@@ -2466,9 +2489,9 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
   const [qAt, setQAt] = useState(0);                // which of several open questions the Question view shows
   const [, bump] = useState(0);
   const log = useRef(null), input = useRef(null), cur = useRef(wt), tabs = useRef(null), menuOn = useRef(false), swBtn = useRef(null);
-  const pick = useRef(null), held = useRef({}), slots = useRef({}), seq = useRef(0);
+  const pick = useRef(null), held = useRef({}), slots = useRef({}), seq = useRef(0), planOn = useRef(false);
   const qText = useRef(null);   // held: wt -> its attached images; slots: wt -> uploads in flight
-  cur.current = shown.wt; menuOn.current = menu;
+  cur.current = shown.wt; menuOn.current = menu; planOn.current = !!planOpen;
   const url = "api/chat?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(shown.wt);
   const load = async () => {
     const at = shown.wt;
@@ -2489,7 +2512,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
   useEffect(() => {
     load(); const t = setInterval(load, 3000);
     const key = (e) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || planOn.current) return;
       e.stopPropagation();
       if (menuOn.current) { setMenu(false); if (swBtn.current && swBtn.current.focus) swBtn.current.focus(); return; }   // closes only the member list
       onClose();   // the card behind it keeps its own Esc for the next press
@@ -2629,6 +2652,7 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
   const view = qView ? "question" : showScreen ? "screen" : "chat";
   const goView = (v) => { setQOn({ wt: shown.wt, key: blockKey, on: v === "question" }); if (v !== "question") setScreenOn(v === "screen"); };
   const qCur = qItems[Math.min(qAt, qItems.length - 1)] || null;
+  const qRec = qCur && qCur.source !== "picker" ? qCur.suggestion : null;   // a picker's option 1 is only first, not recommended
   // A tap on a choice is the card's own answer: sendAnswer posts api/answer with the question's `since`.
   const answerQ = async (q, answer) => {
     const to = shown.wt;
@@ -2679,9 +2703,11 @@ function ChatPanel({ project, topic, wt, label, onClose, onSeen }) {
           ${qCur.menu ? html`<div class="chat-qprompt">${qCur.prompt.join("\n") || shown.label + "'s screen shows a menu"}</div>
             ${qCur.options.map((o, i) => html`<button key=${i} type="button" class="btn chat-qopt" disabled=${pressing === shown.wt} onClick=${() => pressOpt(i)}>${i + 1}. ${o}</button>`)}
             <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(() => goView("chat"))}>Esc · leave the menu</button>`
-          : html`<h3>${qCur.title}</h3>${qCur.question && qCur.question !== qCur.title && html`<div class="chat-qprompt">${qCur.question}</div>`}
+          : html`<h3>${linkedQ(qCur.title, qCur.repo_slug)}</h3>${qCur.doc && onPlan && html`<div><button type="button" class="btn sm" data-ev="open-doc" onClick=${() => onPlan(qCur.doc)}>${docLabel(qCur)}</button></div>`}
+            ${qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
             ${qCur.answerable
-              ? html`<${QOptions} n=${qCur} onPick=${(l) => answerQ(qCur, l)} />
+              ? html`<${QOptions} n=${qCur} rec=${qRec} onPick=${(l) => answerQ(qCur, l)} />
+                ${qRec && !qCur.choices.some((c) => c.label === qRec) && html`<div class="sugg"><b>Suggested:</b> ${qRec}${qCur.why ? html` — ${linkedQ(qCur.why, qCur.repo_slug)}` : ""}</div>`}
                 ${qCur.choices.length === 0 && html`<textarea key=${qCur.key} class="chat-qtext" ref=${qText} placeholder="Type your answer"></textarea><button type="button" class="btn pri" onClick=${() => { const v = qText.current && qText.current.value.trim(); if (v) answerQ(qCur, v); }}>Send</button>`}`
               : html`<${QOptions} n=${qCur} termOnly=${true} /><button type="button" class="btn chat-qopt" onClick=${() => goView("screen")}>Open Screen to answer</button>`}`}</div>`
         : showScreen
@@ -2751,6 +2777,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
   useEffect(() => {
     const onKey = (e) => {
       if (planOpen || chat) return;
+      if (e.key === "Enter" && e.target.tagName === "A") return;   // Enter on a focused link opens it; it never sends
       if (e.key === "Escape") return onClose();
       if (!n) return;
       // At phone width Enter sends (the key reads "send", enterkeyhint; a phone has no Ctrl+Enter).
@@ -2771,7 +2798,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
   const rec = isPicker ? null : n.suggestion; // a picker's option 1 is only first, not recommended
   return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="mbox">
-      <div class="tabs">${items.map((m, j) => html`<button key=${nkey(m)} title=${m.title}
+      <div class="tabs">${items.map((m, j) => html`<button key=${nkey(m)} title=${mdPlain(m.title)}
         class=${"tab" + (j === i ? " on" : "") + (m.id && sentQ.has(akey(m)) ? " done" : m.kind === "blocking" ? " blk" : "")}
         onClick=${() => setAt(nkey(m))}>${m.id && sentQ.has(akey(m)) ? "✓" : "□"} ${sqName(m)}: ${m.title}</button>`)}
         <span class="sp" style=${{ flex: 1 }}></span><button class="btn sm mclose" onClick=${onClose}>✕</button></div>
@@ -2788,19 +2815,19 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           <div>${n.changes && html`<button class="btn sm" data-ev="what-changed" onClick=${() => onPlan({ ...n.doc, view: "changes", changes: n.changes })}>What changed</button> `}<button class="btn sm" data-ev="open-doc" onClick=${() => onPlan({ ...n.doc, view: "full", changes: n.changes })}>${docLabel(n)}</button></div></div>`}
         ${n.plain && !n.revision && n.facts && html`<div class="qfacts">${[n.facts.steps + " steps", n.facts.hard + " hard", n.facts.start_now + " start now"].map((t) => html`<span key=${t} class="qfact">${t}</span>`)}</div>`}
         ${n.plain && !n.revision && html`<ul class="qplain">${n.plain.map((l) => html`<li key=${l.label}><b>${l.label}</b>${l.text}</li>`)}</ul>`}
-        ${!n.plain && n.text !== n.title && html`<div class="qtxt">${linkedQ(n.text, n.repo_slug)}</div>`}
+        ${!n.plain && n.text !== n.title && html`<${QMd} cls="qtxt" text=${n.text} slug=${n.repo_slug} />`}
         ${n.id && isPicker && !termOnly && html`<div class="pnote">This mirrors the live picker in ${n.from}'s terminal: your pick is pressed there as its option, and the entry clears once the picker records it.</div>`}
         ${n.id && (termOnly
           ? html`<div class="pnote">Answer it in ${n.from}'s terminal — this picker has several questions or allows several picks, so the board can't answer it. It clears once it is answered.</div>
             <${QOptions} n=${n} termOnly=${true} />`
           : html`${studioCard && n.when && html`<div class="when mut">When done: ${n.when}</div>`}
             ${!(studioCard && one !== null) && html`<${QOptions} n=${n} val=${val} rec=${rec} onPick=${set} />`}
-          ${rec && !n.choices.some((c) => c.label === rec) && html`<div class="sugg"><b>Suggested:</b> ${rec}${n.why ? " — " + n.why : ""}</div>`}
+          ${rec && !n.choices.some((c) => c.label === rec) && html`<div class="sugg"><b>Suggested:</b> ${rec}${n.why ? html` — ${linkedQ(n.why, n.repo_slug)}` : ""}</div>`}
           ${!studioCard && html`<textarea enterkeyhint="send" placeholder=${"Or type your own answer (" + (typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches ? "Enter" : "⌘/Ctrl+Enter") + " sends)"} value=${isChoice ? "" : val} onInput=${(e) => set(e.target.value)}></textarea>`}`)}
         ${n.plain && n.revision && html`<details class="qdetails"><summary>Whole plan in plain words</summary>${n.facts && html`<div class="qfacts">${[n.facts.steps + " steps", n.facts.hard + " hard", n.facts.start_now + " start now"].map((t) => html`<span key=${t} class="qfact">${t}</span>`)}</div>`}
           <ul class="qplain">${n.plain.map((l) => html`<li key=${l.label}><b>${l.label}</b>${l.text}</li>`)}</ul></details>`}
         ${n.plain && (n.text !== n.title || n.why) && html`<details class="qdetails"><summary>Details for the record</summary>
-          ${n.text !== n.title && html`<div class="qtxt">${linkedQ(n.text, n.repo_slug)}</div>`}
+          ${n.text !== n.title && html`<${QMd} cls="qtxt" text=${n.text} slug=${n.repo_slug} />`}
           ${n.why && html`<div class="qtxt">Why: ${linkedQ(n.why, n.repo_slug)}</div>`}</details>`}
       </div>
       <div class="qfoot">
@@ -2821,7 +2848,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           : html`<button class="btn pri" title=${n.command} onClick=${() => copy(n.command, toast)}>Approve</button>`}
       </div>
     </div>
-    ${chat && html`<${ChatPanel} ...${chat} onClose=${() => setChat(null)} />`}</div>`;
+    ${chat && html`<${ChatPanel} ...${chat} onPlan=${onPlan} planOpen=${planOpen} onClose=${() => setChat(null)} />`}</div>`;
 }
 
 // The crew row's status dot: red = stuck until someone acts, amber = held or in transition, otherwise the
@@ -2925,7 +2952,7 @@ const unitTitle = (u) => {
 };
 // `ask` (the nkey of the unit's open question) and `onAsk` come from a Flow card; `onShow(member)` opens the squad and
 // marks the member's crew row; `onPlan(plan)` opens the plan viewer. All optional, so the Work units row opens the same window.
-function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, card }) {
+function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, planOpen, card }) {
   const [asking, setAsking] = useState(false);
   const [chat, setChat] = useState(null);
   const bm = builderMember(s, u);
@@ -2958,7 +2985,7 @@ function UnitDetails({ s, u, toast, onClose, ask, onAsk, onShow, onPlan, card })
   const canChat = open && bm && bm.wt, canShow = open && bm && onShow, canAnswer = ask && onAsk;
   useEffect(() => { const k = (e) => { if (e.key === "Escape" && !asking && !chat) onClose(); }; document.addEventListener("keydown", k); return () => document.removeEventListener("keydown", k); }, [asking, chat]);
   return html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    ${chat && html`<${ChatPanel} project=${s.label} topic=${s.topic} wt=${chat.wt} label=${chat.label} onClose=${() => setChat(null)} />`}
+    ${chat && html`<${ChatPanel} project=${s.label} topic=${s.topic} wt=${chat.wt} label=${chat.label} onPlan=${onPlan} planOpen=${planOpen} onClose=${() => setChat(null)} />`}
     <div class="mbox ud" style=${{ width: "min(680px,100%)" }} role="dialog" aria-modal="true" aria-label=${"Details of " + u.slug}>
       <div class="mhd"><span class="ud-head"><span class="ud-title">${unitTitle(u)}</span><span class="ud-slug mono mut">${u.slug}${u.plan_unit ? " · plan " + u.plan_unit : ""}</span></span><span class="sp"></span><button class="btn sm mclose ud-close" autofocus onClick=${onClose}>✕</button></div>
       <div class="md">
@@ -3323,7 +3350,7 @@ function SquadMenu({ s, toast, onChat }) {
       <button class="btn sm red" title="Finished for good: removes its worktrees and moves it to Archived (it can't be resumed; unmerged branches are kept)" onClick=${() => studio({ project: s.label, action: "close", topic: s.topic }, toast, closeConfirm(s))}>Archive squad</button>
     </div></span>`;
 }
-function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
+function Detail({ s, onPlan, planOpen, toast, setAsk, askKeys, prerequisites, flow }) {
   const [waitMember, setWaitMember] = useState(null);
   const [chatWith, setChatWith] = useState(null);
   const [msgWith, setMsgWith] = useState(null);
@@ -3338,7 +3365,7 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
   if (s.gates) flags.push(html`<span class="flag soft">⛳ ${s.gates} gates</span>`);
   if (s.lfg_assumptions) flags.push(html`<span class="flag soft">lfg ${s.lfg_assumptions} assumptions</span>`);
   return html`<div class="detail">
-    ${chatWith && html`<${ChatPanel} project=${s.label} topic=${s.topic} wt=${chatWith.wt} label=${chatWith.label} onClose=${() => setChatWith(null)} />`}
+    ${chatWith && html`<${ChatPanel} project=${s.label} topic=${s.topic} wt=${chatWith.wt} label=${chatWith.label} onPlan=${onPlan} planOpen=${planOpen} onClose=${() => setChatWith(null)} />`}
     ${msgWith && html`<${MessagesPanel} project=${s.label} topic=${s.topic} wt=${msgWith.wt} label=${msgWith.label} onClose=${() => setMsgWith(null)} />`}
     ${waitMember && html`<${DependencyWait} s=${s} m=${waitMember} prerequisites=${prerequisites} toast=${toast} close=${() => setWaitMember(null)} />`}
     ${(s.type === "testing" || s.autonomy === "lfg" || (s.ship_mode && s.ship_mode !== "ce-pipeline" && s.ship_mode !== "?") || flags.length > 0 || backendChip(s)) && html`<div class="dbar">
@@ -3360,7 +3387,7 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
         const ak = askingKey(k, q.since);
         return html`<div key=${q.id || q.question} class=${"qrow" + (ak && sentQ.has(ak) ? " sent" : "")} onClick=${openable ? () => setAsk(k) : undefined}>
           <span><span class=${"kind " + (q.blocking ? "blocking" : "question")}>${q.blocking ? "blocking" : "question"}</span></span>
-          <span class="t" title=${q.question}>${linkedQ(q.title, s.repo_slug)}<${QPr} pr=${q.pr} /></span>
+          <span class="t" title=${mdPlain(q.question)}>${linkedQ(q.title, s.repo_slug)}<${QPr} pr=${q.pr} /></span>
           <span class="fr">${ak && sentQ.has(ak) ? html`<span class="ok">✓ sent</span>` : "from " + q.asker}</span>
           <span class=${"ag" + ((q.age_min || 0) > 24 * 60 ? " old" : "")}>${fmtAge(q.age_min)}</span></div>`; })}</div>`}
       ${s.override && html`<div class="box sqpin"><h3>Pinned for the squad <span>until cleared or the squad closes</span></h3><div><span class="badge pin">⚑ ${[[s.override.model, s.override.effort].filter(Boolean).join(" "), s.override.account ? "@" + acctEmail(s.override.account) : s.override.plan].filter(Boolean).join(" · ")}</span> <button class="btn sm ovr-clear" title="Clear the squad's pin: its next picks are automatic again" onClick=${() => override(s, { wt: null }, { scope: "squad", clear: true }, toast)}>Clear</button></div></div>`}
@@ -3383,7 +3410,7 @@ function Detail({ s, onPlan, toast, setAsk, askKeys, prerequisites, flow }) {
       <${PastAnswers} s=${s} />
       <${Docs} s=${s} onPlan=${onPlan} toast=${toast} closed=${s.status === "done"} atArchive=${true} />
       ${s.mermaid && html`<${GraphBox} s=${s} />`}
-      ${(s.units || []).length > 0 && html`<${UnitsBox} s=${s} flow=${flow} toast=${toast} onPlan=${onPlan} />`}
+      ${(s.units || []).length > 0 && html`<${UnitsBox} s=${s} flow=${flow} toast=${toast} onPlan=${onPlan} planOpen=${planOpen} />`}
       ${(s.leftovers || []).length > 0 && html`<${LeftoversBox} s=${s} toast=${toast} />`}
       ${(s.proposals || []).length > 0 && html`<div class="box"><h3>Proposed fixes</h3>${s.proposals.map((p) => html`<div key=${p.id} class="prop">
           <span>${p.id}: ${p.topic}</span><button class="btn pri sm" title=${p.command} onClick=${() => copy(p.command, toast)}>Approve</button></div>`)}</div>`}
@@ -3488,7 +3515,7 @@ function PastAnswers({ s }) {
   }, [s.label, s.topic]);
   if (!rows || !rows.length) return null;
   return html`<details class="box past"><summary><h3>Past answers <span>${rows.length}${older != null ? "+" : ""}</span></h3></summary>
-    ${rows.map((q) => html`<div key=${q.seq} class="qrow"><span class="t" title=${q.question || ""}>${linkedQ(q.title || q.id, s.repo_slug)}<${QPr} pr=${q.pr} /></span>
+    ${rows.map((q) => html`<div key=${q.seq} class="qrow"><span class="t" title=${mdPlain(q.question || "")}>${linkedQ(q.title || q.id, s.repo_slug)}<${QPr} pr=${q.pr} /></span>
       <span>${q.answer}</span><span class="fr">via ${q.via}</span></div>`)}
     ${older != null && html`<button class="btn sm" data-q="older" disabled=${busy} onClick=${() => load(older)}>older ›</button>`}</details>`;
 }
@@ -4344,8 +4371,8 @@ function App() {
         <div class="l2">${linkedQ(n.title, n.repo_slug)}</div>
         ${debrief ? (n.text && n.text !== n.title && html`<div class="lndet dbr">${linkedQ(n.text, n.repo_slug)}</div>`)
           : n.plain_from === "section" && (n.plain || []).find((l) => l.label === "What you get") ? html`<div class="lndet">${n.plain.find((l) => l.label === "What you get").text}</div>`
-          : n.text && n.text !== n.title && html`<div class="lndet">${linkedQ(n.text, n.repo_slug)}</div>`}
-        ${n.why && html`<div class="lndet">Why: ${linkedQ(n.why, n.repo_slug)}</div>`}</div>`;
+          : n.text && n.text !== n.title && html`<div class="lndet">${linkedQ(mdPlain(n.text), n.repo_slug)}</div>`}
+        ${n.why && html`<div class="lndet">Why: ${linkedQ(mdPlain(n.why), n.repo_slug)}</div>`}</div>`;
     })}</div>`}
     <${LoopNotes} notes=${data.loop_notes || []} open=${notesOpen} setOpen=${(o) => { setNotesOpen(o); lstore.set("b:notes", o); }} sq=${notesSq} setSq=${(v) => { setNotesSq(v); lstore.set("b:notes-sq", v); }} toast=${setToast} onShow=${show} />
     ${startOpen && data.project && html`<${StartSquad} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setStartOpen(false)} />`}
@@ -4379,7 +4406,7 @@ function App() {
             <${SpentCell} r=${s.spent_since} />
             <span class="c-menu"><${SquadMenu} s=${s} toast=${setToast} onChat=${setSquadChat} /></span>
           </div>
-          ${isOpen && html`<${Detail} s=${s} onPlan=${setPlan} toast=${setToast} setAsk=${setAsk} askKeys=${askKeys} prerequisites=${data.prerequisites} flow=${data.flow} />`}
+          ${isOpen && html`<${Detail} s=${s} onPlan=${setPlan} planOpen=${!!plan} toast=${setToast} setAsk=${setAsk} askKeys=${askKeys} prerequisites=${data.prerequisites} flow=${data.flow} />`}
         </${React.Fragment}>`; })}
       ${shown.some((s) => st.get(key(s)).total > 0) && html`<${UnitKey} />`}
       ${shown.some((s) => suspendedLike(s) || ["pausing", "paused", "resuming", "held-only"].includes(s.display_key || s.display_status)) && html`<div class="statelegend">${STATE_LEGEND.join(" · ")}</div>`}
@@ -4406,7 +4433,7 @@ function App() {
 
     ${data.flow && html`<${FlowSection} flow=${data.flow} lstore=${lstore} focus=${flowFocus} onOpen=${openFlowUnit} now=${Date.now() / 1000} showProject=${!data.project} />`}
     ${flowUnit && (() => { const sq = squads.find((x) => x.label === flowUnit.label && x.topic === flowUnit.topic), un = sq && (sq.units || []).find((x) => x.slug === flowUnit.slug);
-      return un ? html`<${UnitDetails} s=${sq} u=${un} toast=${setToast} ask=${flowUnit.ask} onAsk=${setAsk} onShow=${showMember} card=${flowUnit.card} onPlan=${setPlan} onClose=${() => setFlowUnit(null)} />`
+      return un ? html`<${UnitDetails} s=${sq} u=${un} toast=${setToast} ask=${flowUnit.ask} onAsk=${setAsk} onShow=${showMember} card=${flowUnit.card} onPlan=${setPlan} planOpen=${!!plan} onClose=${() => setFlowUnit(null)} />`
         : html`<${FlowCardDetails} card=${flowUnit.card} now=${Date.now() / 1000} onAsk=${setAsk} onClose=${() => setFlowUnit(null)} />`; })()}
     ${(data.accounts || []).length > 0 && html`<details class="acc-sec" id="accounts" open=${accOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== accOpen) { setAccOpen(o); lstore.set("b:accts", o); } }}>
       <summary>Accounts<small>${data.accounts.length} · 5-hour and 7-day usage left</small><span class="asof">${asOf(data.as_of && data.as_of.accounts)}</span></summary>
@@ -4430,13 +4457,13 @@ function App() {
     <${Briefs} list=${data.briefings || []} schedule=${data.briefing_schedule} project=${data.project || (data.squads[0] && data.squads[0].label) || ""} />
     <${EventLog} tick=${data.generated_at} toast=${setToast} />
 
-    ${squadChat && html`<${ChatPanel} ...${squadChat} onClose=${() => setSquadChat(null)} />`}
-    ${studioChat && html`<${ChatPanel} ...${studioChat} onSeen=${() => bumpSeen((n) => n + 1)} onClose=${() => { setStudioChat(null); bumpSeen((n) => n + 1); }} />`}
+    ${squadChat && html`<${ChatPanel} ...${squadChat} onPlan=${setPlan} planOpen=${!!plan} onClose=${() => setSquadChat(null)} />`}
+    ${studioChat && html`<${ChatPanel} ...${studioChat} onPlan=${setPlan} planOpen=${!!plan} onSeen=${() => bumpSeen((n) => n + 1)} onClose=${() => { setStudioChat(null); bumpSeen((n) => n + 1); }} />`}
     ${feedbackOpen && html`<${FeedbackPanel} summary=${data.feedback} project=${data.project} toast=${setToast} onClose=${() => setFeedbackOpen(false)} />`}
     ${settingsOpen && data.project && html`<${Settings} project=${data.project} projects=${data.projects} toast=${setToast} onClose=${() => setSettings(false)} />`}
 
     ${ask && html`<${AskOverlay} cardActions=${cardActions} data=${data} onDebrief=${openDebriefOf} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}
-    ${plan && html`<div class="modal" onClick=${(e) => { if (e.target === e.currentTarget) setPlan(null); }}>
+    ${plan && html`<div class="modal doc-modal" onClick=${(e) => { if (e.target === e.currentTarget) setPlan(null); }}>
       <div class="mbox"><div class="mhd"><span>${plan.name}</span><span class="sp"></span>${plan.changes && html`<button class="btn sm" data-ev="plan-switch" onClick=${() => setPlan({ ...plan, view: plan.view === "changes" ? "full" : "changes" })}>${plan.view === "changes" ? "Show full plan" : "What changed"}</button> `}<button class="btn sm mclose" onClick=${() => setPlan(null)}>✕</button></div>
         ${plan.changes && plan.view === "changes"
           ? html`<div class="md pdiff" data-ev="plan-diff">${plan.changes.diff.length ? plan.changes.diff.map((d, di, all) => html`<div key=${di}>${(di === 0 || all[di - 1].heading !== d.heading) && html`<h4>${d.heading}</h4>`}${d.unit && html`<h5 class="pdiff-unit" data-ev="plan-diff-unit">${d.unit}</h5>`}${d.lines.map((l, k) => html`<div key=${k} class=${"dl " + (l.t === "+" ? "add" : "del")}>${(l.t === "+" ? "+ " : "- ") + l.text}</div>`)}</div>`) : html`<p class="mut">No lines differ from the approved copy.</p>`}

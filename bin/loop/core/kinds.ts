@@ -40,6 +40,7 @@ export const REQUESTS = {
   // account-free-resets U4: one press of a grant's Use button; `key` is the idempotency key every try reuses.
   "account-reset": obj({ agent: str, account: str, grant: str, key: str, ...THROUGH }),
   "leftover-remove": obj({ wt: str, fingerprint: opt(str), ...THROUGH }),   // archive-leftovers U4: the board's Remove
+  "remove-project": obj({ label: str, by: opt(str), ...THROUGH }),   // remove-project U3: fulfil/remove-project.ts (project NULL)
   alert: obj({ id: opt(str), title: opt(str), text: opt(str), option: opt(str), why: opt(str), unit: opt(str), card: opt(str), reason: opt(str), fields: opt(rec) }),
   "alert-clear": obj({ prefix: opt(str), id: opt(str) }),
   answer: obj({ id: str, answer: str, seq: opt(num), card_wt: opt(str), choices: opt(arr(any)), transcript: opt(str), tool_use_id: opt(str), via: opt(str) }),

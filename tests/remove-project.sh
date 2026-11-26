@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# remove-project.sh — remove-project U2: `ds remove-project <label> --dry-run` on a temp state root:
+# remove-project.sh — remove-project U2, U3: `ds remove-project <label>` on a temp state root (the loop not running):
 # blockers with the command that clears them, the plan when clear, refusals, and no write at all.
 set -euo pipefail
 
@@ -45,8 +45,8 @@ for bad in .. a/b nobody; do
   has "refused $bad: nothing changed" "$out" "Nothing changed."
 done
 dry fx
-ck "no --dry-run: exit 1" "$rc" "1"
-has "no --dry-run: not available yet" "$out" "removal itself is not available yet"
+ck "blocked removal: exit 1" "$rc" "1"
+has "blocked removal: names the blocker" "$out" "cannot be removed"
 dry --dry-run
 ck "no label: exit 2" "$rc" "2"
 ck "refusals: wrote nothing" "$(snapshot)" "$before"
@@ -63,6 +63,10 @@ has "clear: what stops" "$out" "A removal would stop:"
 has "clear: what moves" "$out" "$S/.removed/fx-<YYYY-MM-DD>/"
 has "clear: what stays" "$out" "the repo clone repos/fx"
 ck "clear: wrote nothing" "$(snapshot)" "$before"
+dry fx
+ck "loop down: exit 1" "$rc" "1"
+has "loop down: says the loop carries it out" "$out" "a removal is carried out by the loop"
+ck "loop down: wrote nothing" "$(snapshot)" "$before"
 
 echo "remove-project: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

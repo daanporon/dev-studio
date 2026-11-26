@@ -828,7 +828,7 @@ rm -f "$SD/qpr-sq.json"
 qp="$(bun -e 'const fs = require("fs"), h = fs.readFileSync(process.argv[1], "utf8");
   const html = (s, ...v) => s.map((x, i) => x + (v[i] ?? "")).join("");
   const take = (name) => { const i = h.indexOf("function " + name + "("); return h.slice(i, h.indexOf("\n}", i) + 2); };
-  const f = new Function("html", take("linkedQ") + "\nreturn linkedQ;")(html);
+  const f = new Function("html", take("urlTail") + take("linkedQ") + "\nreturn linkedQ;")(html);
   const show = (t, slug) => console.log([].concat(f(t, slug)).join(""));
   show("Is PR #21196 good to merge? Also see PRD-18424 and U7.", "acme/app");
   show("plain one", "acme/app");
