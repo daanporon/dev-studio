@@ -1057,6 +1057,10 @@ eq "restart: a done squad writes the restart wish" "$(dbq "SELECT restart_by AS 
 # POST /api/focus is gone (no jumps from the board).
 eq "focus: route is gone (POST -> 405)"       "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"q7\"}" "http://127.0.0.1:$PORT/api/focus")" "405"
 
+# remove-project U4: this board serves one project, so it removes no other.
+eq "remove-project: another project is 403" "$(post -H "$O" -H "$CT" -d '{"project":"zzrm","confirm":"zzrm"}' "http://127.0.0.1:$PORT/api/remove-project")" "403"
+eq "remove-project: and its blockers are 403" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/remove-project?project=zzrm")" "403"
+
 # POST /api/poke files a `poke` request: the loop types a wake-up line into the squad's Lead (what
 # the stall banner's button does).
 P="http://127.0.0.1:$PORT/api/poke"; : > "$TMP/poke.log"
@@ -1530,6 +1534,33 @@ eq  "code change: one restart per change"      "$(grep -c 'listening on' "$TMP/s
 touch "$TMP/srvcopy/bin/loop/core/store.ts"
 for _ in $(seq 1 600); do [ "$(grep -c 'listening on' "$TMP/serve5.log")" -gt "$((n0 + 1))" ] && break; sleep 0.1; done
 eq  "code change: a loop module restarts"      "$(grep -c 'listening on' "$TMP/serve5.log")" "$((n0 + 2))"
+stop_own "$SPID"; SPID=""
+
+# remove-project U4: GET /api/remove-project lists the blockers; POST files one `remove-project` request (project
+# NULL) only for the exact label of a project nothing blocks. On a board of all projects.
+dbw "INSERT INTO projects (label, observed_at) VALUES ('zzrm', 1)"
+DS_STATE_ROOT="$DBR" bun "$ROOT/bin/board/board-server.ts" 127.0.0.1 "$PORT" "$ROOT/web/board.html" bun "$ROOT/bin/board/board-data.ts" --json >"$TMP/serve-rm.log" 2>&1 &
+SPID=$!
+for _ in $(seq 1 600); do grep -q 'listening on' "$TMP/serve-rm.log" && break; sleep 0.1; done
+RM="http://127.0.0.1:$PORT/api/remove-project"; O="Origin: http://127.0.0.1:$PORT"
+rm_post(){ post -H "$O" -H "$CT" -d "{\"project\":\"$1\",\"confirm\":\"$2\"}" "$RM"; }
+rm_rows(){ bun "$TMP/dbq.ts" "$DBR/loop.db" "SELECT id, project, payload, done_at FROM requests WHERE kind = 'remove-project' ORDER BY id"; }
+jt "remove-project: a clear project has no blocker" <(curl -s "$RM?project=zzrm") '.blockers == [] and .removing == null and (.archive_hint | endswith("/.removed/zzrm-<YYYY-MM-DD>/"))'
+jt "remove-project: a blocked one names them" <(curl -s "$RM?project=$LBL") '[.blockers[].kind] | index("open-squad") != null'
+eq "remove-project: an invalid name is 400"   "$(rm_post ../x ../x)" "400"
+eq "remove-project: another confirm is 409"   "$(rm_post zzrm Zzrm)" "409"
+eq "remove-project: an unknown project is 409" "$(rm_post zznone zznone)" "409"
+eq "remove-project: a blocked project is 409" "$(rm_post "$LBL" "$LBL")" "409"
+has "remove-project: the refusal names the blocker" "$(jq -r .error "$TMP/post.out")" "cannot be removed: "
+eq "remove-project: a foreign Origin is 403"  "$(post -H 'Origin: http://evil.example' -H "$CT" -d '{"project":"zzrm","confirm":"zzrm"}' "$RM")" "403"
+eq "remove-project: no refused POST wrote a row" "$(rm_rows)" "[]"
+eq "remove-project: a clear project is 202"   "$(rm_post zzrm zzrm)" "202"
+RMID="$(rid)"
+jt "remove-project: one row, no project, the label in the payload" <(rm_rows) '(length == 1) and .[0].project == null and (.[0].payload | fromjson | .label == "zzrm" and .by == "board")'
+eq "remove-project: again while it runs is 409" "$(rm_post zzrm zzrm)" "409"
+has "remove-project: says it is already removing" "$(jq -r .error "$TMP/post.out")" "already removing"
+dbw "UPDATE requests SET done_at = 2, result = '{\"ok\":false,\"error\":\"x\"}' WHERE id = $RMID"
+eq "remove-project: after a failed one it files again" "$(rm_post zzrm zzrm)" "202"
 stop_own "$SPID"; SPID=""
 
 # U11: the gh log never names the real repo (the guard test in fulfil-feedback-post.test.ts covers a post with no origin).

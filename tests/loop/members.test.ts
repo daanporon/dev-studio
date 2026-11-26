@@ -3,7 +3,7 @@
 // Run worker that is no longer a member gets one `unbind`. Hermetic: a copy of
 // tests/fixtures/loop/state and the fake Orca (bin/loop/fakes/orca.ts).
 import { beforeAll, afterAll, afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LoopActuator, type Fulfiller } from "../../bin/loop/core/actuator.ts";
@@ -420,6 +420,25 @@ describe("a stray shell in a member's worktree", () => {
     await tick(T + 5 + 2 * STRAY_EVERY);
     expect(orca.of("terminal-close")).toHaveLength(1);
     expect(events(s, "stray_terminal_closed")).toHaveLength(1);
+  });
+
+  // U5 (issue #125): an open `ds account add`'s login terminal is the add's, never a stray, even in a member's worktree.
+  test("an open account add's quiet login terminal in a held squad's worktree is left alone", async () => {
+    const { s, orca, wt, tick, cards } = await loopRig();
+    up(orca, wt("builder"));
+    orca.shells.push({ wt: wt("builder"), handle: "term_login", title: "ds-account-add claude:realp" });
+    const id = Number(s.requestAny("account-add", { agent: "claude", name: "realp", project: "fx" }, { project: "fx" }).row.id);
+    // The add's own fulfiller watches it meanwhile: a folder with no login yet and a screen it can read.
+    const folder = join(s.root, "accounts", "claude", "realp");
+    mkdirSync(folder, { recursive: true });
+    orca.screens.set("term_login", { pane: "tab9:leaf9", wt: wt("builder"), cwd: folder, env: {}, lines: ["Paste code here if prompted >"], line: "", out: null });
+    s.upsert("requests", { id }, { result: JSON.stringify({ state: "terminal_open", folder, started_at: T, opened_at: T,
+      terminal: { via: "orca", handle: "term_login", project: "fx" } }) });
+    await tick(T + 5);
+    await tick(T + 5 + STRAY_EVERY);
+    expect(orca.of("terminal-close")).toEqual([]);
+    expect(events(s, "stray_terminal_closed")).toEqual([]);
+    expect(cards()).toEqual([]);
   });
 
   // U261: the adopted Studio (squad _studio) is no squad member: a shell beside it is never a stray,
