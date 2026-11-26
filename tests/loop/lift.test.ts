@@ -82,8 +82,13 @@ describe("ds limit-lift", () => {
     process.env.DS_STATE_ROOT = s.root;
     await dsLift(["claude", "acct-a"]);
     await tick(s);
+    // The list is the accounts table's (issue #125): two dev-studio logins with their folders.
+    for (const a of ["acct-a", "acct-b"]) {
+      mkdirSync(join(s.root, "accounts", "claude", a), { recursive: true });
+      s.upsert("accounts", { agent: "claude", account: a }, { source: "ds", config_dir: join(s.root, "accounts", "claude", a) });
+    }
     const be = join(s.root, "backend");
-    writeFileSync(be, "#!/usr/bin/env bash\ncase \"$1\" in account-list) printf 'claude\\tacct-a\\tx\\nclaude\\tacct-b\\ty\\n' ;; esac\n");
+    writeFileSync(be, "#!/usr/bin/env bash\nexit 0\n");
     chmodSync(be, 0o755);
     const r = Bun.spawnSync([join(ROOT, "bin", "lib", "accounts-refresh.sh")], { env: { ...process.env, BACKEND: be, DS_STATE_ROOT: s.root, DS_NOW: String(T), HOME: s.root } });
     expect(r.exitCode).toBe(0);
