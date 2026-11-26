@@ -12,7 +12,7 @@ const CODE_RE = /^[A-Z0-9]{4,8}-[A-Z0-9]{4,8}$/;
 const ANSI = /\x1b\[[0-9;]*m/g;
 
 /** The device login screen: the URL to open and the one-time code (on a line of its own). */
-export function readDeviceScreen(screen: string): { url?: string; device_code?: string; prompt: boolean } {
+function readDeviceScreen(screen: string): { url?: string; device_code?: string; prompt: boolean } {
   const lines = screen.replace(ANSI, "").split("\n").map((l) => l.trim());
   const url = lines.map((l) => l.match(URL_RE)?.[0]).find(Boolean);
   const code = lines.find((l) => CODE_RE.test(l));

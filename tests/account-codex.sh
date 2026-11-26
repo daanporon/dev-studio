@@ -40,8 +40,9 @@ case "$*" in
     printf '2. Enter this one-time code \033[90m(expires in 15 minutes)\033[0m\n   \033[94mAB12-CD34E\033[0m\n'
     for _ in $(seq 400); do [ -e "$FAKE_DIR/approve" ] && break; sleep 0.05; done
     [ -e "$FAKE_DIR/approve" ] || exit 1
-    printf '{"OPENAI_API_KEY":null,"tokens":{"id_token":"S","access_token":"S","refresh_token":"S","account_id":"acct-work"}}\n' \
-      | sed "s/\"S\"/\"SENTINEL-made-up-token\"/g" > "$CODEX_HOME/auth.json" ;;
+    t='"SENTINEL-made-up-token"'
+    printf '{"OPENAI_API_KEY":null,"tokens":{"id_token":%s,"access_token":%s,"refresh_token":%s,"account_id":"acct-work"}}\n' \
+      "$t" "$t" "$t" > "$CODEX_HOME/auth.json" ;;
   app-server)
     while IFS= read -r l; do
       case "$l" in
