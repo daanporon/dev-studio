@@ -23,9 +23,9 @@ function rig() {
     const str = (y: any): string => Array.isArray(y) ? y.map(str).join("") : typeof y === "function" ? `[fn:${fns.push(y) - 1}]` : y === false || y == null ? "" : String(y);
     return o + t + (k < v.length ? str(v[k]) : "");
   }, "");
-  const make = new Function("useState", "useRef", "useEffect", "html", "sendAnswer", "sqName", "fmtAge", "linkedQ", "docLabel", "copy", "QPr", "ActBtn", "ChatPanel", "hhmmss", "post",
+  const make = new Function("useState", "useRef", "useEffect", "html", "sendAnswer", "sqName", "fmtAge", "linkedQ", "docLabel", "copy", "QPr", "ActBtn", "ChatPanel", "hhmmss", "post", "mdPlain", "QMd",
     `${qoptions}\n${sentSrc}\n${keysSrc}\nconst sendAnswer2 = async (label, topic, id, answer, since) => { sentQ.set(askingKey(label + "/" + topic + "/" + id, since), "10:00"); };\n${overlay.replace("sendAnswer(", "sendAnswer2(")}\nreturn { AskOverlay, sentQ, pruneSent, akey };`);
-  const api = make(useState, useRef, () => {}, html, null, () => "sq", () => "1m", (t: string) => t, () => "doc", () => {}, null, null, null, (d: Date) => d.toISOString().slice(11, 19), null);
+  const api = make(useState, useRef, () => {}, html, null, () => "sq", () => "1m", (t: string) => t, () => "doc", () => {}, null, null, null, (d: Date) => d.toISOString().slice(11, 19), null, (t: string) => t, null);
   const q = (id: string, since: string | null, label = "p", squad = "one") => ({ squad, label, kind: "question", id, since, title: id, titled: true, text: id, options: [], choices: [], age_min: 1 });
   const render = (items: any[], atKey: string) => { at = 0; fns.length = 0;
     const out = api.AskOverlay({ items, at: atKey, setAt() {}, onClose() {}, onShow() {}, toast() {}, onPlan() {}, planOpen: false, cardActions, data: { squads: [] } }) as string;

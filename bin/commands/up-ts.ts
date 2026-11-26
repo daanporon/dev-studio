@@ -28,6 +28,8 @@ import { chooseSquadBackend, type BackendName } from "../backend/registry.ts";
 import { herdrBin } from "../backend/herdr-bin.ts";
 import { herdrPlace } from "../backend/herdr.ts";
 import { readGet, readRoster } from "../loop/settings/settings";
+import { dbPath, openReadOnly } from "../loop/core/store.ts";
+import { openRemoval } from "../loop/squad/project-removal.ts";
 
 export const help = `[<git-url> | <label> | --home <selector>] [--label <name>] [--backend <orca|orca-lite|tmux|herdr>] [--worktree <auto|git|treehouse>] [--account <id>] [--skills] — install if needed, start the loop, add or reconcile a project, have the loop start its Studio, start the board (up.sh)`;
 
@@ -150,6 +152,13 @@ export async function run(argv: string[]): Promise<number> {
   const arg = homeArg || process.env.HOME_REPO!;
   const label = parsed.label || dsLabel(arg);
   const root = stateRoot(), stateDir = join(root, label);
+  // remove-project KTD12: no project comes up under a label that is being removed.
+  if (existsSync(dbPath(root))) {
+    const ro = openReadOnly(root);
+    let removing: number | null;
+    try { removing = openRemoval(ro, label); } finally { ro.close(); }
+    if (removing !== null) { writeErr(`up: '${label}' is being removed (request ${removing}); run ds up again once it finishes. Nothing changed.\n`); return 2; }
+  }
   const dispState = join(stateDir, "dispatcher.json");
   const prevDoc: any = readJson(dispState);
   const existingHome = String(prevDoc?.home_repo || "");
