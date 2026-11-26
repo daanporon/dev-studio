@@ -9,7 +9,7 @@
 -- `project` is the writer's member's project, `-` for a note written outside a member, `?` for an
 -- imported line whose prefix names no known project. State moves new → drafted / project-only /
 -- already-fixed → filed → fixed / closed; any not-yet-filed note can be dismissed (and restored to new).
--- No row is ever deleted.
+-- Their rows stay: `ds remove-project` keeps both tables.
 --
 -- feedback_drafts: the text the Studio's drafter writes for one or more notes (a duplicate cluster):
 -- a new issue (`issue`) or a comment on an open one (`add-to`, `target` = its number). Only these

@@ -2,7 +2,7 @@
 -- tables hold gets a copy in an `orca_*` table, so the clean-up can move readers there and drop the
 -- old columns, and a squad on another backend leaves these tables alone:
 --   orca_runs          squads.run_id, squads.task_id                       (one row per squad)
---   orca_coordinators  coordinators (the Run's coordinator terminal)       (one row per squad; gone_at, never deleted)
+--   orca_coordinators  coordinators (the Run's coordinator terminal)       (one row per squad; ends with gone_at)
 --   orca_dispatches    dispatches (each dispatch id and its worktree)      (one row per dispatch)
 --   orca_workers       observed_workers.dispatch_id, dispatch, dispatch_at, dispatch_seen_at (one row per worktree)
 --   orca_pauses        pause_members.dispatch, task_completed              (one row per paused member)

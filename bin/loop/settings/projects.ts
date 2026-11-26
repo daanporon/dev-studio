@@ -14,8 +14,9 @@ export function prUrl(s: string): { nwo: string; n: number } | null {
 
 // U253: the names the tests give their throwaway projects (zz<name>_<pid>, sstate-jrnl-<pid>,
 // pickseam-<pid>, _<name>). A project with one of these names is never ticked: a test that leaked into
-// the live state costs the loop nothing. No row is deleted by code. `ds import` and the readers still
-// see them (the tests' own projects live in temp roots and are imported there).
+// the live state costs the loop nothing. Skipping one deletes none of its rows (only `ds remove-project`
+// deletes a project's rows, into an archive). `ds import` and the readers still see them (the tests' own
+// projects live in temp roots and are imported there).
 export const TEST_PROJECT_PREFIXES = ["zz", "sstate-", "pickseam-", "_"];
 export function isTestProject(name: string): boolean {
   return TEST_PROJECT_PREFIXES.some((p) => name.startsWith(p));

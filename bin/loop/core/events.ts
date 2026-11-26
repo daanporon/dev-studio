@@ -1,4 +1,4 @@
-// events.ts — the append-only event log (Bun). Rows are only ever added; a reader keeps the last id
+// events.ts — the append-only event log (Bun). Rows are only added (only `ds remove-project` deletes a project's, into its archive); a reader keeps the last id
 // it saw and asks for what came after it (the board's SSE stream, `ds events --since`).
 import type { Row, Store } from "./store.ts";
 

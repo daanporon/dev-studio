@@ -1,5 +1,5 @@
 // question-card-structure U1: a question's markdown in both views (web/board.html AskOverlay and the chat's
-// Question view), the real page mounted in happy-dom: formatting, links, the recommendation, Open doc and Esc.
+// docked question card), the real page mounted in happy-dom: formatting, links, the recommendation, Open doc and Esc.
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -53,7 +53,7 @@ function linkedParts(view: any) {
   expect(hrefs(opts[1])).toEqual(["https://github.com/acme/app/pull/31000"]);
 }
 
-test("Needs-you and the chat's Question view draw the question's markdown, links and recommendation; Esc closes the doc first", async () => {
+test("Needs-you and the chat's docked question card draw the question's markdown, links and recommendation; Esc closes the doc first", async () => {
   const t = await open([need("q1", { doc })], [chatQ("q1", { doc })]);
   const { d, until, click, esc } = t;
   try {
@@ -71,7 +71,7 @@ test("Needs-you and the chat's Question view draw the question's markdown, links
     expect(card.textContent).toContain("Why: shown in");
 
     await click(d.querySelector(".chat-btn"));
-    const view = await until(() => d.querySelector("[data-chat-question]") as any, "the Question view");
+    const view = await until(() => d.querySelector(".chat-dock.open [data-chat-question]") as any, "the docked question card");
     drawn(view.querySelector(".md.chat-qprompt"));
     linkedParts(view);
     expect(view.querySelector(".opt .rec")?.textContent).toBe("recommended");
@@ -93,13 +93,13 @@ test("Needs-you and the chat's Question view draw the question's markdown, links
   } finally { await t.r.window.happyDOM.close(); }
 }, 30000);
 
-test("a picker question has no recommendation in the Question view, and no Open doc without a doc", async () => {
+test("a picker question has no recommendation on the docked card, and no Open doc without a doc", async () => {
   const picker = { source: "picker", picker_answerable: true };
   const t = await open([need("q2", picker)], [chatQ("q2", picker)]);
   try {
     await t.click(t.row);
     await t.click(await t.until(() => t.d.querySelector(".chat-btn") as any, "the Chat button"));
-    const view = await t.until(() => t.d.querySelector("[data-chat-question]") as any, "the Question view");
+    const view = await t.until(() => t.d.querySelector(".chat-dock.open [data-chat-question]") as any, "the docked question card");
     expect(view.querySelectorAll(".opts .opt").length).toBe(2);
     expect(view.querySelector(".rec")).toBeNull();
     expect(view.textContent).not.toContain("Why:");

@@ -143,8 +143,10 @@ else does. The ones you read most:
 **What happened.**
 
 - `events`: one row per thing the loop did or saw, with `at`, `project`,
-  `squad`, `member`, `kind` and a JSON `payload`. Nothing deletes them. This is
-  the first place to look when something went wrong.
+  `squad`, `member`, `kind` and a JSON `payload`. The one thing that deletes them
+  is `ds remove-project`, which moves a removed project's rows, these and those in
+  its other tables, into an archive under `state/.removed/`. This is the first
+  place to look when something went wrong.
 - `health`: one row, the loop's pid and its last tick (`tick_at`, `tick_no`,
   `tick_ms`, `progress_at`).
 
@@ -441,8 +443,10 @@ old squad JSON once, `bin/loop/db/export-json.ts` writes the squad snapshots,
 `bin/loop/db/seed.ts` seeds a project's wishes from what runs, and
 `bin/loop/db/migrate-host.ts` imports each project's existing state once.
 `bin/loop/db/project-rows.ts` copies one project's rows to an archive file and
-then deletes them from `loop.db` in one transaction that counts them again first
-(remove-project; no caller yet).
+then deletes them from `loop.db`: the big log tables (`events`, `orca_calls`,
+`relayed`) in short batches, then the rest in one transaction that counts them
+again first. The `remove-project` fulfiller, `bin/loop/fulfil/remove-project.ts`,
+calls it.
 
 ### drivers/
 
