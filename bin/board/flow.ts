@@ -42,6 +42,8 @@ export type FlowUnit = {
   place?: number[] | null;              // slot.ts placeOf: the loop's pickup rank (queued units; focus included)
   urgent?: boolean;                     // the unit's doc urgent flag (⚡)
   unlocks?: number; unlock?: "on";    // open units waiting on this one (⬆N); `unlock` on while the line ranks it by that
+  parked?: "held" | "behind" | null;   // not started and waiting on the operator: itself, or behind such a unit (board-data parkedUnits)
+  stopped?: boolean;                   // started, but nobody is on it (paused, pausing, resuming, suspended, gone)
   focus?: "on" | "held" | "muted" | null;  // open unit of the focus squad: next in line / the squad holds its share / any other
   lane?: string; lane_rule?: string | null; lane_cpu_h?: number; lane_limit_h?: number;   // a light-tagged unit's lane (board-data unitLane)
   tier_key?: string | null;             // units.tier (standard | hard), not the display label
@@ -312,6 +314,7 @@ export function flowOf(input: FlowInput) {
       paused: isPaused, paused_s: isPaused && u.paused_at != null ? Math.max(0, now - u.paused_at) : null, stuck, slow, stale, active_at: u.active_at ?? null, typical_s: typ,
       needs_you: s.stage === "needs_you", ask: u.question?.id ? ukey(u.project, u.squad, u.question.id) : null,
       note: isPaused ? u.paused_why ?? s.note : s.stage === "queued" && u.paused ? u.paused_why ?? s.note : s.note, pr: u.pr, open_pr: s.open_pr, queue_pos: null as number | null, urgent: u.urgent === true, focus: u.focus ?? null, ...(u.unlocks ? { unlocks: u.unlocks, ...(u.unlock ? { unlock: "on" as const } : {}) } : {}),
+      ...(u.parked ? { parked: u.parked } : {}), ...(u.stopped ? { stopped: true } : {}),
       ...(u.lane ? { lane: u.lane, lane_rule: u.lane_rule ?? null, lane_cpu_h: u.lane_cpu_h, lane_limit_h: u.lane_limit_h } : {}),
     };
   });

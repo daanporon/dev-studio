@@ -475,6 +475,11 @@ graph's text, the work-units list is unaffected). Closed squads collapse into a 
 **Archived** section at the bottom, so a finished squad's units/PRs/plan stay viewable
 without cluttering the live board.
 
+A unit with links (`links` on the unit doc, from its plan) shows the first one as a chip beside its name in the **work units**
+list, with `+N` when there are more (the badge's tooltip names them). The chip opens that page in a new tab; a click anywhere
+else on the row opens the unit's details window, whose **More info** row lists every link. A link's label is its Linear or Jira
+ticket id, `owner/repo#n` for a GitHub issue or pull request, else the host name. Only `http://` and `https://` links are shown.
+
 ## Recover a wedged or dead role
 
 A worker can get stuck (looping, parked on a prompt) and still read `working`, or the
