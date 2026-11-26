@@ -12,12 +12,13 @@ import { LoopActuator, type Fulfiller } from "../../bin/loop/core/actuator.ts";
 import { FakeBackend as FakeOrca } from "../../bin/loop/fakes/orca.ts";
 import { importJson } from "../../bin/loop/db/import-json.ts";
 import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
-import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
+import { dbPath, open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { openRemoval } from "../../bin/loop/squad/project-removal.ts";
 import { planKey } from "../../bin/loop/fulfil/remove-project.ts";
 import { fakeContract } from "../../bin/loop/fakes/contract.ts";
 import { createWorktree } from "../../bin/loop/io/worktrees.ts";
+import { copyRows, deleteRows } from "../../bin/loop/db/project-rows.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const T = 1_800_000_000, DAY = new Date(T * 1000).toISOString().slice(0, 10);
@@ -196,5 +197,56 @@ describe("ds remove-project through the loop (remove-project U3)", () => {
     expect(r.orca.of("worktree-rm")).toEqual([]);
     expect(existsSync(join(res.archive, "pages", "_studio", "leftovers"))).toBe(true);
     expect(off.terms.has(term.terminal.id)).toBe(false);
+  }, 60_000);
+
+  // The copied step on its own: the plan stopped at `moved`, the copy made here, the plan set to `copied` with its
+  // counts, as a loop that died right after saving that step left it.
+  async function atCopied(r: ReturnType<typeof rig>, id: number, plan: Record<string, unknown> = {}) {
+    await r.run(id, () => r.step() === "moved");
+    const ep = r.s.get("episodes", planKey("fx"))!, p = JSON.parse(String(ep.result));
+    const c = copyRows(dbPath(r.S), "fx", join(p.archive, "loop-rows.db"));
+    r.s.upsert("episodes", planKey("fx"), { state: "copied", result: JSON.stringify({ ...p, step: "copied", copies: 1, copy: { counts: c.counts, rows: c.rows, set_aside: c.set_aside }, ...plan }) });
+    return { p, c };
+  }
+  const plan = (r: ReturnType<typeof rig>) => JSON.parse(String(r.s.get("episodes", planKey("fx"))!.result));
+
+  test("a replay after the delete committed finishes, the archive kept", async () => {
+    const r = rig();
+    const id = r.file();
+    const { p } = await atCopied(r, id);
+    expect(deleteRows(r.s, "fx", plan(r).copy.counts).ok).toBe(true);
+    const res = await r.run(id);
+    expect(res).toMatchObject({ ok: true, step: "removed", archive: p.archive });
+    expect(plan(r).copies).toBe(1);
+    const a = new Database(join(p.archive, "loop-rows.db"), { readonly: true });
+    expect((a.query("SELECT COUNT(*) AS n FROM squads WHERE project = 'fx'").get() as { n: number }).n).toBe(1);
+    a.close();
+    expect(labelRows(r.s)).toEqual([]);
+  }, 60_000);
+
+  test("a row added after the copy copies again, then deletes", async () => {
+    const r = rig();
+    const id = r.file();
+    await atCopied(r, id);
+    r.s.event("note", { project: "fx", payload: { late: true } });
+    const res = await r.run(id);
+    expect(res.ok).toBe(true);
+    expect(plan(r).copies).toBe(2);
+    expect(labelRows(r.s)).toEqual([]);
+    const a = new Database(join(res.archive, "loop-rows.db"), { readonly: true });
+    expect((a.query("SELECT COUNT(*) AS n FROM events WHERE project = 'fx' AND kind = 'note'").get() as { n: number }).n).toBe(2);
+    a.close();
+  }, 60_000);
+
+  test("rows that keep changing fail the removal after 5 copies, the archive kept", async () => {
+    const r = rig();
+    const id = r.file();
+    const { p } = await atCopied(r, id, { copies: 5 });
+    r.s.event("note", { project: "fx", payload: { late: true } });
+    const res = await r.run(id);
+    expect(res).toMatchObject({ ok: false, step: "copied" });
+    expect(res.error).toContain("kept changing");
+    expect(existsSync(join(p.archive, "loop-rows.db"))).toBe(true);
+    expect(labelRows(r.s)).toContain("events");
   }, 60_000);
 });
