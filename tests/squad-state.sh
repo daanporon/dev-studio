@@ -1521,5 +1521,20 @@ check "a missing plan path still records the approval" "yes" "$("$SS" "$af" plan
 check "..and writes no copy"                    "no" "$([ -e "$AC/missing-plan.approved.md" ] && echo yes || echo no)"
 rm -rf "$AC"
 
+# U5 (retest1 fixes). register-plan takes only <file> and <plan>: anything after <plan> exits 2 and writes nothing.
+x="$(tmp)"; xp="$(tmp)"; "$SS" "$x" init >/dev/null 2>&1
+printf 'U1 — Extra args — deps: none — Tier: standard\n' > "$xp"
+cp "$x" "$x.before"
+"$SS" "$x" register-plan "$xp" --dry-run >/dev/null 2>"$x.err"; rc=$?
+check "register-plan --dry-run exits 2" "2" "$rc"
+check "..and leaves the state file unchanged" "same" "$(cmp -s "$x" "$x.before" && echo same)"
+check "..names the argument and points at a scratch copy" "1 1" "$(grep -c -- 'extra argument.*--dry-run' "$x.err") $(grep -c 'no dry run.*scratch copy' "$x.err")"
+"$SS" "$x" register-plan "$xp" extra more >/dev/null 2>"$x.err"; rc=$?
+check "register-plan with extra arguments exits 2" "2" "$rc"
+check "..and leaves the state file unchanged" "same" "$(cmp -s "$x" "$x.before" && echo same)"
+check "..names them, with no dry-run hint" "1 0" "$(grep -c 'extra argument.*extra more' "$x.err") $(grep -c 'dry run' "$x.err")"
+"$SS" "$x" register-plan "$xp" >/dev/null 2>&1; rc=$?
+check "register-plan with only <plan> still registers" "0 u1-extra-args" "$rc $("$SS" "$x" get | jq -r '.units[].slug')"
+
 echo "squad-state: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
