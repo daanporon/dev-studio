@@ -7,6 +7,7 @@
 //   mergeOrcaImport / parseAccountFolders / copyLoginIds        the state observer's merge of the refresh's files
 //   setDefaultAccount / removeAccount                           `ds account default|remove` (issue #125)
 //   addAccount                                                  `ds account add`'s row: added, back or already there (U5)
+//   moveProblem / moveAccountRow / accountMembers               `ds account move`: its refusals and its row (U8)
 //
 // A disabled account has accounts.state = 'disabled'; NULL is enabled ('draining' is the v2 hook,
 // U25). pick.ts leaves a disabled account out on every rung and accountBlock names it, so nothing new
@@ -22,6 +23,7 @@
 // (credits.ts clearCredits, one `account_credits_cleared` event), even when it was not disabled. So does
 // a live login hold (claude-login-ended U2: login.ts clearLogin, one `account_login_cleared` event).
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { now, type FactRow, type Row, type Store } from "../core/store.ts";
 import { accountFolder, type AccountRow } from "../../lib/account-dirs.ts";
 import { findKind } from "../../lib/account-kinds/index.ts";
@@ -253,5 +255,47 @@ export function addAccount(store: Store, req: { agent: string; account: string; 
     store.db.run("INSERT INTO accounts (agent, account, label, config_dir, source, login_id, observed_at) VALUES (?, ?, ?, ?, 'ds', ?, ?)",
       [agent, account, account, folder, loginId, at]);
     return done("added", { account, label: account }, folder);
+  });
+}
+
+/** The token-rotation risk of one login in two folders (KTD14): said by the move's refusal and its result. */
+export const ROTATION = "two copies of one login rotate its token: the first copy to refresh logs the other out at that copy's next refresh";
+
+/** The live members that use `agent:account` (as the board's accountUsers counts them: a member with a live worker
+ *  whose configured or live account is this one), as `project/squad/role[-suffix]`. */
+export function accountMembers(store: Store, agent: string, account: string): string[] {
+  return (store.db.query(`SELECT DISTINCT m.project, m.squad, m.role, m.suffix FROM members m
+    JOIN observed_workers w ON w.project = m.project AND w.wt = m.wt AND w.gone_at IS NULL
+    WHERE COALESCE(m.status, '') != 'gone' AND COALESCE(NULLIF(m.agent, ''), 'claude') = ? AND (m.account = ? OR w.account = ?)
+    ORDER BY m.project, m.squad, m.role, m.suffix`).all(agent, account, account) as Row[])
+    .map((m) => `${m.project}/${m.squad}/${m.role}${m.suffix ? `-${m.suffix}` : ""}`);
+}
+
+/** Why `ds account move` cannot move `agent:account` now (KTD14), or null. Checks the table only: the caller adds the
+ *  live agent processes (agent-accounts). Claude only, a listed Orca row, nobody on it, and not listed by Orca any
+ *  more unless `force`. */
+export function moveProblem(store: Store, agent: string, account: string, force: boolean, env: Record<string, string | undefined> = process.env): string | null {
+  if (agent !== CLAUDE) return `only Claude accounts live in Orca's folders; ${agent}:${account} has nothing to move`;
+  if (findKind(agent)?.systemId === account) return `${agent}:${account} is the agent's own login (~/.claude) and stays where it is`;
+  const row = store.get("accounts", { agent, account });
+  if (!row) return `no ${agent} account '${account}' (ds account list)`;
+  if (row.removed_at != null) return `${agent}:${account} is removed`;
+  if (row.source === "ds") return `${agent}:${account} is already in dev-studio's folder (${accountFolder(row as AccountRow, env)})`;
+  if (row.source !== "orca") return `${agent}:${account} is not in the list (no source yet: wait for the next accounts refresh)`;
+  const folder = accountFolder(row as AccountRow, env);
+  if (!existsSync(join(folder, ".credentials.json"))) return `${folder} holds no .credentials.json: nothing logged in to move`;
+  const users = accountMembers(store, agent, account);
+  if (users.length) return `${agent}:${account} is in use by ${users.join(", ")}; move it once they are off it (disable it, then wait for them to switch at their restart)`;
+  if (row.orca_listed && !force) return `Orca still lists ${agent}:${account}: ${ROTATION}. Remove it in Orca first, or pass --force to keep both and accept that risk`;
+  return null;
+}
+
+/** The move's row (KTD14): `agent:account` now runs from `folder`, a dev-studio folder. The id, the label and every
+ *  flag stay. One `account_moved` event. */
+export function moveAccountRow(store: Store, req: { agent: string; account: string; from: string; folder: string; force: boolean; by: string }): void {
+  const { agent, account, from, folder, force, by } = req;
+  store.tx(() => {
+    store.db.run("UPDATE accounts SET config_dir = ?, source = 'ds' WHERE agent = ? AND account = ?", [folder, agent, account]);
+    store.event("account_moved", { payload: { agent, account, from, to: folder, force, by } });
   });
 }

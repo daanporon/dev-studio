@@ -8,6 +8,11 @@
 //                   backend a contract terminal, else an Orca tab in the Studio worktree (projects.studio_wt), else
 //                   none and the result names the line to run by hand; `why` once no link shows on its screen
 //   waiting_login   the screen's login URL (and a device-flow kind's code) in the result, for the CLI and board
+//   code_typed      (paste flow, U6) the code the board dropped (bin/lib/account-login-code.ts) was read, removed
+//                   and typed while the paste prompt showed; the prompt still up PROMPT_BACK_S later with no
+//                   credentials means it was not accepted: back to waiting_login with that `why`. A code that comes
+//                   once the prompt has gone is dropped untyped. Once a code was typed no screen text goes into the
+//                   result again (the URL stays as first read).
 //   done            `.credentials.json` (the kind's credentials file) appeared: afterLogin, the row (addAccount:
 //                   added, "back as <label>", or "already there as <label>", which removes only this add's folder),
 //                   the terminal closed, one forced accounts refresh
@@ -15,7 +20,8 @@
 //                   the folder stays, the terminal is closed
 // `--dir <folder>` adds a logged-in folder in one step, with no terminal: it is never moved, copied, written or
 // removed. A one-login kind is refused with its `why` before any folder is made. The screen is read only for the
-// URL and the device code: the code an operator pastes is a secret and never reaches a row, event or log.
+// URL, the device code and whether the paste prompt shows: the code an operator pastes is a secret and never
+// reaches a row, event or log, and the typing step keeps no error text (an adapter's error may echo the input).
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { finishRequest, requestActions, type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
@@ -27,6 +33,7 @@ import { refreshAccounts } from "./account-reset.ts";
 import { studioContract } from "../squad/backend.ts";
 import { findKind, type AccountKind } from "../../lib/account-kinds/index.ts";
 import { loginExit, loginLine, makeAccountFolder, nameProblem, removeMadeFolder } from "../../lib/account-folder.ts";
+import { clearLoginCode, takeLoginCode } from "../../lib/account-login-code.ts";
 
 export const DEADLINE_S = 1800;
 const CHECK_S = 2;
@@ -34,9 +41,13 @@ const NO_LINK_S = 20;     // no login link on the screen this long after the ter
 const LOGIN_ID_S = 10;    // credentials there but no login id yet: wait this long for the agent to write it
 export const NOT_FINISHED = "login not finished; the folder stays — add it with --dir or add again";
 export const NO_LINK = "no login link seen; log in in the terminal";
+export const PROMPT_BACK_S = 8;   // the paste prompt still up this long after the code was typed: not accepted
+export const NOT_ACCEPTED = "the code was not accepted: copy the code again and paste it";
+export const LATE = "the code came after the login prompt had gone, so it was not typed";
+export const NOT_TYPED = "the code could not be typed into the login terminal: paste it again, or type it there";
 
 export type LoginTerm = { via: "orca" | "contract"; handle: string; project: string };
-type Rec = Record<string, unknown> & { state?: string; folder?: string; terminal?: LoginTerm | null; started_at?: number; opened_at?: number };
+type Rec = Record<string, unknown> & { state?: string; folder?: string; terminal?: LoginTerm | null; started_at?: number; opened_at?: number; typed_at?: number };
 
 /** Where the login terminal lives. The default opens it beside the project's Studio. */
 export type Terminals = {
@@ -44,6 +55,8 @@ export type Terminals = {
   /** The screen, or null when the terminal is gone. */
   read(x: Exec, t: LoginTerm): Promise<string | null>;
   close(x: Exec, t: LoginTerm): Promise<void>;
+  /** Type `text` and then Enter; true when both went. Never returns or logs an error text: it may echo `text`. */
+  type(x: Exec, t: LoginTerm, text: string): Promise<boolean>;
 };
 
 const studioWt = (x: Exec, project: string) => (x.store.get("projects", { label: project })?.studio_wt as string | null | undefined) ?? null;
@@ -83,6 +96,17 @@ export const studioTerminals: Terminals = {
     if (t.via === "contract") await contractSeat(x, t.project, `account-add-close:${t.handle}`)?.ask("terminal.close", { id: t.handle });
     else await x.act.orca.run("terminal-close", [t.handle]);
   },
+  // The text, then Enter on its own (KTD11: chat's typing primitive, with no prefix and no copy). On Orca not with
+  // `enter`, which waits for an agent turn. Only the exit codes are looked at.
+  async type(x, t, text) {
+    if (t.via === "contract") {
+      const seat = contractSeat(x, t.project, `account-add-type:${t.handle}`);
+      return !!(await seat?.ask("terminal.send", { id: t.handle, text, submit: true }).catch(() => null))?.ok;
+    }
+    const a = await x.act.orca.run("terminal-type", [t.handle, text]).catch(() => null);
+    if (a?.code !== 0) return false;
+    return (await x.act.orca.run("terminal-type", [t.handle, "\r"]).catch(() => null))?.code === 0;
+  },
 };
 
 /** Where the operator finds the login terminal. */
@@ -112,6 +136,7 @@ export function accountAdd(opts: { terminals?: Terminals; refresh?: (root: strin
       const save = (r: Rec) => { rec = r; x.store.upsert("requests", { id }, { result: JSON.stringify(r) }); };
       const end = async (ok: boolean, set: Rec): Promise<Result> => {
         if (rec.terminal) await terms.close(x, rec.terminal).catch(() => {});
+        clearLoginCode(x.store.root, id);
         // The URL and a device code are kept only while the add runs (KTD9).
         const { url: _u, device_code: _d, ...kept } = rec;
         finishRequest(x.store, a, { ...kept, ...set, terminal: rec.terminal ?? null, state: ok ? "done" : "failed", ok }, x.now);
@@ -161,13 +186,17 @@ export function accountAdd(opts: { terminals?: Terminals; refresh?: (root: strin
           text: t ? `login terminal open: ${where(t, x)}` : `no Studio terminal to open: run this login yourself: ${line}`,
           ...(t ? {} : { line }) });
       }
-      return watch(x, kind, folder, rec, save, fail, finish, terms, env);
+      return watch(x, id, kind, folder, rec, save, fail, finish, terms, env);
     },
-    giveUp: (a, x, why) => { finishRequest(x.store, a, { ok: false, state: "failed", error: why, text: why }, x.now); return true; },
+    giveUp: (a, x, why) => {
+      clearLoginCode(x.store.root, Number(payloadOf<"account-add">(a).request));
+      finishRequest(x.store, a, { ok: false, state: "failed", error: why, text: why }, x.now);
+      return true;
+    },
   };
 }
 
-async function watch(x: Exec, kind: AccountKind, folder: string, rec: Rec, save: (r: Rec) => void, fail: (why: string) => Promise<Result>,
+async function watch(x: Exec, id: number, kind: AccountKind, folder: string, rec: Rec, save: (r: Rec) => void, fail: (why: string) => Promise<Result>,
   finish: (folder: string) => Promise<Result>, terms: Terminals, env: Record<string, string | undefined>): Promise<Result> {
   if (existsSync(join(folder, kind.credentialsFile))) {
     // The agent writes the login id beside the credentials: wait a moment for it, then add the row either way.
@@ -184,6 +213,22 @@ async function watch(x: Exec, kind: AccountKind, folder: string, rec: Rec, save:
     const screen = await terms.read(x, rec.terminal);
     if (screen === null) return fail(`login not finished (the login terminal closed); the folder stays: ${folder}`);
     const seen = kind.login.read(screen);
+    if (kind.login.flow === "paste" && rec.state === "code_typed") {
+      // Only whether the prompt came back: this screen may hold the typed code.
+      if (x.now - Number(rec.typed_at ?? x.now) >= PROMPT_BACK_S && seen.prompt)
+        save({ ...rec, state: "waiting_login", why: NOT_ACCEPTED, text: `${NOT_ACCEPTED}: ${rec.url ?? "the login link"}` });
+      return { wait: String(rec.state), at: x.now + CHECK_S };
+    }
+    if (kind.login.flow === "paste" && rec.state === "waiting_login") {
+      const code = takeLoginCode(x.store.root, id);
+      if (code !== null) {
+        if (!seen.prompt) save({ ...rec, why: LATE, text: LATE });
+        else if (!await terms.type(x, rec.terminal, code)) save({ ...rec, why: NOT_TYPED, text: NOT_TYPED });
+        else save({ ...rec, state: "code_typed", typed_at: x.now, why: null, text: "code typed: logging in" });
+        return { wait: String(rec.state), at: x.now + CHECK_S };
+      }
+      if (rec.typed_at != null) return { wait: String(rec.state), at: x.now + CHECK_S };   // the URL stays as first read
+    }
     const url = seen.url ?? rec.url as string | undefined, code = seen.device_code ?? rec.device_code as string | undefined;
     if (url && (url !== rec.url || code !== rec.device_code || rec.state !== "waiting_login")) {
       save({ ...rec, state: "waiting_login", url, ...(code ? { device_code: code } : {}), why: null,

@@ -54,7 +54,8 @@ PERM='. + {picker_kind:"permission",tool:"Bash",shown:"git push origin work",cho
 jq --arg t "$T" --argjson a "$(pk qp2 toolu_1 "$T" true)" --argjson b "$(pk qp3 toolu_3 "$T" true)" --argjson c "$(pk qp4 toolu_1 "$T" false)" \
   --argjson d "$(pk qp5 toolu_1 "$T" true)" --argjson e "$(pk qp6 toolu_6 "$T" true)" --argjson u "$(pk qpu toolu_1 "$TMP/nope.jsonl" true)" \
   --argjson p1 "$(pk pp1 toolu_1 "$T" true | jq -c "$PERM")" --argjson p2 "$(pk pp2 toolu_1 "$T" true | jq -c "$PERM")" \
-  '(.waiting_on_you[] | select(.id=="qp1") | .transcript_path) = $t | .waiting_on_you += [$a,$b,$c,$d,$e,$u,$p1,$p2,
+  --argjson p3 "$(pk pp3 toolu_1 "$T" true | jq -c "$PERM"' | .shown="PGPASSWORD=zzhunter2 psql"')" \
+  '(.waiting_on_you[] | select(.id=="qp1") | .transcript_path) = $t | .waiting_on_you += [$a,$b,$c,$d,$e,$u,$p1,$p2,$p3,
     {"id":"qc","asker":"lead","blocking":false,"question":"c?","since":"2026-10-08T09:00:00Z"},
     {"id":"qr","asker":"lead","blocking":false,"question":"r?","since":"2026-10-08T09:00:00Z"},
     {"id":"qa1","asker":"lead","blocking":false,"title":"Pick a name","question":"name?","since":"2026-10-08T09:00:00Z"},
@@ -324,6 +325,8 @@ bun -e 'import { Database } from "bun:sqlite"; const d = new Database(process.ar
 eq "permission: refused press is 409" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"pp2\",\"answer\":\"Yes\"}" "$U")" "409"
 has "permission: refused says the prompt changed" "$(cat "$TMP/post.out")" "the prompt changed"
 eq "permission: a refusal files nothing" "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'answer' AND json_extract(payload, '\$.id') IN ('pp1', 'pp2')" | jq '.[0].n')" "1"
+eq "permission: a hidden secret is 409 (U4)" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"pp3\",\"answer\":\"Yes\"}" "$U")" "409"
+has "permission: a hidden secret says the terminal" "$(cat "$TMP/post.out")" "hides a secret"
 curl -s -o "$TMP/perm.json" "http://127.0.0.1:$PORT/board.json"
 jt "permission: a refused prompt is terminal-only on the board" "$TMP/perm.json" '[.squads[] | select(.topic=="ans") | .questions[] | select(.id=="pp1" or .id=="pp2") | [.id, .picker_answerable, .picker_refused]] | sort == [["pp1",true,null],["pp2",false,"the screen shows a different command"]]'
 # Keys typed after a picker closed would land in the agent's prompt: the board refuses one whose
@@ -350,7 +353,7 @@ rm -f "$TMP/keys.rc"
 eq "picker: a failed press can be retried" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"topic\":\"ans\",\"id\":\"qp5\",\"answer\":\"Blue\"}" "$U")" "202"
 ff
 eq "picker: retry pressed option 1"   "$(tail -n1 "$TMP/keys.log")" "$(printf 'wTh\t1')"
-eq "picker: the board leaves the squad file alone" "$(jq '[.waiting_on_you[] | select(.source=="picker")] | length' "$SD/ans.json")" "9"
+eq "picker: the board leaves the squad file alone" "$(jq '[.waiting_on_you[] | select(.source=="picker")] | length' "$SD/ans.json")" "10"
 jt "board: picker source passes through" "$TMP/served.json" '.squads[] | select(.topic=="ans") | .questions[] | select(.id=="qp1") | .source=="picker" and .picker_answerable==true'
 jt "board: inbox carries picker source"  "$TMP/served.json" '.needs_you[] | select(.id=="qp1") | .source=="picker"'
 TX="$(tb "$LBL" 2>/dev/null)"
@@ -808,6 +811,49 @@ eq "account-reset: ... and filed one more request"    "$(rr | jq length)" "2"
 eq "account-reset: a second press while paused is 409" "$(rp "{\"project\":\"$LBL\",\"agent\":\"claude\",\"account\":\"system\",\"grant\":\"g-ok\"}")" "409"
 DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); s.db.run("DELETE FROM pause_intents WHERE scope = ?", ["project"]); s.close();'
 eq "web board: the Use button posts api/account-reset after a confirm" "$(grep -cF 'post("api/account-reset"' "$ROOT/web/board.html")$(sed -n '/^async function useReset(/,/^}/p' "$ROOT/web/board.html" | grep -cF 'This cannot be undone.')" "11"
+
+# POST /api/account-add and /api/account-login-code (issue #125, U6): the board's Add files the `account-add` request
+# `ds account add` files; the pasted code goes to a 0600 drop file and nowhere else (R7: no row, no log, no echo).
+# The fulfiller's typing is tests/loop/account-login-secret.test.ts.
+AA="http://127.0.0.1:$PORT/api/account-add"; AC="http://127.0.0.1:$PORT/api/account-login-code"
+ap(){ post -H "$O" -H "$CT" -d "$1" "$AA"; }
+cp_(){ post -H "$O" -H "$CT" -d "$1" "$AC"; }
+ar(){ dbq "SELECT id, project, requested_by, payload FROM requests WHERE kind = 'account-add' ORDER BY id" | jq -c '[.[] | [.project, .requested_by, (.payload | fromjson | [.agent, .name, .project])]]'; }
+setres(){ DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); s.db.run("UPDATE requests SET result = ? WHERE id = ?", [process.argv[2], Number(process.argv[1])]); s.close();' "$1" "$2"; }
+ACODE='zq-made-up-code#Kx81'
+eq "account-add: a bad name is 400"              "$(ap "{\"project\":\"$LBL\",\"name\":\"Bad Name\"}")" "400"
+eq "account-add: the system name is 400"         "$(ap "{\"project\":\"$LBL\",\"name\":\"system\"}")" "400"
+eq "account-add: an unknown project is 409"      "$(ap '{"project":"nope-zz","name":"realp"}')" "409"
+eq "account-add: foreign Origin is 403"          "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"project\":\"$LBL\",\"name\":\"realp\"}" "$AA")" "403"
+eq "account-add: none of those filed a request"  "$(ar | jq length)" "0"
+eq "account-add: a good name is 202"             "$(ap "{\"project\":\"$LBL\",\"name\":\"realp\"}")" "202"
+eq "account-add: one Claude add, by the board"   "$(ar)" "[[\"$LBL\",\"board\",[\"claude\",\"realp\",\"$LBL\"]]]"
+eq "account-add: a second while open is 409"     "$(ap "{\"project\":\"$LBL\",\"name\":\"realp\"}")" "409"
+has "account-add: ... saying one is in progress" "$(cat "$TMP/post.out")" "already in progress"
+AID=$(dbq "SELECT id FROM requests WHERE kind = 'account-add'" | jq -r '.[0].id')
+eq "login-code: an add not waiting yet is 409"   "$(cp_ "{\"request\":$AID,\"code\":\"$ACODE\"}")" "409"
+has "login-code: ... saying it is not waiting"   "$(cat "$TMP/post.out")" "not waiting for a code"
+setres "$AID" '{"state":"waiting_login","url":"https://claude.ai/oauth/authorize?state=zz"}'
+eq "login-code: two lines are 400"               "$(cp_ "{\"request\":$AID,\"code\":\"zq-line-one\\nzq-line-two\"}")" "400"
+eq "login-code: ... and the refusal has no code" "$(grep -c 'zq-line' "$TMP/post.out" || true)" "0"
+eq "login-code: a long code is 400"              "$(cp_ "{\"request\":$AID,\"code\":\"$(printf 'x%.0s' $(seq 1 513))\"}")" "400"
+eq "login-code: no request id is 400"            "$(cp_ "{\"request\":\"$AID\",\"code\":\"$ACODE\"}")" "400"
+eq "login-code: an unknown request is 409"       "$(cp_ "{\"request\":987654,\"code\":\"$ACODE\"}")" "409"
+eq "login-code: foreign Origin is 403"           "$(post -H 'Origin: http://evil.example' -H "$CT" -d "{\"request\":$AID,\"code\":\"$ACODE\"}" "$AC")" "403"
+eq "login-code: none of those made a drop file"  "$(test -e "$DBR/account-login/$AID" && echo yes || echo no)" "no"
+eq "login-code: a waiting paste-flow add is 202" "$(cp_ "{\"request\":$AID,\"code\":\" $ACODE\\n\"}")" "202"
+eq "login-code: the answer has no code"          "$(grep -cF "$ACODE" "$TMP/post.out" || true)" "0"
+eq "login-code: the drop file, 0600 in 0700"     "$(stat -c '%a' "$DBR/account-login")/$(stat -c '%a' "$DBR/account-login/$AID")/$(cat "$DBR/account-login/$AID")" "700/600/$ACODE"
+eq "login-code: no copy in loop.db or the log"   "$(cat "$DBR"/loop.db* "$TMP/serve.log" | grep -caF "$ACODE" || true)" "0"
+eq "login-code: no request or event row came"    "$(dbq "SELECT COUNT(*) AS n FROM requests WHERE kind = 'account-add'" | jq '.[0].n')" "1"
+rm -f "$DBR/account-login/$AID"
+DID=$(DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); console.log(s.requestAny("account-add", {agent:"codex", name:"zzdev", project:process.argv[1]}, {project:process.argv[1], by:"cli"}).row.id); s.close();' "$LBL")
+setres "$DID" '{"state":"waiting_login","url":"https://example.com/device","device_code":"ABCD-1234"}'
+eq "login-code: a device-flow add is 409"        "$(cp_ "{\"request\":$DID,\"code\":\"$ACODE\"}")" "409"
+has "login-code: ... approved in the browser"    "$(cat "$TMP/post.out")" "approved in the browser"
+DS_STATE_ROOT="$DBR" bun -e 'import {open} from "'"$ROOT"'/bin/loop/core/store.ts"; const s=open(); s.db.run("UPDATE requests SET done_at = 1 WHERE kind = ?", ["account-add"]); s.close();'
+eq "login-code: an ended add is 409"             "$(cp_ "{\"request\":$AID,\"code\":\"$ACODE\"}")" "409"
+eq "login-code: ... and no drop file"            "$(test -e "$DBR/account-login/$AID" && echo yes || echo no)" "no"
 
 # POST /api/leftover-remove (archive-leftovers U4): a Leftovers box's Remove files one `leftover-remove` request
 # for a leftover the squad names; 404 for none, 409 with one open, 400 for a body that is no JSON or bad fields.

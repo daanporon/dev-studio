@@ -72,8 +72,8 @@ The catalog is a set of choices, not an access check. Codex uses the host's own
 configuration and credentials, including an Azure provider in `~/.codex/config.toml`.
 Selecting a model does not change the provider or make an unavailable deployment
 accessible. Today, an Azure account with only `gpt-6.1-sol` should select that model.
-Codex has one host login, recorded as `codex/default`; Muse's `default` is a separate
-login. Codex usage percentages remain unknown until the backend can report them.
+Codex's system login is recorded as `codex/default`, and `ds account add <name> --agent codex`
+adds more, each in its own `CODEX_HOME`; Muse's `default` is a separate login. Codex usage percentages remain unknown until the backend can report them.
 The loop recognises Codex's terminal usage-limit and HTTP 429 messages and follows
 the role's account/model fallback ladder. Other launch or provider-access errors
 surface as failures, rather than automatically trying every fallback.

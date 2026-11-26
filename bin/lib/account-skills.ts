@@ -52,7 +52,7 @@ function tsvVal(v: unknown): string | null {
 }
 
 /** The registry rows `[id, scope, projectPath, installPath]`, `-` for none, as jq read them. */
-function registryRows(reg: string): string[][] {
+export function registryRows(reg: string): string[][] {
   let doc: any;
   try { doc = JSON.parse(readFileSync(reg, "utf8")); } catch { return []; }
   if (doc === null || doc === false) return []; // jq -e . fails

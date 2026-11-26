@@ -148,7 +148,9 @@ only processes you started, by a PID you recorded or with `ds stop-mine <pattern
 
 **No safety-check prompts:** write commands bash and zsh read the same way. A command that removes anything takes
 literal paths only (no `$(…)`, backticks, `eval` or computed paths), holds one removal, and stays out of a long
-pipeline or loop. Never edit `.claude/` settings files by hand. The same goes for a prompt you give a helper agent.
+pipeline or loop. Keep a ( … ) subshell out of $( … ) (write `a || b || c`, or put a multi-step probe in a script file);
+Claude Code cannot parse that shape and stops at a prompt even when nothing is deleted. Never edit `.claude/` settings
+files by hand. The same goes for a prompt you give a helper agent.
 
 **Large files:** read a large file in parts (Read with `offset`/`limit`, or `ctx_execute` with
 `file`): context-mode turns whole-file reads of big files into snippets. Check that a file
