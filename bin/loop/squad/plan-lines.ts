@@ -108,8 +108,9 @@ export function ticketUrlProblem(v: string): string | null {
 /** Why these links are refused, or null. */
 export function linksProblem(links: string[]): string | null {
   const bad = links.find((x) => !isWebUrl(x));
-  // A refusal is printed and logged, so whatever sits before an `@` is cut from the quoted value.
-  if (bad !== undefined) return `Link: takes http(s) URLs — use another label (e.g. Files:) for notes (got '${bad.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/*)?.*@/, "$1…@").slice(0, 80)}')`;
+  // A refusal is printed and logged. register-plan splits a line on commas and spaces, so a password can end up in pieces: with an `@` in any value, none is quoted.
+  const got = links.some((x) => x.includes("@")) ? "a value not shown: it may hold a login" : `got '${bad?.slice(0, 80)}'`;
+  if (bad !== undefined) return `Link: takes http(s) URLs — use another label (e.g. Files:) for notes (${got})`;
   if (links.some(hasLogin)) return "Link: a URL must not carry a login (user:password@)";
   if (links.some((x) => x.length > LINK_CHARS)) return `Link: a URL is longer than ${LINK_CHARS} characters`;
   return links.length > LINKS_MAX ? `Link: at most ${LINKS_MAX} links per unit (got ${links.length})` : null;

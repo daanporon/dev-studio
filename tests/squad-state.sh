@@ -536,11 +536,16 @@ printf 'U1 — First — deps: none — Tier: standard\n  Done: changed.\n  Link
 err="$("$SS" "$ul" register-plan "$lp" 2>&1 >/dev/null)"; rc=$?
 check "register-plan refuses a Link: with a login, naming the line" "1 yes" "$rc $(case "$err" in *s3cretpw*) echo "$err" ;; *"line 3: Link: a URL must not carry a login"*) echo yes ;; *) echo "$err" ;; esac)"
 check "..and writes nothing" "$before" "$("$SS" "$ul" get | jq -Sc .units)"
+for pw in 's3cretpw,tail' 's3cretpw tail'; do
+  printf 'U1 — First — deps: none — Tier: standard\n  Done: changed.\n  Link: https://user:%s@tracker.example/x\n' "$pw" > "$lp"
+  err="$("$SS" "$ul" register-plan "$lp" 2>&1 >/dev/null)"; rc=$?
+  check "a password split on a comma or space is not quoted ($pw)" "1 yes" "$rc $(case "$err" in *s3cretpw*) echo "$err" ;; *"line 3: Link:"*) echo yes ;; *) echo "$err" ;; esac)"
+done
 err="$("$SS" "$ul" add-unit loginlink "" "" "" --tier standard --link https://user@tracker.example/x 2>&1 >/dev/null)"; rc=$?
 check "add-unit --link refuses a login and adds nothing" "2 yes 0" "$rc $(case "$err" in *"must not carry a login"*) echo yes ;; *) echo "$err" ;; esac) $("$SS" "$ul" get | jq '[.units[] | select(.slug=="loginlink")] | length')"
 for bad in 'ftp://user:s3cretpw@tracker.example/x' 'https://user:s3cretpw@tracker.example:bad/x' 'user:s3cretpw@tracker.example'; do
   err="$("$SS" "$ul" add-unit loginlink "" "" "" --tier standard --link "$bad" 2>&1 >/dev/null)"; rc=$?
-  check "a refused non-web value hides its login (${bad%%:*})" "2 yes" "$rc $(case "$err" in *s3cretpw*) echo "$err" ;; *"takes http(s) URLs"*) echo yes ;; *) echo "$err" ;; esac)"
+  check "a refused non-web value does not show its login (${bad%%:*})" "2 yes" "$rc $(case "$err" in *s3cretpw*) echo "$err" ;; *"takes http(s) URLs"*) echo yes ;; *) echo "$err" ;; esac)"
 done
 
 # U1 (adaptive-builder-capacity). Lane: light|normal [(rule: <id>)] on a unit line -> lane / lane_rule on the unit.
