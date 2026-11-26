@@ -72,7 +72,7 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
     store.db.run("UPDATE hosts SET last_seen_at = ?, link_version = ?, up_migration = ?, code_rev = ?, unreachable_since = NULL WHERE name = ?",
       [at, String(f.link_version ?? ""), String(f.up_migration ?? "") || null, String(f.code_rev ?? "") || null, name]);
     ws.data.phase = "up";
-    ws.data.peer = new Peer((fr) => sendTo(ws, fr), channels, { host: name, end: "main", root }, "m");
+    ws.data.peer = new Peer((fr) => sendTo(ws, fr), channels, { host: name, end: "main", root, store }, "m");
     live.set(name, ws);
     fact("host_link_up", { name, addr: ws.data.addr, link_version: String(f.link_version ?? ""), code_rev: String(f.code_rev ?? "") });
     sendTo(ws, { t: "welcome", host: name, link_version: LINK_VERSION });

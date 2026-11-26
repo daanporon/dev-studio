@@ -6,10 +6,10 @@
 // `reconnect` it dials again after a loss with a growing pause (1 s up to 30 s); a refusal (not accepted, removed,
 // a second link, a wrong version) is kept in `refusal` and also retried, since the operator may accept the host
 // later. `sendJoin` is the one-shot join request (U12's `ds join` calls it).
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { ROOT } from "../loop/core/store.ts";
 import { ensureHostKey, hostKeyPath, signHello } from "./host-keys.ts";
+import { UP_MIGRATION } from "./replica.ts";
 import { deadMs, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
 
 export type LinkState = "connecting" | "up" | "down" | "refused" | "stopped";
@@ -23,10 +23,8 @@ export function linkUrl(main: string): string {
   return url.toString();
 }
 
-/** The newest migration this checkout ships (KTD15's `up_migration` until U6 names the up-tables' own). */
-export function newestMigration(): string {
-  try { return readdirSync(join(ROOT, "bin", "loop", "migrations")).filter((f) => /^\d{4}-.*\.sql$/.test(f)).sort().pop()?.replace(/\.sql$/, "") ?? ""; } catch { return ""; }
-}
+/** The newest migration that changed an up-table (KTD15's `up_migration`, replica.ts). */
+export const newestMigration = (): string => UP_MIGRATION;
 
 /** This checkout's commit, short; empty when git cannot say. */
 export function codeRev(): string {

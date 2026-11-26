@@ -269,7 +269,7 @@ export function liveModel(store: Store, project: string, wt: string, m: MainAgen
     return { model: m.model, effort: m.effort };
   }
   if (m.agent === "codex") {
-    const r = store.db.query(`SELECT model, effort FROM observed_rollouts WHERE cwd = ? AND model IS NOT NULL
+    const r = store.db.query(`SELECT model, effort FROM observed_rollouts WHERE cwd = ? AND host = 'local' AND model IS NOT NULL
       AND COALESCE(originator, '') NOT IN (SELECT value FROM json_each(?)) AND COALESCE(model_at, mtime) >= ? ORDER BY mtime DESC LIMIT 1`)
       .get(m.cwd, JSON.stringify([...HEADLESS]), m.start ?? 0) as { model: string; effort: string | null } | null;
     return r ? { model: r.model, effort: r.effort } : { model: null, effort: null };
@@ -316,7 +316,7 @@ const SCREEN_EVERY_S = 3; // U19: a watched member's screen (board keys, a scree
 // A worktree belongs to one project: a name that also starts with a longer label's prefix
 // (`ds-dev-studio-public-` beside `ds-dev-studio-`) is that project's, not this one's.
 function knownWts(store: Store, project: string, ps: PsWorktree[]): Set<string> {
-  const ids = new Set((store.db.query("SELECT wt FROM members WHERE project = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone' UNION SELECT builder_wt AS wt FROM units WHERE project = ? AND status = 'cancelled' AND COALESCE(builder_wt, '') != ''")
+  const ids = new Set((store.db.query("SELECT wt FROM members WHERE project = ? AND wt IS NOT NULL AND COALESCE(want, '') != 'gone' AND COALESCE(host, '') NOT IN (SELECT name FROM hosts) UNION SELECT builder_wt AS wt FROM units WHERE project = ? AND status = 'cancelled' AND COALESCE(builder_wt, '') != ''")
     .all(project, project) as { wt: string }[]).map((r) => r.wt));
   const studio = (store.get("projects", { label: project })?.studio_wt as string | null) ?? null;
   if (studio) ids.add(studio);
@@ -456,18 +456,19 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
             doc: { agent_states: [], terminals_seen_at: terminals ? now : null } });
         }
         // U12: the contract observer's rows (a `local::` worktree, a member off Orca) are left alone.
+        // side-loop-host U6: so are a side host's uploaded rows (host != local).
         const theirs = JSON.stringify([...off.wts]);
         for (const t of ["observed_worktrees", "observed_workers"]) {
           store.db.run(`UPDATE ${t} SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt NOT IN (SELECT value FROM json_each(?))
-            AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?))`, [now, project, seen, theirs]);
+            AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?)) AND host = 'local'`, [now, project, seen, theirs]);
         }
         if (terminals || !adapter.terminals) store.db.run(`UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND handle NOT IN (SELECT value FROM json_each(?))
-            AND COALESCE(wt, '') NOT LIKE 'local::%' AND COALESCE(wt, '') NOT IN (SELECT value FROM json_each(?))`,
+            AND COALESCE(wt, '') NOT LIKE 'local::%' AND COALESCE(wt, '') NOT IN (SELECT value FROM json_each(?)) AND host = 'local'`,
           [now, project, JSON.stringify(terminals ? terminals.filter((t) => t.connected === true && t.writable !== false && t.orphaned !== true).map((t) => t.handle) : dir.flatMap((d) => d.terminals ?? [])), theirs]);
         // A terminal row whose worktree is no longer the project's (an over-wide name match before) is
         // gone too, though its handle is still live under the project that owns it.
         store.db.run(`UPDATE observed_terminals SET gone_at = ? WHERE project = ? AND gone_at IS NULL AND wt IS NOT NULL AND wt NOT IN (SELECT value FROM json_each(?))
-            AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?))`,
+            AND wt NOT LIKE 'local::%' AND wt NOT IN (SELECT value FROM json_each(?)) AND host = 'local'`,
           [now, project, JSON.stringify([...ids]), theirs]);
         // U261: only a listing that succeeded can adopt, keep or release the Studio's terminal.
         if (terminals && !studioOff) adoptStudio(store, project, now);

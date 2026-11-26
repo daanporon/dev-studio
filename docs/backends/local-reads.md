@@ -13,6 +13,12 @@ host (because it reads the loop's own files) is marked **loop host**.
 Keep this page current: a change that adds a new direct read of `/proc`, a transcript, a git
 checkout, an account folder or a disk path adds its line here.
 
+**How the facts reach main (side-loop-host U6).** A side host's loop runs the same observers over its own
+copy of its members, squads, projects, units, worktrees and settings, which main sends down the link; the
+observed rows they write go up and land in main's tables tagged with the host (`host = <name>`), worktree ids
+as `<host>::<path>` and terminal handles as `<host>:<handle>` (`bin/link/replica.ts`, `docs/scripts.md`).
+Main's own observers read and prune only `host = 'local'` rows, so they never touch a side host's facts.
+
 ## `/proc`: processes
 
 | File | What it reads |
