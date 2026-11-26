@@ -209,7 +209,7 @@ rm -rf "$DS_STATE_ROOT/zzunit_$$"
 ud="$DS_STATE_ROOT/zzdet_$$/squads"; mkdir -p "$ud"
 cat > "$ud/m.json" <<'JSON'
 {"status":"running","members":[],"units":[
- {"slug":"u1-text","status":"planned","plan":"/p/plan.md","plan_unit":"U1","title":"Show the text","about":"Stores what the unit does.","done":"the overlay opens.","check":"tests/board.sh","hold":true,"hold_reason":"waiting for the operator","deps":[]},
+ {"slug":"u1-text","status":"planned","plan":"/p/plan.md","plan_unit":"U1","title":"Show the text","about":"Stores what the unit does.","done":"the overlay opens.","check":"tests/board.sh","links":["https://linear.app/acme/issue/ABC-1/x","javascript:alert(1)","https://example.org/page"],"hold":true,"hold_reason":"waiting for the operator","deps":[]},
  {"slug":"u2-after","status":"planned","deps":["u1-text"]},
  {"slug":"u3-bare","status":"planned"},
  {"slug":"adhoc-fix","status":"done","about":"Fixes the stale lane label on the flow card. It also renames the key.","deps":["u1-text"],"pr":"#24508"}]}
@@ -219,11 +219,13 @@ dbw "UPDATE units SET done_at = 1700000000 WHERE slug = 'adhoc-fix'"
 render "zzdet_$$" --json > "$TMP/det.json"
 DQ='.squads[] | select(.topic=="m") | .units | map({(.slug): .}) | add'
 jt "unit details: the stored text reaches the board" "$TMP/det.json" "$DQ | .\"u1-text\" | .title == \"Show the text\" and .about == \"Stores what the unit does.\" and .done_text == \"the overlay opens.\" and .check_text == \"tests/board.sh\" and .plan == \"/p/plan.md\" and .plan_unit == \"U1\""
+jt "unit links: the doc's http(s) links reach the board with their labels, a javascript: value does not" "$TMP/det.json" "$DQ | .\"u1-text\".links == [{url:\"https://linear.app/acme/issue/ABC-1/x\",label:\"ABC-1\"},{url:\"https://example.org/page\",label:\"example.org\"}] and .\"u3-bare\".links == []"
+eq "unit links: at phone width the row chip has a tap area of at least 44px" "$(sed -n '/^@media (max-width:600px){/,/^}/p' "$ROOT/web/board.html" | grep -cF '.units .u .ulink{min-height:44px;min-width:44px;')" "1"
 jt "unit details: hold kind and reason, and who waits on it" "$TMP/det.json" "$DQ | .\"u1-text\" | .hold_reason == \"waiting for the operator\" and (.hold_kind | startswith(\"frozen\")) and (.dependents | index(\"u2-after\"))"
 jt "unit details: a unit with no stored text carries nulls, for the fallback" "$TMP/det.json" "$DQ | .\"u3-bare\" | .about == null and .done_text == null and .check_text == null and .hold_kind == null"
 jt "unit details: done_at is on the done unit's row and null on an open one" "$TMP/det.json" "$DQ | .\"adhoc-fix\".done_at == 1700000000 and .\"u3-bare\".done_at == null"
 ud_fn=$(sed -n '/^function UnitDetails(/,/^}/p' "$ROOT/web/board.html")
-for f in ud-title ud-slug ud-status ud-about ud-done ud-check ud-waits ud-dependents ud-hold ud-builder ud-plan ud-release ud-cancel ud-chat ud-show ud-answer ud-bar; do
+for f in ud-title ud-slug ud-status ud-about ud-done ud-check ud-links ud-waits ud-dependents ud-hold ud-builder ud-plan ud-release ud-cancel ud-chat ud-show ud-answer ud-bar; do
   eq "unit details: the window has $f" "$(printf '%s' "$ud_fn" | grep -cF "$f" | sed 's/^[1-9][0-9]*$/ok/')" "ok"
 done
 eq "unit details: no 'not stored' text and no add-unit hint" "$(printf '%s' "$ud_fn" | grep -cF 'not stored')$(printf '%s' "$ud_fn" | grep -cF 'add-unit')" "00"
