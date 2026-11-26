@@ -1,8 +1,10 @@
 // ds host — side-loop-host U1 (issue #127, KTD4): the side hosts that may run worker seats for main, on main.
 // `list` shows them; `accept <name> [--seats N]` lets a pending join in (default 2 seats), `reject <name>` turns
-// a pending join down, `remove <name>` deletes an accepted host's key. Same code as the board's Accept (U17):
+// a pending join down, `remove <name>` deletes an accepted host's key. With no hosts and link_listen not `on`,
+// `list` says to turn link_listen on so a first join can reach main's link server (U2). Same code as the board's Accept (U17):
 // bin/link/host-keys.ts. A join request itself arrives over the link (U2), never through this command.
-import { open } from "../loop/core/store.ts";
+import { now, open } from "../loop/core/store.ts";
+import { linkListen, linkWish } from "../loop/fulfil/link.ts";
 import { parse, print } from "../loop/core/cli.ts";
 import { accept, hostLine, listHosts, reject, remove } from "../link/host-keys.ts";
 
@@ -26,7 +28,12 @@ export async function run(args: string[]): Promise<number> {
     try {
       const rows = listHosts(s, { all: flag.has("all") });
       if (flag.has("json")) { print(rows); return 0; }
-      if (!rows.length) { console.log("no side hosts (a side host asks to join with `ds join <main-url>`)"); return 0; }
+      if (!rows.length) {
+        console.log("no side hosts (a side host asks to join with `ds join <main-url>`)");
+        const listen = linkListen(s);
+        if (listen !== "on") console.log(`link_listen is ${listen}: main's link server is not running, so a first join cannot reach it (port ${linkWish(s, now()).port}); turn it on with \`ds config set <project> limits.conf link_listen on\``);
+        return 0;
+      }
       for (const r of rows) console.log(hostLine(r));
       return 0;
     } finally { s.close(); }

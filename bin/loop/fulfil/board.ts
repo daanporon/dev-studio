@@ -59,6 +59,8 @@ export function exitCodeOf(pid: number): number | null {
   return Number.isNaN(n) ? null : n;
 }
 export const isStarting = (id: number) => starting.has(id);
+// A start in flight for services row `id` (the link service, fulfil/link.ts, shares this set: row ids are unique).
+export const markStarting = (id: number, on: boolean) => { if (on) starting.add(id); else starting.delete(id); };
 // The epochs a row was restarted at (the cap's window).
 export function restartsOf(r: Row): number[] {
   try { return JSON.parse(String(r.restarts ?? "[]")) as number[]; } catch { return []; }
@@ -94,25 +96,29 @@ export async function boardUp(port: number | string, b = binds(), pid?: unknown)
 }
 
 // True only for a live pid that is a board server — never a reused pid of something else.
-export function isBoard(pid: unknown): boolean {
+export function isBoard(pid: unknown): boolean { return isProc(pid, /board-server/); }
+
+// True only for a live pid whose command line matches `re` — never a reused pid of something else.
+export function isProc(pid: unknown, re: RegExp): boolean {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return false;
   try { process.kill(n, 0); } catch { return false; }
   let args = "";
   try { args = readFileSync(`/proc/${n}/cmdline`, "utf8").replace(/\0/g, " "); }
   catch { args = Bun.spawnSync(["ps", "-p", String(n), "-o", "args="]).stdout.toString(); }
-  return /board-server/.test(args);
+  return re.test(args);
 }
 
-// SIGTERM (and SIGCONT, so a stopped one can act on it), then SIGKILL after 2 s.
-async function stop(pid: unknown): Promise<void> {
-  if (!isBoard(pid)) return;
+// SIGTERM (and SIGCONT, so a stopped one can act on it), then SIGKILL after 2 s; `alive` says it is still ours.
+export async function stopProc(pid: unknown, alive: (pid: unknown) => boolean = isBoard): Promise<void> {
+  if (!alive(pid)) return;
   const n = Number(pid);
   for (const sig of ["SIGTERM", "SIGCONT"] as const) { try { process.kill(n, sig); } catch { /* gone */ } }
-  for (let t = 0; t < 2000 && isBoard(n); t += 100) await Bun.sleep(100);
-  if (isBoard(n)) { try { process.kill(n, "SIGKILL"); } catch { /* gone */ } }
-  for (let t = 0; t < 2000 && isBoard(n); t += 100) await Bun.sleep(100);
+  for (let t = 0; t < 2000 && alive(n); t += 100) await Bun.sleep(100);
+  if (alive(n)) { try { process.kill(n, "SIGKILL"); } catch { /* gone */ } }
+  for (let t = 0; t < 2000 && alive(n); t += 100) await Bun.sleep(100);
 }
+const stop = (pid: unknown) => stopProc(pid, isBoard);
 
 export function binds(): string {
   return process.env.DS_BIND || ["127.0.0.1", tailscale().ip].filter(Boolean).join(" ");
@@ -155,27 +161,27 @@ function failStart(s: Store, r: Row, why: string, at: number, cols: Row = {}): v
 }
 
 // A running server the start waits on: its pid, and whether (and how) it has exited.
-type Handle = { pid: number; exited(): { code: number | null } | null };
+export type Handle = { pid: number; exited(): { code: number | null } | null };
 
 // True when this host can run a transient user unit (the same test bin/loop/loop.sh uses for the loop's own).
 // DS_BOARD_SYSTEMD=0 turns it off.
-function systemdUp(): boolean {
+export function systemdUp(): boolean {
   const PATH = process.env.PATH ?? "";
   if (process.env.DS_BOARD_SYSTEMD === "0" || !Bun.which("systemd-run", { PATH }) || !Bun.which("systemctl", { PATH })) return false;
   try { return Bun.spawnSync([Bun.which("systemctl", { PATH })!, "--user", "show-environment"], { timeout: 5000, stdout: "ignore", stderr: "ignore" }).exitCode === 0; } catch { return false; }
 }
 
-// Start the server in its own user unit `ds-board-<id>`. The unit runs a small shell that starts the
+// Start the server in its own user unit (`ds-board-<id>`; the link's is `ds-link-<id>`). The unit runs a small shell that starts the
 // server, writes its pid and, when it ends, its exit code (the loop is not its parent). Null when
 // systemd refuses (the unit name is taken, no bus): the caller spawns it detached instead.
-async function startUnit(id: number, argv: string[], env: Record<string, string>, log: string): Promise<Handle | null> {
+export async function startUnit(unit: string, argv: string[], env: Record<string, string>, log: string, alive: (pid: unknown) => boolean = isBoard): Promise<Handle | null> {
   const pidFile = `${log}.pid`, exitFile = `${log}.exit`;
   rmSync(pidFile, { force: true }); rmSync(exitFile, { force: true });
   const script = 'pf=$1; ef=$2; shift 2; "$@" & echo $! > "$pf"; wait $!; echo $? > "$ef"';
   const setenv = Object.entries(env).filter(([k, v]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && !/[\n\0]/.test(v)).flatMap(([k, v]) => ["-E", `${k}=${v}`]);
   let r: Bun.SyncSubprocess;
   try {
-    r = Bun.spawnSync([Bun.which("systemd-run", { PATH: process.env.PATH ?? "" }) ?? "systemd-run", "--user", "--collect", "--quiet", "--unit", `ds-board-${id}`,
+    r = Bun.spawnSync([Bun.which("systemd-run", { PATH: process.env.PATH ?? "" }) ?? "systemd-run", "--user", "--collect", "--quiet", "--unit", unit,
       "-p", `WorkingDirectory=${ROOT}`, "-p", `StandardOutput=append:${log}`, "-p", `StandardError=append:${log}`,
       ...setenv, "--", "sh", "-c", script, "sh", pidFile, exitFile, ...argv], { timeout: 15_000, stdout: "ignore", stderr: "pipe" });
   } catch { return null; }
@@ -184,7 +190,7 @@ async function startUnit(id: number, argv: string[], env: Record<string, string>
     const pid = parseInt(((): string => { try { return readFileSync(pidFile, "utf8"); } catch { return ""; } })().trim(), 10);
     if (pid > 0) {
       exitFiles.set(pid, exitFile);
-      return { pid, exited: () => (isBoard(pid) ? null : { code: exitCodeOf(pid) }) };
+      return { pid, exited: () => (alive(pid) ? null : { code: exitCodeOf(pid) }) };
     }
     await Bun.sleep(50);
   }
@@ -233,7 +239,7 @@ async function start(x: Exec, r: Row, restarted = false): Promise<Result> {
   const argv = [process.execPath, process.env.DS_BOARD_SERVER || join(ROOT, "bin", "board", "board-server.ts"), b, String(port), join(ROOT, "web", "board.html"), ...data];
   const env = childEnv({ DS_STATE_ROOT: store.root, DS_BOARD_HOSTS: hosts(r, b), DS_READY_FILE: null });
   let h: Handle | null = null;
-  if (systemdUp()) { h = await startUnit(id, argv, env, log); }
+  if (systemdUp()) { h = await startUnit(`ds-board-${id}`, argv, env, log); }
   if (!h) {
     const fd2 = openSync(log, "a");
     let p: Bun.Subprocess;

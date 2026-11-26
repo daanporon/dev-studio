@@ -127,6 +127,11 @@ const ONLY_ACTIONS = {
   board_restart: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_stop: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   board_giveup: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
+  // side-loop-host U2: the link server as a service (reconcilers/services.ts, fulfil/link.ts).
+  link_start: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
+  link_restart: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
+  link_stop: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
+  link_giveup: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
 } as const satisfies Record<string, ObjShape<any>>;
 export const ACTIONS = { ...REQUESTS, ...ONLY_ACTIONS } as const;
 export type ActionKind = keyof typeof ACTIONS;
@@ -174,6 +179,12 @@ export const FACTS = {
   host_accepted: obj({ name: str, fingerprint: str, seats: num, by: str }),
   host_rejected: obj({ name: str, fingerprint: str, was: str, by: str }),
   host_removed: obj({ name: str, fingerprint: str, was: str, by: str }),
+  // side-loop-host U2 (bin/link/server.ts): a side host's link came up, went silent, was closed (host removed)
+  // or was refused (a second live link for the same host).
+  host_link_up: obj({ name: str, addr: opt(str), link_version: opt(str), code_rev: opt(str) }),
+  host_link_down: obj({ name: str, why: opt(str) }),
+  host_link_closed: obj({ name: str, why: opt(str) }),
+  host_link_refused: obj({ name: str, addr: opt(str), why: opt(str) }),
   limit_cleared: ep,
   limit_expired: ep,
   limit_wait: ep,

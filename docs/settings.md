@@ -249,6 +249,8 @@ Review thresholds apply when a Builder runs `bin/review/review-unit.sh`:
 | `disk_card_free_pct` | `20` | A Studio card `Disk <path> low: <free> free (<pct>%)` opens when a disk's free share drops below this percent and names up to 8 consumers (Docker build cache, images and volumes, the Host tidy rows, `disk_watch_paths`). It clears once free space is above the value plus 5 points. `0` = off. The card deletes nothing. |
 | `tick_alarm_ms` | `6000` | A Studio card `Loop ticks slow: <avg> s` opens when the average tick time of each of the last `tick_alarm_windows` `tick_slow` events is over this many ms; it names the three slowest steps and how long ticks have been slow. It clears once the newest event is at or under the limit, or when no `tick_slow` event came for twice `DS_LOOP_SLOW_EVERY_S` (600 s). `0` = off. |
 | `tick_alarm_windows` | `3` | How many `tick_slow` events in a row must be over `tick_alarm_ms` (1 to 20). |
+| `link_listen` | `auto` | Host-level (side-loop-host U2; any project's `on` wins over another's `off`, the env var over both): when main's link server for side hosts runs. `auto`: while a host is pending or accepted (`ds host list`); `on`: always, so a first `ds join` can reach main; `off`: never. It binds loopback and the tailnet address only. |
+| `link_port` | `7790` | Host-level (the first project that sets it, else this default): the port side hosts dial (`ws://<main>:<port>/link`). Fixed: the loop never moves it to another port. |
 | `disk_watch_paths` | `-` | Host-level, summed: the paths of the default row and of every project the loop ticks (a `zz…` test project's row is not read) are all sized, once each; the env value `DS_LIMIT_DISK_WATCH_PATHS` wins alone. Comma- or space-separated absolute paths (a leading `~/` is the home; no `..`, no wildcard) the disk card sizes with `du -sk`, e.g. `~/.bun/install/cache,~/.claude/projects`. Set it through an import like `cleanup_tmp_globs`. |
 
 `cleanup_tmp_globs`, `cleanup_trim_globs`, `cleanup_on_close` and `disk_watch_paths` hold spaces, slashes and `*`, which `limits.sh set` and `ds config set` refuse today: set them through an import, `ds config export --project <project> > f`, add the line under `#== limits.conf` in `f`, then `ds config import --project <project> f`.
@@ -476,6 +478,9 @@ The loop also reads the `DS_SWEEP_*` settings listed below under their compatibi
 |---|---|---|
 | `BACKEND` | Backend adapter behind every `orca` call | `bin/backend/orca.sh` |
 | `DS_BIND` | IPs the web board listens on (space-separated) | `127.0.0.1` + the tailnet IP |
+| `DS_LINK_BIND` | IPs the side-host link server listens on (space-separated); an address that is neither loopback nor the tailnet IP is refused | `127.0.0.1` + the tailnet IP |
+| `DS_LINK_BIND_ANY` | `1` lets the link server bind any address (outside a tailnet, put TLS in front) | unset |
+| `DS_LINK_PING_MS` / `DS_LINK_DEAD_MS` | How often each end of a side-host link pings, and the silence after which it calls the link down | `10000` / `30000` |
 | `DS_BOARD_HOSTS` | Extra allowed `Host` values for the web board | localhost, 127.0.0.1, ::1, hostname, tailnet names |
 | `DS_PREFIX` | Worktree-name namespace (`ds-…`) | `ds-` |
 | `DS_PICK_WAIT_S` | Fallback wait when no account reset time is known | 3600 (1h) |
