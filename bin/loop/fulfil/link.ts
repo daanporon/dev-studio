@@ -86,7 +86,7 @@ export function syncLinkWish(store: Store, at: number): Row | null {
     if (w.want !== "running") return null;
     store.db.run("INSERT INTO services (name, project, topic, port, want, want_by, want_at, observed_at, updated_at) VALUES ('link', '', '', ?, 'running', 'loop', ?, ?, ?)", [w.port, at, at, at]);
   } else if (r.want !== w.want || Number(r.port) !== w.port) {
-    store.db.run("UPDATE services SET want = ?, port = ?, want_by = 'loop', want_at = ?, want_result = NULL, updated_at = ? WHERE id = ?", [w.want, w.port, at, at, r.id]);
+    store.db.run("UPDATE services SET want = ?, port = ?, want_by = 'loop', want_at = ?, want_result = NULL, updated_at = ? WHERE id = ?", [w.want, w.port, at, at, Number(r.id)]);
   } else return r;
   return store.get("services", { name: "link", project: "", topic: "" });
 }
