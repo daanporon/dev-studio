@@ -38,7 +38,7 @@ describe("the fixture board", () => {
 
   test("PR open: groups by precedence, since the first unit_pr", () => {
     expect(["u10-review", "u11-draft", "u12-fixing", "u13-checks", "u14-blocked"].map((s) => card(s).group))
-      .toEqual(["in review", "draft", "fixing", "checks running", "blocked"]);   // u11 is a draft with failing checks
+      .toEqual(["in review", "draft", "checks failing", "checks running", "blocked"]);   // u11 is a draft with failing checks
     expect(card("u10-review")).toMatchObject({ stage: "pr_open", since: N - 400, pr: { ref: "acme/flow#10", num: "10" } });
   });
 
@@ -52,13 +52,13 @@ describe("the fixture board", () => {
     expect(card("u18-merged")).toMatchObject({ stage: "merging", since: null, in_stage_s: null, stuck: false });
   });
 
-  test("Stuck: past 2 × typical, a stale PR or a gone Builder", () => {
+  test("Stuck: past 2 × typical or a gone Builder", () => {
     // the five done units carry tier standard (U279): the tier has its own medians, here the same numbers
     expect(b.flow.typical_s).toEqual({ [f.a]: { building: 1200, pr_open: 500, merging: 100, tiers: { standard: { building: 1200, pr_open: 500, merging: 100 } } } });
     // late, but a review runs (u19) or checks run (u11): the Builder is at work, so slow, not stuck
-    expect(card("u19-slow")).toMatchObject({ in_stage_s: 3000, stuck: false, slow: true, stale: false });   // > 2400
+    expect(card("u19-slow")).toMatchObject({ in_stage_s: 3000, stuck: false, slow: true, stale: false, why: null });   // > 2400
     expect(card("u11-draft")).toMatchObject({ in_stage_s: 1500, stuck: false, slow: true });                // > 1000
-    expect(card("u8-gone")).toMatchObject({ in_stage_s: 300, stuck: true, stale: true });
+    expect(card("u8-gone")).toMatchObject({ in_stage_s: 300, stuck: true, stale: true, no_builder: true, why: "stuck · no Builder" });
   });
 
   test("merges: the last week with took_s, per local day over 30 days, a closed squad's included", () => {
@@ -107,7 +107,7 @@ describe("the fixture board", () => {
 const P = "p", S = "s";
 const unit = (slug: string, o: Partial<FlowUnit> = {}): FlowUnit => ({
   project: P, squad: S, slug, tier: null, status: "dispatched", hold: false, plan_blocked: false, paused: false,
-  blocked_by: [], deps: [], pick: null, question: null, pr: null, verdict: null, reasons: null, stale: false, ...o });
+  blocked_by: [], deps: [], pick: null, question: null, pr: null, verdict: null, reasons: null, pr_red: false, no_builder: false, ...o });
 const ev = (unit: string, kind: string, ago: number, project = P): FlowEvent => ({ project, squad: S, unit, kind, at: N - ago });
 const pr = (num: string, status: string | null = "open") => ({ ref: `o/r#${num}`, num, url: null, status });
 // n finished units, each `building` s from dispatch to PR, 100 s to armed, 50 s to done.
@@ -217,9 +217,10 @@ describe("flow.ts", () => {
     }
   });
 
-  test("PR groups: stale wins over draft; a blocked verdict needs a reason", () => {
-    expect(one(unit("u", { pr: pr("1", "draft"), stale: true })).group).toBe("blocked");
-    expect(one(unit("u", { pr: pr("1", "failing"), verdict: "blocked" })).group).toBe("fixing");
+  test("PR groups: a red PR or no Builder wins over draft; a blocked verdict alone needs a reason", () => {
+    expect(one(unit("u", { pr: pr("1", "draft"), pr_red: true })).group).toBe("blocked");
+    expect(one(unit("u", { pr: pr("1", "draft"), no_builder: true })).group).toBe("blocked");
+    expect(one(unit("u", { pr: pr("1", "failing"), verdict: "blocked" })).group).toBe("checks failing");
   });
 
   test("Merging: a ready verdict without armed (no since); armed only counts after the first unit_pr", () => {
@@ -251,10 +252,48 @@ describe("flow.ts", () => {
     expect([at(1200), at(1201)]).toEqual([false, true]);          // 2 × 600 over a 600 s floor
     expect([at(1500, 30), at(1801, 30)]).toEqual([false, true]);  // a 30 min floor holds it to 1800
     expect([at(1200, 0), at(1201, 0)]).toEqual([false, true]);
-    expect(at(99999, 10, { paused: true, stale: true })).toBe(false);
-    expect(at(99999, 10, { stale: true })).toBe(true);
+    expect(at(99999, 10, { paused: true, no_builder: true })).toBe(false);
+    expect(at(99999, 10, { no_builder: true })).toBe(true);
     expect(one(unit("u", { status: "planned", deps: ["d0"] }), [...finished(5), ev("u", "unit_dispatched", 99999)]).stuck).toBe(false);
-    expect(one(unit("u", { stale: true, question: { id: "q", since: N - 99999 } })).stuck).toBe(false);
+    expect(one(unit("u", { no_builder: true, question: { id: "q", since: N - 99999 } })).stuck).toBe(false);
+  });
+
+  describe("a red PR: fixing, slow fix or stuck", () => {
+    const MIN = 60, HOUR = 3600;
+    // finished() gives a 100 s PR-open median, so the 10 min floor decides when a red PR is slow.
+    const red = (o: Partial<FlowUnit> = {}) => unit("u", { pr: pr("1", "failing"), verdict: "blocked", reasons: "checks-failing,threads:2",
+      pr_red: true, red_since: N - 5 * MIN, active_at: N - 3 * MIN, ...o });
+    // The PR has been open 20 h, far past the typical time.
+    const card = (u: FlowUnit, opened = 20 * HOUR) => flow([u], [...finished(5), ev("u", "unit_pr", opened)], 10).cards[0];
+
+    test("red with an active Builder, red a short while: neither, though the PR is old", () => {
+      expect(card(red())).toMatchObject({ stage: "pr_open", group: "blocked", stuck: false, slow: false, pr_red: true, no_builder: false, stale: true,
+        red_s: 300, why: "fixing · checks-failing, threads:2 · output 3m ago" });
+    });
+    test("red past max(2 × typical, floor) with an active Builder: slow fix", () => {
+      expect(card(red({ red_since: N - 20 * HOUR, active_at: N - MIN }))).toMatchObject({ stuck: false, slow: true, why: "slow fix · red 20h · output 1m ago" });
+      expect([card(red({ red_since: N - 600 })).slow, card(red({ red_since: N - 601 })).slow]).toEqual([false, true]);
+    });
+    test("red with an idle Builder: stuck, whatever the red age", () => {
+      expect(card(red({ red_since: N - 4 * HOUR, active_at: N - 45 * MIN }))).toMatchObject({ stuck: true, slow: false, why: "stuck · Builder idle 45m · red 4h" });
+      expect(card(red({ active_at: null }))).toMatchObject({ stuck: true, why: "stuck · Builder idle · red 5m" });
+    });
+    test("Builder gone: stuck, no Builder", () => {
+      expect(card(red({ no_builder: true, active_at: N }))).toMatchObject({ stuck: true, slow: false, why: "stuck · no Builder" });
+    });
+    test("no red-since time: the time since the PR opened stands in, and the red age is left out", () => {
+      expect(card(red({ red_since: null }))).toMatchObject({ slow: true, red_s: null, why: "slow fix · output 3m ago" });
+      expect(card(red({ red_since: null }), 300)).toMatchObject({ slow: false, why: "fixing · checks-failing, threads:2 · output 3m ago" });
+      expect(card(red({ red_since: null, active_at: N - 45 * MIN }))).toMatchObject({ stuck: true, why: "stuck · Builder idle 45m" });
+    });
+    test("a paused or needs-you red card is neither and says nothing about it", () => {
+      expect(card(red({ paused: true, active_at: null }))).toMatchObject({ stuck: false, slow: false, why: null, stale: false });
+      expect(card(red({ question: { id: "q", since: N - 30 }, active_at: null }))).toMatchObject({ stuck: false, slow: false, why: null });
+    });
+    test("the counts take only the stuck and slow ones", () => {
+      const f = flow([red(), { ...red({ active_at: null }), slug: "v" }], finished(5), 10);
+      expect(f.counts).toMatchObject({ stuck: 1, slow: 0 });
+    });
   });
 
   describe("U279: typical per tier, stuck means quiet, else slow", () => {
@@ -302,8 +341,8 @@ describe("flow.ts", () => {
     test("a unit with no tier uses the project median", () => {
       expect(run(unit("u"), 90 * MIN).cards[0]).toMatchObject({ stuck: true });
     });
-    test("stale stays stuck whatever the activity; a ready card waiting for finish-unit too", () => {
-      expect(run(hardU({ stale: true, active_at: N }), 60).cards[0]).toMatchObject({ stuck: true, slow: false });
+    test("no Builder stays stuck whatever the activity; a ready card waiting for finish-unit too", () => {
+      expect(run(hardU({ no_builder: true, active_at: N }), 60).cards[0]).toMatchObject({ stuck: true, slow: false });
       const ready = unit("u", { pr: { ...pr("1"), updated_at: N - 1800 }, verdict: "ready", active_at: N });
       expect(one(ready, [ev("u", "unit_pr", 5000)], 10)).toMatchObject({ stuck: true, slow: false });
     });

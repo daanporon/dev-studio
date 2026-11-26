@@ -66,7 +66,7 @@ test("3. Building and PR open render their groups in KD3 order; Queued has no fo
   expect(flowGroups(flow.cards.filter((c: any) => c.stage === "building" && c.group !== "reviewing"), "building").map((x: any) => x.group))
     .toEqual(["coding", "fixing findings", "review stopped"]);
   const pr = text(col(view, "pr_open"));
-  expect(["draft", "checks running", "fixing", "in review", "blocked"].map((g) => pr.indexOf(g)).every((i, k, all) => i >= 0 && (k === 0 || i > all[k - 1]))).toBe(true);
+  expect(["draft", "checks running", "checks failing", "in review", "blocked"].map((g) => pr.indexOf(g)).every((i, k, all) => i >= 0 && (k === 0 || i > all[k - 1]))).toBe(true);
   const { visibleCards } = L();
   const cards = [{ key: "a", stuck: false, needs_you: false }, { key: "b", stuck: true, needs_you: false }, { key: "c", stuck: false, needs_you: true }];
   expect(visibleCards(cards, true).map((c: any) => c.key)).toEqual(["b", "c"]);
@@ -219,11 +219,12 @@ test("12. with only coding cards in Building, one group header renders", () => {
   expect(headers).toHaveLength(1);
 });
 
-test("a stuck card reads in text: time and a multiple of the typical time, or stale", () => {
+test("a stuck card reads in text: time and a multiple of the typical time, or why", () => {
   const { view } = render({}, lstoreOf());
   const t = text(col(view, "building"));
   expect(t).toMatch(/\d+m/);
-  expect(t).toMatch(/× typical|stale/);
+  expect(t).toMatch(/× typical|stuck · no Builder/);
+  expect(t).not.toContain("stale");
   const slow = flow.cards.find((c: any) => c.slug === "u19-slow");
   expect(text(col(view, "building"))).toContain("u19-slow");
   expect(slow.stuck).toBe(false);   // a review runs: late, but its Builder is at work
@@ -380,7 +381,7 @@ test("U5-7. the page CSS: flush-left ellipsis header, divider on every group aft
 // ---- U6: Queued in pickup order
 const qcards = (n: number, pos: boolean, group = "waiting for a slot", from = 0) => Array.from({ length: n }, (_, i) => ({
   key: `p/s/${group[0]}${from + i}`, project: "p", squad: "s", slug: `${group[0]}${from + i}`, stage: "queued", group, queue_pos: pos ? from + i + 1 : null,
-  since: null, in_stage_s: 60, stuck: false, needs_you: false, ask: null, note: group === "held" ? "later" : null, pr: null, tier: null, stale: false }));
+  since: null, in_stage_s: 60, stuck: false, needs_you: false, ask: null, note: group === "held" ? "later" : null, pr: null, tier: null }));
 const withQ = (cards: any[], counts = {}) => ({ ...flow, cards, merged: [], counts: { ...flow.counts, queued: cards.length, ...counts } });
 const rq = (cards: any[], store = lstoreOf(), o: any = {}) => { const l = L(); return { l, store, view: l.FlowSection({ flow: withQ(cards), lstore: store, focus: null, onAsk: () => {}, now: FX_NOW, showProject: false, ...o }) }; };
 const cardsIn = (view: any) => nodes(col(view, "queued")).filter((n) => n.values.some((x: any) => typeof x === "string" && x.startsWith("fcard ")));

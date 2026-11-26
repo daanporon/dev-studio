@@ -12,8 +12,12 @@
 // none), and one per (project, tier) from the units table's tier (U279): a card uses its tier's
 // median when that tier has 5 samples, else the project's. A card past max(2 × typical,
 // flow_stuck_floor_min) is late; late is stuck when its Builder shows no sign of work for
-// flow_quiet_min (active_at null or older), else slow. A stale card is stuck at any age, a paused one
-// never, a queued or needs-you one never by time.
+// flow_quiet_min (active_at null or older), else slow. A paused card is never stuck, a queued or
+// needs-you one never. A dispatched unit with no Builder (gone, unknown) is stuck at any age. One with
+// a red PR (verdict blocked) is judged by its Builder, not the late rule: stuck when the Builder is
+// idle (same flow_quiet_min rule), else slow ("slow fix") once the PR has been red past max(2 ×
+// typical, floor) for the card's stage, else a normal card ("fixing"); with no red-since time the
+// time since the PR opened stands in. `why` says which in words.
 // Building splits by the unit's review (U4, observed_reviews), first match wins: review stopped →
 // reviewing → fixing findings → coding; no review row (or no table) reads coding. The group never
 // changes Building's since or its stuck threshold.
@@ -38,7 +42,9 @@ export type FlowUnit = {
   pr: FlowPr | null;
   verdict: string | null;               // PR health verdict (ready | blocked | …)
   reasons: string | null;
-  stale: boolean;                       // stale PR health, unitPhase stale, or its Builder gone/unknown
+  pr_red: boolean;                      // its PR health verdict is blocked
+  red_since?: number | null;            // when that red stretch began; null: unknown (a sweep row)
+  no_builder: boolean;                  // dispatched with its Builder gone/unknown, or a blocked PR with none
   place?: number[] | null;              // slot.ts placeOf: the loop's pickup rank (queued units; focus included)
   urgent?: boolean;                     // the unit's doc urgent flag (⚡)
   unlocks?: number; unlock?: "on";    // open units waiting on this one (⬆N); `unlock` on while the line ranks it by that
@@ -120,12 +126,28 @@ function queuedBase(u: FlowUnit): { group: string; note: string | null } {
 }
 
 function prGroup(u: FlowUnit): string {
-  if (u.stale || (u.verdict === "blocked" && !!u.reasons)) return "blocked";
+  if (u.pr_red || u.no_builder || (u.verdict === "blocked" && !!u.reasons)) return "blocked";
   const s = u.pr?.status;
   if (s === "draft") return "draft";
-  if (s === "failing") return "fixing";
+  if (s === "failing") return "checks failing";
   if (s === "running") return "checks running";
   return "in review";
+}
+
+// "<1m", "45m", "4h", "4h 5m": a span in seconds as the Flow cards show it.
+const span = (s: number) => {
+  const m = Math.floor(s / 60);
+  return m < 1 ? "<1m" : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
+};
+// A red-PR or no-Builder card in words; a fact that is unknown (red since, output) is left out.
+function redWhy(c: { noBuilder: boolean; stuck: boolean; slow: boolean; reasons: string | null; red_s: number | null; output_s: number | null }): string {
+  if (c.noBuilder) return "stuck · no Builder";
+  const red = c.red_s == null ? null : `red ${span(c.red_s)}`;
+  const output = c.output_s == null ? null : `output ${span(c.output_s)} ago`;
+  const parts = c.stuck ? ["stuck", c.output_s == null ? "Builder idle" : `Builder idle ${span(c.output_s)}`, red]
+    : c.slow ? ["slow fix", red, output]
+    : ["fixing", c.reasons?.split(",").join(", "), output];
+  return parts.filter(Boolean).join(" · ");
 }
 
 const OPEN_PR = (s: string | null | undefined) => s !== "merged" && s !== "closed";
@@ -300,18 +322,26 @@ export function flowOf(input: FlowInput) {
     // A paused building, pr_open or merging card moves to the lane's `paused` group (unitStage keeps its stage and group);
     // its note says why and its time is the pause's, while since / in_stage_s stay the stage's.
     const isPaused = u.paused && (s.stage === "building" || s.stage === "pr_open" || s.stage === "merging");
-    const stale = !u.paused && u.status === "dispatched" && u.stale;
-    // Late is stuck when its Builder shows no sign of work for flow_quiet_min, else slow. A stale card, and
-    // a ready PR waiting for its Builder to run finish-unit, are stuck whatever the activity.
+    const open = !u.paused && u.status === "dispatched";
+    const noBuilder = open && u.no_builder, red = open && u.pr_red;
+    const redS = red && u.red_since != null ? Math.max(0, now - u.red_since) : null;
+    const opened = first(times.get(k)?.pr ?? []);
+    const redFor = redS ?? (opened == null ? null : Math.max(0, now - opened));
+    const redLate = redFor != null && typ != null && redFor > Math.max(2 * typ, floor);
+    // Late is stuck when its Builder shows no sign of work for flow_quiet_min, else slow. A unit with no
+    // Builder, and a ready PR waiting for its Builder to run finish-unit, are stuck whatever the activity.
     const quiet = (input.quiet_min?.[u.project] ?? 20) * 60;
-    const idle = readyWait || u.active_at == null || now - u.active_at > quiet;
+    const idle = u.active_at == null || now - u.active_at > quiet;
     const live = !u.paused && s.stage !== "needs_you" && s.stage !== "queued";
-    const stuck = live && (stale || (late && idle));
-    const slow = live && !stuck && late;
+    const stuck = live && (noBuilder || (red ? idle : late && (readyWait || idle)));
+    const slow = live && !stuck && (red ? redLate : late);
+    const why = live && (noBuilder || red)
+      ? redWhy({ noBuilder, stuck, slow, reasons: u.reasons, red_s: redS, output_s: u.active_at == null ? null : Math.max(0, now - u.active_at) })
+      : null;
     return {
       key: ukey(u.project, u.squad, u.slug), project: u.project, squad: u.squad, slug: u.slug, tier: u.tier,
       stage: s.stage, group: isPaused ? "paused" : s.group, since: s.since, in_stage_s: inStage,
-      paused: isPaused, paused_s: isPaused && u.paused_at != null ? Math.max(0, now - u.paused_at) : null, stuck, slow, stale, active_at: u.active_at ?? null, typical_s: typ,
+      paused: isPaused, paused_s: isPaused && u.paused_at != null ? Math.max(0, now - u.paused_at) : null, stuck, slow, stale: noBuilder || red, pr_red: red, no_builder: noBuilder, red_s: redS, why, active_at: u.active_at ?? null, typical_s: typ,
       needs_you: s.stage === "needs_you", ask: u.question?.id ? ukey(u.project, u.squad, u.question.id) : null,
       note: isPaused ? u.paused_why ?? s.note : s.stage === "queued" && u.paused ? u.paused_why ?? s.note : s.note, pr: u.pr, open_pr: s.open_pr, queue_pos: null as number | null, urgent: u.urgent === true, focus: u.focus ?? null, ...(u.unlocks ? { unlocks: u.unlocks, ...(u.unlock ? { unlock: "on" as const } : {}) } : {}),
       ...(u.parked ? { parked: u.parked } : {}), ...(u.stopped ? { stopped: true } : {}),
