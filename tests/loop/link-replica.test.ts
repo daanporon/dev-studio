@@ -20,6 +20,8 @@ import { stateObserver } from "../../bin/loop/observers/state.ts";
 import { chatObserver } from "../../bin/loop/observers/chat.ts";
 import { reviewsObserver } from "../../bin/loop/observers/reviews.ts";
 import { codexObserver } from "../../bin/loop/observers/codex.ts";
+import { liveModel } from "../../bin/loop/observers/orca.ts";
+import { pathFor } from "../../bin/loop/chat/codex.ts";
 
 const saved: Record<string, string | undefined> = {};
 const ENV = { DS_LINK_PING_MS: "150", DS_LINK_DEAD_MS: "600", DS_LINK_BIND_ANY: undefined, DS_NOW: undefined };
@@ -276,5 +278,17 @@ describe("main's observers leave uploaded rows alone", () => {
     expect(uploaded()).toEqual(before);
     // and main's own rows still move: its procs scan saw no process, so its own procs row is gone
     expect(all(main, "SELECT wt FROM observed_procs WHERE host = 'local'")).toEqual([]);
+  });
+
+  test("main's Codex readers look rollouts up among its own, never a side host's with the same cwd", async () => {
+    const mainRoot = temp(), main = store(mainRoot);
+    seedMain(main);
+    const { side, sync } = await linked(main, mainRoot, "s1");
+    put(side, "observed_rollouts", { path: "/home/u/.codex/sessions/m.jsonl", cwd: "/w/lead", model: "gpt-side", effort: "high", mtime: 3000, size: 1 });
+    await sync.tick();
+    expect(all(main, "SELECT cwd, host FROM observed_rollouts WHERE cwd = '/w/lead'")).toEqual([{ cwd: "/w/lead", host: "s1" }]);
+    expect(pathFor(main, "realp", "local::/w/lead")).toBeNull();
+    const m = { agent: "codex", account: "-", cwd: "/w/lead", model: "gpt-main", effort: "low", pid: null, start: 1, rss: null };
+    expect(liveModel(main, "realp", "local::/w/lead", m)).toEqual({ model: null, effort: null });   // not the side's gpt-side
   });
 });

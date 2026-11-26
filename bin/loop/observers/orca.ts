@@ -269,7 +269,7 @@ export function liveModel(store: Store, project: string, wt: string, m: MainAgen
     return { model: m.model, effort: m.effort };
   }
   if (m.agent === "codex") {
-    const r = store.db.query(`SELECT model, effort FROM observed_rollouts WHERE cwd = ? AND model IS NOT NULL
+    const r = store.db.query(`SELECT model, effort FROM observed_rollouts WHERE cwd = ? AND host = 'local' AND model IS NOT NULL
       AND COALESCE(originator, '') NOT IN (SELECT value FROM json_each(?)) AND COALESCE(model_at, mtime) >= ? ORDER BY mtime DESC LIMIT 1`)
       .get(m.cwd, JSON.stringify([...HEADLESS]), m.start ?? 0) as { model: string; effort: string | null } | null;
     return r ? { model: r.model, effort: r.effort } : { model: null, effort: null };
