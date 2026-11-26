@@ -1,13 +1,15 @@
 // project-rows.test.ts — remove-project U1: copy one project's loop.db rows to an archive file, verify, delete.
 // With DS_ROWS_BENCH_DB set to a copy of a live loop.db (never the live one), it also times the delete for each
-// project in it (DS_ROWS_BENCH_LABELS narrows them) and prints the write-lock hold in ms.
+// project in it (DS_ROWS_BENCH_LABELS narrows them) as the removal does it, log tables in batches (U6), and
+// prints the longest single write-lock hold in ms, the batches and the total time.
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { open, ROOT, type Store } from "../../bin/loop/core/store.ts";
-import { archiveMeta, BY_KEY, copyRows, deleteRows, KEEP_WITH_PROJECT, KEPT, projectTables, unclassified } from "../../bin/loop/db/project-rows.ts";
+import { BATCH_ROWS } from "../../bin/loop/fulfil/remove-project.ts";
+import { appendRows, archiveMeta, BY_KEY, copyRows, deleteLogBatch, deleteRows, KEEP_WITH_PROJECT, KEPT, LOG_TABLES, projectTables, unclassified, type Counts, type LogTable } from "../../bin/loop/db/project-rows.ts";
 
 const temps: string[] = [], stores: Store[] = [];
 const closeAll = () => {
@@ -233,6 +235,165 @@ describe("project-rows", () => {
   });
 });
 
+// Every batch of one table, as the fulfiller walks it.
+function drain(s: Store, label: string, arc: string, table: LogTable, limit: number) {
+  let after: number | null = 0, deleted = 0, batches = 0, held = 0;
+  while (after !== null) {
+    const b = deleteLogBatch(s, label, arc, table, limit, after);
+    expect(b.deleted).toBeLessThanOrEqual(limit);
+    deleted += b.deleted; held = Math.max(held, b.held_ms); if (b.deleted) batches++;
+    after = b.next;
+  }
+  return { deleted, batches, held };
+}
+const noLogs = (c: Counts): Counts => ({ ...c, ...Object.fromEntries(LOG_TABLES.map((t) => [t, 0])) });
+const rowsIn = (path: string, sql: string) => {
+  const db = new Database(path, { readonly: true });
+  try { return db.query(sql).all() as Record<string, unknown>[]; } finally { db.close(); }
+};
+
+describe("project-rows batched log delete (U6)", () => {
+  function logs(n = 12) {
+    const s = store();
+    seedTwo(s);
+    for (let i = 0; i < n; i++) for (const t of LOG_TABLES) { put(s.db, t, { project: "gone" }); put(s.db, t, { project: "stay" }); }
+    const arc = join(tmp(), "loop-rows.db");
+    const src = join(s.root, "loop.db");
+    return { s, db: s.db, arc, src };
+  }
+
+  test("batches take every archived log row and nothing else, then deleteRows expects none", () => {
+    const { s, db, arc, src } = logs();
+    const stay = tally(db, "stay");
+    const kept = Object.fromEntries(Object.keys(KEPT).map((t) => [t, count(db, t)]));
+    const c = copyRows(src, "gone", arc);
+    for (const t of LOG_TABLES) {
+      const d = drain(s, "gone", arc, t, 5);
+      expect(d.deleted).toBe(c.counts[t]);
+      expect(d.batches).toBe(Math.ceil(c.counts[t] / 5));
+      expect(count(db, t, "project = 'gone'")).toBe(0);
+      expect(count(db, t, "project = 'stay'")).toBe(stay[t]);
+      expect(deleteLogBatch(s, "gone", arc, t, 5)).toMatchObject({ deleted: 0, next: null });   // a replay from 0
+    }
+    expect(deleteRows(s, "gone", noLogs(c.counts)).ok).toBe(true);
+    expect(tally(db, "stay")).toEqual(stay);
+    for (const t of Object.keys(KEPT)) expect([t, count(db, t)]).toEqual([t, kept[t]]);
+    for (const t of LOG_TABLES) expect(rowsIn(arc, `SELECT COUNT(*) AS n FROM ${t}`)[0].n).toBe(c.counts[t]);
+    expect((db.query("PRAGMA database_list").all() as unknown[]).length).toBe(1);   // the archive detached
+  });
+
+  test("every copy keeps the rowid, also of a table with no integer key", () => {
+    const { db, arc, src } = logs(3);
+    db.run("DELETE FROM relayed WHERE rowid = (SELECT MIN(rowid) FROM relayed)");
+    copyRows(src, "gone", arc);
+    expect(rowsIn(arc, "SELECT rowid AS r, msg_id FROM relayed ORDER BY rowid"))
+      .toEqual(db.query("SELECT rowid AS r, msg_id FROM relayed WHERE project = 'gone' ORDER BY rowid").all() as never);
+  });
+
+  test("a row written after the copy stays, fails the final check, and is added to the same archive", () => {
+    const { s, db, arc, src } = logs();
+    const c = copyRows(src, "gone", arc);
+    const late = put(db, "events", { project: "gone", kind: "late" });
+    for (const t of LOG_TABLES) drain(s, "gone", arc, t, 5);
+    expect(count(db, "events", "id = ?", late)).toBe(1);
+    const miss = deleteRows(s, "gone", noLogs(c.counts));
+    expect(!miss.ok && miss.mismatch).toEqual({ events: { archive: 0, now: 1 } });
+    const a = appendRows(src, "gone", arc);
+    expect(a.added).toBeGreaterThanOrEqual(1);
+    expect(a.counts.events).toBe(c.counts.events + 1);
+    expect(a.source.events).toBe(1);
+    expect(rowsIn(arc, "SELECT counts FROM removed_meta")).toHaveLength(2);
+    expect(archiveMeta(arc)!.counts).toEqual(a.counts);
+    expect(readdirSync(join(arc, ".."))).toEqual(["loop-rows.db"]);
+    expect(drain(s, "gone", arc, "events", 5).deleted).toBe(1);
+    expect(deleteRows(s, "gone", noLogs(a.source)).ok).toBe(true);
+    expect(tally(db, "gone").events).toBe(0);
+  });
+
+  test("a new row on a deleted row's rowid is not deleted unarchived, and both are kept in the archive", () => {
+    const { s, db, arc, src } = logs();
+    const newest = put(db, "events", { project: "gone", kind: "newest" });
+    const c = copyRows(src, "gone", arc);
+    drain(s, "gone", arc, "events", 5);
+    // SQLite gives the deleted newest rowid out again: inside the archive's rowids, and not in the archive.
+    const reused = put(db, "events", { project: "gone", kind: "reused" });
+    expect(reused).toBeLessThanOrEqual(newest);
+    expect(drain(s, "gone", arc, "events", 5).deleted).toBe(0);
+    expect(count(db, "events", "id = ?", reused)).toBe(1);
+    const a = appendRows(src, "gone", arc);
+    expect(a.counts.events).toBe(c.counts.events + 1);
+    expect(rowsIn(arc, "SELECT kind FROM events WHERE kind IN ('newest', 'reused') ORDER BY kind")).toEqual([{ kind: "newest" }, { kind: "reused" }]);
+    expect(drain(s, "gone", arc, "events", 5).deleted).toBe(1);
+    expect(count(db, "events", "project = 'gone'")).toBe(0);
+  });
+
+  test("a log row changed after the copy stays until its new version is in the archive", () => {
+    const { s, db, arc, src } = logs(2);
+    const c = copyRows(src, "gone", arc);
+    db.run("UPDATE orca_calls SET state = 'changed' WHERE rowid = (SELECT MIN(rowid) FROM orca_calls WHERE project = 'gone')");
+    db.run("UPDATE relayed SET error = 'changed' WHERE rowid = (SELECT MIN(rowid) FROM relayed WHERE project = 'gone')");
+    for (const [t, col] of [["orca_calls", "state"], ["relayed", "error"]] as const) {
+      expect(drain(s, "gone", arc, t, 5).deleted).toBe(c.counts[t] - 1);
+      expect(count(db, t, `project = 'gone' AND ${col} = 'changed'`)).toBe(1);
+    }
+    const a = appendRows(src, "gone", arc);
+    for (const [t, col] of [["orca_calls", "state"], ["relayed", "error"]] as const) {
+      expect(a.counts[t]).toBe(c.counts[t]);
+      expect(rowsIn(arc, `SELECT COUNT(*) AS n FROM ${t} WHERE ${col} = 'changed'`)[0].n).toBe(1);
+      expect(drain(s, "gone", arc, t, 5).deleted).toBe(1);
+    }
+  });
+
+  test("a row changed after the batch picked it, before the lock, is not deleted", () => {
+    const { s, db, arc, src } = logs(3);
+    const c = copyRows(src, "gone", arc);
+    // Another writer, after the batch picked its rowids and before its transaction begins.
+    const meanwhile = (sql: string) => {
+      const real = s.db.transaction.bind(s.db);
+      (s.db as { transaction: unknown }).transaction = (fn: () => unknown) => {
+        (s.db as { transaction: unknown }).transaction = real;
+        const other = new Database(src);
+        try { other.run(sql); } finally { other.close(); }
+        return real(fn);
+      };
+    };
+    for (const [t, col] of [["orca_calls", "state"], ["relayed", "error"], ["events", "kind"]] as const) {
+      meanwhile(`UPDATE ${t} SET ${col} = 'raced' WHERE rowid = (SELECT MIN(rowid) FROM ${t} WHERE project = 'gone')`);
+      expect(deleteLogBatch(s, "gone", arc, t, 100).deleted).toBe(c.counts[t] - 1);
+      expect(count(db, t, `project = 'gone' AND ${col} = 'raced'`)).toBe(1);
+    }
+  });
+
+  test("an archived keyed row whose rowid went to another row moves, and both are kept", () => {
+    const { db, arc, src } = logs(3);
+    const c = copyRows(src, "gone", arc);
+    for (const [t, key] of [["orca_calls", "retry_id"], ["relayed", "msg_id"]] as const) {
+      const top = db.query(`SELECT rowid AS r, ${key} AS k FROM ${t} WHERE project = 'gone' ORDER BY rowid DESC LIMIT 1`).get() as { r: number; k: string };
+      db.run(`UPDATE ${t} SET ${key} = 'other-row' WHERE rowid = ${top.r}`);
+      const a = appendRows(src, "gone", arc);
+      expect(a.added).toBe(1);
+      expect(a.counts[t]).toBe(c.counts[t] + 1);
+      expect(rowsIn(arc, `SELECT ${key} AS k FROM ${t} WHERE ${key} IN ('${top.k}', 'other-row')`)).toHaveLength(2);
+    }
+    expect(appendRows(src, "gone", arc).added).toBe(0);
+    expect(rowsIn(arc, "SELECT counts FROM removed_meta")).toHaveLength(3);   // none for a call that added nothing
+  });
+
+  test("another label's archive, a missing one and another table are refused", () => {
+    const { s, db, arc, src } = logs(2);
+    expect(() => deleteLogBatch(s, "gone", arc, "events", 5)).toThrow("no archive");
+    expect(() => appendRows(src, "gone", arc)).toThrow("no archive");
+    expect(existsSync(arc)).toBe(false);
+    copyRows(src, "stay", arc);
+    const before = tally(db, "gone");
+    expect(() => deleteLogBatch(s, "gone", arc, "events", 5)).toThrow("not a finished archive of 'gone'");
+    expect(() => appendRows(src, "gone", arc)).toThrow("not a finished archive of 'gone'");
+    expect(() => deleteLogBatch(s, "stay", arc, "messages" as LogTable, 5)).toThrow("not deleted in batches");
+    expect(tally(db, "gone")).toEqual(before);
+    expect((db.query("PRAGMA database_list").all() as unknown[]).length).toBe(1);
+  });
+});
+
 // The measured lock hold on a copy of a live loop.db (KTD11): DS_ROWS_BENCH_DB names the copy.
 const bench = process.env.DS_ROWS_BENCH_DB;
 describe.if(!!bench)("project-rows bench", () => {
@@ -252,9 +413,19 @@ describe.if(!!bench)("project-rows bench", () => {
       const t0 = performance.now();
       const c = copyRows(join(dir, "loop.db"), label, join(dir, `rows-${label}.db`));
       const copyMs = Math.round(performance.now() - t0);
-      const r = deleteRows(s, label, c.counts);
+      const t1 = performance.now();
+      const per = LOG_TABLES.map((t) => ({ t, ...drain(s, label, join(dir, `rows-${label}.db`), t, BATCH_ROWS) }));
+      const t2 = performance.now();
+      const again = appendRows(join(dir, "loop.db"), label, join(dir, `rows-${label}.db`));
+      const appendMs = Math.round(performance.now() - t2);
+      expect([again.added, ...LOG_TABLES.map((t) => again.source[t])]).toEqual([0, 0, 0, 0]);
+      const r = deleteRows(s, label, noLogs(again.source));
+      const deleteMs = Math.round(performance.now() - t1);
       expect(r.ok).toBe(true);
-      console.log(`bench ${label}: rows=${c.rows} copy_ms=${copyMs} hold_ms=${r.held_ms}${r.ok ? ` cleared_links=${r.cleared_links} cleared_pins=${r.cleared_pins}` : ""}`);
+      for (const sp of projectTables(s.db)) if (sp.mode === "delete" && sp.table !== "observed_exposed") expect([sp.table, count(s.db, sp.table, sp.where(""), label)]).toEqual([sp.table, 0]);
+      for (const d of per) expect([d.t, d.deleted]).toEqual([d.t, c.counts[d.t]]);
+      const longest = Math.max(r.held_ms, ...per.map((d) => d.held));
+      console.log(`bench ${label}: rows=${c.rows} longest_hold_ms=${longest} batches=${per.reduce((n, d) => n + d.batches, 0)} batch_hold_ms=${Math.max(...per.map((d) => d.held))} final_hold_ms=${r.held_ms} copy_ms=${copyMs} final_append_ms=${appendMs} delete_ms=${deleteMs} total_ms=${copyMs + deleteMs} (batch=${BATCH_ROWS}, no pauses)${r.ok ? ` cleared_links=${r.cleared_links} cleared_pins=${r.cleared_pins}` : ""}`);
     }
   }, 600_000);
 });

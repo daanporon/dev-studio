@@ -20,8 +20,13 @@
 //                     makes a new one. Discovery skips dot folders, so from the next tick nothing ticks the label.
 //   moved             two ticks later: a folder back at state/<label>/ goes into the archive as after-move/;
 //                     then db/project-rows.ts copyRows writes loop-rows.db in the archive
-//   copied            deleteRows: one transaction that counts again and deletes; a count that changed copies
-//                     again (5 tries), a delete that already committed (every count 0 now) goes on
+//   copied            the log tables first, in batches (deleteLogBatch, only rows the archive holds): about 2 s
+//                     of batches a tick, a short pause between two, and `wait` while rows are left; then, with no
+//                     await between them, appendRows (what changed while the batches ran, in any table) and
+//                     deleteRows: one transaction that counts again, expects no log row, and deletes the rest;
+//                     a log row that came late goes round the batches again, a count that changed copies again
+//                     (5 tries; once a batch ran, appendRows adds to the same archive), a delete that already
+//                     committed (every count 0 now) goes on
 //   deleted           removed.json in the archive, one `project_removed` event, the request done
 //
 // Progress is the open request's `result` ({step, label, archive, text}); `text` comes from STEP_TEXT, never the
@@ -34,7 +39,7 @@ import { payloadOf } from "../core/kinds.ts";
 import type { Action } from "../core/plugins.ts";
 import { dbPath, type Row } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
-import { archiveMeta, copyRows, deleteRows, KEEP_WITH_PROJECT, KEPT, type Counts } from "../db/project-rows.ts";
+import { appendRows, archiveMeta, copyRows, deleteLogBatch, deleteRows, KEEP_WITH_PROJECT, KEPT, LOG_TABLES, type Counts, type LogTable } from "../db/project-rows.ts";
 import { localPath } from "../drivers/contract.ts";
 import { spawn } from "../io/orca.ts";
 import { leftoverCheck } from "../io/tidy.ts";
@@ -65,17 +70,58 @@ export const STEP_TEXT: Record<Step, string> = {
 };
 
 type Studio = { wt: string; path: string; branch: string | null; common: string | null };
+// `after`: where each table's batches go on (null: done); starting a table again from 0 is safe.
+type LogProgress = { after: Partial<Record<LogTable, number | null>>; deleted: number; batches: number; held_ms: number };
 type Plan = {
   request: number; label: string; by: string | null; step: Step; tick: number; since: number;
   studio?: Studio | null; saved?: string | null; branch_to?: string | null; branch_error?: string | null;
   archive?: string; rows_only?: boolean; moved_tick?: number; after_move?: string[]; left_actions?: string[];
-  copies?: number; copy?: { counts: Counts; rows: number; set_aside: string[] };
+  // copy.counts: the archive's rows per table; copy.source: loop.db's at the latest copy (absent: the same).
+  copies?: number; copy?: { counts: Counts; source?: Counts; rows: number; set_aside: string[] };
+  // Saved before the first batch: from then on the archive is only added to.
+  log?: LogProgress;
   deleted?: { rows: number; cleared_pins: number; cleared_links: number; held_ms: number } | null;
 };
 
 const boardS = () => envInt("DS_LOOP_REMOVE_BOARD_S", 60);
 const quietS = () => envInt("DS_LOOP_REMOVE_QUIET_S", 120);
 const COPY_TRIES = 5;
+// One batch holds the write lock under 300 ms on a loaded host (the bench in tests/loop/project-rows.test.ts).
+export const BATCH_ROWS = 5000;
+const batchRows = () => envInt("DS_LOOP_REMOVE_BATCH_ROWS", BATCH_ROWS);
+const sliceMs = () => envInt("DS_LOOP_REMOVE_SLICE_MS", 2000);
+// Longer than SQLite's longest busy-handler sleep (100 ms), so a waiting writer gets the lock between two batches.
+const BATCH_PAUSE_MS = 120;
+
+// What deleteRows expects once the batches are done: loop.db's rows at the latest copy, and no log row.
+function rest(copy: NonNullable<Plan["copy"]>): Counts {
+  const counts: Counts = { ...(copy.source ?? copy.counts) };
+  for (const t of LOG_TABLES) if (t in counts) counts[t] = 0;
+  return counts;
+}
+const logRows = (counts: Counts | undefined) => LOG_TABLES.reduce((n, t) => n + (counts?.[t] ?? 0), 0);
+function stepText(p: Plan): string {
+  const total = logRows(p.copy?.counts);
+  return (p.step === "moved" || p.step === "copied") && p.log?.batches ? `${STEP_TEXT[p.step]} (${p.log.deleted} of ${total})` : STEP_TEXT[p.step];
+}
+
+// About a slice of batches; true when every log table has none left that the archive holds.
+async function deleteLogs(x: Exec, p: () => Plan, put: (next: Partial<Plan>) => void): Promise<boolean> {
+  const archive = join(p().archive!, "loop-rows.db"), limit = batchRows(), t0 = performance.now();
+  if (!p().log) put({ log: { after: {}, deleted: 0, batches: 0, held_ms: 0 } });
+  for (const t of LOG_TABLES) {
+    for (let after = p().log?.after[t]; after !== null; after = p().log!.after[t]) {
+      const b = deleteLogBatch(x.store, p().label, archive, t, limit, after ?? 0);
+      const log = p().log!;
+      put({ log: { after: { ...log.after, [t]: b.next }, deleted: log.deleted + b.deleted,
+        batches: log.batches + (b.deleted ? 1 : 0), held_ms: Math.max(log.held_ms, b.held_ms) } });
+      if (!b.deleted) continue;
+      await Bun.sleep(BATCH_PAUSE_MS);
+      if (performance.now() - t0 >= sliceMs()) return false;
+    }
+  }
+  return true;
+}
 
 export const planKey = (label: string) => ({ project: "", subject: `remove-project:${label}`, kind: "remove-project" });
 const day = (at: number) => new Date(at * 1000).toISOString().slice(0, 10);
@@ -92,7 +138,7 @@ function loadPlan(x: Exec, label: string, request: number): Plan | null {
 // The plan saved, and the request's progress beside it.
 function savePlan(x: Exec, p: Plan, end = false): void {
   x.store.upsert("episodes", planKey(p.label), { state: p.step, source: "loop", result: JSON.stringify(p), observed_at: x.now, ended_at: end ? x.now : null });
-  if (!end) x.store.upsert("requests", { id: p.request }, { result: JSON.stringify({ step: p.step, label: p.label, archive: p.archive ?? null, text: STEP_TEXT[p.step] }) });
+  if (!end) x.store.upsert("requests", { id: p.request }, { result: JSON.stringify({ step: p.step, label: p.label, archive: p.archive ?? null, text: stepText(p) }) });
 }
 
 // The Studio's worktree, its branch and its repo's common dir, read before anything closes.
@@ -249,34 +295,55 @@ async function run(a: Action, x: Exec): Promise<Result> {
         renameSync(home, to);
         put({ after_move: [...(p.after_move ?? []), to] });
       }
-      const c = copyRows(dbPath(root), label, join(p.archive!, "loop-rows.db"));
-      put({ step: "copied", copy: { counts: c.counts, rows: c.rows, set_aside: c.set_aside }, copies: (p.copies ?? 0) + 1 });
+      const file = join(p.archive!, "loop-rows.db");
+      let copy: NonNullable<Plan["copy"]>;
+      if (p.log) {
+        const c = appendRows(dbPath(root), label, file);
+        copy = { counts: c.counts, source: c.source, rows: c.rows, set_aside: p.copy?.set_aside ?? [] };
+      } else {
+        const c = copyRows(dbPath(root), label, file);
+        copy = { counts: c.counts, rows: c.rows, set_aside: c.set_aside };
+      }
+      put({ step: "copied", copy, copies: (p.copies ?? 0) + 1, ...(p.log ? { log: { ...p.log, after: {} } } : {}) });
       break;
     }
     case "copied": {
-      const counts = p.copy!.counts, d = deleteRows(x.store, label, counts);
-      if (d.ok) { put({ step: "deleted", deleted: { rows: d.rows, cleared_pins: d.cleared_pins, cleared_links: d.cleared_links, held_ms: d.held_ms } }); break; }
-      // A replay after the delete committed: every table the archive holds rows of is empty now.
-      if (Object.entries(counts).every(([t, n]) => n === 0 || d.mismatch[t]?.now === 0)) { put({ step: "deleted", deleted: p.deleted ?? null }); break; }
-      const changed = Object.keys(d.mismatch).join(", ");
-      if ((p.copies ?? 0) >= COPY_TRIES) return fail(a, x, p, `the project's rows kept changing while they were copied (${changed}); the archive is at ${p.archive}`);
+      // The same wait text every time, so a long delete writes one event.
+      if (!(await deleteLogs(x, () => p, put))) return { wait: "deleting the log rows in batches" };
+      const before = rest(p.copy!);
+      // The batches took ticks, and a count does not show a row that changed meanwhile: the archive takes what
+      // it lacks now. No await from here to deleteRows.
+      const c = appendRows(dbPath(root), label, join(p.archive!, "loop-rows.db"));
+      // A replay after the delete committed: every table that had rows to delete here is empty now.
+      const expected = Object.entries(before).filter(([, n]) => n > 0);
+      if (expected.length && expected.every(([t]) => c.source[t] === 0)) { put({ step: "deleted", deleted: p.deleted ?? null }); break; }
+      put({ copy: { counts: c.counts, source: c.source, rows: c.rows, set_aside: p.copy!.set_aside } });
+      // A log row here came after the batches passed it.
+      let changed: string[] = LOG_TABLES.filter((t) => c.source[t]);
+      if (!changed.length) {
+        const d = deleteRows(x.store, label, rest(p.copy!));
+        if (d.ok) { put({ step: "deleted", deleted: { rows: d.rows + p.log!.deleted, cleared_pins: d.cleared_pins, cleared_links: d.cleared_links, held_ms: d.held_ms } }); break; }
+        changed = Object.keys(d.mismatch);
+      }
+      if ((p.copies ?? 0) >= COPY_TRIES) return fail(a, x, p, `the project's rows kept changing while they were copied (${changed.join(", ")}); the archive is at ${p.archive}`);
       put({ step: "moved", moved_tick: x.tick - 2 });
-      return { wait: `the rows of ${changed} changed since the copy: copying again` };
+      return { wait: `the rows of ${changed.join(", ")} changed since the copy: copying again` };
     }
     case "deleted": {
       const record = {
         label, removed_at: x.now, by: p.by, request: p.request, archive: p.archive, rows_only: !!p.rows_only,
         rows: p.copy?.rows ?? null, counts: p.copy?.counts ?? null, set_aside: p.copy?.set_aside ?? [],
-        held_ms: p.deleted?.held_ms ?? null, cleared_pins: p.deleted?.cleared_pins ?? null, cleared_links: p.deleted?.cleared_links ?? null,
+        held_ms: p.deleted || p.log ? Math.max(p.deleted?.held_ms ?? 0, p.log?.held_ms ?? 0) : null,
+        batches: p.log?.batches ?? 0, cleared_pins: p.deleted?.cleared_pins ?? null, cleared_links: p.deleted?.cleared_links ?? null,
         studio: p.studio ? { worktree: p.studio.wt, path: p.studio.path, branch: p.studio.branch, branch_now: p.branch_to ?? null,
           branch_error: p.branch_error ?? null, saved: p.saved ?? null } : null,
         after_move: p.after_move ?? [], left_actions: p.left_actions ?? [],
         kept: { tables: KEPT, with_project: KEEP_WITH_PROJECT },
       };
       writeFileSync(join(p.archive!, "removed.json"), JSON.stringify(record, null, 2) + "\n");
-      x.store.event("project_removed", { project: null, payload: { label, request: p.request, archive: p.archive, rows: record.rows, held_ms: record.held_ms } });
+      x.store.event("project_removed", { project: null, payload: { label, request: p.request, archive: p.archive, rows: record.rows, held_ms: record.held_ms, batches: record.batches } });
       p = { ...p, step: "removed" };
-      finishRequest(x.store, a, { ok: true, step: "removed", label, archive: p.archive, rows: record.rows, counts: record.counts, held_ms: record.held_ms,
+      finishRequest(x.store, a, { ok: true, step: "removed", label, archive: p.archive, rows: record.rows, counts: record.counts, held_ms: record.held_ms, batches: record.batches,
         branch: p.branch_to ?? null, text: `Removed '${label}': archived at ${p.archive}` }, x.now);
       savePlan(x, p, true);
       return { done: true, result: `removed: ${p.archive}` };
