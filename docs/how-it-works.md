@@ -136,8 +136,8 @@ flowchart LR
     end
 ```
 
-More accounts = more headroom: each `orca account add` on the host registers another Claude
-login that squads can use.
+More accounts = more headroom: each `ds account add` on the host adds another login that
+squads can use.
 
 ## The loop: what runs on its own
 
