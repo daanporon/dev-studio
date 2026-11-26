@@ -41,6 +41,7 @@ export const KEPT: Record<string, string> = {
   feedback_drafts: "the operator's feedback outlives the project (settled decision)",
   accounts: "host-wide account list",
   health: "the loop process's own health",
+  hosts: "host-wide list of side hosts and their public keys (side-loop-host U1)",
   observed_accounts: "host-wide account usage",
   observed_account_folders: "host-wide login folders the accounts refresh found",
   observed_cleanup_scan: "host-wide cleanup scan",
