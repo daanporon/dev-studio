@@ -2404,14 +2404,14 @@ function updateRun(db: any, label: string, now: number) {
     log: text(res.log), age_min: Math.max(0, Math.floor(((open ? now : Number(q.done_at)) - since) / 60)),
   };
 }
-// The label's newest `remove-project` request, while it is open or no older than the label's current
-// projects row: a reused label never shows an earlier project's removal.
+// The label's newest `remove-project` request. One that worked deleted the label's projects row, so with a
+// row again the label is reused and shows nothing. The row's observed_at is restamped every tick: it dates nothing.
 function removalView(db: any, label: string) {
   if (!db || !label) return null;
   const q = db.one("SELECT id, done_at, result FROM requests WHERE kind = 'remove-project' AND json_extract(payload, '$.label') = ? ORDER BY id DESC LIMIT 1", label);
   if (!q) return null;
-  if (q.done_at != null && Number(q.done_at) < Number(db.one("SELECT observed_at FROM projects WHERE label = ?", label)?.observed_at ?? 0)) return null;
   const res = parse(q.result) ?? {};
+  if (q.done_at != null && res.ok === true && db.one("SELECT 1 FROM projects WHERE label = ?", label)) return null;
   const state = q.done_at == null ? "removing" : res.ok === true ? "removed" : "failed";
   const text = (v: unknown) => (typeof v === "string" && v ? v : null);
   return {

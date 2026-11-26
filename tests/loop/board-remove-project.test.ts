@@ -207,7 +207,23 @@ describe("board.json removal", () => {
     expect(d.read().removal).toMatchObject({ state: "failed", error: "blocked" });
   });
 
-  test("a reused label shows no removal that finished before its projects row was made", () => {
+  test("a failure stays after the state observer restamps the projects row, as it does every tick", () => {
+    const d = db();
+    d.project(T);
+    d.request(T + 5, { ok: false, step: "check", error: "blocked" });
+    d.s.db.run("UPDATE projects SET observed_at = ? WHERE label = 'acme'", [T + 100]);
+    d.s.close();
+    expect(d.read().removal).toMatchObject({ state: "failed", error: "blocked" });
+  });
+
+  test("a removal that worked shows while the label has no projects row", () => {
+    const d = db();
+    d.request(T, { ok: true, step: "removed", archive: "/a", text: "Removed" });
+    d.s.close();
+    expect(d.read().removal).toMatchObject({ state: "removed", archive: "/a" });
+  });
+
+  test("a reused label, with a projects row again, shows no removal that worked", () => {
     const d = db();
     d.request(T - 100, { ok: true, step: "removed", archive: "/a", text: "Removed" });
     d.project(T);
