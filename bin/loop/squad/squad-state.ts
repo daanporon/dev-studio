@@ -47,7 +47,7 @@ const USAGE = `usage: squad-state.sh <file> <command> [args]
   set-member-wait <file> <wt> <epoch>   (a stopped member waiting for a restart pick)
   add-worktree     <file> <worktree_id>    (legacy; prefer add-member)
   add-unit         <file> <slug> [builder_worktree_id] [plan] [deps] [--hold] [--tier standard|hard] [--about <text>] [--link <url>]... [--ext-dep <squad>/<slug>]...   (--link = an http(s) page with more on the unit; --about = what the unit does, shown in the board overlay; deps = comma-separated unit slugs it waits on; --hold = minor follow-up, never auto-dispatched; --tier = the Thinker's Builder tier; --ext-dep = another squad's unit it waits on)
-  register-plan    <file> <plan>    (a relative <plan> that exists from the current directory is read there; register every unit line of an approved plan — \`U<n> — <title> — deps: U<m>… | none — Tier: standard|hard [— ext-deps: <squad>/<slug>[, …]] [— Lane: light|normal [(rule: <id>)]] [— HELD]\` —
+  register-plan    <file> <plan>    (takes exactly these two arguments; a relative <plan> that exists from the current directory is read there; register every unit line of an approved plan — \`U<n> — <title> — deps: U<m>… | none — Tier: standard|hard [— ext-deps: <squad>/<slug>[, …]] [— Lane: light|normal [(rule: <id>)]] [— HELD]\` —
                    with plan, deps as slugs, tier; all-or-nothing (exit 1 names the bad line, writes nothing); idempotent.
                    A unit keeps its slug across re-runs (matched by plan + U<n>); a new one's slug is a backticked \`u<n>-…\` in the
                    title, else u<n>- + the title in kebab case, first 4 words, max 32 chars (-2, -3 on a clash).
@@ -755,6 +755,10 @@ function main(argv: string[]): void {
       // Register every unit line of an approved plan (conventions/plan-shape.md step d) in one go,
       // all-or-nothing: a refusal (exit 1) writes nothing.
       need(1);
+      if (a.length > 1) {
+        const hint = a.includes("--dry-run") ? "; register-plan has no dry run: test a plan on a scratch copy of the state file (as approve-handoff.sh does)" : "";
+        die(2, `squad-state: register-plan: unexpected extra argument(s) after <plan>: ${a.slice(1).join(" ")}${hint}`);
+      }
       let planText: string;
       const planPath = cliPlanPath(a[0]);
       try { if (!statSync(planPath).isFile()) throw new Error(); planText = readFileSync(planPath, "utf8"); } catch { return die(1, `squad-state: register-plan: cannot read plan '${a[0]}'`); }
