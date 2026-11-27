@@ -422,7 +422,7 @@ After that the rows are the only copy:
 The Settings window has **Export** and **Import** (settings-export-import U3). Its search box filters the
 Limits tab by key, meaning, group, value or env var name and unfolds the groups that match. On the Skills tab it
 filters by skill, start hook or MCP server name and description (a matching role name shows the whole role), and
-on the Roles tab by role name, agent or model. The word stays when you switch tabs; Pins and Accounts are not searched.
+on the Roles tab by role name, agent or model. A name with a dash or underscore matches as written. The word stays when you switch tabs; Pins and Accounts are not searched.
 Esc or ✕ clears it; nothing is written or stored, and Save still saves edits the search hides.
 
 - **Export** downloads `<project>-settings.txt` (`GET /api/settings-export?project=`): the export text with a
