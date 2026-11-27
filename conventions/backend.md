@@ -224,6 +224,16 @@ main checks the answer (`checked()`), so one outside its op's type throws on mai
   a name, or a side that failed answers `failed`, naming the host; the adapter never throws.
 - **Conformance:** `tests/loop/backend-remote.test.ts` runs the whole suite through a real link against the
   side's fake in every capability mix.
+- **A member's life there (side-loop-host U10):** a member whose row names a side host starts there: the actuator's
+  contract seat (`core/actuator.ts` `contractSeat`) has that host clone the project first if it lacks it (host job
+  `clone`, `bin/link/host-jobs.ts`), adds its worktree there (`worktree.add`), and makes its terminal there with
+  `DS_MEMBER`, `DS_GEN`, `DS_WT` and `DS_MAIN_URL` (the side's `contract` channel adds the last and marks the folder
+  trusted for its login, `sideCreate`). Its id on main is `<host>::<path>`. The terminal runs on the backend
+  `sideBackend()` names: the squad's, but tmux for a squad on `orca` or `orca-lite`. Close stops it there and removes
+  its worktree with `worktree.remove` (`squad/removal.ts`; rescue and probe as host jobs, `fulfil/close.ts`). Main
+  never reads it through Orca: the Orca observer skips side ids, and the drift check reads main's `worktrees` row
+  for its folder, not main's disk. Until the accounts units land, the agent uses that host's own default login.
+  `ds add-role … --host <name>` (and `ds request member … --host <name>`) asks for a member on a named host.
 
 ### The herdr backend (`bin/backend/herdr.ts`)
 

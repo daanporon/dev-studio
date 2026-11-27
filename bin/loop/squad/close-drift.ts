@@ -15,6 +15,7 @@ import { effective } from "../pause/pause.ts";
 import { view } from "./member-state.ts";
 import { knob } from "../reconcilers/liveness.ts";
 import { wtPath } from "../observers/orca.ts";
+import { onSide } from "./backend.ts";
 import type { Row, Store } from "../core/store.ts";
 
 export const STOP_TRIES = 3;
@@ -29,7 +30,10 @@ export function driftCleared(store: Store, m: Row, now: number): boolean {
   const wt = String(m.wt), project = String(m.project);
   const tree = store.get("observed_worktrees", { project, wt });
   const path = tree?.path ? String(tree.path) : wtPath(wt);
-  if (!path || existsSync(path)) return false;
+  // side-loop-host U10: a side member's folder is on its host: main's record of that tree (host jobs) says if it is there.
+  if (!path) return false;
+  const side = onSide(m.host) ? store.get("worktrees", { host: String(m.host), path }) : null;
+  if (onSide(m.host) ? !!side && side.gone_at == null : existsSync(path)) return false;
   if (tree && tree.gone_at == null) return false;
   const w = store.get("observed_workers", { project, wt });
   if (w && w.gone_at == null) return false;

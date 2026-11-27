@@ -2,7 +2,7 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { ROOT, dsLabel, chomp, readJson, globJson, backendPath, hostBackendPath, run as runCmd, stateRoot, writeOut, writeErr } from "../lib/shared";
-import { contractHere, contractStates, isLocalWt, projectOffOrca, squadContract } from "../lib/contract-roles.ts";
+import { contractHere, contractStates, isLocalWt, isSideWt, projectOffOrca, sideHostNames, squadContract } from "../lib/contract-roles.ts";
 import { attachLine } from "../lib/attach-line.ts";
 
 export const help = `<project> [--topic <slug>] [--switch <label>|--reap] — print a squad's roster, jump to a role's terminal, or reap stale terminals (team.sh)`;
@@ -78,6 +78,12 @@ async function main(argv: string[]): Promise<number> {
     const wid = hit ? str(hit.wt) : "";
     if (!wid) { err(`team: no roster member '${SWITCH}' in ${topic}`); return 1; }
     const tok = str((hit.terminals ?? [])[0]);
+    const side = sideHostNames(stateRoot()).find((h) => wid.startsWith(`${h}::`));
+    if (side) {
+      // side-loop-host U10: a member on a side host runs in a terminal there; attach on that host.
+      out(`team: '${SWITCH}' runs on host ${side}${tok ? ` (terminal ${tok})` : " (no live terminal seen)"}; reach it on that host, in ${wid.slice(side.length + 2)}\n`);
+      return 0;
+    }
     if (isLocalWt(wid)) {
       // Off Orca: the member's own backend has no focus or terminal-switch, so print how to reach it (U58).
       const b = squadContract(stateRoot(), LABEL, topic) ?? "its backend";
@@ -120,8 +126,10 @@ async function main(argv: string[]): Promise<number> {
   const scope = TOPIC ? [oneSquad()] : globJson(DIR);
   const wts = scope.flatMap((f) => { const d = readJson(f); return (d && Array.isArray(d.members) ? d.members : []).map((m: any) => str(m?.wt)); });
   const lines: string[] = [];
-  if (wts.some((w: string) => w && !isLocalWt(w))) lines.push(...chomp((await be(["worker-states"])).out).split("\n"));
-  if (wts.some(isLocalWt)) {
+  // side-loop-host U10: a member on a side host (`<host>::<path>`) is read over the link with the contract squads.
+  const sides = sideHostNames(stateRoot()), offOrca = (w: string) => isLocalWt(w) || isSideWt(w, sides);
+  if (wts.some((w: string) => w && !offOrca(w))) lines.push(...chomp((await be(["worker-states"])).out).split("\n"));
+  if (wts.some(offOrca)) {
     const c = await contractStates(stateRoot(), LABEL);
     lines.push(...c.lines);
     for (const b of c.blind) err(`team: can't read the squads off Orca (${b}) — their members show GONE`);

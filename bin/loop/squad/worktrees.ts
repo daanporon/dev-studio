@@ -37,7 +37,8 @@ export const PATH_COLUMNS: readonly (readonly [table: string, id: string, path: 
 
 // The one statement that records the known worktrees; `now` is the SQL for the record time. `skipProviderRows`
 // (the observer's run) also leaves alone the rows the `orca` worktree provider made, which carry `repo`
-// (migration 0055); the 0054 backfill ran before that column existed.
+// (migration 0055); the 0054 backfill ran before that column existed. It also skips a member on a side host and a
+// side's uploaded worktree rows (side-loop-host U10, columns from 0061): host jobs record those under their own host.
 export function syncSql(now: string, skipProviderRows = false): string {
   return `WITH cand AS (
   SELECT p.label AS project, p.studio_wt AS wt, p.studio_path AS path, '_studio' AS squad, 'studio' AS role,
@@ -50,11 +51,11 @@ export function syncSql(now: string, skipProviderRows = false): string {
            WHEN 'lead' THEN (SELECT p.studio_path FROM projects p WHERE p.label = m.project)
            ELSE (SELECT s.lead_path FROM squads s WHERE s.project = m.project AND s.topic = m.squad ORDER BY s.id DESC LIMIT 1) END,
          1, 0, -m.id
-    FROM members m WHERE m.wt_path IS NOT NULL AND m.wt NOT LIKE 'local::%'
+    FROM members m WHERE m.wt_path IS NOT NULL AND m.wt NOT LIKE 'local::%'${skipProviderRows ? " AND COALESCE(m.host, 'local') IN ('', 'local')" : ""}
   UNION ALL
   SELECT o.project, o.wt, COALESCE(o.path, ${pathSql("o.wt")}), NULL, NULL, o.parent_path,
          2, o.gone_at IS NOT NULL, -COALESCE(o.observed_at, 0)
-    FROM observed_worktrees o WHERE o.wt NOT LIKE 'local::%'
+    FROM observed_worktrees o WHERE o.wt NOT LIKE 'local::%'${skipProviderRows ? " AND o.host = 'local'" : ""}
 ), best AS (
   SELECT *, row_number() OVER (PARTITION BY path ORDER BY pri, gone, ord, project) AS rn FROM cand WHERE path IS NOT NULL AND path != ''
 )
