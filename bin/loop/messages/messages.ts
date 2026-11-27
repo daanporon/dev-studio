@@ -39,7 +39,7 @@ export function senderAt(s: Store, top: string | null, env: Record<string, strin
   if (id) {
     const m = s.db.query("SELECT wt FROM members WHERE project = ? AND squad = ? AND role = ? AND COALESCE(suffix, '') = ? AND wt IS NOT NULL AND COALESCE(status, '') != 'gone' ORDER BY id DESC")
       .get(id.project, id.squad, id.role, id.suffix) as Row | null;
-    if (m?.wt) tries.push(wtDir(String(m.wt)));
+    if (m?.wt) tries.push(String(m.wt), wtDir(String(m.wt)));   // the exact id first: a side path can equal a main one
   }
   if (me.wt) tries.push(me.wt.replace(/\/+$/, ""));
   const handle = me.handle;

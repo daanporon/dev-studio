@@ -6,6 +6,7 @@ import type { Row, Store } from "../core/store.ts";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
+import { linkWt } from "../../link/split.ts";
 import { dependencyReasons, memberUnit, mergedUnit } from "./pause-conditions.ts";
 
 export type PauseTarget = { scope: "project" | "squad" | "member"; project: string; squad?: string; role?: string; suffix?: string };
@@ -155,7 +156,7 @@ export function checkpointHash(file: string, generation: string): string {
 export function sessionOf(store: Store, me: { handle: string | null; gen: string | null; wt: string | null }): string | null {
   if (me.handle) return me.handle;
   if (!me.gen || !me.wt) return null;
-  const rows = store.db.query("SELECT handle, doc FROM observed_terminals WHERE wt = ? AND gone_at IS NULL").all(`local::${me.wt.replace(/\/+$/, "")}`) as Row[];
+  const rows = store.db.query("SELECT handle, doc FROM observed_terminals WHERE wt = ? AND gone_at IS NULL").all(linkWt() ?? `local::${me.wt.replace(/\/+$/, "")}`) as Row[];
   const hit = rows.filter((r) => { try { return JSON.parse(String(r.doc ?? "{}")).gen === me.gen; } catch { return false; } });
   return hit.length === 1 ? String(hit[0].handle) : null;
 }

@@ -14,6 +14,7 @@ import { toplevel } from "../loop/squad/exposed.ts";
 import { ack, inbox, line, senderAt, waitingFor, waitingLines, type Addr, type Message } from "../loop/messages/messages.ts";
 import { parseMember, whoAmI } from "../loop/core/whoami.ts";
 import { instructionFilesFor } from "../lib/update-classes";
+import { factsOf } from "../link/split.ts";
 
 /** U276: whose message rows this tick reads on a loop root — `me`, else this worktree's member; null when
  *  loop.db can't tell (no db, no member: the Orca read stays). */
@@ -143,6 +144,15 @@ function instrHash(): string {
 const readText = (f: string): string | undefined => { try { return readFileSync(f, "utf8"); } catch { return undefined; } };
 const isFile = (f: string): boolean => { try { return statSync(f).isFile(); } catch { return false; } };
 
+/** Whether this worktree's instruction files changed since it last read them, marking them read now. */
+export function instructionsSeen(SR = stateRoot()): "changed" | "unchanged" {
+  const ihash = instrHash();
+  const iseen = join(process.env.DS_INSTR_SEEN || join(SR, "_instr-seen"), cksum(process.env.PWD || process.cwd()));
+  if (chomp(readText(iseen) ?? "") === ihash) return "unchanged";
+  try { mkdirSync(dirname(iseen), { recursive: true }); writeFileSync(iseen, `${ihash}\n`); } catch { /* best effort */ }
+  return "changed";
+}
+
 function requestHint(line: string): string {
   if (line.startsWith("board:")) return "run that command (the operator asked from the board), then";
   if (line.startsWith("switch:") && line.includes("(early, while idle")) return "historical early move: run that exact command ONLY if the agent is still idle; otherwise clear it with done-request.sh, then";
@@ -262,14 +272,11 @@ export async function run(argv: string[]): Promise<number> {
     writeOut(`=== ${TOPIC || "run"} ${LABEL ? `(${LABEL}) ` : ""}— ${hdr} ===\n`);
     // Re-read instructions only when they changed since this worktree last saw them; a --poll peek is
     // never shown to the agent, so it marks nothing seen.
+    // On a side host the worktree and its instruction files are there: bin/ds read them before forwarding (link/split.ts).
     if (!POLL) {
-      const ihash = instrHash();
-      const iseen = join(process.env.DS_INSTR_SEEN || join(SR, "_instr-seen"), cksum(process.env.PWD || process.cwd()));
-      if (chomp(readText(iseen) ?? "") === ihash) writeOut("INSTRUCTIONS: unchanged since your last read — no need to re-read them\n");
-      else {
-        writeOut("INSTRUCTIONS: changed (or first tick here) — re-read ~/.dev-studio/AGENTS.md + your role file now\n");
-        try { mkdirSync(dirname(iseen), { recursive: true }); writeFileSync(iseen, `${ihash}\n`); } catch { /* best effort */ }
-      }
+      const seen = factsOf<{ instr: string | null }>()?.instr ?? instructionsSeen(SR);
+      writeOut(seen === "unchanged" ? "INSTRUCTIONS: unchanged since your last read — no need to re-read them\n"
+        : "INSTRUCTIONS: changed (or first tick here) — re-read ~/.dev-studio/AGENTS.md + your role file now\n");
     }
     writeOut("MESSAGES:\n");
     let list: any = null, any = false;

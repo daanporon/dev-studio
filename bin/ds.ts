@@ -102,13 +102,16 @@ export async function markdown(binDir: string): Promise<string> {
 const argv = process.argv.slice(2);
 // side-loop-host U7 (KTD5): on a side host a worker's terminal carries DS_MAIN_URL. Every call but help and the
 // forward table's `local` commands goes to main through the side loop's relay, --state and all (main refuses it).
+// U8: a `split` command first reads what it needs from this worktree here and sends those facts along.
 const mainUrl = process.env.DS_MAIN_URL;
 if (mainUrl && !process.env.DS_LINK_FORWARDED && argv[0] && !["help", "--help", "-h"].includes(argv[0])) {
   const { kindOf } = await import("./link/forward-table.ts");
   const { parseMember } = await import("./loop/core/whoami.ts");
-  if (kindOf(parseMember(process.env.DS_MEMBER)?.role ?? "", argv[0]) !== "local") {
+  const kind = kindOf(parseMember(process.env.DS_MEMBER)?.role ?? "", argv[0]);
+  if (kind !== "local") {
     const { forwardDs } = await import("./link/relay.ts");
-    process.exit(await forwardDs(mainUrl, argv));
+    const facts = kind === "split" ? await (await import("./link/split.ts")).gather(argv[0], argv.slice(1)) : undefined;
+    process.exit(await forwardDs(mainUrl, argv, process.env, facts));
   }
 }
 const at = argv.indexOf("--state");
