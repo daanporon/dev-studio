@@ -11,6 +11,8 @@
 import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import { ROOT } from "../loop/core/store.ts";
+import { hostKeys } from "../lib/host-settings.ts";
+import { limitEnv } from "../loop/settings/limits.ts";
 import { ensureHostKey, hostKeyPath, signHello } from "./host-keys.ts";
 import { UP_MIGRATION } from "./replica.ts";
 import { deadMs, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
@@ -51,6 +53,12 @@ export async function dialUrl(main: string, resolve: Resolve = resolveAll): Prom
   const pick = found.find((a) => a.family === 4) ?? found[0];
   url.hostname = pick.family === 6 ? `[${pick.address}]` : pick.address;
   return url.toString();
+}
+
+/** This host's own environment values of the `[host]` keys, by key: main shows them as this host's `env` source. */
+export function hostEnv(): Record<string, string> {
+  let room = 3000; // the hello is a pre-auth frame: main refuses one over JOIN_MAX_BYTES, and the host could not link
+  return Object.fromEntries(hostKeys().flatMap((k) => { const v = process.env[limitEnv(k)]?.trim(); return v && v.length <= 500 && (room -= Buffer.byteLength(JSON.stringify([k, v]))) >= 0 ? [[k, v]] : []; }));
 }
 
 /** The newest migration that changed an up-table (KTD15's `up_migration`, replica.ts). */
@@ -189,7 +197,7 @@ export class LinkClient {
       if (f.t === "challenge") {
         const nonce = Buffer.from(String(f.nonce ?? ""), "base64");
         const key = readFileSync(hostKeyPath(this.o.root), "utf8");
-        ws.send(JSON.stringify({ t: "auth", signature: signHello(key, nonce, LINK_VERSION, this.o.name), link_version: LINK_VERSION, up_migration: newestMigration(), code_rev: codeRev(), ...this.fencedField() } satisfies Frame));
+        ws.send(JSON.stringify({ t: "auth", signature: signHello(key, nonce, LINK_VERSION, this.o.name), link_version: LINK_VERSION, up_migration: newestMigration(), code_rev: codeRev(), env: hostEnv(), ...this.fencedField() } satisfies Frame));
         return;
       }
       if (f.t === "welcome") {

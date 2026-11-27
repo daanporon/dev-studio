@@ -1196,7 +1196,7 @@ eq "web board: crew footer names builders (all units)" "$(grep -cF 'builders (al
 eq "web board: settings button in the header" "$(grep -cF '⚙ Settings' "$ROOT/web/board.html")" "1"
 eq "web board: #settings and #settings/<tab> open the overlay" "$(grep -cF '/^#settings(?:\/([a-z]+))?$/.exec(location.hash)' "$ROOT/web/board.html")" "1"
 eq "web board: settings overlay closes on Esc" "$(grep -cF 'if (e.key === "Escape") setSettings(false)' "$ROOT/web/board.html")" "1"
-eq "web board: settings has a tab list (Limits, Roles, Skills, Pins, Accounts)" "$(grep -cF 'SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"], ["accounts", "Accounts"]]' "$ROOT/web/board.html")" "1"
+eq "web board: settings has a tab list (Limits, Roles, Skills, Pins, Accounts, Hosts)" "$(grep -cF 'SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"], ["accounts", "Accounts"], ["hosts", "Hosts"]]' "$ROOT/web/board.html")" "1"
 eq "web board: Roles tab uses the combined ModelPick" "$(grep -cF 'function ModelPick(' "$ROOT/web/board.html")" "1"
 eq "web board: Roles tab no longer has a free model datalist" "$(grep -cF 'datalist' "$ROOT/web/board.html")" "0"
 eq "web board: Roles is the second tab, mounting RolesTab" "$(grep -cF 'tab === "roles" && html`<${RolesTab}' "$ROOT/web/board.html")" "1"

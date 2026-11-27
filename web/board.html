@@ -171,6 +171,8 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .arow .lu.awarn,.mrow .lu.awarn{color:var(--amber);white-space:normal;overflow-wrap:anywhere} .arow .al{flex-wrap:wrap} .arow .al .t{max-width:100%} .afacts{margin:-4px 0 10px;font-size:11px;color:var(--dim);overflow-wrap:anywhere}
 .acc-sec .acc-head{justify-content:flex-end;margin:0 0 8px}
 .mrow .mbtns{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end} .acct-ctl{margin-bottom:8px}
+.host-chip{margin-left:6px;font-size:10px;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue)} .host .al .bdg{font-size:10px;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue)}
+.hosts-pane .awarn{color:var(--amber)} .hosts-pane .mrow .lu{white-space:normal;overflow-wrap:anywhere} .host-keys{margin-left:16px} .host-keys input,.host-keys select{max-width:220px;min-width:0} .host-join{border-top:1px solid var(--line);margin-top:8px} .join-cmd{user-select:all;overflow-wrap:anywhere}
 .acct-pending{border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px;font:12px var(--mono);color:var(--mut);overflow-wrap:anywhere} .acct-pending .al{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--fg)} .acct-pending .lu{margin-top:4px} .acct-pending .awarn,.acct-form .awarn{color:var(--amber)} .acct-pending .dcode{font-size:15px;color:var(--fg);user-select:all}
 .acct-paste{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px} .acct-paste input{flex:1 1 200px;min-width:0} .acct-form label{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
 .mrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font:12px var(--mono);color:var(--mut)} .mrow:first-child{border-top:0} .mrow .al{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--fg);min-width:0} .mrow .al .t{overflow-wrap:anywhere} .mrow .mark,.acct-pending .mark{flex:none;font-size:10px;padding:1px 5px;border-radius:4px;background:var(--blue-bg);color:var(--blue)} .mrow .bdg,.acct-pending .bdg{flex:none;font-size:10px;padding:1px 6px;border-radius:4px;background:#23272f;color:var(--mut)}
@@ -2328,6 +2330,7 @@ function cardActions(n, data) {
     if (n.act) out.push({ key: "act", label: n.act.label, cls: "btn" + (n.act.action === "close" ? " red" : ""), act: n.act });
     return out;
   }
+  if (n.card === "host-join") return [{ key: "host-accept", label: "Accept", cls: "btn sm pri" }, { key: "host-reject", label: "Reject", cls: "btn sm" }];
   if (n.squad === "_studio") {
     if (n.card_squad) out.push({ key: "show", label: "Show squad", cls: "btn sm" });
     if (n.act) out.push({ key: "act", label: n.act.label, cls: "btn" + (n.act.action === "close" ? " red" : ""), act: n.act });
@@ -3002,7 +3005,7 @@ const qLine = !qItems.length ? "" : qItems[0].menu
       </div>
     </div></div>`;
 }
-function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen, cardActions, data, onDebrief }) {
+function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen, cardActions, data, onDebrief, onAction }) {
   const i = Math.max(0, items.findIndex((n) => nkey(n) === at));
   const n = items[i];
   const [pick, setPick] = useState({});          // nkey -> chosen label or free text
@@ -3047,7 +3050,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
       }
       if (e.key === "ArrowRight") go(1); else if (e.key === "ArrowLeft") go(-1);
       else if (/^[1-9]$/.test(e.key) && n && !termOnly && !checking && n.choices[+e.key - 1]) set(n.choices[+e.key - 1].label);
-      else if (e.key === "Enter" && n && !termOnly && n.id && !sentQ.has(akey(n))) { if (studioCard && n.choices.length === 0) send(markAct ? markAct.answer : ""); else if (val.trim() || one !== null) send(); }
+      else if (e.key === "Enter" && n && !termOnly && n.id && n.card !== "host-join" && !sentQ.has(akey(n))) { if (studioCard && n.choices.length === 0) send(markAct ? markAct.answer : ""); else if (val.trim() || one !== null) send(); }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   });
@@ -3100,9 +3103,10 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           onClick=${() => setChat({ project: n.label, topic: n.card_squad || n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead", qid: n.id })}>Chat with ${n.chat_label || "the Lead"}</button>`}
         <span class="sp"></span>
         ${st.err && html`<span class="err">not sent: ${st.err}</span>`}
-        ${sent && !checking && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
+        ${sent && !checking && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.card === "host-join" ? "✓ answer sent " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
         <button class="btn qsec" disabled=${i === 0} onClick=${() => go(-1)}>←</button><button class="btn qsec" disabled=${i === items.length - 1} onClick=${() => go(1)}>→</button>
-        ${n.id ? (termOnly ? null
+        ${n.card === "host-join" ? acts.map((a) => html`<button key=${a.key} class=${a.cls.replace(" sm", "")} disabled=${!!sent} onClick=${() => { onClose(); onAction(n, a); }}>${a.label}</button>`)
+        : n.id ? (termOnly ? null
             : studioCard && n.choices.length > 0
               ? html`<button class="btn" disabled=${st.busy || !!sent} onClick=${() => send("")}>Dismiss</button>
                 <button class="btn pri" disabled=${(one === null && !val.trim()) || st.busy || !!sent} onClick=${() => send()}>${st.busy ? "Sending…" : one !== null ? one : "Send"}</button>`
@@ -3675,7 +3679,7 @@ function Detail({ s, onPlan, planOpen, toast, setAsk, askKeys, prerequisites, fl
         <div class="m head"><span></span><span>Role</span><span>Phase</span><span class="num">Context</span><span>State</span><span>Model · Effort @ Account</span><span>Machine</span><span class="num">Spent 7d</span><span></span></div>
         ${s.members.map((m) => { const acct = m.account_real ? (m.account_real_label || m.account_real) : m.account ? (m.account_label || m.account) : m.account_label;
           return html`<div key=${m.wt || m.label} class="m" id=${m.wt ? crewRowId(s, m) : null}>
-          ${(() => { const d = crewDot(s, m); return html`<span class=${"dot " + d.cls} title=${d.why || undefined} aria-label=${d.why || undefined}></span>`; })()}<span class="nm" title=${m.label}>${m.label}${m.unread + m.reply_due > 0 && html`<span class="msg-badge" title=${m.unread + " unread · " + m.reply_due + " waiting for a reply"}>${m.unread + m.reply_due}</span>`}${(() => { const n = memberLinks(s, m).length; return n > 0 && html`<span class="link-chip" title=${n + " page" + (n === 1 ? "" : "s") + " this member shares: open them from its ⋯ menu"}>🔗 ${n}</span>`; })()}</span>
+          ${(() => { const d = crewDot(s, m); return html`<span class=${"dot " + d.cls} title=${d.why || undefined} aria-label=${d.why || undefined}></span>`; })()}<span class="nm" title=${m.label}>${m.label}${m.host && html`<span class="bdg where host-chip" title=${"runs on side host " + m.host}>${m.host}</span>`}${m.unread + m.reply_due > 0 && html`<span class="msg-badge" title=${m.unread + " unread · " + m.reply_due + " waiting for a reply"}>${m.unread + m.reply_due}</span>`}${(() => { const n = memberLinks(s, m).length; return n > 0 && html`<span class="link-chip" title=${n + " page" + (n === 1 ? "" : "s") + " this member shares: open them from its ⋯ menu"}>🔗 ${n}</span>`; })()}</span>
           <span class="st" title="the loop's phase for this Builder">${m.phase || ""}</span>
           <span class=${"num tok ctx " + (m.ctx_level || "")} title=${m.tokens ? tokTip(m.tokens, true) + " · " + m.tokens.model : ""}>${m.tokens ? (m.tokens.ctx == null ? "?" : fmtTok(m.tokens.ctx)) : ""}</span>
           <span class="st" title=${[m.pause && m.pause.reason, wishText(m.wish)].filter(Boolean).join(" · ")}>${m.pause && m.pause.state !== "active" ? pauseLabel(m.pause.state) : m.state}${wishText(m.wish) ? html`<span class="wish"> · ${wishText(m.wish)}</span>` : ""}</span>
@@ -3913,7 +3917,7 @@ function FeedbackPanel({ summary, project, toast, onClose }) {
 
 // Settings: the project's limits (GET/POST api/limits -> limits.sh). Changes apply on the next
 // sweep minute / board refresh; auto_compact_* apply when an agent is next (re)started.
-const SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"], ["accounts", "Accounts"]];
+const SETTINGS_TABS = [["limits", "Limits"], ["roles", "Roles"], ["skills", "Skills"], ["pins", "Pins"], ["accounts", "Accounts"], ["hosts", "Hosts"]];
 function Settings({ project, projects, accounts, folderOnly, adds, kinds, at, toast, onClose }) {
   const backend = ((projects || []).find((p) => p.label === project) || {}).studio_backend || "orca";
   const tabAt = (t) => (SETTINGS_TABS.some(([k]) => k === t) ? t : SETTINGS_TABS[0][0]);
@@ -3936,7 +3940,77 @@ function Settings({ project, projects, accounts, folderOnly, adds, kinds, at, to
       <button class="btn sm mclose" style=${{ marginLeft: 6 }} title="Close (Esc)" onClick=${onClose}>✕</button></div>
       <div class="set-note set-backend" style=${{ margin: "8px 16px 0" }}>Backend: <b class="mono">${backend}</b> — the Studio's; new squads start on it. To change it run <code>ds up ${project} --backend ${"<name>"}</code>; squads already running keep theirs.</div>
       ${importing ? html`<div class="set-body"><${ImportPane} project=${project} toast=${toast} onBack=${() => setImporting(false)} onApplied=${() => setRev((n) => n + 1)} /></div>` : html`<div class="set-tabs">${SETTINGS_TABS.map(([k, l]) => html`<button key=${k} class=${"set-tab" + (tab === k ? " on" : "")} onClick=${() => setTab(k)}>${l}</button>`)}</div>
-      <div class="set-body set-searched" key=${rev}><div class="set-search"><input ref=${box} type="search" aria-label="Search settings" placeholder="Search settings" value=${query} disabled=${!searched} title=${searched ? undefined : "This tab is not searched"} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${searchKey} />${searched && query && html`<button class="btn sm set-clear" aria-label="Clear search" title="Clear search" onClick=${clearSearch}>✕</button>`}</div>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "accounts" && html`<${AccountsPane} accounts=${accounts} folderOnly=${folderOnly} adds=${adds} kinds=${kinds} project=${project} toast=${toast} />`}</div>`}</div></div>`;
+      <div class="set-body set-searched" key=${rev}><div class="set-search"><input ref=${box} type="search" aria-label="Search settings" placeholder="Search settings" value=${query} disabled=${!searched} title=${searched ? undefined : "This tab is not searched"} onInput=${(e) => setQuery(e.target.value)} onKeyDown=${searchKey} />${searched && query && html`<button class="btn sm set-clear" aria-label="Clear search" title="Clear search" onClick=${clearSearch}>✕</button>`}</div>${tab === "limits" && html`<${LimitsPane} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "roles" && html`<${RolesTab} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "pins" && html`<${PinsTab} project=${project} toast=${toast} />`}${tab === "hosts" && html`<${HostsPane} project=${project} toast=${toast} />`}${tab === "skills" && html`<${SkillsTab} project=${project} toast=${toast} query=${query} onShowAll=${clearSearch} />`}${tab === "accounts" && html`<${AccountsPane} accounts=${accounts} folderOnly=${folderOnly} adds=${adds} kinds=${kinds} project=${project} toast=${toast} />`}</div>`}</div></div>`;
+}
+
+// side-loop-host U17: Settings → Hosts. A row per host with its state; the row opens that host's machine keys (U25),
+// each with where its value comes from. Writes go as `requests` rows (POST api/host).
+const hostAge = (s) => s == null ? "never" : (s < 60 ? s + "s" : fmtAge(Math.floor(s / 60))) + " ago";
+const hostFacts = (h) => [
+  h.main ? "main" : h.online ? "online" : "offline",
+  "seats " + h.seats.used + " used, " + (h.seats.total == null ? "no limit" : h.seats.free + " free of " + h.seats.total),
+  h.load ? "load " + h.load.load1 + (h.load.pct == null ? "" : " (" + h.load.pct + "% of " + h.load.cores + " cores)") + (h.load.state === "stale" ? ", stale" : "") : "load unknown",
+  h.main ? null : "last seen " + hostAge(h.last_seen_s),
+  "brake " + (!h.brake.on ? "off" : h.brake.hit ? "holding: " + h.brake.hit : "on"),
+].filter(Boolean).join(" · ");
+// One filed host write: true once the loop did it.
+async function hostWrite(body, said, say) {
+  try {
+    const why = await refusal(await post("api/host", body));
+    say(why ? "not changed: " + why : said);
+    return !why;
+  } catch (e) { say("not changed: " + (e.message || e)); return false; }
+}
+function HostKeyRow({ host, main, k, toast, reload }) {
+  const [draft, setDraft] = useState(null), [busy, setBusy] = useState(false);
+  const say = sayFor(toast), id = host + " " + k.key;
+  const send = async (body, said) => { setBusy(true); if (await hostWrite({ host, key: k.key, ...body }, said, say)) setDraft(null); setBusy(false); reload(); };
+  // Main's own env wins over any override, so there is nothing to edit; a side host's env leaves what main reads.
+  const fixed = k.fileOnly || (main && k.source === "env");
+  const value = draft ?? (k.main_reads != null ? k.override ?? k.main_reads : k.value);
+  const source = k.source === "env" ? "env on that host (" + k.env + ")" : k.source;
+  return html`<div class="mrow host-key"><div><div class="al"><span class="t" title=${k.comment}>${k.key}</span><span class="bdg where">${source}</span></div>
+      <div class="lu">${k.comment}</div>
+      ${k.main_reads != null && html`<div class="lu awarn">that host uses ${k.value}; main places by ${k.main_reads}</div>`}
+      ${k.fileOnly && html`<div class="lu">set with: ds host set ${host} ${k.key} "…"</div>`}</div>
+    <div class="mbtns">${k.fileOnly ? html`<span class="mono">${k.value || "-"}</span>`
+      : k.allowed ? html`<select aria-label=${id} disabled=${fixed || busy} value=${value} onChange=${(e) => setDraft(e.target.value)}>${(k.allowed.includes(value) ? k.allowed : [value, ...k.allowed]).map((v) => html`<option key=${v} value=${v}>${v || "unset"}</option>`)}</select>`
+      : html`<input aria-label=${id} size="10" disabled=${fixed || busy} value=${value} onInput=${(e) => setDraft(e.target.value)} />`}
+      ${draft != null && html`<button class="abtn host-save" disabled=${busy || !draft.trim()} onClick=${() => send({ action: "set", value: draft }, k.key + " set for " + host)}>Save</button>`}
+      ${k.override != null && html`<button class="abtn host-reset" disabled=${busy} title="drop this host's override" onClick=${() => send({ action: "reset" }, k.key + " of " + host + " back to the default")}>Reset</button>`}</div></div>`;
+}
+function HostsPane({ project, toast }) {
+  const [data, setData] = useState(null), [error, setError] = useState(null), [open, setOpen] = useState(null);
+  const load = async () => {
+    try {
+      const r = await fetch("api/hosts?project=" + encodeURIComponent(project), { cache: "no-store" }), b = await r.json();
+      if (!r.ok) throw new Error(b.error || "HTTP " + r.status);
+      setData(b); setError(null);
+    } catch (e) { setError(String(e.message || e)); }
+  };
+  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [project]);
+  const say = sayFor(toast);
+  const remove = async (name) => {
+    if (!confirm("Remove host " + name + "? Its key is deleted: it takes no more work, and it must join again to come back.")) return;
+    await hostWrite({ host: name, action: "remove" }, "host " + name + " removed", say);
+    load();
+  };
+  if (!data) return html`<div class="mut">${error ? "hosts unavailable: " + error : "loading…"}</div>`;
+  return html`<div class="hosts-pane">
+    <p class="set-note">Hosts are main's, one list for all its projects; Export/Import leaves them out. A [host] key reads that host's env, then its override, then the default.</p>
+    ${error && html`<p class="set-note awarn">not updated: ${error}</p>`}
+    ${data.hosts.map((h) => html`<div key=${h.name} class="host" data-host=${h.name}>
+      <div class="mrow"><div><div class="al"><button class="abtn host-open" aria-expanded=${open === h.name} onClick=${() => setOpen(open === h.name ? null : h.name)}>${open === h.name ? "▾" : "▸"} ${h.name}</button>
+          ${h.behind && html`<span class="bdg where" title=${h.behind}>behind</span>`}${h.drain && html`<span class="bdg where">draining</span>`}${h.fenced && html`<span class="bdg where">fenced</span>`}</div>
+          <div class="lu">${hostFacts(h)}</div>${h.behind && html`<div class="lu awarn">${h.behind}</div>`}</div>
+        <div class="mbtns">${!h.main && html`<button class="abtn host-remove" onClick=${() => remove(h.name)}>Remove</button>`}</div></div>
+      ${open === h.name && html`<div class="host-keys">${h.main && html`<p class="set-note">Main's seats are each project's max_builders, on the Limits tab.</p>`}
+        ${h.keys.map((k) => html`<${HostKeyRow} key=${k.key} host=${h.name} main=${h.main} k=${k} toast=${toast} reload=${load} />`)}</div>`}
+    </div>`)}
+    ${data.pending.length > 0 && html`<p class="set-note">Waiting to join: ${data.pending.join(", ")} — Accept or Reject on its Needs-you card.</p>`}
+    <div class="host-join"><p class="set-note">To add a side host, run this on it:</p><code class="mono join-cmd">${data.join.command}</code>
+      ${data.join.note && html`<p class="set-note">${data.join.note}</p>`}${data.join.hint && html`<p class="set-note awarn join-hint">${data.join.hint}</p>`}</div>
+  </div>`;
 }
 
 // Import in Settings: a source (a file, pasted export text, or another project on this host) -> the plan
@@ -4642,6 +4716,12 @@ function App() {
       return qbump((v) => v + 1);
     }
     if (cardGone(n)) return;
+    if (k === "host-accept" || k === "host-reject") {   // side-loop-host U17: the fingerprint shown goes with the answer
+      const verb = k.slice(5);
+      sentQ.set(akey(n), hhmmss(new Date()).slice(0, 5)); setPlan(null); qbump((v) => v + 1);
+      if (!(await hostWrite({ host: n.host, action: verb, fingerprint: n.fingerprint }, "host " + n.host + (verb === "accept" ? " accepted" : " rejected"), say))) sentQ.delete(akey(n));
+      return qbump((v) => v + 1);
+    }
     if (k === "read") openBriefs();
     try { await sendAnswer(n.label, "_studio", n.id, k === "dismiss" ? "" : k === "read" ? "Mark read" : a.answer); if (k !== "dismiss") say(k === "read" ? "marked the brief read" : "marked the debrief read"); }
     catch (e) { return say((k === "dismiss" ? "not dismissed: " : "not read: ") + (e.message || e)); }
@@ -4866,7 +4946,7 @@ function App() {
     ${feedbackOpen && html`<${FeedbackPanel} summary=${data.feedback} project=${data.project} toast=${setToast} onClose=${() => setFeedbackOpen(false)} />`}
     ${settingsOpen && data.project && html`<${Settings} project=${data.project} projects=${data.projects} accounts=${data.accounts || []} folderOnly=${data.account_folders || []} adds=${data.account_adds || []} kinds=${data.account_kinds || []} at=${settingsAt} toast=${setToast} onClose=${() => setSettings(false)} />`}
 
-    ${ask && html`<${AskOverlay} cardActions=${cardActions} data=${data} onDebrief=${openDebriefOf} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}
+    ${ask && html`<${AskOverlay} cardActions=${cardActions} onAction=${runCardAction} data=${data} onDebrief=${openDebriefOf} items=${data.needs_you.filter((n) => n.kind !== "done")} at=${ask} setAt=${setAsk} onClose=${() => setAsk(null)} onShow=${show} toast=${setToast} onPlan=${setPlan} planOpen=${!!plan} />`}
     ${plan && html`<div class="modal doc-modal" onClick=${(e) => { if (e.target === e.currentTarget) setPlan(null); }}>
       <div class="mbox"><div class="mhd"><span>${plan.name}</span><span class="sp"></span>${plan.changes && html`<button class="btn sm" data-ev="plan-switch" onClick=${() => setPlan({ ...plan, view: plan.view === "changes" ? "full" : "changes" })}>${plan.view === "changes" ? "Show full plan" : "What changed"}</button> `}<button class="btn sm mclose" onClick=${() => setPlan(null)}>✕</button></div>
         ${plan.changes && plan.view === "changes"
