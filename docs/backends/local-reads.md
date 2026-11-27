@@ -23,6 +23,8 @@ as `<host>::<path>` and terminal handles as `<host>:<handle>` (`bin/link/replica
 host's login folders travel the same way (`observed_account_folders`, U18); main records each login's folder on
 that host in `account_folders` by login id.
 Main's own observers read and prune only `host = 'local'` rows, so they never touch a side host's facts.
+`tests/side-host.sh` checks that on one machine: its main loop runs no observers, so every row it asserts about
+the side host came up the link. Setting up and losing a side host: [`../runbooks/side-host.md`](../runbooks/side-host.md).
 
 ## `/proc`: processes
 
