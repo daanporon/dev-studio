@@ -140,7 +140,10 @@ export function reconcile({ store, now: at }: TickCtx, { eligible, moves }: Want
   }); } finally { store.db.run("DROP TABLE IF EXISTS temp.picks"); }
   store.tx(() => {
     const before = new Map((store.db.query("SELECT * FROM picks").all() as Row[]).map((p) => [Number(p.member), p]));
-    store.db.run("DELETE FROM picks WHERE member NOT IN (SELECT value FROM json_each(?))", [ids]);
+    // U11: a side host the loop placed a member on stays recorded while that member has no worktree yet (a start in
+    // flight or failed, a suspended squad): it reads as the loop's placement, never as a forced host (place.ts).
+    store.db.run(`DELETE FROM picks WHERE member NOT IN (SELECT value FROM json_each(?)) AND NOT (host IS NOT NULL AND EXISTS (SELECT 1 FROM members m
+      WHERE m.id = picks.member AND m.host = picks.host AND COALESCE(m.wt, '') = '' AND COALESCE(m.status, '') NOT IN ('gone', 'closed')))`, [ids]);
     store.db.run("UPDATE picks SET slot = 0");
     const changed = new Map<string, Row[]>();     // `<project>\t<role>` -> its picks this tick
     for (const { m, id, phase, row, placed, override } of plan) {

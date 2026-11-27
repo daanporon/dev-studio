@@ -96,6 +96,27 @@ describe("U11: placement picks a side host", () => {
     expect(hostCol(s, id)).toBe("alpha");
   });
 
+  test("a loop placement stays movable while its member is no candidate (start in flight, suspended): the host can still be left", () => {
+    const s = fixture();
+    sample(s, "local");
+    side(s, "alpha");
+    live(s);
+    const id = asks(s);
+    reconcile(ctx(s));
+    expect(hostCol(s, id)).toBe("alpha");
+    // Out of the candidate set (suspended, no worktree): its picks row and placement stay.
+    s.db.run("UPDATE squads SET status = 'suspended' WHERE topic = 'demo'");
+    s.db.run("UPDATE members SET status = 'suspended' WHERE id = ?", [id]);
+    reconcile(ctx(s), { eligible: [], moves: new Map() });
+    expect(s.get("picks", { member: id })).toMatchObject({ host: "alpha" });
+    // Resumed with alpha now draining: placed again, not pinned (main full, so it waits on main).
+    s.db.run("UPDATE squads SET status = 'running' WHERE topic = 'demo'");
+    s.db.run("UPDATE members SET status = 'wanted' WHERE id = ?", [id]);
+    s.db.run("UPDATE hosts SET drain = 1 WHERE name = 'alpha'");
+    expect(reconcile(ctx(s)).has(id)).toBe(false);
+    expect(String(s.get("picks", { member: id })!.reason)).toMatch(/^WAIT slot: .*alpha draining/s);
+  });
+
   test("main with room: a placed Builder starts on main and its row names no host", () => {
     const s = fixture();
     side(s, "alpha");

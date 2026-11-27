@@ -463,8 +463,8 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   // Tester or Researcher starts on main. The reason keeps main's wait on the same line, never at a line start (SLOT_WAIT).
   if (!req.place || !movable(store, m, req.role)) return held ?? choose(store, req, m, squad, now);
   const role = String(m?.role ?? req.role);
-  const mainCrit = role !== "builder" ? hostCritHit(mainSample(store), (k) => wholeLimit(store, req.project, k), now) : null;
-  const why = held ? held.reason.replace(/^WAIT /, "") : mainCrit ? `host: ${hostCrit(mainSample(store), (k) => wholeLimit(store, req.project, k), now)}` : null;
+  const mainCrit = role !== "builder" ? hostCrit(mainSample(store), (k) => wholeLimit(store, req.project, k), now) : null;
+  const why = held ? held.reason.replace(/^WAIT /, "") : mainCrit ? `host: ${mainCrit}` : null;
   const side = why ? placeSide(store, role, now, m ? Number(m.id) : null) : null;
   if (held && !side?.host) return side?.skipped.length ? { ...held, reason: `${held.reason}; side hosts: ${side.skipped.join(", ")}` } : held;
   const r = choose(store, req, m, squad, now);
