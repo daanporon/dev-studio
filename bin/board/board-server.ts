@@ -97,7 +97,7 @@
 //                 open, or something blocks it). A board of one project takes only its own, a topic board none (403)
 // Everything else is 404, so no state file is ever reachable.
 import { openMove, unmovable } from "../loop/squad/move.ts";
-import { hostUnreachable } from "../loop/squad/host-reach.ts";
+import { addHostProblem, hostUnreachable } from "../loop/squad/host-reach.ts";
 import { createHash } from "node:crypto";
 import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -105,7 +105,7 @@ import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJ
 import { isHostKey } from "../lib/host-settings.ts";
 import { knownHost } from "../loop/settings/host-settings.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
-import { BACKEND_NAMES, squadBackendRule } from "../backend/registry.ts";
+import { BACKEND_NAMES, LOCAL_HOST, squadBackendRule } from "../backend/registry.ts";
 import { studioBackend } from "../loop/squad/studio.ts";
 import { chatProblem } from "../loop/chat/limits.ts";
 import { isHidden } from "../loop/chat/permission.ts";
@@ -1037,6 +1037,7 @@ async function accountResetPost(req: Request) {
 
 // account-add (issue #125, U6, U9): the board's Add account files the request `ds account add` files, for the board's
 // project (its Studio's worktree takes the login terminal). `dir` is checked as the CLI checks it (`~/` is $HOME).
+// `host` (side-loop-host U20) logs in on that accepted side host, whose link must be up; not with `dir`.
 async function accountAddPost(req: Request) {
   const pr = await readPost(req);
   if ("r" in pr) return pr.r;
@@ -1045,6 +1046,9 @@ async function accountAddPost(req: Request) {
   if (!NAME.test(project ?? "") || typeof name !== "string") return json(400, { error: "need project and name" });
   if (!kind) return json(400, { error: "no such agent" });
   if (!kind.multi) return json(400, { error: kind.why ?? `${agent} keeps one login` });
+  const host = pr.b.host == null || pr.b.host === LOCAL_HOST ? null : pr.b.host;
+  if (host !== null && (typeof host !== "string" || !NAME.test(host))) return json(400, { error: "host must be a host name" });
+  if (host && pr.b.dir) return json(400, { error: `the folder is a folder on main: leave it out to log in on ${host}` });
   let dir = pr.b.dir ?? "";
   if (typeof dir !== "string" || dir.length > 1024 || /[\x00-\x1f]/.test(dir)) return json(400, { error: "dir must be one folder path" });
   dir = dir.trim().replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
@@ -1062,7 +1066,9 @@ async function accountAddPost(req: Request) {
     if (bad) no(400, bad);
     const open = one(s, "SELECT id FROM requests WHERE kind = 'account-add' AND done_at IS NULL AND json_extract(payload, '$.agent') = ? AND json_extract(payload, '$.name') = ?", agent, name);
     if (open) no(409, `an add of ${agent}:${name} is already in progress (request #${open.id})`);
-    const row = board(s, "account-add", { agent, name, project, ...(dir ? { dir } : {}), by: "board" }, { project });
+    const off = host ? addHostProblem(s, host) : null;
+    if (off) no(409, off);
+    const row = board(s, "account-add", { agent, name, project, ...(dir ? { dir } : {}), ...(host ? { host } : {}), by: "board" }, { project });
     cache.at = 0; // the open add shows on the next board read, not ~2s later
     return paused(s, { project }) ? json(202, { ok: true, id: Number(row.id), queued: true }) : row;
   });

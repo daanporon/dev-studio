@@ -24,7 +24,7 @@ import { open, stateRoot, type Store } from "../loop/core/store.ts";
 import { tailnetIp } from "../loop/io/tailnet.ts";
 import { isHostKey } from "../lib/host-settings.ts";
 import { Challenges, nameProblem, parseJoinFrame, requestJoin, verifyHello } from "./host-keys.ts";
-import { deadMs, JOIN_MAX_BYTES, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
+import { deadMs, frameLog, JOIN_MAX_BYTES, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
 
 import { socketPath } from "./request.ts";
 // The unix-socket client lives in request.ts (role-side code imports it without this server); re-exported here.
@@ -90,7 +90,7 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
       fact("host_reported_fence", { name, fenced_at: fenced });
     }
     ws.data.phase = "up";
-    ws.data.peer = new Peer((fr) => sendTo(ws, fr), channels, { host: name, end: "main", root, store }, "m");
+    ws.data.peer = new Peer((fr) => sendTo(ws, fr), channels, { host: name, end: "main", root, store }, "m", frameLog((l) => console.error(`${name}: ${l}`)));
     live.set(name, ws);
     fact("host_link_up", { name, addr: ws.data.addr, link_version: String(f.link_version ?? ""), code_rev: String(f.code_rev ?? "") });
     sendTo(ws, { t: "welcome", host: name, link_version: LINK_VERSION });

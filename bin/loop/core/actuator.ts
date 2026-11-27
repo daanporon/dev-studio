@@ -595,12 +595,13 @@ export class LoopActuator implements Actuator {
   }
 
   // U54 (project-start): a seat for the Studio on `backend` in worktree `wt`, before the project names either (a
-  // backend move's new Studio, fulfil/studio.ts moveBackend): the contract seat off Orca, else the Orca seat.
-  studioSeatOn(store: Store, project: string, backend: string, provider: string, key: string, wt: string, at: number, ident: string | null = null): Seat {
+  // backend move's new Studio, fulfil/studio.ts moveBackend): the contract seat off Orca, else the Orca seat. On a
+  // side host `host` (side-loop-host U20: an account add's login terminal there) the contract seat runs over its link.
+  studioSeatOn(store: Store, project: string, backend: string, provider: string, key: string, wt: string, at: number, ident: string | null = null, host = "local"): Seat {
     if (backend === "orca") return this.seat(store, project, null, key, wt, at, ident);
     let gen: string | null = null;
     const sq = { project, topic: STUDIO_SQUAD, run_id: null, repo: null, lead_wt: null, studio_wt: wt };
-    return this.contractSeat(store, sq, backend, provider, key, wt, at, ident, (g) => { gen = g; }, () => gen, null);
+    return this.contractSeat(store, sq, backend, provider, key, wt, at, ident, (g) => { gen = g; }, () => gen, null, host);
   }
 
   private block(store: Store, target: { project: string; squad?: string | null; member?: string | null }): string | null {

@@ -40,7 +40,7 @@ export const REQUESTS = {
   // account-free-resets U4: one press of a grant's Use button; `key` is the idempotency key every try reuses.
   "account-reset": obj({ agent: str, account: str, grant: str, key: str, ...THROUGH }),
   // `ds account add` (issue #125, U5): a new login folder and its login terminal, or a logged-in --dir folder.
-  "account-add": obj({ agent: str, name: str, project: opt(str), dir: opt(str), by: opt(str), ...THROUGH }),
+  "account-add": obj({ agent: str, name: str, project: opt(str), dir: opt(str), host: opt(str), by: opt(str), ...THROUGH }),
   // `ds account move` (issue #125, U8): copy an Orca-folder account into the accounts root and repoint its row.
   "account-move": obj({ agent: str, account: str, force: opt(bool), by: opt(str), ...THROUGH }),
   "leftover-remove": obj({ wt: str, fingerprint: opt(str), ...THROUGH }),   // archive-leftovers U4: the board's Remove

@@ -3,14 +3,18 @@
 //   ds account disable|enable <agent>:<account|label>   switch one off or on (host-wide)
 //   ds account default <name> [--agent <agent>]         make one the agent's default (issue #125, KTD5)
 //   ds account remove <name> [--agent <agent>]          take one off the list (a tombstone; its folder stays, KTD6)
-//   ds account add <name> [--agent <agent>] [--project <label>] [--dir <folder>] [--no-wait]
+//   ds account add <name> [--agent <agent>] [--project <label>] [--dir <folder>] [--host <host>] [--no-wait]
 //                                                       a new login (issue #125, U5): files an `account-add` request the
 //                                                       loop carries out (fulfil/account-add.ts): a 0700 folder under the
 //                                                       accounts root and a login terminal beside the project's Studio
 //                                                       (default: the one project with a live Studio); it follows the
 //                                                       request, printing where the terminal is, the login URL and the
 //                                                       end. --dir adds a logged-in folder as it is, with no terminal.
-//                                                       Ctrl-C leaves the request running. Exit 0 added (or already
+//                                                       --host <host> logs in on that accepted side host (U20): its
+//                                                       link must be up; the folder and the terminal are there (the
+//                                                       project names its terminal server), and no accounts row is
+//                                                       written (an account on main with the same login gets the
+//                                                       folder). Not with --dir. Ctrl-C leaves the request running. Exit 0 added (or already
 //                                                       there), 1 failed or the loop down, 2 refused (nothing made).
 //   ds account move <account|label> [--force] [--no-wait]
 //                                                       copy a Claude account out of Orca's profile folder into the
@@ -30,12 +34,14 @@ import { open, type Row, type Store } from "../loop/core/store.ts";
 import { parse, print } from "../loop/core/cli.ts";
 import { knownAccounts, moveProblem, removeAccount, resolveAccount, setAccountEnabled, setDefaultAccount } from "../loop/capacity/accounts.ts";
 import { STUDIO_SQUAD } from "../loop/squad/studio.ts";
+import { addHostProblem } from "../loop/squad/host-reach.ts";
+import { LOCAL_HOST } from "../backend/registry.ts";
 import { findKind } from "../lib/account-kinds/index.ts";
 import { nameProblem } from "../lib/account-folder.ts";
 
-export const help = "[list] | disable|enable <agent>:<account|label> [--by <who>] | default|remove <account|label> [--agent <agent>] [--by <who>] | add <name> [--agent <agent>] [--project <label>] [--dir <folder>] [--no-wait] | move <account|label> [--force] [--no-wait] — list accounts, switch one off/on for every pick, set the default, remove one, add a login (a login terminal, or a logged-in --dir folder), or move an Orca-folder account into dev-studio's folder";
+export const help = "[list] | disable|enable <agent>:<account|label> [--by <who>] | default|remove <account|label> [--agent <agent>] [--by <who>] | add <name> [--agent <agent>] [--project <label>] [--dir <folder>] [--host <host>] [--no-wait] | move <account|label> [--force] [--no-wait] — list accounts, switch one off/on for every pick, set the default, remove one, add a login (a login terminal, on main or a --host side host, or a logged-in --dir folder), or move an Orca-folder account into dev-studio's folder";
 export async function run(args: string[]): Promise<number> {
-  const { pos, opt, flag } = parse(args, ["by", "agent", "dir", "project"], ["no-wait", "force"]);
+  const { pos, opt, flag } = parse(args, ["by", "agent", "dir", "project", "host"], ["no-wait", "force"]);
   const [verb = "list", name] = pos;
   if (verb === "add" && name && pos.length === 2) return add(name, opt, !flag.has("no-wait"));
   if (verb === "move" && name && pos.length === 2) return move(name, opt, flag.has("force"), !flag.has("no-wait"));
@@ -83,6 +89,8 @@ async function add(name: string, opt: Record<string, string>, wait: boolean): Pr
   const agent = opt.agent ?? "claude", kind = findKind(agent);
   if (!kind) return refuse(`no account kind for agent '${agent}'`);
   if (!kind.multi) return refuse(kind.why ?? `${agent} keeps one login`);
+  const host = opt.host && opt.host !== LOCAL_HOST ? opt.host : undefined;
+  if (host && opt.dir) return refuse(`--dir names a folder on main: leave it out to log in on ${host}`);
   const dir = opt.dir ? resolve(opt.dir) : undefined;
   if (dir && !(existsSync(dir) && statSync(dir).isDirectory())) return refuse(`${dir} is not a folder`);
   if (dir && !existsSync(join(dir, kind.credentialsFile))) return refuse(`${dir} has no ${kind.credentialsFile}: it is not logged in (log in there first, or add without --dir)`);
@@ -98,11 +106,13 @@ async function add(name: string, opt: Record<string, string>, wait: boolean): Pr
       project = live[0];
     }
     if (project && !s.get("projects", { label: project })) return refuse(`no project '${project}'`);
+    const off = host ? addHostProblem(s, host) : null;
+    if (off) return refuse(off);
     const down = loopDown(s);
     if (down) return refuse(`${down}; an add is carried out by the loop`);
     const by = opt.by ?? process.env.DS_WHO ?? "cli";
-    const id = Number(s.requestAny("account-add", { agent, name, ...(project ? { project } : {}), ...(dir ? { dir } : {}), by }, { by, project: project ?? null }).row.id);
-    console.log(`Filed the add of ${agent}:${name} (request ${id})${dir ? ` on ${dir}` : ""}.`);
+    const id = Number(s.requestAny("account-add", { agent, name, ...(project ? { project } : {}), ...(dir ? { dir } : {}), ...(host ? { host } : {}), by }, { by, project: project ?? null }).row.id);
+    console.log(`Filed the add of ${agent}:${name} (request ${id})${dir ? ` on ${dir}` : host ? ` on host ${host}` : ""}.`);
     for (const v of kind.keyEnv ?? []) if (process.env[v]) console.error(`ds account add: warning: ${v} is set here; where ${agent} sees it, it can use that key instead of this account's login`);
     return wait ? await follow(s, id) : 0;
   } finally { s.close(); }

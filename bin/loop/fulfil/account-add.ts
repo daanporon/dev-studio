@@ -22,6 +22,14 @@
 // removed. A one-login kind is refused with its `why` before any folder is made. The screen is read only for the
 // URL, the device code and whether the paste prompt shows: the code an operator pastes is a secret and never
 // reaches a row, event or log, and the typing step keeps no error text (an adapter's error may echo the input).
+//
+// `--host <h>` (side-loop-host U20): the login is made on accepted side host <h>, whose link must be up. The folder is
+// made and read there (host jobs account.folder and account.check, bin/link/host-jobs.ts: a login folder is never
+// copied between hosts), the terminal is a contract terminal of the project there (the Studio's side backend, over the
+// link) and the pasted code is typed into it with terminal.send, whose text the link's frame log redacts
+// (bin/link/protocol.ts). The add writes no accounts row: a login id an account on main already has ends "logged in
+// on <h> as <label>" and U18's sync links the folder to it; any other ends OK naming the `ds account add` to run on
+// main, after which the same sync links the side folder. Main never removes a side folder.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { finishRequest, requestActions, type Exec, type Fulfiller, type Result } from "../core/actuator.ts";
@@ -30,9 +38,12 @@ import type { Action } from "../core/plugins.ts";
 import type { Row } from "../core/store.ts";
 import { addAccount } from "../capacity/accounts.ts";
 import { refreshAccounts } from "./account-reset.ts";
-import { studioContract } from "../squad/backend.ts";
+import { onSide, sideBackend, studioContract } from "../squad/backend.ts";
+import { addHostProblem } from "../squad/host-reach.ts";
+import { STUDIO_SQUAD } from "../squad/studio.ts";
+import { accountCheckOn, accountFolderOn } from "../../link/host-jobs.ts";
 import { findKind, type AccountKind } from "../../lib/account-kinds/index.ts";
-import { loginExit, loginLine, makeAccountFolder, nameProblem, removeMadeFolder } from "../../lib/account-folder.ts";
+import { folderCheck, loginLine, makeAccountFolder, nameProblem, removeMadeFolder, type FolderCheck } from "../../lib/account-folder.ts";
 import { clearLoginCode, takeLoginCode } from "../../lib/account-login-code.ts";
 
 export const DEADLINE_S = 1800;
@@ -46,12 +57,13 @@ export const NOT_ACCEPTED = "the code was not accepted: copy the code again and 
 export const LATE = "the code came after the login prompt had gone, so it was not typed";
 export const NOT_TYPED = "the code could not be typed into the login terminal: paste it again, or type it there";
 
-export type LoginTerm = { via: "orca" | "contract"; handle: string; project: string };
+/** A login terminal; `host` is set for one on a side host (always a contract terminal there). */
+export type LoginTerm = { via: "orca" | "contract"; handle: string; project: string; host?: string };
 type Rec = Record<string, unknown> & { state?: string; folder?: string; terminal?: LoginTerm | null; started_at?: number; opened_at?: number; typed_at?: number };
 
 /** Where the login terminal lives. The default opens it beside the project's Studio. */
 export type Terminals = {
-  open(x: Exec, project: string, req: { id: number; folder: string; line: string; label: string }): Promise<LoginTerm | null | { error: string }>;
+  open(x: Exec, project: string, req: { id: number; folder: string; line: string; label: string; host?: string }): Promise<LoginTerm | null | { error: string }>;
   /** The screen, or null when the terminal is gone. */
   read(x: Exec, t: LoginTerm): Promise<string | null>;
   close(x: Exec, t: LoginTerm): Promise<void>;
@@ -60,14 +72,16 @@ export type Terminals = {
 };
 
 const studioWt = (x: Exec, project: string) => (x.store.get("projects", { label: project })?.studio_wt as string | null | undefined) ?? null;
-const contractSeat = (x: Exec, project: string, key: string) => {
+// On a side host: the project's contract backend there (the Studio's side backend), over the host's link.
+const contractSeat = (x: Exec, project: string, key: string, host?: string) => {
+  if (host && onSide(host)) return x.act.studioSeatOn(x.store, project, sideBackend(x.store, project, STUDIO_SQUAD), "git", key, "", x.now, null, host).contract ?? null;
   const c = studioContract(x.store, project);
   return c ? x.act.studioSeatOn(x.store, project, c.backend, c.provider, key, studioWt(x, project) ?? "", x.now).contract ?? null : null;
 };
 
 export const studioTerminals: Terminals = {
-  async open(x, project, { id, folder, line, label }) {
-    const seat = contractSeat(x, project, `account-add:${id}`);
+  async open(x, project, { id, folder, line, label, host }) {
+    const seat = contractSeat(x, project, `account-add:${id}`, host);
     if (seat) {
       const r = await seat.ask("terminal.create", { cwd: folder, label });
       if (!r.ok) return { error: `terminal.create: ${r.error.message}` };
@@ -76,7 +90,7 @@ export const studioTerminals: Terminals = {
         await seat.ask("terminal.close", { id: r.terminal.id });
         return { error: `terminal.send: ${s.error.message}` };
       }
-      return { via: "contract", handle: r.terminal.id, project };
+      return { via: "contract", handle: r.terminal.id, project, ...(host ? { host } : {}) };
     }
     const wt = studioWt(x, project);
     if (!wt) return null;
@@ -86,21 +100,21 @@ export const studioTerminals: Terminals = {
   },
   async read(x, t) {
     if (t.via === "contract") {
-      const r = await contractSeat(x, t.project, `account-add-read:${t.handle}`)?.ask("terminal.read", { id: t.handle, screen: true });
+      const r = await contractSeat(x, t.project, `account-add-read:${t.handle}`, t.host)?.ask("terminal.read", { id: t.handle, screen: true });
       return r?.ok ? r.text : null;
     }
     const o = await x.act.orca.run("terminal-read", [t.handle, "screen"]);
     return o.code === 0 ? o.out : o.code === 3 ? null : "";
   },
   async close(x, t) {
-    if (t.via === "contract") await contractSeat(x, t.project, `account-add-close:${t.handle}`)?.ask("terminal.close", { id: t.handle });
+    if (t.via === "contract") await contractSeat(x, t.project, `account-add-close:${t.handle}`, t.host)?.ask("terminal.close", { id: t.handle });
     else await x.act.orca.run("terminal-close", [t.handle]);
   },
   // The text, then Enter on its own (KTD11: chat's typing primitive, with no prefix and no copy). On Orca not with
   // `enter`, which waits for an agent turn. Only the exit codes are looked at.
   async type(x, t, text) {
     if (t.via === "contract") {
-      const seat = contractSeat(x, t.project, `account-add-type:${t.handle}`);
+      const seat = contractSeat(x, t.project, `account-add-type:${t.handle}`, t.host);
       return !!(await seat?.ask("terminal.send", { id: t.handle, text, submit: true }).catch(() => null))?.ok;
     }
     const a = await x.act.orca.run("terminal-type", [t.handle, text]).catch(() => null);
@@ -112,8 +126,9 @@ export const studioTerminals: Terminals = {
 /** Where the operator finds the login terminal. */
 function where(t: LoginTerm, x: Exec): string {
   if (t.via === "orca") return `an Orca tab "ds-account-add" in ${t.project}'s Studio worktree (${t.handle})`;
-  const backend = studioContract(x.store, t.project)?.backend ?? "contract";
-  return backend === "tmux" ? `tmux -L ds-${t.project} attach (terminal ${t.handle})` : `${backend} terminal ${t.handle} of ${t.project}`;
+  const backend = t.host ? sideBackend(x.store, t.project, STUDIO_SQUAD) : studioContract(x.store, t.project)?.backend ?? "contract";
+  const on = t.host ? ` on ${t.host}` : "";
+  return backend === "tmux" ? `tmux -L ds-${t.project} attach${on} (terminal ${t.handle})` : `${backend} terminal ${t.handle} of ${t.project}${on}`;
 }
 
 const parse = (s: unknown): Rec => { try { return s ? JSON.parse(String(s)) ?? {} : {}; } catch { return {}; } };
@@ -149,10 +164,23 @@ export function accountAdd(opts: { terminals?: Terminals; refresh?: (root: strin
       if (!kind) return fail(`no account kind for agent '${p.agent}'`);
       if (!kind.multi) return fail(kind.why ?? `${p.agent} keeps one login`);
       const by = p.by ?? String(row.requested_by ?? "ds");
+      const host = p.host && onSide(p.host) ? p.host : null;
+      const jobs = { root: x.store.root, ...x.act.hostJobs() };
+      const check = (folder: string, after: boolean): Promise<FolderCheck> => host
+        ? accountCheckOn(host, { agent: kind.agent, folder, ...(after ? { after } : {}) }, jobs)
+        : Promise.resolve(folderCheck(kind, folder, after, env));
 
-      // The row, once the folder holds a login.
-      const finish = async (folder: string) => {
-        const res = addAccount(x.store, { agent: kind.agent, account: p.name, folder, loginId: kind.loginId(folder, false, env), by }, env, x.now);
+      // The row, once the folder holds a login. A side host's login writes none: an account on main with its login
+      // id gets the folder through U18's sync, and any other is named for the operator to add on main.
+      const finish = async (folder: string, loginId = kind.loginId(folder, false, env)) => {
+        if (host) {
+          const there = loginId ? x.store.db.query("SELECT account, label FROM accounts WHERE agent = ? AND login_id = ? AND removed_at IS NULL ORDER BY account LIMIT 1").get(kind.agent, loginId) as Row | null : null;
+          const label = there ? String(there.label ?? there.account) : null;
+          return end(true, there
+            ? { outcome: "there", account: String(there.account), label, folder, host, text: `logged in on ${host} as ${label}: its folder there links to that account` }
+            : { outcome: "side_only", folder, host, text: `logged in on ${host}; not an account on main yet: run ds account add ${p.name} on main, logged in as the same login, and ${host}'s folder links by itself` });
+        }
+        const res = addAccount(x.store, { agent: kind.agent, account: p.name, folder, loginId, by }, env, x.now);
         // The duplicate: the login keeps its own folder, and this add's (only one its marker names) goes.
         if (res.folder !== folder) removeMadeFolder(folder, id);
         const text = res.outcome === "added" ? `added ${kind.agent}:${res.account}` : res.outcome === "back" ? `back as ${res.label}` : `already there as ${res.label}`;
@@ -162,13 +190,17 @@ export function accountAdd(opts: { terminals?: Terminals; refresh?: (root: strin
       if (!rec.state) {
         const bad = nameProblem(p.name, (x.store.db.query("SELECT account FROM accounts WHERE agent = ?").all(kind.agent) as Row[]).map((r) => String(r.account)));
         if (bad) return fail(bad);
+        const off = host ? addHostProblem(x.store, host) : null;
+        if (off) return fail(off);
+        if (host && p.dir) return fail(`--dir names a folder on main: leave it out to log in on ${host}`);
         if (p.dir) {
           if (!existsSync(join(p.dir, kind.credentialsFile))) return fail(`${p.dir} has no ${kind.credentialsFile}: it is not logged in (log in there first, or add without --dir)`);
           return finish(p.dir);
         }
         if (!kind.login) return fail(`${kind.agent} has no login command yet`);
         let folder: string;
-        try { folder = makeAccountFolder(kind, p.name, id, env); } catch (e) { return fail((e as Error).message); }
+        try { folder = host ? await accountFolderOn(host, { agent: kind.agent, name: p.name, request: id }, jobs) : makeAccountFolder(kind, p.name, id, env); }
+        catch (e) { return fail((e as Error).message); }
         save({ state: "folder_ready", folder, started_at: x.now, text: `folder ready: ${folder}` });
       }
 
@@ -180,13 +212,13 @@ export function accountAdd(opts: { terminals?: Terminals; refresh?: (root: strin
       }
       if (rec.state === "folder_ready") {
         save({ ...rec, state: "opening" });
-        const t = a.project ? await terms.open(x, a.project, { id, folder, line, label: `ds-account-add ${kind.agent}:${p.name}` }) : null;
+        const t = a.project ? await terms.open(x, a.project, { id, folder, line, label: `ds-account-add ${kind.agent}:${p.name}`, ...(host ? { host } : {}) }) : null;
         if (t && "error" in t) return fail(`could not open the login terminal: ${t.error}`);
         save({ ...rec, state: "terminal_open", terminal: t, opened_at: x.now,
           text: t ? `login terminal open: ${where(t, x)}` : `no Studio terminal to open: run this login yourself: ${line}`,
           ...(t ? {} : { line }) });
       }
-      return watch(x, id, kind, folder, rec, save, fail, finish, terms, env);
+      return watch(x, id, kind, folder, rec, save, fail, finish, terms, check);
     },
     giveUp: (a, x, why) => {
       clearLoginCode(x.store.root, Number(payloadOf<"account-add">(a).request));
@@ -197,17 +229,23 @@ export function accountAdd(opts: { terminals?: Terminals; refresh?: (root: strin
 }
 
 async function watch(x: Exec, id: number, kind: AccountKind, folder: string, rec: Rec, save: (r: Rec) => void, fail: (why: string) => Promise<Result>,
-  finish: (folder: string) => Promise<Result>, terms: Terminals, env: Record<string, string | undefined>): Promise<Result> {
-  if (existsSync(join(folder, kind.credentialsFile))) {
+  finish: (folder: string, loginId: string | null) => Promise<Result>, terms: Terminals, check: (folder: string, after: boolean) => Promise<FolderCheck>): Promise<Result> {
+  // A side host not answering: wait for it until the deadline.
+  const unanswered = (e: unknown): Promise<Result> | Result => x.now - Number(rec.started_at ?? x.now) >= DEADLINE_S
+    ? fail(`${NOT_FINISHED}: ${folder}`) : { wait: (e as Error).message, at: x.now + CHECK_S };
+  let c: FolderCheck;
+  try { c = await check(folder, false); } catch (e) { return unanswered(e); }
+  if (c.creds) {
     // The agent writes the login id beside the credentials: wait a moment for it, then add the row either way.
-    if (!kind.loginId(folder, false, env) && x.now - Number(rec.creds_at ?? x.now) < LOGIN_ID_S) {
+    if (!c.login_id && x.now - Number(rec.creds_at ?? x.now) < LOGIN_ID_S) {
       if (rec.creds_at == null) save({ ...rec, creds_at: x.now, state: "logged_in", text: "logged in" });
       return { wait: "logged in: reading the login", at: x.now + CHECK_S };
     }
-    kind.afterLogin?.(folder, env);
-    return finish(folder);
+    let done: FolderCheck;
+    try { done = await check(folder, true); } catch (e) { return unanswered(e); }
+    return finish(folder, done.login_id);
   }
-  if (loginExit(folder) != null) return fail(`login not finished (the login command ended); the folder stays: ${folder}`);
+  if (c.exit != null) return fail(`login not finished (the login command ended); the folder stays: ${folder}`);
   if (x.now - Number(rec.started_at ?? x.now) >= DEADLINE_S) return fail(`${NOT_FINISHED}: ${folder}`);
   if (rec.terminal && kind.login) {
     const screen = await terms.read(x, rec.terminal);
