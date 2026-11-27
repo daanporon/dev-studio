@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mount } from "./board-mount";
-import { TEXT_EXTS } from "../../bin/loop/chat/files.ts";
+import { KIND_MAX, TEXT_EXTS } from "../../bin/loop/chat/files.ts";
 
 const root = join(import.meta.dir, "../..");
 const now = Math.floor(Date.now() / 1000);
@@ -145,6 +145,40 @@ test("a big image is redrawn at 2000 px as JPEG before upload; a small one goes 
     expect(t.uploads.length).toBe(3);
     await t.click(bad.querySelector(".chat-rm"));
     expect(t.doc.querySelector(".chat-th.bad")).toBeNull();
+  } finally { t.close(); }
+});
+
+const MIB = 1024 * 1024;
+
+test("a text file or PDF over its cap is refused by name and limit with no upload; one at the cap goes up", async () => {
+  // The page's caps are those of files.ts.
+  const caps = /const FILE_MAX = \{ text: ([\d *]+), pdf: ([\d *]+) \};/.exec(readFileSync(join(root, "web/board.html"), "utf8"))!;
+  expect(caps.slice(1).map((s) => s.split("*").reduce((a, b) => a * Number(b), 1))).toEqual([KIND_MAX.text, KIND_MAX.pdf]);
+  const t = await open();
+  try {
+    await t.pick(t.file("big.pdf", "application/pdf", 11 * MIB), t.file("big.txt", "text/plain", 2 * MIB), t.file("fits.pdf", "application/pdf", 9 * MIB));
+    expect(t.uploads.map((u) => u.url.split("&name=")[1])).toEqual(["fits.pdf"]);
+    expect(t.thumbs().length).toBe(1);
+    const foot = t.doc.querySelector(".qfoot").textContent;
+    expect(foot).toContain("big.pdf: a PDF is at most 10 MiB");
+    expect(foot).toContain("big.txt: a text file is at most 1 MiB");
+    const ev = await t.paste(t.file("huge.log", "", MIB + 1));
+    expect(ev.defaultPrevented).toBe(true);
+    expect(t.doc.querySelector(".qfoot").textContent).toContain("huge.log: a text file is at most 1 MiB");
+    await t.drop(t.file("edge.txt", "text/plain", MIB), t.file("a.zip", "application/zip"));
+    expect(t.uploads.length).toBe(2);
+    expect(t.doc.querySelector(".qfoot").textContent).toContain("a.zip: only pictures, text files and PDFs");
+  } finally { t.close(); }
+});
+
+test("a bare 413 names the kind's limit; a server's own text wins", async () => {
+  const t = await open();
+  try {
+    const stubbed = t.w.fetch;
+    t.w.fetch = async (url: string, init?: any) => String(url).startsWith("api/chat-file") && init?.method === "POST"
+      ? { ok: false, status: 413, json: async () => { throw new Error("no body"); }, text: async () => "" } : stubbed(url, init);
+    await t.pick(t.file("a.pdf", "application/pdf"));
+    expect(t.doc.querySelector(".chat-th.bad").textContent).toContain("a PDF is at most 10 MiB");
   } finally { t.close(); }
 });
 
