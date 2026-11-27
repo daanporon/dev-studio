@@ -345,12 +345,15 @@ and one short model call on the Studio's own agent and account picks a 2-4 word 
 alone; when that call fails or answers something that is not a name, the brief's first words are the
 name, with `-2`, `-3` … when it is taken. While it starts the board lists "starting a squad: …" under
 Waiting, and a failed start shows its error there. A second Start with the same brief while one is
-open is refused. A start can carry up to 8 images (PNG, JPEG, WebP or GIF, at most 5 MiB each),
-uploaded while the dialog is open to `state/<project>/chat-files/_start/` (pruned after
+open is refused. A start can carry up to 8 attachments (pictures: PNG, JPEG, WebP or GIF, at most
+5 MiB each; text files, at most 1 MiB each; PDFs, at most 10 MiB each; the kinds are listed under
+"Attach files in the Chat panel"), uploaded while the dialog is open to `state/<project>/chat-files/_start/` (pruned after
 `chat_files_keep_d` days, like chat images). When the loop starts the squad they are copied to
 `state/<project>/framings/board-start-<request>/` and kept with the brief, never pruned, and the
-brief ends with an `## Attached images` section listing their absolute paths, so every role that
-reads the brief can open them. Images are not checked for secrets.
+brief ends with an `## Attached images` section for the pictures and an `## Attached files` section for
+the text files and PDFs, each listing absolute paths, so every role that reads the brief can open them.
+A file is never pasted into the brief. Some roles (Codex, Muse) may not read PDFs; the dialog does not
+warn about it. Attachments are not checked for secrets.
 
 This creates the squad's Run + task and starts **the Lead + the Thinker** (the
 Lead `run-use`s the Run to become its coordinator). **Builders are on-demand** —
@@ -630,14 +633,26 @@ one click shows that member's chat without closing the panel. On a phone the tit
 (`<member> ▾`, with the other members' mail and a dot) that opens the same list. What you typed for
 each member stays with it (per browser tab, kept across a switch, a close and a reload) until you send it.
 
-**Attach images in the Chat panel.** The 📎 button (or a paste into the box, or a drop anywhere on the
-panel) attaches up to 4 images; each shows as a 56 px thumbnail with ✕ and is uploaded at once. An image over
-3.5 MiB, with a long side over 2000 px, or of a type the server refuses (an iPhone HEIC) is redrawn in the
-page as a JPEG with its long side at most 2000 px first; a small one goes as it is. Send works with images
-and no text; the typed line then ends with the stored paths, which the member opens with its file-reading
-tool, and the bubble shows the thumbnails. Images are kept 14 days (an older bubble says `image removed`),
-are not checked for secrets, and a Muse member or a screen-only chat shows `this member may not see images`.
-Attached images stay in each member's draft across a switch.
+**Attach files in the Chat panel.** The 📎 button (or a paste into the box, or a drop anywhere on the
+panel) attaches up to 4 files, each uploaded at once. Three kinds are taken:
+
+- **Pictures**, shown as a 56 px thumbnail with ✕. One over 3.5 MiB, with a long side over 2000 px, or of
+  a type the server refuses (an iPhone HEIC) is redrawn in the page as a JPEG with its long side at most
+  2000 px first; a small one goes as it is. At most 5 MiB stored.
+- **Text files** (UTF-8, at most 1 MiB), by extension: `md markdown txt log csv tsv json jsonl yaml yml toml
+  ini conf xml html htm css js mjs cjs ts tsx jsx py rb go rs java kt c h cpp hpp sh bash zsh sql diff patch`.
+- **PDFs** (at most 10 MiB).
+
+A text file or PDF goes up as it is and shows as a chip with its name and size (the name cleaned to
+letters, digits, `.`, `_` and `-`). Clicking it opens a text file in a new tab and downloads a PDF; the
+same chip sits in your bubble (its size only in the browser tab that uploaded it). Any other file (an
+archive, an office file) is refused in the panel by name:
+`<name>: only pictures, text files and PDFs`. Send works with attachments and no text; the typed line then
+ends with the stored paths, which the member opens with its file-reading tool. Attachments are kept 14 days
+(an older picture says `image removed`; an older file's link answers that it is gone) and are not checked
+for secrets. A Codex or Muse member or a screen-only chat shows `this member may not read PDFs` on a PDF's
+chip, and a Muse member or a screen-only chat also shows `this member may not see images`. Attachments stay
+in each member's draft across a switch.
 
 **Chat with the Studio from the board.** The board's top bar has a **💬 Studio** button (one per
 project on a host-wide board) that opens the same Chat panel on the project's Studio, titled

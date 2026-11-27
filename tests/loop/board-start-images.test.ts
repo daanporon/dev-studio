@@ -24,12 +24,13 @@ async function open() {
     if (String(url).startsWith("api/chat-file") && init?.method === "POST") {
       uploads.push({ url: String(url), type: init.headers["Content-Type"] });
       if (hold) await hold;
-      const id = HEX(++n) + ".png";
+      const name = new URL(String(url), "http://x/").searchParams.get("name");
+      const id = HEX(++n) + (name ? "-" + name : ".png");
       return body({ id, url: "api/chat-file?project=fixture&topic=_start&name=" + id, bytes: init.body.size });
     }
     if (String(url) === "api/request" && init?.method === "POST") {
       const b = JSON.parse(init.body); posts.push(b);
-      if (gone) return body({ error: `image ${gone} is gone — attach it again` }, 409);
+      if (gone) return body({ error: `${gone.endsWith(".png") ? "image" : "file"} ${gone} is gone — attach it again` }, 409);
       return body({ ok: true, id: 9 }, 202);
     }
     return body({});
@@ -81,7 +82,7 @@ test("the dialog offers 📎; picker, paste and drop give four thumbnails, Start
     await t.pick(t.file("e.png"), t.file("f.png"), t.file("g.png"), t.file("h.png"), t.file("i.png"));
     expect(t.thumbs().length).toBe(8);
     expect(t.uploads.length).toBe(8);
-    expect(t.doc.querySelector(".start-imgs").textContent).toContain("Up to 8 images");
+    expect(t.doc.querySelector(".start-imgs").textContent).toContain("Up to 8 files");
     await t.click(t.doc.querySelector(".start-imgs .chat-rm"));   // ✕ removes one
     expect(t.thumbs().length).toBe(7);
     await t.set(".start-text", "go");
@@ -109,7 +110,7 @@ test("changing the project clears the images with a note; Start waits while an u
     expect(t.thumbs().length).toBe(1);
     await t.set(".start-project", "other", "change");
     expect(t.thumbs().length).toBe(0);
-    expect(t.doc.querySelector(".start-imgs").textContent).toContain("images belong to one project — attach them again");
+    expect(t.doc.querySelector(".start-imgs").textContent).toContain("attachments belong to one project — attach them again");
     let release!: () => void;
     t.hold(new Promise<void>((x) => { release = x; }));
     await t.pick(t.file("b.png"));
@@ -132,4 +133,31 @@ test("a 409 'image … is gone' drops that thumbnail, keeps the dialog and shows
     expect(t.doc.querySelector('[role="dialog"][aria-label="Start squad"]')).not.toBeNull();
     expect(t.doc.body.textContent).toContain("is gone");
   } finally { await t.close(); }
+});
+
+test("Start takes a text file raw, refuses another kind by name, and a 409 for a gone file drops its chip and keeps the dialog", async () => {
+  const t = await open();
+  try {
+    expect(t.doc.querySelector('.startsq input[type="file"]').getAttribute("accept")).toContain(",.md,");
+    await t.pick(t.file("a.png"), new t.w.File(["# x"], "x.md", { type: "" }), new t.w.File(["z"], "a.zip", { type: "application/zip" }));
+    expect(t.uploads.map((u) => u.type).sort()).toEqual(["image/png", "text/plain"]);
+    expect(t.uploads.find((u) => u.type === "text/plain").url).toBe("api/chat-file?project=fixture&topic=_start&name=x.md");
+    expect(t.doc.querySelector(".start-imgs").textContent).toContain("a.zip: only pictures, text files and PDFs");
+    const chip = t.doc.querySelector(".start-imgs .chat-doc");
+    expect([chip.querySelector(".chat-fname").textContent, chip.querySelector(".chat-fsize").textContent]).toEqual(["x.md", "3 B"]);
+    await t.set(".start-text", "build it from the spec");
+    await t.click(t.doc.querySelector(".start-go"));
+    const ids: string[] = t.posts[0].files;
+    expect(ids.length).toBe(2);
+  } finally { t.close(); }
+  const u = await open();
+  try {
+    await u.pick(u.file("a.png"), new u.w.File(["# x"], "x.md", { type: "" }));
+    await u.set(".start-text", "build it from the spec");
+    u.gone(u.doc.querySelector(".start-imgs a.chat-file").getAttribute("href").split("name=")[1]);
+    await u.click(u.doc.querySelector(".start-go"));
+    expect(u.doc.querySelector(".startsq")).not.toBeNull();
+    expect(u.doc.querySelector(".start-imgs .chat-doc")).toBeNull();
+    expect(u.thumbs().length).toBe(1);
+  } finally { u.close(); }
 });
