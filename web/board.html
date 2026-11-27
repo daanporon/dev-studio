@@ -316,6 +316,8 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-th .dot.spin{margin:0} .mbox.chat.drop{outline:2px dashed var(--blue);outline-offset:-6px}
 .chat-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px} .chat-img{display:block;max-width:160px;max-height:160px;border-radius:8px;border:1px solid var(--line)}
 .chat-imgchip{font:11px var(--mono);color:var(--dim);border:1px dashed var(--line);border-radius:8px;padding:2px 8px}
+.chat-file{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;min-height:32px;padding:4px 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--fg);font:11px var(--mono);text-decoration:none} .chat-fname{min-width:0;overflow-wrap:anywhere} .chat-fsize{flex:none;color:var(--dim)}
+.chat-th.chat-doc{display:grid;grid-template-columns:minmax(0,auto) auto;column-gap:4px;width:auto;height:auto;min-width:0;max-width:100%;padding-right:4px} .chat-doc .chat-file{border:0;background:transparent} .chat-doc .chat-rm{position:static;background:transparent;color:var(--mut)} .chat-pdfnote{grid-column:1/-1;padding:0 8px 4px;font:11px var(--mono);color:var(--amber)}
 .chat-tabs{flex:none;display:flex;gap:4px;padding:6px 12px 0;overflow-x:auto;white-space:nowrap;border-bottom:1px solid var(--line)} .chat-tab{flex:none;display:inline-flex;align-items:center;gap:2px;max-width:200px;padding:5px 10px;border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;background:transparent;color:var(--mut);font:600 12px var(--mono);cursor:pointer} .chat-tab.on{background:var(--panel2);color:var(--fg);border-color:var(--line)} .chat-tab:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 .chat-swlabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .chat-new{display:inline-block;flex:none;width:8px;height:8px;margin-left:6px;border-radius:50%;background:var(--blue)} .chat-lead{flex:none;white-space:nowrap} .chat-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .mhd .chat-sub{flex:0 1000 auto} .mhd .chat-sw{position:relative;display:inline-block;vertical-align:middle;flex:0 1 auto;min-width:0;max-width:60%} .mbox .chat-swbtn{min-width:0} .chat-swbtn>.msg-badge,.chat-swbtn>.chat-ask{flex:none}
 .chat-swbtn{display:inline-flex;align-items:center;max-width:100%;min-height:44px;padding:0 8px;font:600 13px var(--mono)} .chat-menu{position:absolute;z-index:60;top:100%;left:0;display:flex;flex-direction:column;gap:2px;min-width:220px;max-width:calc(100vw - 24px);padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4)} .chat-mi{display:flex;align-items:center;min-height:44px;text-align:left;border-color:transparent;background:transparent} .chat-mi[aria-checked="true"]{border-color:var(--line);background:var(--panel)}
@@ -2586,7 +2588,7 @@ const CHAT_KEYS = [["Escape", "Esc", "Press Esc: stops a working agent, closes a
   ["Enter", "⏎", "Enter: picks the marked option"], ["Tab", "⇥", "Tab"], ];
 // U19b: the digits follow the screen read's numbered menu, 1 up to its option count (at most 5), in the Screen key row.
 const chatDigits = (n) => ["1", "2", "3", "4", "5"].slice(0, Math.max(0, Math.min(5, Number(n) || 0))).map((d) => [d, d, "Press " + d + ": picks option " + d]);
-// ---- images in the chat (chat-image-upload U3) ----
+// ---- files in the chat (chat-image-upload U3; text files and PDFs: markdown-file-upload-support U2) ----
 // An image is shrunk in the page when it is big (over 3.5 MiB, a long side over 2000 px) or of a type the server refuses
 // (an iPhone HEIC), uploaded the moment it is attached (api/chat-file, answered with its name), and only the names ride
 // along with the line. These helpers take the upload url and the limit as arguments so the Start squad dialog can share them.
@@ -2612,12 +2614,54 @@ async function shrinkImage(file) {
     return blob;
   } finally { if (bmp && bmp.close) bmp.close(); if (url) URL.revokeObjectURL(url); }
 }
+// A text file or a PDF goes up as it is, under its own name. The extension decides (a browser's File.type is often empty for
+// these), with the tables of bin/loop/chat/files.ts (tests/loop/board-chat-images.test.ts holds the two lists equal).
+const TEXT_FILE_EXTS = "md markdown txt log csv tsv json jsonl yaml yml toml ini conf xml html htm css js mjs cjs ts tsx jsx py rb go rs java kt c h cpp hpp sh bash zsh sql diff patch".split(" ");
+const FILE_ACCEPT = ["image/*", ...TEXT_FILE_EXTS.map((e) => "." + e), ".pdf"].join(",");
+const docKind = (name) => { const m = /\.([^.]+)$/.exec(String(name || "")), e = m ? m[1].toLowerCase() : ""; return e === "pdf" ? "pdf" : TEXT_FILE_EXTS.includes(e) ? "text" : null; };
+// Picked, dropped or pasted files by what the board does with each: `ok` is [{f, kind}], `bad` the rest.
+function sortFiles(list) {
+  const all = Array.from(list || []).filter(Boolean), pics = imageFiles(all), ok = [], bad = [];
+  for (const f of all) { const kind = pics.includes(f) ? "image" : docKind(f.name); if (kind) ok.push({ f, kind }); else bad.push(f); }
+  return { ok, bad };
+}
+const refusedNote = (bad) => (bad.length ? bad.map((f) => f.name || "this file").join(", ") + ": only pictures, text files and PDFs" : "");
+const pastedFiles = (d) => (d && d.files && d.files.length ? Array.from(d.files) : Array.from((d && d.items) || []).filter((x) => x.kind === "file").map((x) => x.getAsFile()));
 // POST the bytes to `url`; resolves {id, url, bytes}, rejects with the server's own refusal text.
-async function uploadImage(blob, url) {
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+async function uploadImage(blob, url, type = blob.type) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": type }, body: blob });
   const b = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(b.error || "HTTP " + r.status); e.status = r.status; throw e; }
+  if (!r.ok) { const e = new Error(b.error || (r.status === 413 ? "the file is too large" : "HTTP " + r.status)); e.status = r.status; throw e; }
   return b;
+}
+// The name the operator sees for a stored name: its stem and extension, or all of it when it has no stem (files.ts chatFileShown).
+const fileShown = (name) => { const m = /^[0-9a-f]{16}-(.+)$/.exec(name); return m ? m[1] : name; };
+// The sizes of the files uploaded or restored in this tab, by url: the board data of a sent file has no size.
+const fileSizes = new Map();
+const fileSize = (n) => (n < 1024 ? n + " B" : n < 1024 * 1024 ? Math.round(n / 102.4) / 10 + " KB" : Math.round(n / 104857.6) / 10 + " MB");
+// Uploads one sorted file and resolves its attached entry {id, url, name}, plus `bytes` for a text file or a PDF.
+async function uploadAttachment({ f, kind }, url) {
+  if (kind === "image") { const r = await uploadImage(await shrinkImage(f), url); return { id: r.id, url: r.url, name: f.name || "image" }; }
+  const r = await uploadImage(f, url + "&name=" + encodeURIComponent(f.name), kind === "pdf" ? "application/pdf" : "text/plain");
+  fileSizes.set(r.url, r.bytes);
+  return { id: r.id, url: r.url, name: fileShown(r.id), bytes: r.bytes };
+}
+// A stored text file or PDF: a click opens the text in a new tab and downloads the PDF.
+function FileLink({ id, url, bytes }) {
+  const pdf = docKind(id) === "pdf", size = bytes != null ? bytes : fileSizes.get(url);
+  return html`<a class="chat-file" href=${url} rel="noopener" target=${pdf ? undefined : "_blank"} download=${pdf ? fileShown(id) : undefined}><span aria-hidden="true">${pdf ? "📕" : "📄"}</span><span class="chat-fname">${fileShown(id)}</span>${size != null && html`<span class="chat-fsize">${fileSize(size)}</span>`}</a>`;
+}
+// The files of a bubble. `items`: {name, url} for a stored file, null for a path that names no stored file.
+function ChatFiles({ items }) {
+  return html`<div class="chat-imgs">${items.map((x, i) => x && x.url ? html`<${FileLink} key=${x.url} id=${x.name} url=${x.url} />` : html`<span key=${"n" + i} class="chat-imgchip">file</span>`)}</div>`;
+}
+// The attached files above a composer: a picture's thumbnail, or a file's chip (`pdfNote`: the member may not read a PDF).
+function AttachChip({ f, onRemove, pdfNote }) {
+  const doc = !!docKind(f.id);
+  return html`<div class=${"chat-th" + (doc ? " chat-doc" : "")} title=${f.name}>${doc
+    ? html`<${FileLink} id=${f.id} url=${f.url} bytes=${f.bytes} />`
+    : html`<img src=${f.url} alt=${f.name} />`}
+            <button type="button" class="chat-rm" aria-label=${"Remove " + f.name} onClick=${onRemove}>✕</button>${pdfNote && docKind(f.id) === "pdf" && html`<span class="chat-pdfnote">this member may not read PDFs</span>`}</div>`;
 }
 const chatImgUrl = (project, topic, name) => "api/chat-file?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&name=" + encodeURIComponent(name);
 // One image in a bubble: a click opens the full size in a new tab; a file the prune removed says so.
@@ -2687,7 +2731,8 @@ function chatTurn(r, source, i, imgUrl, ctl) {
   if (r.day) return html`<div key=${"d" + i} class="chat-day">${r.day}</div>`;
   if (r.send) {
     const x = r.send;
-    return html`<div key=${"s" + x.id} class=${"chat-turn op " + chatTone(x.state, x.failing)}><div class="bubble">${x.text}${x.files && x.files.length ? html`<${ChatImages} items=${x.files} />` : null}</div>
+    const pics = (x.files || []).filter((f) => !docKind(f.name)), docs = (x.files || []).filter((f) => docKind(f.name));
+    return html`<div key=${"s" + x.id} class=${"chat-turn op " + chatTone(x.state, x.failing)}><div class="bubble">${x.text}${pics.length ? html`<${ChatImages} items=${pics} />` : null}${docs.length ? html`<${ChatFiles} items=${docs} />` : null}</div>
       <span class="chat-time">${chatSendLine(x)}</span>${x.state === "queued" && x.gives_up_at != null ? html`<span class="chat-time chat-giveup">gives up at ${chatTime(x.gives_up_at)}</span>` : null}${x.state === "queued" && ctl ? html`<${ChatCtl} key=${x.id + ":" + (x.now ? 1 : 0) + ":" + (x.first ? 1 : 0)} x=${x} project=${ctl.project} reload=${ctl.reload} />` : null}${(x.state === "failed" || x.state === "cancelled") && ctl && ctl.edit ? html`<${ChatFailCtl} key=${"f" + x.id} x=${x} project=${ctl.project} reload=${ctl.reload} edit=${ctl.edit} />` : null}</div>`;
   }
   const t = r.turn, text = String(t.text ?? ""), time = chatTime(t.at);
@@ -2697,8 +2742,9 @@ function chatTurn(r, source, i, imgUrl, ctl) {
     return html`<div key=${i} class="chat-turn tool" title=${(t.tools || [text]).join("\n") + (more > 0 ? "\n…and " + more + " before" : "")}><span>⚙</span><span>${chatTools(t)}</span>${time && html`<span>· ${time}</span>`}</div>`;
   }
   if (t.role === "user" && t.from === "operator") {
-    const own = r.files || [], imgs = (t.images || []).map((n) => n == null ? null : { url: (own.find((f) => f.name === n) || {}).url || imgUrl(n) });
-    return html`<div key=${i} class="chat-turn op"><div class="bubble">${text}${imgs.length ? html`<${ChatImages} items=${imgs} />` : null}</div><span class="chat-time">${time}${t.via === "terminal" && html`<span class="chat-via">${time ? " · " : ""}in Orca</span>`}${text && html`<${CopyBtn} key=${text} text=${text} />`}</span></div>`;
+    const own = r.files || [], urlOf = (n) => (own.find((f) => f.name === n) || {}).url || imgUrl(n);
+    const imgs = (t.images || []).map((n) => n == null ? null : { url: urlOf(n) }), docs = (t.files || []).map((n) => n == null ? null : { name: n, url: urlOf(n) });
+    return html`<div key=${i} class="chat-turn op"><div class="bubble">${text}${imgs.length ? html`<${ChatImages} items=${imgs} />` : null}${docs.length ? html`<${ChatFiles} items=${docs} />` : null}</div><span class="chat-time">${time}${t.via === "terminal" && html`<span class="chat-via">${time ? " · " : ""}in Orca</span>`}${text && html`<${CopyBtn} key=${text} text=${text} />`}</span></div>`;
   }
   if (t.role === "user" && t.from === "interrupted") return html`<div key=${i} class="chat-turn in"><span>⏹ Interrupted${time ? " · " + time : ""}</span></div>`;
   if (t.role === "user") return html`<div key=${i} class="chat-turn in" title=${text}><span>in${time ? " · " + time : ""}</span><span class="txt">${text}</span></div>`;
@@ -2713,7 +2759,7 @@ const chatReplyAt = (turns) => { for (let i = (turns || []).length - 1; i >= 0; 
 // stay as they are); the new-reply dot compares a member's `reply_at` with its seen mark (lstore, chatSeenKey).
 const chatDraftKey = (project, topic, wt) => "b:chat-draft:" + project + "/" + topic + "/" + wt;
 const chatDraft = (project, topic, wt) => { const d = store.get(chatDraftKey(project, topic, wt), null); return d && typeof d === "object" ? d : {}; };
-// A member's draft holds `text` and `files` (the attached images as {id, url, name}, never bytes); a patch key that is
+// A member's draft holds `text` and `files` (the attachments as {id, url, name}, a text file or PDF also its size, never its content); a patch key that is
 // empty is dropped, and a draft with no keys is deleted.
 const chatDraftPatch = (project, topic, wt, patch) => {
   const d = { ...chatDraft(project, topic, wt), ...patch };
@@ -2737,7 +2783,7 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
   const [crew, setCrew] = useState([]);
   const [phone, setPhone] = useState(typeof matchMedia === "function" && matchMedia("(max-width:600px)").matches);
   const [menu, setMenu] = useState(false);
-  const [files, setFiles] = useState(chatDraftFiles(project, topic, wt));   // the shown member's attached images {id, url, name}
+  const [files, setFiles] = useState(chatDraftFiles(project, topic, wt));   // the shown member's attachments {id, url, name, bytes?}
   const [ups, setUps] = useState([]);              // uploads under way or refused: {k, wt, state: "up"|"bad", msg}
   const [note, setNote] = useState("");
   const [drag, setDrag] = useState(false);
@@ -2748,7 +2794,7 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
   const [, bump] = useState(0);
   const log = useRef(null), input = useRef(null), cur = useRef(wt), tabs = useRef(null), menuOn = useRef(false), swBtn = useRef(null);
   const pick = useRef(null), held = useRef({}), slots = useRef({}), seq = useRef(0), planOn = useRef(false);
-  const qText = useRef(null);   // held: wt -> its attached images; slots: wt -> uploads in flight
+  const qText = useRef(null);   // held: wt -> its attachments; slots: wt -> uploads in flight
   cur.current = shown.wt; menuOn.current = menu; planOn.current = !!planOpen;
   const url = "api/chat?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(shown.wt);
   const load = async () => {
@@ -2817,34 +2863,37 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
     setText(String(chatDraft(project, topic, m.wt).text || "")); setFiles(heldOf(m.wt)); setNote("");
     if (input.current && input.current.style) setTimeout(() => grow(input.current), 0);
   };
-  // The images attached to a member, kept in `held` (and in its draft); a put shows them when that member is the one shown.
+  // The files attached to a member, kept in `held` (and in its draft); a put shows them when that member is the one shown.
   const heldOf = (at) => held.current[at] || (held.current[at] = chatDraftFiles(project, topic, at));
   const putHeld = (at, arr) => { held.current[at] = arr; chatDraftPatch(project, topic, at, { files: arr }); if (cur.current === at) setFiles(arr); };
   const uploading = ups.some((u) => u.wt === shown.wt && u.state === "up");
-  // Attach images for the member shown now: each is shrunk if needed and uploaded at once; a fifth is refused.
+  // Attach files for the member shown now: each is uploaded at once (a picture shrunk if needed); a fifth is refused, and
+  // so is any other kind, by name.
   const attach = (list) => {
-    const at = shown.wt, imgs = imageFiles(list), upUrl = "api/chat-file?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(at);
-    if (!imgs.length) return;
-    setNote("");
-    for (const f of imgs) {
-      if (heldOf(at).length + (slots.current[at] || 0) >= CHAT_IMAGES) { setNote("Up to " + CHAT_IMAGES + " images per message — remove one first."); break; }
+    const at = shown.wt, { ok, bad } = sortFiles(list), upUrl = "api/chat-file?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(at);
+    if (!ok.length && !bad.length) return;
+    const notes = bad.length ? [refusedNote(bad)] : [];
+    for (const item of ok) {
+      if (heldOf(at).length + (slots.current[at] || 0) >= CHAT_IMAGES) { notes.push("Up to " + CHAT_IMAGES + " files per message — remove one first."); break; }
       const k = ++seq.current;
       slots.current[at] = (slots.current[at] || 0) + 1;
       setUps((u) => [...u, { k, wt: at, state: "up" }]);
       (async () => {
         try {
-          const r = await uploadImage(await shrinkImage(f), upUrl);
-          if (!heldOf(at).some((x) => x.id === r.id)) putHeld(at, [...heldOf(at), { id: r.id, url: r.url, name: f.name || "image" }]);
+          const got = await uploadAttachment(item, upUrl);
+          if (!heldOf(at).some((x) => x.id === got.id)) putHeld(at, [...heldOf(at), got]);
           setUps((u) => u.filter((x) => x.k !== k));
         } catch (e) { setUps((u) => u.map((x) => (x.k === k ? { ...x, state: "bad", msg: String(e.message || e) } : x))); }
         finally { slots.current[at]--; }
       })();
     }
+    setNote(notes.join(" · "));
   };
   const dropFile = (id) => { putHeld(shown.wt, heldOf(shown.wt).filter((x) => x.id !== id)); setNote(""); };
   const onPaste = (e) => {
-    const d = e.clipboardData, got = imageFiles(d && d.files && d.files.length ? d.files : Array.from((d && d.items) || []).filter((x) => x.kind === "file").map((x) => x.getAsFile()));
-    if (got.length) { e.preventDefault(); attach(got); }   // a text paste is left alone
+    const got = pastedFiles(e.clipboardData);
+    if (sortFiles(got).ok.length) e.preventDefault();   // a text paste is left alone, also one that carries a refused file
+    attach(got);
   };
   const dragHas = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files");
   const send = async () => {
@@ -2869,21 +2918,22 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
         setPinned(true); load();
       }
     } catch (e) {
-      const gone = /^image (\S+) is gone/.exec(String(e.message || ""));
-      if (e.status === 409 && gone) putHeld(to, heldOf(to).filter((x) => x.id !== gone[1]));   // that thumbnail goes; the rest stay
+      const gone = /^(?:image|file) (\S+) is gone/.exec(String(e.message || ""));
+      if (e.status === 409 && gone) putHeld(to, heldOf(to).filter((x) => x.id !== gone[1]));   // that chip goes; the rest stay
       if (cur.current === to) setErr("not sent: " + String(e.message || e));
     }
     finally { setBusy((v) => (v === to ? "" : v)); }
   };
   // Edit on a failed send: its text goes back in the member's box (below an existing draft after a blank line) and its
-  // images with it, each rebuilt from the stored name; one that is gone from the store is skipped with a note.
+  // files with it, each rebuilt from the stored name; one that is gone from the store is skipped with a note.
   const editSend = async (x) => {
     const to = shown.wt;
     const gone = [], back = [];
     for (const f of x.files || []) {
       let ok = true;
       try { const r = await fetch(f.url, { cache: "no-store" }); ok = r.ok; } catch (e) { ok = true; }   // an unreachable store is not "gone"
-      if (ok) back.push({ id: f.name, url: f.url, name: f.name }); else gone.push(f.name);
+      const bytes = fileSizes.get(f.url);
+      if (ok) back.push({ id: f.name, url: f.url, name: fileShown(f.name), ...(bytes != null ? { bytes } : {}) }); else gone.push(f.name);
     }
     const draft = String(chatDraft(project, topic, to).text || (cur.current === to ? text : ""));
     const next = draft.trim() ? draft.replace(/\s+$/, "") + "\n\n" + x.text : x.text;
@@ -2891,7 +2941,8 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
     const have = heldOf(to), add = back.filter((f) => !have.some((h) => h.id === f.id));
     if (add.length) putHeld(to, [...have, ...add].slice(0, CHAT_IMAGES));
     if (cur.current === to) {
-      setText(next); setErr(""); setNote(gone.length ? (gone.length === 1 ? "image " + gone[0] + " is gone, not restored" : gone.length + " images are gone, not restored: " + gone.join(", ")) : "");
+      const what = gone.some(docKind) ? "file" : "image";
+      setText(next); setErr(""); setNote(gone.length ? (gone.length === 1 ? what + " " + gone[0] + " is gone, not restored" : gone.length + " " + what + "s are gone, not restored: " + gone.join(", ")) : "");
       if (input.current) { input.current.value = next; grow(input.current); if (input.current.focus) input.current.focus(); }
     }
   };
@@ -3013,8 +3064,7 @@ const qLine = !qItems.length ? "" : qItems[0].menu
           class="btn sm chat-key" title=${tip} aria-label=${tip} disabled=${pressing === shown.wt}
           onClick=${() => press([k], l)}>${l}</button>`)}</div>`}
         ${data && (data.agent === "muse" || data.source === "screen") && html`<span class="chat-note">this member may not see images</span>`}
-        ${(files.length > 0 || ups.some((u) => u.wt === shown.wt)) && html`<div class="chat-strip">${files.map((f) => html`<div key=${f.id} class="chat-th" title=${f.name}><img src=${f.url} alt=${f.name} />
-            <button type="button" class="chat-rm" aria-label=${"Remove " + f.name} onClick=${() => dropFile(f.id)}>✕</button></div>`)}
+        ${(files.length > 0 || ups.some((u) => u.wt === shown.wt)) && html`<div class="chat-strip">${files.map((f) => html`<${AttachChip} key=${f.id} f=${f} pdfNote=${!!data && (data.agent === "codex" || data.agent === "muse" || data.source === "screen")} onRemove=${() => dropFile(f.id)} />`)}
           ${ups.filter((u) => u.wt === shown.wt).map((u) => html`<div key=${"u" + u.k} class=${"chat-th" + (u.state === "bad" ? " bad" : "")} title=${u.msg || "uploading"}>${u.state === "bad"
             ? html`<span>${u.msg.length > 40 ? u.msg.slice(0, 39) + "…" : u.msg}</span><button type="button" class="chat-rm" aria-label="Dismiss" onClick=${() => setUps((l) => l.filter((x) => x.k !== u.k))}>✕</button>`
             : html`<span class="dot spin" role="status" aria-label="Uploading"></span>`}</div>`)}</div>`}
@@ -3023,8 +3073,8 @@ const qLine = !qItems.length ? "" : qItems[0].menu
           onInput=${(e) => { setText(e.target.value); grow(e.target); chatDraftSet(project, topic, shown.wt, e.target.value); }}
           onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing && !e.shiftKey && !chatTouch()) { e.preventDefault(); send(); } }} onPaste=${onPaste}></textarea>
           <div class="chat-row">
-          <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
-            <button type="button" class="btn chat-round chat-attach" title="Attach images (up to 4) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg></button>${scr && html`<button type="button" class="btn chat-round chat-scrtog" aria-label=${showScreen ? "Back to the chat" : "Show the live screen"} title=${showScreen ? "Back to the chat" : "Show the live screen"} onClick=${() => setScreenOn(!showScreen)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d=${showScreen ? "M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.8A8.4 8.4 0 1 1 21 11.5z" : "M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM12 17v4M8 21h8"}/></svg></button>`}<span class="sp"></span>
+          <input type="file" accept=${FILE_ACCEPT} multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
+            <button type="button" class="btn chat-round chat-attach" title="Attach pictures, text files or PDFs (up to 4) — sent as they are, not checked for secrets" aria-label="Attach files" onClick=${() => pick.current && pick.current.click()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg></button>${scr && html`<button type="button" class="btn chat-round chat-scrtog" aria-label=${showScreen ? "Back to the chat" : "Show the live screen"} title=${showScreen ? "Back to the chat" : "Show the live screen"} onClick=${() => setScreenOn(!showScreen)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d=${showScreen ? "M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.8A8.4 8.4 0 1 1 21 11.5z" : "M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM12 17v4M8 21h8"}/></svg></button>`}<span class="sp"></span>
             <span class=${"chat-left" + (left < 100 ? " low" : "")}>${left < 0 ? `${-left} over` : `${left} left`}</span>
             ${data && data.working && html`<button type="button" class="btn chat-round chat-stop" title="Press Esc: stops a working agent, closes a menu" aria-label="Stop" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc")}>■</button>`}
             <button class="btn pri chat-round chat-send" aria-label="Send" title=${busy === shown.wt ? "Sending…" : uploading ? "Uploading…" : "Send"} disabled=${busy === shown.wt || uploading || (!chatText(text) && !files.length)} onClick=${send}>${busy === shown.wt || uploading ? "…" : "↑"}</button>
@@ -3361,40 +3411,42 @@ function StartSquad({ project, projects, toast, onClose }) {
   const [type, setType] = useState("feature"), [autonomy, setAutonomy] = useState("checkpoints"), [start, setStart] = useState("auto");
   const [err, setErr] = useState(null), [sending, setSending] = useState(false), [discard, setDiscard] = useState(false);
   const busy = useRef(false), refs = { text: useRef(null), slug: useRef(null) };
-  // Images (chat-image-upload U5): shrunk and uploaded at once to topic _start of the dialog's project; only the names ride with Start.
+  // Attachments (chat-image-upload U5): uploaded at once to topic _start of the dialog's project (a picture shrunk first); only the names ride with Start.
   const [files, setFiles] = useState([]), [ups, setUps] = useState([]), [note, setNote] = useState(""), [drag, setDrag] = useState(false);
   const pick = useRef(null), seq = useRef(0), held = useRef([]), slots = useRef(0), gen = useRef(0);
   const uploading = ups.some((u) => u.state === "up");
   const putHeld = (arr) => { held.current = arr; setFiles(arr); };
   const attach = (list) => {
-    const imgs = imageFiles(list), g = gen.current, upUrl = "api/chat-file?project=" + encodeURIComponent(proj) + "&topic=_start";
-    if (!imgs.length) return;
-    setNote("");
-    for (const f of imgs) {
-      if (held.current.length + slots.current >= START_IMAGES) { setNote("Up to " + START_IMAGES + " images per squad — remove one first."); break; }
+    const { ok, bad } = sortFiles(list), g = gen.current, upUrl = "api/chat-file?project=" + encodeURIComponent(proj) + "&topic=_start";
+    if (!ok.length && !bad.length) return;
+    const notes = bad.length ? [refusedNote(bad)] : [];
+    for (const item of ok) {
+      if (held.current.length + slots.current >= START_IMAGES) { notes.push("Up to " + START_IMAGES + " files per squad — remove one first."); break; }
       const k = ++seq.current;
       slots.current++;
       setUps((u) => [...u, { k, state: "up" }]);
       (async () => {
         try {
-          const r = await uploadImage(await shrinkImage(f), upUrl);
+          const got = await uploadAttachment(item, upUrl);
           if (g === gen.current) {
-            if (!held.current.some((x) => x.id === r.id)) putHeld([...held.current, { id: r.id, url: r.url, name: f.name || "image" }]);
+            if (!held.current.some((x) => x.id === got.id)) putHeld([...held.current, got]);
             setUps((u) => u.filter((x) => x.k !== k));
           }
         } catch (e) { if (g === gen.current) setUps((u) => u.map((x) => (x.k === k ? { ...x, state: "bad", msg: String(e.message || e) } : x))); }
         finally { if (g === gen.current) slots.current--; }
       })();
     }
+    setNote(notes.join(" · "));
   };
   const changeProject = (l) => {
-    if (l !== proj && (held.current.length || ups.length)) { gen.current++; slots.current = 0; putHeld([]); setUps([]); setNote("images belong to one project — attach them again"); }
+    if (l !== proj && (held.current.length || ups.length)) { gen.current++; slots.current = 0; putHeld([]); setUps([]); setNote("attachments belong to one project — attach them again"); }
     setProj(l);
   };
   const dropFile = (id) => { putHeld(held.current.filter((x) => x.id !== id)); setNote(""); };
   const onPaste = (e) => {
-    const d = e.clipboardData, got = imageFiles(d && d.files && d.files.length ? d.files : Array.from((d && d.items) || []).filter((x) => x.kind === "file").map((x) => x.getAsFile()));
-    if (got.length) { e.preventDefault(); attach(got); }   // a text paste is left alone
+    const got = pastedFiles(e.clipboardData);
+    if (sortFiles(got).ok.length) e.preventDefault();   // a text paste is left alone, also one that carries a refused file
+    attach(got);
   };
   const dragHas = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files");
   const backendOf = (l) => ((projects || []).find((p) => p.label === l) || {}).studio_backend || "orca";
@@ -3417,8 +3469,8 @@ function StartSquad({ project, projects, toast, onClose }) {
       say("starting squad… " + (slug.trim() || "a name picked from the text") + " (request #" + b.id + ")");
     } catch (e) {
       busy.current = false; setSending(false);
-      const gone = /^image (\S+) is gone/.exec(String(e.message || ""));
-      if (e.status === 409 && gone) putHeld(held.current.filter((x) => x.id !== gone[1]));   // that thumbnail goes; the rest stay
+      const gone = /^(?:image|file) (\S+) is gone/.exec(String(e.message || ""));
+      if (e.status === 409 && gone) putHeld(held.current.filter((x) => x.id !== gone[1]));   // that chip goes; the rest stay
       say("not sent: " + (e.status === 413 ? "the request is too large" : e.status == null ? "could not reach the board" : e.message || e));
     }
   };
@@ -3437,11 +3489,10 @@ function StartSquad({ project, projects, toast, onClose }) {
         <label><b>What should the squad do?</b> <span class="mut">(paste the whole brief; Ctrl/Cmd+Enter sends)</span></label>
         <textarea class="start-text" ref=${refs.text} rows="16" style=${{ width: "100%", resize: "vertical", fontFamily: "inherit" }} value=${text} onInput=${(e) => { setText(e.target.value); setErr(null); setDiscard(false); }} onPaste=${onPaste}></textarea>
         <div class="start-imgs">
-          <input type="file" accept="image/*" multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
-          <button type="button" class="btn sm chat-attach start-attach" title="Attach images (up to 8) — sent as they are, not checked for secrets" aria-label="Attach images" onClick=${() => pick.current && pick.current.click()}>📎</button>
+          <input type="file" accept=${FILE_ACCEPT} multiple hidden ref=${pick} onChange=${(e) => { const got = Array.from(e.target.files || []); e.target.value = ""; attach(got); }} />
+          <button type="button" class="btn sm chat-attach start-attach" title="Attach pictures, text files or PDFs (up to 8) — sent as they are, not checked for secrets" aria-label="Attach files" onClick=${() => pick.current && pick.current.click()}>📎</button>
           ${note && html`<span class="err start-imgnote">${note}</span>`}
-          ${(files.length > 0 || ups.length > 0) && html`<div class="chat-strip">${files.map((f) => html`<div key=${f.id} class="chat-th" title=${f.name}><img src=${f.url} alt=${f.name} />
-            <button type="button" class="chat-rm" aria-label=${"Remove " + f.name} onClick=${() => dropFile(f.id)}>✕</button></div>`)}
+          ${(files.length > 0 || ups.length > 0) && html`<div class="chat-strip">${files.map((f) => html`<${AttachChip} key=${f.id} f=${f} onRemove=${() => dropFile(f.id)} />`)}
             ${ups.map((u) => html`<div key=${"u" + u.k} class=${"chat-th" + (u.state === "bad" ? " bad" : "")} title=${u.msg || "uploading"}>${u.state === "bad"
               ? html`<span>${u.msg.length > 40 ? u.msg.slice(0, 39) + "…" : u.msg}</span><button type="button" class="chat-rm" aria-label="Dismiss" onClick=${() => setUps((l) => l.filter((x) => x.k !== u.k))}>✕</button>`
               : html`<span class="dot spin" role="status" aria-label="Uploading"></span>`}</div>`)}</div>`}
