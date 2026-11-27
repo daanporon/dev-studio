@@ -333,7 +333,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .mbox>.md,.mbox>.qbody,.mbox>.msg-list,.mbox>.chat-wrap,.mbox>.set-body{flex:1 1 auto;min-height:0;overflow:auto}
 .mbox>.chat-wrap{overflow:visible}
 /* The log takes what the question card leaves: a basis of its whole conversation would shrink the card to its min-height, which covers its header. */
-.mbox.chat>.chat-wrap{flex:1 1 0} .mbox.chat>:is(.chat-dock.open,.chat-dock.full){min-height:54px}
+.mbox.chat>.chat-wrap{flex:1 1 0} .chat-dock.open,.chat-dock.full{min-height:54px}
 .mbox>.mhd[style*="border-top"],.mbox>.qfoot{flex:none;flex-wrap:wrap;gap:8px;padding:10px 12px max(10px,env(safe-area-inset-bottom))}
 .mbox>.mhd[style*="border-top"]>.btn,.mbox>.qfoot>.btn{min-height:44px}
 .mbox>.mhd[style*="border-top"]>.btn.pri,.mbox>.qfoot>.btn.pri{flex:1 1 100%;order:99}
