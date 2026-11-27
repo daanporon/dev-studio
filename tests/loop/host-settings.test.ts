@@ -193,8 +193,10 @@ describe("migration 0064", () => {
     row("pa", "host_tidy", "apply"); row("pb", "host_tidy", "report");
     row("pa", "cleanup_tmp_globs", "/tmp/aa-*,/tmp/ab-*"); row("pb", "cleanup_tmp_globs", "/tmp/bb-*"); row("pc", "cleanup_tmp_globs", "-");
     row("pb", "cleanup_trim_globs", "/tmp/cache/v1.*");
+    row("pa", "cleanup_tmp_age_h", "24"); row("pb", "cleanup_tmp_age_h", "96"); row("pc", "cleanup_tmp_age_h", "x");
     migrate(db, full);
     expect(db.query("SELECT key, value FROM host_config WHERE host = 'local' ORDER BY key").all()).toEqual([
+      { key: "cleanup_tmp_age_h", value: "96" },   // the longest, so retention never shortens
       { key: "cleanup_tmp_globs", value: "/tmp/aa-*,/tmp/ab-* /tmp/bb-*" },
       { key: "cleanup_trim_globs", value: "/tmp/cache/v1.*" },
       { key: "host_tidy", value: "apply" }]);
@@ -203,7 +205,7 @@ describe("migration 0064", () => {
 
   test("no project with the brake on: main keeps the default off", () => {
     const { db, full } = before0064();
-    db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES ('realp', 'limits.conf', 'builder_host_brake', 'off', ?)", [T0]);
+    db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES ('realp', 'limits.conf', 'builder_host_brake', 'off', ?), ('realp', 'limits.conf', 'cleanup_tmp_age_h', '12', ?)", [T0, T0]);   // shorter age: not carried
     migrate(db, full);
     expect(db.query("SELECT * FROM host_config").all()).toEqual([]);
     db.close();

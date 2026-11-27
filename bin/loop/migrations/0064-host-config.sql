@@ -38,6 +38,14 @@ INSERT INTO host_config (host, key, value, set_at)
           AND key IN ('cleanup_tmp_globs', 'cleanup_trim_globs') AND TRIM(value) NOT IN ('', '-') ORDER BY project)
   GROUP BY key;
 
+-- The longest project cleanup_tmp_age_h, when longer than the default (48), so carrying `apply` never shortens retention.
+INSERT INTO host_config (host, key, value, set_at)
+  SELECT 'local', 'cleanup_tmp_age_h', CAST(m AS TEXT), CAST(strftime('%s', 'now') AS INTEGER)
+  FROM (SELECT MAX(CAST(TRIM(value) AS INTEGER)) AS m FROM config WHERE project <> '' AND file = 'limits.conf'
+          AND key = 'cleanup_tmp_age_h' AND TRIM(value) GLOB '[0-9]*' AND TRIM(value) NOT GLOB '*[^0-9]*')
+  WHERE m > COALESCE((SELECT CAST(TRIM(value) AS INTEGER) FROM config WHERE project = '' AND file = 'limits.conf'
+                      AND key = 'cleanup_tmp_age_h'), 48);
+
 -- A side host accepted before this migration: its seats (hosts.seats) and its brake on, as `ds host accept` now writes.
 INSERT OR IGNORE INTO host_config (host, key, value, set_at)
   SELECT name, 'seats', CAST(seats AS TEXT), CAST(strftime('%s', 'now') AS INTEGER) FROM hosts WHERE status = 'accepted';

@@ -137,7 +137,8 @@ the board's Settings show main's value with source `env`, `host` or `default`.
 `ds host accept` gives a new side host `seats` (its `--seats`, default 2) and
 `builder_host_brake on`; main's brake default stays `off`. Migration 0064 set
 main's brake `on` when any project had it on, `host_tidy apply` when any project had
-it, and each cleanup glob key to the union of the projects' lists.
+it, each cleanup glob key to the union of the projects' lists, and
+`cleanup_tmp_age_h` to the longest project value when it beats the default.
 
 Two keys KTD16 named stay per project, because they are bound to a project:
 `cleanup_on_close` (what closing that project's squads tidies) and
