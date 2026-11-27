@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 command -v tmux >/dev/null || { echo "skip: no tmux on PATH, ds join is not tested"; exit 0; }
 # An agent's terminal sets these; ds join refuses an agent, and the side root must be the checkout's own.
-unset DS_MEMBER DS_GEN DS_WT DS_MAIN_URL DS_STATE_ROOT DS_PREFIX DS_BACKEND TMUX TMUX_PANE
+unset DS_ROOT DS_MEMBER DS_GEN DS_WT DS_MAIN_URL DS_STATE_ROOT DS_PREFIX DS_BACKEND TMUX TMUX_PANE
 unset DS_HERDR_BIN XDG_DATA_HOME
 # shellcheck source=tests/lib/install-setup.sh
 . "$ROOT/tests/lib/install-setup.sh"
@@ -56,6 +56,9 @@ rc=0; out="$(join_run 127.0.0.1:1 --name local)" || rc=$?
 eq "the name 'local': exit" "$rc" 2
 rc=0; out="$(cd "$REPO" && DS_MEMBER=p/s/builder PATH="$STUB" ./bin/ds join 127.0.0.1:1 2>&1)" || rc=$?
 eq "an agent: exit" "$rc" 2
+rc=0; out="$(join_run 192.0.2.7:7790 --name laptop)" || rc=$?
+eq "a main outside the tailnet: exit" "$rc" 2
+has "a main outside the tailnet" "refusing to dial 192.0.2.7:7790 over plain ws" "$out"
 untouched "a refusal"
 
 # A host with a main's project stays a main.
@@ -112,10 +115,10 @@ PRIVATE="$(sed -n 2p "$SIDE_STATE/link/host.key")"
 if [ -n "$PRIVATE" ] && ! grep -rqaF "$PRIVATE" "$MAIN_STATE" "$TMP/join.log" "$TMP/server.log"; then good; else bad "the private key left the side host"; fi
 
 # Again: an accepted host goes straight back to a connected side loop.
-rc=0; out="$(join_run "127.0.0.1:$PORT" --name laptop)" || rc=$?
+rc=0; out="$(join_run "127.0.0.1:$PORT")" || rc=$?   # without --name it keeps the joined one
 LOOP="$(loop_pid)"; OWN_PIDS="$OWN_PIDS $LOOP"
 eq "rejoin: exit" "$rc" 0
-has "rejoin" "already accepted" "$out"
+has "rejoin" "already accepted a host named 'laptop'" "$out"
 has "rejoin connected" "join: connected" "$out"
 
 # The cron watchdog's command keeps a side loop a side loop; ds up is refused here.

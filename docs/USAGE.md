@@ -267,6 +267,9 @@ bin/ds join <main-host>[:<port>] [--name <name>] [--repo <git-url>]...
 - **It asks main to accept it** and prints this host's key fingerprint. On main, run `bin/ds host list`, check that
   the fingerprint matches, and run `bin/ds host accept <name>`. `join` waits for up to 15 minutes, then starts the
   side loop and prints `join: connected`. The private key stays in `state/link/host.key` (mode 0600).
+- **The network.** `<main-host>` is main's tailnet name or address: the link itself adds no encryption and main
+  proves nothing about itself, so a plain connection only goes to loopback or a tailnet address (an `https://` url
+  uses TLS).
 - **`--name`** is the name main knows this host by (default: the machine's short name). `<port>` defaults to 7790.
 
 **If main cannot be reached:** a main with no side host yet does not run its link server. On main, run

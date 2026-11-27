@@ -19,7 +19,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT, run as sh, stateRoot, writeErr, writeOut } from "../lib/shared";
 import { ensureLoop, installHost } from "../lib/host-setup.ts";
-import { LinkClient, linkUrl, sendJoin } from "../link/client.ts";
+import { DialRefused, dialUrl, LinkClient, linkUrl, sendJoin } from "../link/client.ts";
 import { ensureHostKey, linkListenHint, nameProblem, PENDING_TTL_S } from "../link/host-keys.ts";
 import { readSideConfig, writeSideConfig } from "../lib/loop-unit.ts";
 import { readSideStatus } from "../link/side.ts";
@@ -64,7 +64,7 @@ function parseArgs(argv: string[]): Args | number {
   // A bare host name means main's link port.
   if (!main.includes("://") && !/:\d+(\/|$)/.test(main)) main = `${main}:${DEFAULT_LINK_PORT}`;
   try { linkUrl(main); } catch { return usage(`'${main}' is not a url`); }
-  const chosen = name || defaultName(), bad = nameProblem(chosen);
+  const chosen = name || readSideConfig(stateRoot())?.name || defaultName(), bad = nameProblem(chosen);
   if (bad) return usage(`${bad}${name ? "" : ` (this machine is '${hostname()}': give --name)`}`);
   return { main, name: chosen, repos };
 }
@@ -204,6 +204,11 @@ export async function run(argv: string[]): Promise<number> {
     for (const l of lacks) complain(`missing ${l}`);
     complain("fix what is missing and run ds join again; nothing changed");
     return 1;
+  }
+
+  // An address the link will not dial is said before anything changes; a name that does not resolve yet is not.
+  try { await dialUrl(a.main); } catch (e) {
+    if (e instanceof DialRefused) { complain((e as Error).message); return 2; }
   }
 
   // A loop already running here (an earlier join, or an install without a project) is stopped: it starts
