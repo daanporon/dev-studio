@@ -36,7 +36,9 @@ first. In short:
   lavish -g` (also run by `bin/host/install-skills.sh`). No other setup — the CLI runs on demand
   via `npx -y lavish-axi`, and **Lavish picks its own network binding**: loopback, or this
   machine's Tailscale address when it detects a tailnet (phone-ready MagicDNS link). It's
-  optional — without it the Thinker just uses inline plan approval. Pages and their files live in
+  optional — without it the Thinker just uses inline plan approval. A review page on the board
+  opens the session while it is still there and the page itself otherwise, and "Open in Lavish" on
+  that page starts the session again. Pages and their files live in
   `state/<label>/pages/<topic>/` (the Studio's in `pages/_studio/`), not the worktree, whose
   `.lavish/` and `.scratch/` are lost on close. Security: a tailnet-bound
   Lavish server is **unauthenticated and can serve local files** to anyone on the tailnet, so
