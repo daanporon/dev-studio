@@ -87,9 +87,9 @@ export function memberRow(s: Store, member: string): Row | null {
 /** A member's own unit: a Builder's suffix, or a unit whose builder worktree is the member's. A Tester or Researcher
  *  reports on another member's unit (roles/tester.md), so for them it is any unit of their own squad. */
 function ownUnit(s: Store, m: Row, role: string, unit: string): boolean {
-  if (role !== "builder") return !!s.db.query("SELECT 1 FROM units WHERE project = ? AND squad = ? AND slug = ?").get(m.project, m.squad, unit);
+  if (role !== "builder") return !!s.db.query("SELECT 1 FROM units WHERE project = ? AND squad = ? AND slug = ?").get(String(m.project), String(m.squad), unit);
   if (unit === String(m.suffix ?? "")) return true;
-  return !!m.wt && !!s.db.query("SELECT 1 FROM units WHERE project = ? AND squad = ? AND slug = ? AND builder_wt = ?").get(m.project, m.squad, unit, m.wt);
+  return !!m.wt && !!s.db.query("SELECT 1 FROM units WHERE project = ? AND squad = ? AND slug = ? AND builder_wt = ?").get(String(m.project), String(m.squad), unit, String(m.wt));
 }
 
 /** The path part of a worktree id (`<host>::<path>`, KTD9). */

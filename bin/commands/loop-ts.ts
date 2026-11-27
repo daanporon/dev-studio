@@ -10,10 +10,13 @@
 // this state root and `systemctl --user` works; otherwise as a detached process of its own, logging to
 // $DS_STATE_ROOT/loop.log. DS_LOOP_SYSTEMD=0 forces the latter. Either way the loop writes
 // $DS_STATE_ROOT/loop.pid itself once it holds the state root's lock.
+// On a side root (`ds join` wrote <root>/link/host.json) the loop is `main.ts --role side`, its unit
+// ds-side-loop.service.
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, chomp, readJson, run as sh, stateRoot, writeErr, writeOut } from "../lib/shared";
 import { inherit } from "../lib/upkeep";
+import { loopUnit, loopArgs } from "../lib/loop-unit.ts";
 
 export const help = "--ensure | --status | --stop — start, watch and stop the loop daemon (loop.sh)";
 
@@ -25,7 +28,6 @@ const USAGE = `# loop.sh — start, watch and stop the loop daemon (bin/loop/mai
 #   loop.sh --status   whether it runs, and its health row; exits 3 when it does not run
 `;
 
-const UNIT = "ds-loop.service";
 const nonEmpty = (v: string | undefined): string | undefined => (v ? v : undefined);
 
 // ---- jq's semantics, as far as the --status lines use them: a step that jq would fail on throws, and the
@@ -127,6 +129,7 @@ export function skippedLine(names: string[]): string | undefined {
 
 export async function run(argv: string[]): Promise<number> {
   const STATE_ROOT = stateRoot();
+  const UNIT = loopUnit(STATE_ROOT);
   const PIDF = join(STATE_ROOT, "loop.pid");
   const UNIT_FILE = join(nonEmpty(process.env.XDG_CONFIG_HOME) ?? join(process.env.HOME ?? "", ".config"), "systemd", "user", UNIT);
   const bun = process.execPath;
@@ -183,7 +186,7 @@ export async function run(argv: string[]): Promise<number> {
       const setsid = Bun.which("setsid");
       const log = openSync(join(STATE_ROOT, "loop.log"), "a");
       try {
-        const p = Bun.spawn([setsid ?? Bun.which("nohup") ?? "nohup", bun, join(ROOT, "bin", "loop", "main.ts")], {
+        const p = Bun.spawn([setsid ?? Bun.which("nohup") ?? "nohup", bun, join(ROOT, "bin", "loop", "main.ts"), ...loopArgs(STATE_ROOT)], {
           stdin: "ignore", stdout: log, stderr: log, env: env as Record<string, string>,
         });
         p.unref();

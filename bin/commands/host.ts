@@ -6,7 +6,7 @@
 import { now, open } from "../loop/core/store.ts";
 import { linkListen, linkWish } from "../loop/fulfil/link.ts";
 import { parse, print } from "../loop/core/cli.ts";
-import { accept, hostLine, listHosts, reject, remove } from "../link/host-keys.ts";
+import { accept, hostLine, listHosts, reject, remove, linkListenHint } from "../link/host-keys.ts";
 
 export const help = "list [--all] [--json] | accept <name> [--seats N] | reject <name> | remove <name> — side hosts that run worker seats (hosts rows)";
 
@@ -31,7 +31,7 @@ export async function run(args: string[]): Promise<number> {
       if (!rows.length) {
         console.log("no side hosts (a side host asks to join with `ds join <main-url>`)");
         const listen = linkListen(s);
-        if (listen !== "on") console.log(`link_listen is ${listen}: main's link server is not running, so a first join cannot reach it (port ${linkWish(s, now()).port}); turn it on with \`ds config set <project> limits.conf link_listen on\``);
+        if (listen !== "on") console.log(`link_listen is ${listen}: ${linkListenHint(linkWish(s, now()).port)}`);
         return 0;
       }
       for (const r of rows) console.log(hostLine(r));

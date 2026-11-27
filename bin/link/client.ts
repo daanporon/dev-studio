@@ -131,7 +131,7 @@ export class LinkClient {
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
       const f = parseFrame(typeof ev.data === "string" ? ev.data : Buffer.from(ev.data as ArrayBuffer), MAX_FRAME_BYTES);
-      if ("bad" in f) { ws.close(1003, f.bad); return; }
+      if ("bad" in f) { ws.close(1003, String(f.bad)); return; }
       if (f.t === "refused") { this.refusal = String(f.why ?? "refused"); return; }
       if (welcomed) { this.peer?.onFrame(f).then((known) => { if (!known) ws.close(1003, `unexpected frame '${f.t}'`); }); return; }
       if (f.t === "challenge") {

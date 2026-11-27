@@ -60,7 +60,7 @@ export function startRelay(root: string, request: Requester): Relay {
   const srv = Bun.serve({
     unix: sock,
     idleTimeout: 0,
-    async fetch(req) {
+    async fetch(req: Request) {
       if (req.method !== "POST" || new URL(req.url).pathname !== "/ds") return new Response("not found", { status: 404 });
       const text = await req.text();
       if (Buffer.byteLength(text) > BODY_MAX) return Response.json({ code: EXIT.refused, stdout: "", stderr: "ds: the call is too big to forward\n" });
@@ -71,7 +71,8 @@ export function startRelay(root: string, request: Requester): Relay {
         ...(b.facts && typeof b.facts === "object" ? { facts: b.facts } : {}) };
       return Response.json(await relayCall(request, body));
     },
-  });
+  // bun's types leave idleTimeout out for a unix socket; without it a long forwarded call (an ask) is cut off.
+  } as unknown as Parameters<typeof Bun.serve>[0]);
   chmodSync(sock, 0o600);
   return { socket: sock, stop() { try { srv.stop(true); } catch { /* stopped */ } rmSync(sock, { force: true }); } };
 }

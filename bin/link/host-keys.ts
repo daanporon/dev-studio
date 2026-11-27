@@ -13,7 +13,10 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import { now, type Row, type Store } from "../loop/core/store.ts";
 
-export const LOCAL_HOST = "local";          // main itself (bin/backend/registry.ts); never a side host's name
+export const LOCAL_HOST = "local";
+/** What to do on main when a first join cannot reach it: `ds host list`, `ds join` and the board's join row say it. */
+export const linkListenHint = (port: number): string =>
+  `main's link server is not running, so a first join cannot reach it (port ${port}); turn it on with \`ds config set <project> limits.conf link_listen on\``;          // main itself (bin/backend/registry.ts); never a side host's name
 export const PENDING_TTL_S = 15 * 60;
 export const MAX_PENDING = 3;
 export const JOIN_MAX_BYTES = 4096;
