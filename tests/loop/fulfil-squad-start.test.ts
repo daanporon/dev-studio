@@ -175,6 +175,13 @@ test("an image gone from chat-files/_start fails the request, naming it; a repla
   expect(readFileSync(join(f.s.root, "realp", "framings", `board-start-${id}.md`), "utf8")).toBe("ok");
 });
 
+test("markdown-file-upload-support U1 (D7): a gone .md fails the strict start with `file <name> is gone`", async () => {
+  const f = fixture();
+  const name = "0123456789abcdef-spec.md";
+  expect(await f.run({ framing: BRIEF, slug: "md", files: [name] })).toEqual({ ok: false, error: `file ${name} is gone — attach it again` });
+  expect(f.wish("md")).toBeNull();
+});
+
 test("squad-start is a background kind: one tick dispatches it, the drain finishes the request", async () => {
   expect(BACKGROUND_KINDS.has("squad-start")).toBe(true);
   const f = fixture();

@@ -502,6 +502,30 @@ describe("chat with images", () => {
     expect(typed(orca)).toEqual([]);
   });
 
+  // markdown-file-upload-support U1 (D6): text files and PDFs follow the images under their own mark.
+  const FMARK = "[files attached; read each with your file-reading tool: ";
+  const M1 = "1111111111111111-spec.md", P1 = "2222222222222222.pdf";
+  test("two files and an image type the images mark, then the files mark", async () => {
+    const s = imported(), { orca, tick } = rig(s), p = put(s, N1, M1, P1);
+    idleAt(s, B, T);
+    withFiles(s, "read these", [M1, N1, P1]);
+    await tick(T);
+    expect(typed(orca)).toEqual([`${SAYS}read these ${MARK}${p(N1)}] ${FMARK}${p(M1)}, ${p(P1)}]`]);
+    expect(crewLog(s)).toContain("(+1 image) (+2 files)");
+  });
+
+  test("a files-only request types the files mark alone; a gone file says file", async () => {
+    const s = imported(), { orca, tick } = rig(s), p = put(s, M1);
+    idleAt(s, B, T);
+    withFiles(s, "", [M1]);
+    await tick(T);
+    expect(typed(orca)).toEqual([`${SAYS}${FMARK}${p(M1)}]`]);
+    const gone = withFiles(s, "x", [P1]);
+    idleAt(s, B, T + 60);
+    await tick(T + 60);
+    expect(String(result(s, gone).error)).toContain(`file ${P1} was removed before it was sent`);
+  });
+
   // studio-chat-queued-busy U4: Cancel and Send now.
   const control = (s: Store, kind: "chat-cancel" | "chat-now", chatId: number) =>
     Number(s.request(kind, { chat: chatId }, { project: "fx", squad: "demo", member: B }).row.id);

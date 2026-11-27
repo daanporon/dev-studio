@@ -1,23 +1,25 @@
 // start-framing.ts — the board Start's brief as a file (board-actions-as-wishes U6): `framings/board-start-<request>.md`
-// with its images, written by the loop's `squad-start` fulfiller and by the Studio fulfiller for a `studio`
+// with its attached files, written by the loop's `squad-start` fulfiller and by the Studio fulfiller for a `studio`
 // start filed before the deploy. Named by the request, so a replay writes the same file in place.
 import { closeSync, constants as fsc, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { CHAT_FILE_NAME, chatFileDir, START_TOPIC } from "../chat/files.ts";
+import { CHAT_FILE_NAME, chatFileDir, chatFileGone, chatFileKind, START_TOPIC } from "../chat/files.ts";
 
-// chat-image-upload U4: the images a board start carries, uploaded to `chat-files/_start/`, are copied (never
+// chat-image-upload U4: the files a board start carries, uploaded to `chat-files/_start/`, are copied (never
 // moved) into `framings/board-start-<request>/` so they last as long as the brief, and listed at the brief's
-// end. Plain files in plain folders only, never through a symlink; copies are 0600. A copy already there
-// with the upload's size, or whose upload is gone, is kept, so a replay copies nothing twice. Returns the
-// section to append ("" when no name is an image name: the board files none, a forged row names no path).
-// `strict` (the squad-start fulfiller): an image neither uploaded nor already copied throws, naming it.
+// end: images under `## Attached images`, text files and PDFs under `## Attached files` (never pasted into the
+// brief: it is the squad's framing on the board, and a long document would bury it). Plain files in plain
+// folders only, never through a symlink; copies are 0600. A copy already there with the upload's size, or
+// whose upload is gone, is kept, so a replay copies nothing twice. Returns the lines to list ([] when no name
+// passes the rule: the board files none, a forged row names no path).
+// `strict` (the squad-start fulfiller): a file neither uploaded nor already copied throws, naming it.
 const isDir = (p: string) => lstatSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
-export class GoneImage extends Error {}
-function attachImages(root: string, label: string, fdir: string, request: number, names: string[], strict: boolean): string {
+export class GoneFile extends Error {}
+function copyAttached(root: string, label: string, fdir: string, request: number, names: string[], strict: boolean): string[] {
   const src = chatFileDir(root, label, START_TOPIC), dst = join(fdir, `board-start-${request}`);
   const srcOk = isDir(join(root, label, "chat-files")) && isDir(src);
   const gone = (n: string) => {
-    if (strict) throw new GoneImage(`image ${n} is gone — attach it again`);
+    if (strict) throw new GoneFile(chatFileGone(n));
     return `- ${n} (removed before the squad started)`;
   };
   const lines: string[] = [];
@@ -39,16 +41,24 @@ function attachImages(root: string, label: string, fdir: string, request: number
     renameSync(tmp, to);
     lines.push(`- ${resolve(to)}`);
   }
-  return lines.length
-    ? `\n## Attached images\n\nThe operator attached these images to the brief. Open each with your file-reading tool:\n${lines.join("\n")}\n`
-    : "";
+  return lines;
+}
+function attachFiles(root: string, label: string, fdir: string, request: number, names: string[], strict: boolean): string {
+  const valid = names.filter((n) => CHAT_FILE_NAME.test(n));
+  const images = copyAttached(root, label, fdir, request, valid.filter((n) => chatFileKind(n) === "image"), strict);
+  const docs = copyAttached(root, label, fdir, request, valid.filter((n) => chatFileKind(n) !== "image"), strict);
+  return (images.length
+    ? `\n## Attached images\n\nThe operator attached these images to the brief. Open each with your file-reading tool:\n${images.join("\n")}\n`
+    : "") + (docs.length
+    ? `\n## Attached files\n\nThe operator attached these files to the brief. Read each with your file-reading tool:\n${docs.join("\n")}\n`
+    : "");
 }
 
-/** Write `<root>/<label>/framings/board-start-<request>.md` (the brief's bytes, then its images) and return its path. */
+/** Write `<root>/<label>/framings/board-start-<request>.md` (the brief's bytes, then its attached files) and return its path. */
 export function writeStartFraming(root: string, label: string, request: number, framing: string, files: string[] | undefined, o: { strict?: boolean } = {}): string {
   const fdir = join(root, label, "framings"), ff = join(fdir, `board-start-${request}.md`);
   mkdirSync(fdir, { recursive: true });
-  const images = files?.length ? attachImages(root, label, fdir, request, files, o.strict === true) : "";
+  const images = files?.length ? attachFiles(root, label, fdir, request, files, o.strict === true) : "";
   // tmp+rename: a reader in the same instant never sees half a brief.
   writeFileSync(`${ff}.tmp`, images ? `${framing}${framing.endsWith("\n") ? "" : "\n"}${images}` : framing);
   renameSync(`${ff}.tmp`, ff);

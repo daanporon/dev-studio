@@ -1,8 +1,8 @@
 // fulfil/squad-start.ts — kind `squad-start` (board-actions-as-wishes U6): the board's Start squad, done by the
 // loop with no Studio. The board files the dialog's checked fields (bin/board/board-server.ts `startFields`);
 // this fulfiller, a background kind so the model call never holds the tick:
-//   1. writes the brief and its images to `framings/board-start-<request>.md` (squad/start-framing.ts); an image
-//      gone from `chat-files/_start/` fails the request, naming it;
+//   1. writes the brief and its attached files to `framings/board-start-<request>.md` (squad/start-framing.ts);
+//      a file gone from `chat-files/_start/` fails the request, naming it;
 //   2. names the squad: the operator's slug, else one short model call (bin/lib/one-shot.ts) on the agent, model
 //      and account the Studio's own pick gives, asked for a kebab-case name from the brief text alone; any
 //      failure (no pick, no config dir, a non-zero exit, a timeout, an answer that is not a name) gives a plain
@@ -24,7 +24,7 @@ import { pick } from "../capacity/pick.ts";
 import { childEnv } from "../io/orca.ts";
 import { limit } from "../settings/limits.ts";
 import { effectiveRoster } from "../settings/roster.ts";
-import { GoneImage, writeStartFraming } from "../squad/start-framing.ts";
+import { GoneFile, writeStartFraming } from "../squad/start-framing.ts";
 import { squadWish } from "../squad/squad-wish.ts";
 import { fallbackName, freeName, namePrompt, parseName, takenNames } from "../squad/squad-name.ts";
 import { oneShotArgv } from "../../lib/one-shot.ts";
@@ -106,7 +106,7 @@ const squadStart: Fulfiller = {
 
     let framingFile: string;
     try { framingFile = writeStartFraming(x.store.root, project, id, p.framing, p.files, { strict: true }); }
-    catch (e) { return fail(e instanceof GoneImage ? e.message : `could not write the brief: ${(e as Error)?.message ?? e}`); }
+    catch (e) { return fail(e instanceof GoneFile ? e.message : `could not write the brief: ${(e as Error)?.message ?? e}`); }
 
     let base: string, namedBy: "operator" | "model" | "fallback", agent: string | null = null, nameWhy = "";
     if (p.slug) { base = p.slug; namedBy = "operator"; }

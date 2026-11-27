@@ -1368,7 +1368,8 @@ done
 N2=$(nfiles)
 eq "chat-file: a cross-origin upload is 403" "$(up b.png image/png ans wTh "$LBL" 'Origin: http://evil.example')" "403"
 eq "chat-file: no Origin is 403"        "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: image/png' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=ans&wt=wTh")" "403"
-eq "chat-file: text/plain is 415"       "$(up b.png text/plain)" "415"
+eq "chat-file: text/plain with no name is 400" "$(up b.png text/plain)" "400"
+eq "chat-file: text/plain named as no text file is 415" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$O" -H 'Content-Type: text/plain' --data-binary "@$TMP/b.png" "$F?project=$LBL&topic=ans&wt=wTh&name=b.png")" "415"
 eq "chat-file: an SVG is 415"           "$(up s.svg image/svg+xml)" "415"
 eq "chat-file: an SVG labelled png is 415" "$(up s.svg image/png)" "415"
 eq "chat-file: a PNG labelled jpeg is 415" "$(up b.png image/jpeg)$(jq -r '.error' "$TMP/up.out")" "415not a png/jpeg/webp/gif"
@@ -1436,6 +1437,63 @@ ex(){ [ -e "$CF/ans/$1" ] && echo y || echo n; }
 eq "chat-file: 15 days old gone, 13 kept, other file kept, old tmp gone, new tmp kept" "$(ex "$AID")$(ex "$B")$(ex notes.txt)$(ex ".$AID.1.tmp")$(ex ".$B.2.tmp")" "nyyny"
 eq "chat-file: a pruned image is 404"   "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$AID")" "404"
 rm -f "$CF/ans/notes.txt" "$CF/ans/.$B.2.tmp"
+# markdown-file-upload-support U1: text files and PDFs come as text/plain or application/pdf with their own name
+# (D2), are stored as <hash16>-<cleaned stem>.<ext> (D3) and served as plain text or a PDF download (D4).
+upn(){ # upn <file> <content-type> <name> -> status; the answer in $TMP/up.out
+  curl -s -o "$TMP/up.out" -w '%{http_code}' -X POST -H "$O" -H "Content-Type: $2" --data-binary "@$TMP/$1" \
+    "$F?project=$LBL&topic=ans&wt=wTh&name=$(jq -rn --arg n "$3" '$n | @uri')"; }
+h16(){ sha256sum "$TMP/$1" | cut -c1-16; }
+printf '# Spec\n\nsome text\n' > "$TMP/spec.md"; printf '{"a": 1}\n' > "$TMP/a.json"; printf '%%PDF-1.4\n%%x\n' > "$TMP/r.pdf"
+printf '<html><script>alert(1)</script></html>\n' > "$TMP/x.html"; printf 'v1.2 notes\n' > "$TMP/v12.md"; printf 'underscore\n' > "$TMP/u.md"
+eq "text-file: a .md is 200, its stem cleaned" "$(upn spec.md text/plain 'My Spec (v2).md')$(jq -r '.id' "$TMP/up.out")" "200$(h16 spec.md)-My-Spec-v2.md"
+MID=$(jq -r '.id' "$TMP/up.out")
+eq "text-file: stored 0600" "$(stat -c %a "$CF/ans/$MID")" "600"
+eq "text-file: a leading _ is trimmed" "$(upn u.md text/plain _notes.md)$(jq -r '.id' "$TMP/up.out")" "200$(h16 u.md)-notes.md"
+eq "text-file: a .json with charset is 200" "$(upn a.json 'text/plain; charset=utf-8' a.json)$(jq -r '.id' "$TMP/up.out")" "200$(h16 a.json)-a.json"
+eq "text-file: a symbol-only stem has none" "$(upn a.json text/plain '%%%.JSON')$(jq -r '.id' "$TMP/up.out")" "200$(h16 a.json).json"
+eq "text-file: a .pdf is 200" "$(upn r.pdf application/pdf report.pdf)$(jq -r '.id' "$TMP/up.out")" "200$(h16 r.pdf)-report.pdf"
+PID=$(jq -r '.id' "$TMP/up.out")
+eq "text-file: a dotted stem is 200" "$(upn v12.md text/plain v1.2-spec.md)$(jq -r '.id' "$TMP/up.out")" "200$(h16 v12.md)-v1.2-spec.md"
+VID=$(jq -r '.id' "$TMP/up.out")
+eq "text-file: an .html is 200" "$(upn x.html text/plain page.html)" "200"
+HID=$(jq -r '.id' "$TMP/up.out")
+eq "text-file: an image with a name keeps its plain name" "$(curl -s -o "$TMP/up.out" -w '%{http_code}' -X POST -H "$O" -H 'Content-Type: image/png' --data-binary "@$TMP/c.png" "$F?project=$LBL&topic=ans&wt=wTh&name=c.md")$(jq -r '.id' "$TMP/up.out")" "200$(h16 c.png).png"
+N5=$(nfiles)
+printf '# caf\xe9\n' > "$TMP/latin1.md"; printf 'a\0b\n' > "$TMP/nul.txt"; printf 'not a pdf' > "$TMP/fake.pdf"
+head -c $((2 * 1024 * 1024)) /dev/zero | tr '\0' a > "$TMP/big.txt"
+head -c $((11 * 1024 * 1024)) /dev/zero | cat "$TMP/r.pdf" - > "$TMP/big11.pdf"
+eq "text-file: a .md not UTF-8 is 415" "$(upn latin1.md text/plain latin1.md)$(jq -r '.error' "$TMP/up.out")" "415latin1.md: not a text file (not UTF-8)"
+eq "text-file: a .txt with a NUL is 415" "$(upn nul.txt text/plain nul.txt)$(jq -r '.error' "$TMP/up.out")" "415nul.txt: not a text file (it holds a NUL byte)"
+eq "text-file: a .pdf without %PDF- is 415" "$(upn fake.pdf application/pdf fake.pdf)" "415"
+eq "text-file: an SVG named as text is 415" "$(upn s.svg text/plain s.svg)" "415"
+eq "text-file: a 2 MiB text is 413" "$(upn big.txt text/plain big.txt)$(jq -r '.error' "$TMP/up.out")" "413a text file is at most 1 MiB"
+eq "text-file: an 11 MiB PDF is 413" "$(upn big11.pdf application/pdf big11.pdf)" "413"
+eq "text-file: a .md sent as a PDF is 415" "$(upn spec.md application/pdf spec.md)" "415"
+eq "text-file: a .pdf sent as text is 415" "$(upn r.pdf text/plain r.pdf)" "415"
+eq "text-file: a name with no extension is 415" "$(upn spec.md text/plain README)" "415"
+eq "text-file: an application/pdf with no name is 400" "$(up r.pdf application/pdf)" "400"
+eq "text-file: no refused upload wrote a file" "$(nfiles)" "$N5"
+# Serving per kind: text inline as text/plain, a PDF as a download, both sandboxed.
+eq "text-file: GET a .md is 200" "$(curl -s -D "$TMP/fh.txt" -o "$TMP/served.md" -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$MID")" "200"
+cmp -s "$TMP/spec.md" "$TMP/served.md"; eq "text-file: the same bytes" "$?" "0"
+eq "text-file: text headers" "$(fh content-type)|$(fh x-content-type-options)|$(fh content-disposition)|$(fh content-security-policy)" \
+  "text/plain; charset=utf-8|nosniff|inline|default-src 'none'; sandbox"
+eq "text-file: GET a .pdf is 200" "$(curl -s -D "$TMP/fh.txt" -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$PID")" "200"
+eq "text-file: pdf headers" "$(fh content-type)|$(fh x-content-type-options)|$(fh content-disposition)|$(fh content-security-policy)" \
+  "application/pdf|nosniff|attachment; filename=\"report.pdf\"|default-src 'none'; sandbox"
+eq "text-file: an uploaded .html is text/plain" "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$F?project=$LBL&topic=ans&name=$HID")" "200 text/plain; charset=utf-8"
+eq "text-file: a dotted stem is text/plain" "$(curl -s -o /dev/null -w '%{content_type}' "$F?project=$LBL&topic=ans&name=$VID")" "text/plain; charset=utf-8"
+head -c $((6 * 1024 * 1024)) /dev/zero | cat "$TMP/r.pdf" - > "$TMP/big6.pdf"
+eq "text-file: a 6 MiB PDF is 200" "$(upn big6.pdf application/pdf big6.pdf)" "200"
+eq "text-file: and GET serves all of it" "$(curl -s -o /dev/null -w '%{http_code} %{size_download}' "$F?project=$LBL&topic=ans&name=$(jq -r '.id' "$TMP/up.out")")" "200 $(wc -c < "$TMP/big6.pdf" | tr -d ' ')"
+for bad in "0123456789abcdef-a/b.md" "0123456789abcdef-../x.md" "0123456789ABCDEF-a.md" "0123456789abcdef-a.png" "0123456789abcdef.svg"; do
+  eq "text-file: GET $bad is 400" "$(curl -s -o /dev/null -w '%{http_code}' "$F?project=$LBL&topic=ans&name=$(jq -rn --arg n "$bad" '$n | @uri')")" "400"
+done
+eq "text-file: a send with two files and an image is 202" "$(post -H "$O" -H "$CT" -d "$(fbody 'read' "[\"$MID\",\"$B\",\"$PID\"]")" "$C")" "202"
+eq "text-file: a send naming a gone .md is 409" "$(post -H "$O" -H "$CT" -d "$(fbody hi '["0123456789abcdef-gone.md"]')" "$C")$(jq -r '.error' "$TMP/post.out")" "409file 0123456789abcdef-gone.md is gone — attach it again"
+touch -d '15 days ago' "$CF/ans/$VID"
+eq "text-file: the next upload is 200" "$(upn spec.md text/plain spec.md)" "200"
+eq "text-file: the prune removed an old text file" "$(ex "$VID")$(ex "$MID")" "ny"
 # chat-image-upload U4: the Start squad dialog's images go to topic _start with no member (no squad yet),
 # and a start may name up to 8 of them.
 ups(){ # ups <file> [project] [extra query] -> status; the answer in $TMP/up.out
