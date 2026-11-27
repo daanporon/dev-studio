@@ -151,7 +151,8 @@ and the pick's reason names the host and main's wait. With no host free the Buil
 waits on main and the reason lists each host passed over; a Tester or Researcher starts
 on main. A Lead, Thinker or Studio never leaves main, a shell start (`ds pick`,
 `add-role.sh`) is not placed, and a member with a worktree, or one sent with
-`ds request --host`, stays where it is.
+`ds request --host`, stays where it is. Asking again with `ds request` after a failed
+start drops a host that placement chose, so it is chosen again.
 
 Migration 0064 set
 main's brake `on` when any project had it on, `host_tidy apply` when any project had
