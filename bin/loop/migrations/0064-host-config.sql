@@ -1,4 +1,4 @@
--- 0063-host-config.sql — side-loop-host U25 (issue #127, KTD16): the per-host overrides of the machine keys, the
+-- 0064-host-config.sql — side-loop-host U25 (issue #127, KTD16): the per-host overrides of the machine keys, the
 -- limits.conf keys tagged `[host]` (bin/lib/host-settings.ts). For those keys lookup is the env var on the host that
 -- reads it, then this table's row for that host, then the repo default; a project's own row is never read (it stays,
 -- unread, and the board's Settings marks it "now per host"). Written on main by bin/loop/settings/host-settings.ts

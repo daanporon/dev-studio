@@ -1,5 +1,5 @@
 // host-settings.ts — side-loop-host U25 (issue #127, KTD16): the one writer of the per-host overrides of the machine
-// keys (`host_config`, migration 0063). The keys are the `[host]` ones of conventions/limits.conf; the lookup is
+// keys (`host_config`, migration 0064). The keys are the `[host]` ones of conventions/limits.conf; the lookup is
 // bin/lib/host-settings.ts. Each change writes its row and one `config_history` row (project '', file limits.conf,
 // `host` set) in one transaction, as a project's change does (settings.ts). Callers: `ds host set|rm|show` and
 // `ds host accept` (a new side host gets seats and its brake on). A side host reads its own rows from the settings

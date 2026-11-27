@@ -1,7 +1,7 @@
 // host-settings.test.ts — side-loop-host U25 (issue #127, KTD16): the machine keys are set per host. A `[host]` key of
 // conventions/limits.conf reads the env var on the reading host, then that host's override (host_config), then the
 // default, never a project's row; `ds host set|rm|show` writes and shows them with a config_history row each; a new
-// side host gets seats and its brake on; migration 0063 turns main's brake on when any project had it on; a side host
+// side host gets seats and its brake on; migration 0064 turns main's brake on when any project had it on; a side host
 // gets its own rows as `local` in the settings copy; every limit() copy routes a host key the same way.
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -164,17 +164,17 @@ describe("side hosts", () => {
   });
 });
 
-describe("migration 0063", () => {
-  function before0063(): { db: Database; full: string } {
+describe("migration 0064", () => {
+  function before0064(): { db: Database; full: string } {
     const full = join(REPO, "bin", "loop", "migrations"), dir = temp();
-    for (const f of readdirSync(full)) if (f.endsWith(".sql") && f < "0063") cpSync(join(full, f), join(dir, f));
+    for (const f of readdirSync(full)) if (f.endsWith(".sql") && f < "0064") cpSync(join(full, f), join(dir, f));
     const db = new Database(join(temp(), "loop.db"));
     migrate(db, dir);
     return { db, full };
   }
 
   test("main's brake is on when any project had it on; the project rows stay; accepted hosts get seats and brake", () => {
-    const { db, full } = before0063();
+    const { db, full } = before0064();
     db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES ('realp', 'limits.conf', 'builder_host_brake', 'on', ?), ('other', 'limits.conf', 'builder_host_brake', 'off', ?)", [T0, T0]);
     db.run("INSERT INTO hosts (name, status, public_key, seats, requested_at) VALUES ('box-2', 'accepted', 'k', 4, ?)", [T0]);
     migrate(db, full);
@@ -188,7 +188,7 @@ describe("migration 0063", () => {
   });
 
   test("main's host tidy is apply when any project had it; each cleanup glob key is the union of the projects' lists", () => {
-    const { db, full } = before0063();
+    const { db, full } = before0064();
     const row = (p: string, k: string, v: string) => db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES (?, 'limits.conf', ?, ?, ?)", [p, k, v, T0]);
     row("pa", "host_tidy", "apply"); row("pb", "host_tidy", "report");
     row("pa", "cleanup_tmp_globs", "/tmp/aa-*,/tmp/ab-*"); row("pb", "cleanup_tmp_globs", "/tmp/bb-*"); row("pc", "cleanup_tmp_globs", "-");
@@ -202,7 +202,7 @@ describe("migration 0063", () => {
   });
 
   test("no project with the brake on: main keeps the default off", () => {
-    const { db, full } = before0063();
+    const { db, full } = before0064();
     db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES ('realp', 'limits.conf', 'builder_host_brake', 'off', ?)", [T0]);
     migrate(db, full);
     expect(db.query("SELECT * FROM host_config").all()).toEqual([]);

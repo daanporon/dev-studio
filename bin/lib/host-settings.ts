@@ -1,6 +1,6 @@
 // host-settings.ts — side-loop-host U25 (issue #127, KTD16): the one lookup of a machine key. A limits.conf key whose
 // comment starts `[host]` is about a machine, not a project: its value is the env var on the host that reads it, then
-// that host's override (`host_config`, migration 0063), then the repo default (the conventions row). A project's own
+// that host's override (`host_config`, migration 0064), then the repo default (the conventions row). A project's own
 // row of such a key is never read. Every limit() copy (bin/loop/settings/limits.ts, capacity/pick.ts,
 // reconcilers/liveness.ts, bin/lib/lib.ts, bin/lib/operator.ts, bin/board/board-data.ts) routes a host key through
 // hostLine, so no copy reads one per project. Every host names itself `local`: on main that is main, and a side host
@@ -55,7 +55,7 @@ const row = (db: Db | null, sql: string, ...a: string[]): string | null => {
   try {
     const v = String((db.query(sql).get(...a) as { value: string | null } | null)?.value ?? "").trim();
     return v || null;
-  } catch { return null; }   // a database from before migration 0063, or none
+  } catch { return null; }   // a database from before migration 0064, or none
 };
 
 /** A host's override of one host key (the stored line), or null. */
