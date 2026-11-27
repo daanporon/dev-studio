@@ -10,17 +10,15 @@
 // U19: the account's folder main names in CLAUDE_CONFIG_DIR, else this host's own default login.
 // u8c: a member start also arms the picker hooks and the broad-kill guard in its folder (sideArm): main's arm-picker
 // has no path for a `<host>::<path>` worktree.
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { handle, type Backend } from "../../backend/contract.ts";
 import { markTrusted, systemJsonDir } from "../../loop/drivers/claude-launch.ts";
 import { mainUrlFor } from "../relay.ts";
 import { CONTRACT_CHANNEL } from "../../backend/remote.ts";
 import { makeContract } from "../../loop/squad/contracts.ts";
 import { armPicker } from "../../commands/arm-picker-ts.ts";
-import { git } from "../../loop/io/worktrees.ts";
 import { parseMember } from "../../loop/squad/finish.ts";
-import { isDir } from "../../lib/lib.ts";
+import { excludeFromGit, isDir } from "../../lib/lib.ts";
 import type { Channel } from "../protocol.ts";
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
@@ -41,20 +39,6 @@ export function sideCreate(envelope: Record<string, unknown>, root: string, env:
   return { ...envelope, req: { ...req, env: { ...given, DS_MAIN_URL: mainUrlFor(root) } } };
 }
 
-/** Keep the armed settings file out of the tree's git status (a dirty tree refuses a review); best effort. A clone on
- *  a new host may have no global ignore for it. */
-async function excludeSettings(cwd: string): Promise<void> {
-  const LINE = ".claude/settings.local.json";
-  const r = await git(["-C", cwd, "rev-parse", "--git-path", "info/exclude"]);
-  if (r.code !== 0 || !r.out.trim()) return;
-  const file = resolve(cwd, r.out.trim());
-  let text = "";
-  try { text = readFileSync(file, "utf8"); } catch { /* missing: made below */ }
-  if (text.split("\n").includes(LINE)) return;
-  mkdirSync(dirname(file), { recursive: true });
-  appendFileSync(file, `${text && !text.endsWith("\n") ? "\n" : ""}${LINE}\n`);
-}
-
 /** For a member's `terminal.create` envelope, arm its folder's hooks. The state file they name is this host's path
  *  with main's `<project>/squads/<squad>.json` tail, which main swaps for its own (forward-table.ts), as it does the
  *  worktree id. A failure is logged and the start goes on: the agent then runs without the board mirror. */
@@ -68,7 +52,7 @@ export async function sideArm(envelope: Record<string, unknown>, root: string): 
   try {
     const { rc } = armPicker(cwd, join(root, m.project, "squads", `${m.squad}.json`), label, `local::${cwd}`);
     if (rc !== 0) console.log(`contract: could not arm picker hooks for ${ident} in ${cwd} (exit ${rc})`);
-    else await excludeSettings(cwd);
+    else await excludeFromGit(cwd, ".claude/settings.local.json");   // a dirty tree refuses a review
   } catch (e) { console.log(`contract: could not arm picker hooks for ${ident} in ${cwd}: ${(e as Error).message}`); }
 }
 
