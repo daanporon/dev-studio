@@ -201,6 +201,18 @@ export function roleBrief(role: string, label = "", topic = "", run = ""): strin
   return s;
 }
 
+/** Add `line` to the info/exclude of the repo at `path`, once, so the file it names stays out of git status; best effort. */
+export async function excludeFromGit(path: string, line: string): Promise<void> {
+  let excl = chomp((await run(["git", "-C", path, "rev-parse", "--git-path", "info/exclude"])).out);
+  if (!excl) return;
+  if (!excl.startsWith("/")) excl = join(path, excl);
+  try { mkdirSync(dirname(excl), { recursive: true }); } catch { /* the append below reports nothing either */ }
+  let text = "";
+  try { text = readFileSync(excl, "utf8"); } catch { /* missing: append */ }
+  if (text.split("\n").includes(line)) return;
+  try { appendFileSync(excl, `${text && !text.endsWith("\n") ? "\n" : ""}${line}\n`); } catch { /* as the shell: best effort */ }
+}
+
 /** ds_write_role_file: write the worktree's CLAUDE.local.md role brief (path from `$BACKEND ps`) and keep
  *  it out of the repo's git status. Prints a line; a remote/no-path worktree is skipped (stderr). */
 export async function writeRoleFile(wt: string, role: string, label = "", topic = "", runId = ""): Promise<void> {
@@ -211,14 +223,7 @@ export async function writeRoleFile(wt: string, role: string, label = "", topic 
   }
   try { writeFileSync(join(path, "CLAUDE.local.md"), roleBrief(role, label, topic, runId)); }
   catch (e: any) { writeErr(`${join(path, "CLAUDE.local.md")}: ${e?.code === "EACCES" ? "Permission denied" : String(e?.message ?? e)}\n`); }
-  let excl = chomp((await run(["git", "-C", path, "rev-parse", "--git-path", "info/exclude"])).out);
-  if (excl) {
-    if (!excl.startsWith("/")) excl = join(path, excl);
-    try { mkdirSync(dirname(excl), { recursive: true }); } catch { /* the append below reports nothing either */ }
-    let has = false;
-    try { has = readFileSync(excl, "utf8").split("\n").includes("CLAUDE.local.md"); } catch { /* missing: append */ }
-    if (!has) { try { appendFileSync(excl, "CLAUDE.local.md\n"); } catch { /* as the shell: best effort */ } }
-  }
+  await excludeFromGit(path, "CLAUDE.local.md");
   writeOut(`role-file: ${role} -> ${path}/CLAUDE.local.md\n`);
 }
 
