@@ -74,9 +74,9 @@ test("only rest entries: no link, muted line; the box is hidden when there is no
   expect(anchors(view)).toHaveLength(0); expect(text(view)).toContain("1 down");
   expect(L.ExposedList({ items: [] })).toBeNull();
 });
-test("the box is headed Open and has no not-exposed text", () => {
+test("the box is headed Exposed and has no not-exposed text", () => {
   const t = text(expand(L.ExposedList({ items: [{ ...base, status: "up", reach: "remote" }] })));
-  expect(t).toContain("Open"); expect(t).toContain("pages this squad runs for you");
+  expect(t).toContain("Exposed"); expect(t).toContain("pages this squad runs for you");
   expect(t).not.toContain("not exposed");
 });
 test("the Open cell: count, muted extras, extras alone, empty", () => {

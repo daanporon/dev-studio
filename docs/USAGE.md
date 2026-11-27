@@ -384,8 +384,8 @@ second one. On the web board (`--serve`) the URL is a clickable link.
 Roles can also publish what they host with `ds expose <name> <url> [--note <text>] [--squad]
 [--stop "<cmd>"] [--self] [--ports <p,p>]` (`ds unexpose <name>` or `ds expose --remove <name>` ends
 it, `ds exposed` lists open entries, `--all` includes ended ones). The board's squads table has an
-Open column (the count of entries you can open, then muted `· N down`);
-a squad's Open box links only entries that are up and reachable, and one muted line says how
+Exposed column (the count of entries you can open, then muted `· N down`);
+a squad's Exposed box links only entries that are up and reachable, and one muted line says how
 many are down, host only or not checked yet (click it for the details, never as links). A
 `--self` entry is never listed, and there is no Running now list. An entry made inside a role worktree belongs to that
 member and ends when it goes; `--squad` keeps it until the squad closes (use it for a detached env).
@@ -532,11 +532,12 @@ units from the squad state's `units[]`, each with a live status: `✓ done`,
 `⟳ dispatched` (with the Builder's live state), `⚠ dispatched — builder GONE`
 (the worker vanished — re-dispatch it), and `○ planned` (handed off but no Builder
 yet). The two warning states are the dropped-handoff failures made impossible to
-miss. The LEAD column shows a Lead only when the loop's own liveness check says it is stuck, never
-for being idle: `⚠LEAD-NOT-RESPONDING(Nm)` (idle with Run mail unread for `DS_SWEEP_SILENT_MIN`, 10 minutes; the loop pokes it
+miss. The web board flags Lead trouble under the squad's Phase pill and the text board marks it, only when
+the loop's own liveness check says it is stuck, never for being idle: `⚠LEAD-NOT-RESPONDING(Nm)` (idle with Run mail unread for `DS_SWEEP_SILENT_MIN`, 10 minutes; the loop pokes it
 twice and then asks for a restart), `⚠LEAD-HUNG(Nm)` (working with no output for `DS_SWEEP_HUNG_MIN`, 30 minutes, no long
 step open, and its last turn neither ended nor stopped with Esc) and `⚠LEAD-UNREACHABLE` (Run mail the loop cannot deliver to it). The web board shows the
-same words in red. A Lead that is idle with nothing waiting shows nothing however long it has been idle.
+same words in a red flag (`Lead hung 34m`); it also flags a Lead that is gone (red) or paused while its squad
+is not (amber). A Lead that is idle with nothing waiting shows nothing however long it has been idle.
 
 **Flow cards.** The web board's Flow draws one card per open unit. A red card counts in the header's **stuck** number and means
 nobody is moving the unit; an amber one counts as **slow**. A card well past the typical time for its stage is stuck when its

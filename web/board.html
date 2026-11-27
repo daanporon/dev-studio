@@ -78,7 +78,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .evctl label{display:inline-flex;gap:4px;align-items:center;font-size:12px;color:var(--mut)} .evdata{margin:0;padding:12px 16px;overflow:auto;font:12px var(--mono);white-space:pre-wrap;word-break:break-all}
 .live-list{border-left:3px solid var(--amber);background:var(--amber-bg);padding:8px 12px;border-radius:4px;font:12px var(--mono);margin:0 0 12px}
 .tbl{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.row{display:grid;grid-template-columns:28px minmax(160px,2.4fr) minmax(100px,130px) minmax(90px,150px) minmax(140px,2fr) minmax(90px,150px) minmax(70px,110px) minmax(60px,84px) 40px;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid var(--line);border-left:3px solid transparent}
+.row{display:grid;grid-template-columns:28px minmax(160px,2.4fr) minmax(100px,130px) minmax(220px,3.2fr) minmax(90px,150px) minmax(70px,110px) minmax(60px,84px) 40px;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid var(--line);border-left:3px solid transparent}
 .row.head{border-top:0;font:500 11px var(--mono);letter-spacing:.06em;color:var(--mut);text-transform:uppercase}
 .row.squad{cursor:pointer} .row.squad:hover{background:#181d25}
 .row.need{border-left-color:var(--amber)} .row.open{border-left-color:var(--blue);background:#171c25} .row.held{opacity:.55}
@@ -89,8 +89,6 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .pill.queued{background:#2a2733;color:#d4b8ff} .pill.archiving,.pill.suspending,.pill.resuming{background:var(--amber-bg);color:var(--amber)} .pill.stuck{background:var(--red-bg);color:var(--red)}
 .pill.implementing{background:var(--blue-bg);color:var(--blue)} .pill.fixing,.pill.testing{background:#1c2c2a;color:#7fd8c0}
 .pill.done{background:var(--green-bg);color:var(--green)} .pill.failed{background:var(--red-bg);color:var(--red)} .pill.on-hold,.pill.suspended{color:var(--mut)} .pill.held-only{background:#2e2a1c;color:#d9b866} .pill.wrapping-up{background:var(--blue-bg);color:var(--blue)} .pill.done{box-shadow:inset 0 0 0 1px var(--green)} .unitkey{font-size:11px;color:var(--mut);padding:8px 16px;border-top:1px solid var(--line,#2a2f38)} .explain{font-size:12px;color:var(--mut);margin:4px 0} .pill.broken{background:var(--red-bg);color:var(--red)}
-.lead{font-size:13px;white-space:nowrap} .lead::before{content:"●";margin-right:6px;font-size:10px;vertical-align:1px}
-.lead.ok{color:var(--green)} .lead.idle{color:var(--mut)} .lead.warn{color:var(--amber)} .lead.bad{color:var(--red)}
 .bar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#2a303b} .bar i{display:block}
 .bar .d,.sw.d{background:var(--green)} .bar .w,.sw.w{background:var(--blue)} .bar .s,.sw.s{background:var(--red,#e5534b)} .bar .n,.sw.n{background:var(--amber)} .bar .x,.sw.x{background:var(--dim)}
 /* Solid: started. Striped: not started yet (gold: parked, waits on you; grey: queued, starts by itself). */
@@ -102,7 +100,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .detail{border-top:1px solid var(--line);border-left:3px solid var(--blue);padding:16px 16px 20px 48px;background:#13171e}
 .umark{font-size:11px;flex:none;margin-right:.3em} .fcard .t,.u .un{display:flex;min-width:0} .fcard .t .tn,.u .un .unit-open{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .fcard .t .fpos{flex:none;margin-right:.3em} .umark.focus{color:#e3b341} .umark.unlock{color:#58a6ff} .umark.held{opacity:.7} .dbar-more{margin-left:auto} .dbar .chip{padding:1px 7px;border:1px solid var(--line);border-radius:10px;font-size:11px} .amenu .mutedline{margin:4px 9px 2px;font-size:11px;color:var(--mut)}
 .dbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;font:12px var(--mono);color:var(--mut)}
-.flag{font:12px var(--mono);padding:2px 8px;border-radius:4px;background:var(--red-bg);color:var(--red)} .flag.soft{background:#23272f;color:var(--mut)}
+.flag{font:12px var(--mono);padding:2px 8px;border-radius:4px;background:var(--red-bg);color:var(--red)} .flag.soft{background:#23272f;color:var(--mut)} .flag.warn{background:var(--amber-bg);color:var(--amber)} .flag.leadflag{display:inline-block}
 .dgrid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}
 .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px}
 .box h3{font:500 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin:0 0 10px;display:flex;gap:8px}
@@ -406,7 +404,7 @@ button.fchip,button.gtog{display:inline-flex;align-items:center;justify-content:
 @media (max-width:1000px){.qrow{grid-template-columns:80px minmax(0,1fr) 48px}.qrow .sq,.qrow .fr{display:none}
   .box .qrow{grid-template-columns:72px minmax(0,1fr) 48px}.box .qrow .fr{display:none}
   .dgrid{grid-template-columns:1fr}
-  .row{grid-template-columns:20px minmax(0,1fr) 110px 36px;}.row>.c-lead,.row>.c-units,.row>.c-prs,.row>.c-open,.row>.c-spent,.unitkey{display:none}.detail{padding-left:16px}.wrap{padding:16px}}
+  .row{grid-template-columns:20px minmax(0,1fr) 110px 36px;}.row>.c-units,.row>.c-prs,.row>.c-open,.row>.c-spent,.unitkey{display:none}.detail{padding-left:16px}.wrap{padding:16px}}
 /* Flow section: the project-wide stage kanban (U2). Tokens are the page's own. */
 .flow-sec{margin:22px 0 0} .flow-sec>summary{cursor:pointer;font-size:15px;font-weight:600;margin-bottom:10px} .flow-sec>summary small{font:12px var(--mono);color:var(--mut);margin-left:8px;font-weight:400}
 .flow-sec .fhead{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;font:12px var(--mono);color:var(--mut);margin:0 0 6px}
@@ -1091,7 +1089,7 @@ function ExposedList({ items, id }) {
   const list = items || [];
   const open = list.filter((e) => e.state === "open"), rest = list.filter((e) => e.state !== "open");
   if (!open.length && !rest.length) return null;
-  return html`<div class="box exposed" id=${id}><h3>Open <span>pages this squad runs for you</span></h3>${open.map((e) => html`<div key=${e.id + ":" + e.name} class="xrow">
+  return html`<div class="box exposed" id=${id}><h3>Exposed <span>pages this squad runs for you</span></h3>${open.map((e) => html`<div key=${e.id + ":" + e.name} class="xrow">
     <b>${e.name}</b> <${ExposedLink} e=${e} /> <span class="mut">${e.role}${e.legacy ? "" : " · " + fmtAge(Math.round((e.age_s || 0) / 60)) + " ago"}${e.note ? " · " + e.note : ""}</span></div>`)}
     ${rest.length > 0 && html`<div class="xmore"><button type="button" class="xmute" aria-expanded=${more} title=${rest.map(exposedRest).join("\n")} onClick=${() => setMore(!more)}>${exposedMuted(list)}</button>
       ${more && rest.map((e) => html`<div key=${"r" + e.id + ":" + e.name} class="xrow mut">${exposedRest(e)}</div>`)}</div>`}
@@ -1109,7 +1107,7 @@ function MemberLinks({ items }) {
   return html`${items.map((e) => { const href = memberLinkHref(e);
     return href ? html`<a key=${e.id + ":" + e.name} class="xlink mlink" href=${href} target="_blank" rel="noopener">${e.name}</a> ` : null; })}`;
 }
-// The squads table's Open cell: the open count, then muted `· N down`.
+// The squads table's Exposed cell: the open count, then muted `· N down`.
 function OpenCell({ s, onGo }) {
   const x = s.exposed_summary || {}, extra = [x.down > 0 && "· " + x.down + " down"].filter(Boolean).join(" ");
   if (!x.open && !extra) return html`<span class="c-open num"></span>`;
@@ -2009,20 +2007,25 @@ function stats(s, flow) {
   };
 }
 
-function LeadCell({ s }) {
+// Lead trouble, a flag under the squad's Phase pill.
+function LeadFlag({ s }) {
   const lead = (s.members || []).find((m) => m.role === "lead");
-  if (lead && lead.pause && lead.pause.state !== "active") return html`<span class="lead warn" title=${lead.pause.reason}>${pauseLabel(lead.pause.state)}</span>`;
-  if (lead && lead.limited) return html`<span class="lead bad" title=${lead.limited.line}>usage limit</span>`;
-  if (s.display_status === "waiting-on-you") return html`<span class="lead warn">waiting on you</span>`;
+  const flag = (cls, text, title) => html`<div style=${{ marginTop: "4px" }}><span class=${"flag leadflag" + cls} title=${title}>Lead ${text}</span></div>`;
+  if (lead && lead.pause && lead.pause.state !== "active") {
+    // A pausing, paused or resuming squad says so on its Phase pill.
+    return ["pausing", "paused", "resuming"].includes(s.display_status) ? null : flag(" warn", pauseLabel(lead.pause.state).toLowerCase(), lead.pause.reason);
+  }
+  // The Phase cell's "usage limit" flag already names a limited Lead.
+  if (lead && lead.limited) return null;
   if (s.lead && s.lead.verdict) {
     const v = s.lead.verdict, m = s.lead.since_s == null ? "" : " " + Math.floor(s.lead.since_s / 60) + "m";
     const why = v === "unreachable" ? "The loop cannot deliver Run mail to this Lead; it needs a restart."
       : v === "hung" ? "Working with no output past the hung limit. The loop pokes it, then asks for a restart."
       : "Idle with Run mail unread past the silent limit. The loop pokes it twice, then asks for a restart.";
-    return html`<span class="lead bad" title=${why}>${v}${v === "unreachable" ? "" : m}</span>`;
+    return flag("", v + (v === "unreachable" ? "" : m), why);
   }
   // A healthy Lead is idle between wake-ups ("done") on every squad, so only trouble is shown.
-  if (lead && lead.state === "gone") return html`<span class="lead bad">gone</span>`;
+  if (lead && lead.state === "gone") return flag("", "gone");
   return null;
 }
 
@@ -4910,7 +4913,7 @@ function App() {
         ${Object.entries(filters).map(([k, [lbl, f]]) => html`<button key=${k} class=${"chip" + (filter === k ? " on" : "")} onClick=${() => setFilter(k)}>${lbl}<b>${squads.filter(f).length}</b></button>`)}
       </div></div>
     <div class="tbl">
-      <div class="row head"><span></span><span>Squad</span><span>Phase</span><span class="c-lead">Lead</span><span class="c-units">Units</span><span class="c-prs">Open PRs</span><span class="c-open">Open</span><span class="c-spent num" title="spent since the squad started (price-weighted tokens)">Spent</span><span class="c-menu"></span></div>
+      <div class="row head"><span></span><span>Squad</span><span>Phase</span><span class="c-units">Units</span><span class="c-prs">Open PRs</span><span class="c-open" title="pages this squad runs for you (ds expose)">Exposed</span><span class="c-spent num" title="spent since the squad started (price-weighted tokens)">Spent</span><span class="c-menu"></span></div>
       ${shown.length === 0 && (filter !== "all" ? html`<div class="empty">no squads match this filter</div>` : html`<div class="empty">no squads yet${data.project && html` <button class="btn sm" onClick=${() => setStartOpen(true)}>Start squad</button>`}</div>`)}
       ${shown.map((s) => { const k = key(s), x = st.get(k), isOpen = open.has(k);
         const sub = (s.questions && s.questions[0] && (s.questions[0].title || s.questions[0].question)) || s.framing || "";
@@ -4918,8 +4921,7 @@ function App() {
           <div id=${"sq-" + k} class=${"row squad" + (x.needs ? " need" : "") + (isOpen ? " open" : "") + (suspendedLike(s) ? " held" : "")} onClick=${() => toggle(k)}>
             <span class="caret">›</span>
             <div style=${{ minWidth: 0 }}><div class="topic">${s.live && s.live.working > 0 && !suspendedLike(s) ? html`<span class="dot spin" title=${s.live.working + " agent(s) working"}></span>` : ""}${s.focus && html`<span class="umark focus sqfocus" title="Focus squad: its queued Builders take the next free seat, after urgent and unblocking work">★ </span>`}${s.type === "testing" ? "🧪 " : ""}${s.topic}${backendChip(s) && html` ${backendChip(s)}`}${(s.notes || []).length > 0 && html`<span class="sqnotes" title="loop notes on this squad — open them" onClick=${(e) => { e.stopPropagation(); setNotesSq(s.topic); lstore.set("b:notes-sq", s.topic); setNotesOpen(true); lstore.set("b:notes", true); }}>${s.notes.length}</span>`}${!data.project ? html` <span class="dim" style=${{ fontWeight: 400 }}>${s.label}</span>` : ""}</div><div class="sub" title=${sub.length > 240 ? sub.slice(0, 240) + "…" : sub}>${sub}</div></div>
-            <span><span class=${"pill " + (s.display_key || s.display_status) + (s.phase_stuck ? " stuck" : "")} title=${[explainText(s), s.phase_note].filter(Boolean).join(" ")}>${["pausing", "paused", "resuming"].includes(s.display_status) ? pauseLabel(s.display_status) : s.display_status.replace(/-/g, " ")}</span>${s.held > 0 && s.display_key !== "held-only" && html`<span class="ust held" title=${s.held + " held unit(s): click to expand the squad"} style=${{ marginLeft: "6px" }}>${s.held} held</span>`}${(s.limited || []).length > 0 && html`<div style=${{ marginTop: "4px" }}><span class="flag" style=${{ whiteSpace: "nowrap" }} title=${s.limited.join(", ")}>usage limit</span></div>`}</span>
-            <span class="c-lead"><${LeadCell} s=${s} /></span>
+            <span><span class=${"pill " + (s.display_key || s.display_status) + (s.phase_stuck ? " stuck" : "")} title=${[explainText(s), s.phase_note].filter(Boolean).join(" ")}>${["pausing", "paused", "resuming"].includes(s.display_status) ? pauseLabel(s.display_status) : s.display_status.replace(/-/g, " ")}</span>${s.held > 0 && s.display_key !== "held-only" && html`<span class="ust held" title=${s.held + " held unit(s): click to expand the squad"} style=${{ marginLeft: "6px" }}>${s.held} held</span>`}${(s.limited || []).length > 0 && html`<div style=${{ marginTop: "4px" }}><span class="flag" style=${{ whiteSpace: "nowrap" }} title=${s.limited.join(", ")}>usage limit</span></div>`}<${LeadFlag} s=${s} /></span>
             <span class="c-units"><${UnitsCell} st=${x} /></span>
             <span class="c-prs"><${PrsCell} s=${s} st=${x} /></span>
             <${OpenCell} s=${s} onGo=${() => { if (!isOpen) toggle(k); setTimeout(() => { const el = document.getElementById("sqx-" + k); if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest" }); }, 60); }} />
@@ -4971,15 +4973,14 @@ function App() {
     ${data.archived.length > 0 && html`<details class="arch-sec" id="archived" open=${archOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== archOpen) setArchOpen(o); }}>
       <summary>Archived<small>${data.archived.length} squad${data.archived.length === 1 ? "" : "s"} · closed for good; click one for its documents and PRs</small></summary>
       <div class="tbl">
-        <div class="row head"><span></span><span>Squad</span><span>Phase</span><span class="c-lead">Closed</span><span class="c-units">Units</span><span class="c-prs">PRs</span><span class="c-open">Open</span><span class="c-spent num" title="spent since the squad started (price-weighted tokens)">Spent</span><span class="c-menu"></span></div>
+        <div class="row head"><span></span><span>Squad</span><span>Phase</span><span class="c-units">Units</span><span class="c-prs">PRs</span><span class="c-open" title="pages this squad runs for you (ds expose)">Exposed</span><span class="c-spent num" title="spent since the squad started (price-weighted tokens)">Spent</span><span class="c-menu"></span></div>
         ${data.archived.map((a, i) => { const k = "arch:" + a.topic + ":" + (a.closed_at || i), isOpen = open.has(k);
           const merged = a.prs.filter((p) => p.status === "merged").length;
           return html`<${React.Fragment} key=${k}>
             <div class=${"row squad" + (isOpen ? " open" : "")} onClick=${() => toggle(k)}>
               <span class="caret">›</span>
               <div style=${{ minWidth: 0 }}><div class="topic">${a.type === "testing" ? "🧪 " : ""}${a.topic}</div><div class="sub" title=${a.framing}>${a.framing}</div></div>
-              <span><span class="pill">archived</span></span>
-              <span class="c-lead dim">${a.closed_at ? "closed " + a.closed_at.slice(0, 10) : "—"}</span>
+              <span><span class="pill">archived</span><div class="dim" style=${{ marginTop: "4px", fontSize: "12px" }}>${a.closed_at ? "closed " + a.closed_at.slice(0, 10) : "—"}</div></span>
               <span class="c-units"><${UnitsCell} st=${{ total: a.progress.total, merged: a.progress.done }} /></span>
               <span class="c-prs prs">${a.prs.length ? merged + "/" + a.prs.length + " merged" : "—"}</span>
               <span class="c-open"></span>
