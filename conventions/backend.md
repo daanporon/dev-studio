@@ -228,8 +228,10 @@ main checks the answer (`checked()`), so one outside its op's type throws on mai
   contract seat (`core/actuator.ts` `contractSeat`) has that host clone the project first if it lacks it (host job
   `clone`, `bin/link/host-jobs.ts`), adds its worktree there (`worktree.add`), and makes its terminal there with
   `DS_MEMBER`, `DS_GEN`, `DS_WT` and `DS_MAIN_URL` (the side's `contract` channel adds the last and marks the folder
-  trusted for its login, `sideCreate`). Its id on main is `<host>::<path>`. The terminal runs on the backend
-  `sideBackend()` names: the squad's, but tmux for a squad on `orca` or `orca-lite`. Close stops it there and removes
+  trusted for its login, `sideCreate`); its launch file is written under the side's state root (host job
+  `launch.write`) and that path is what is typed. Its id on main is `<host>::<path>`. The terminal runs on the backend
+  `sideBackend()` names: the squad's, but tmux for a squad on `orca` or `orca-lite`; the side's contract observer
+  reads each squad on that backend, so its rows come up the link. Close stops it there and removes
   its worktree with `worktree.remove` (`squad/removal.ts`; rescue and probe as host jobs, `fulfil/close.ts`). Main
   never reads it through Orca: the Orca observer skips side ids, and the drift check reads main's `worktrees` row
   for its folder, not main's disk. Until the accounts units land, the agent uses that host's own default login.

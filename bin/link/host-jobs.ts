@@ -13,6 +13,8 @@
 //   ref.read         {path, ref}                    → Out + {missing}    `git rev-parse <ref>`
 //   ref.set          {path, ref, sha, no_deref?}    → Out                `git update-ref [--no-deref] <ref> <sha>`
 //   push             {path, branch, remote?}        → Out                `git push <remote> refs/heads/<b>:refs/heads/<b>`, never forced
+//   launch.write     {project, member, gen, line}   → {text}             a member's launch file under this host's state root
+//                                                                          (squad/launch-file.ts, U10); text is the `exec bash` to type
 // The `*On(host, …)` functions are what main calls. For host `local` each runs the same code as before this unit
 // (createWorktree, removeWorktree, wtProbe, rescuePages, the same git calls); for any other host it sends the job down
 // that host's link (server.ts linkRequest, or `o.send` in tests) and checks the answer's shape before using it. Both
@@ -31,6 +33,7 @@ import { spawn, type Out } from "../loop/io/orca.ts";
 import { wtProbe } from "../loop/io/wt-probe.ts";
 import { canon, createWorktree, git, lastLine, provider, removeWorktree, WorktreeError, type Gone, type Made, type RemoveOpts, type Spec } from "../loop/io/worktrees.ts";
 import { placeBody, planRescue, rescueDest, rescuePages, securable, sessionFiles, type Rescued } from "../loop/io/rescue.ts";
+import { writeLaunch } from "../loop/squad/launch-file.ts";
 import { LOCAL_HOST } from "./host-keys.ts";
 import { linkRequest } from "./server.ts";
 
@@ -44,7 +47,8 @@ export type HostJob =
   | { job: "rescue"; path: string; project: string; squad: string; label: string }
   | { job: "ref.read"; path: string; ref: string }
   | { job: "ref.set"; path: string; ref: string; sha: string; no_deref?: boolean }
-  | { job: "push"; path: string; branch: string; remote?: string };
+  | { job: "push"; path: string; branch: string; remote?: string }
+  | { job: "launch.write"; project: string; member: string; gen: string; line: string };
 export type JobName = HostJob["job"];
 
 export type Cloned = { path: string; cloned: boolean };
@@ -169,6 +173,13 @@ export function checkJob(v: unknown): HostJob {
     }
     case "push":
       return { job: "push", path: absPath(v.path, "the worktree"), branch: branchName(v.branch, "the branch"), ...(v.remote == null ? {} : { remote: name(v.remote, "the remote") }) };
+    case "launch.write": {
+      const text = (x: unknown, what: string, max: number): string => {
+        if (typeof x !== "string" || !x || x.length > max || x.includes("\0")) bad(`${what} is text of at most ${max} characters`);
+        return x as string;
+      };
+      return { job: "launch.write", project: name(v.project, "the project"), member: text(v.member, "the member", 4096), gen: text(v.gen, "the generation", 200), line: text(v.line, "the launch line", 262_144) };
+    }
     default:
       return bad(`unknown job '${String(v.job)}'`);
   }
@@ -287,6 +298,7 @@ export async function runHere(job: unknown, ctx: { root: string; store?: Store }
     case "ref.read": return refRead(j.path, j.ref);
     case "ref.set": return refSet(j.path, j.ref, j.sha, !!j.no_deref);
     case "push": return pushHere(j.path, j.branch, j.remote);
+    case "launch.write": return { text: writeLaunch(ctx.root, j.project, j.member, j.gen, j.line) };
   }
 }
 
@@ -294,7 +306,7 @@ export async function runHere(job: unknown, ctx: { root: string; store?: Store }
 
 const TIMEOUT: Record<JobName, number> = {
   "clone": 910_000, "worktree.add": 630_000, "worktree.remove": 180_000, "probe": 0, "rescue": 180_000,
-  "ref.read": 45_000, "ref.set": 45_000, "push": 330_000,
+  "ref.read": 45_000, "ref.set": 45_000, "push": 330_000, "launch.write": 45_000,
 };
 const timeoutOf = (j: HostJob) => (j.job === "probe" ? j.timeout_ms + 15_000 : TIMEOUT[j.job]);
 
@@ -356,6 +368,16 @@ export async function removeWorktreeOn(store: Store, host: string, path: string,
     { project: r.project == null ? undefined : String(r.project), squad: r.squad == null ? undefined : String(r.squad),
       payload: { path, provider: String(r.provider), branch: gone.branch, already: gone.already, host, ...(gone.why ? { why: gone.why } : {}) } });
   return { row: store.get("worktrees", key) as Row, gone };
+}
+
+/** Write a member's launch file on `host` under that host's state root; the `exec bash <file>` line to type there.
+ *  Local: squad/launch-file.ts writeLaunch under `root`, as before (side-loop-host U10). */
+export async function writeLaunchOn(host: string, root: string, job: { project: string; member: string; gen: string; line: string }, o: JobOpts = {}): Promise<string> {
+  const j = checkJob({ job: "launch.write", ...job }) as Extract<HostJob, { job: "launch.write" }>;
+  if (host === LOCAL_HOST) return writeLaunch(root, j.project, j.member, j.gen, j.line);
+  const a = await sendJob(host, j, { root, ...o });
+  if (!isObj(a) || typeof a.text !== "string" || !a.text.startsWith("exec bash '") || /[\0\n\r]/.test(a.text)) return wrong(host, "launch.write", "not {text: \"exec bash '<file>'\"}");
+  return a.text;
 }
 
 /** The remove-safety probe of the tree at `path` on `host` (io/wt-probe.ts's output). */

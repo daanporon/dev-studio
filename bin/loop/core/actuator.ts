@@ -64,9 +64,9 @@ import { loopStopping } from "./stopping.ts";
 import { carded, classify, clear, causeOf, fingerprint, lapse, launchRetryAt, LAUNCH_TRIES, refuse, REFUSAL_KIND, standing } from "../io/refusals.ts";
 import { keepStartFailed } from "../squad/start-failed.ts";
 import { onSide, sideBackend, studioContract, studioSeat, wtHost } from "../squad/backend.ts";
-import { addWorktreeOn, cloneOn, type JobOpts, type Send } from "../../link/host-jobs.ts";
+import { addWorktreeOn, cloneOn, writeLaunchOn, type JobOpts, type Send } from "../../link/host-jobs.ts";
 import { STUDIO_SQUAD } from "../squad/studio.ts";
-import { removeLaunch, writeLaunch } from "../squad/launch-file.ts";
+import { removeLaunch } from "../squad/launch-file.ts";
 import { redact, redactPayload } from "./redact.ts";
 
 export type Result =
@@ -773,7 +773,7 @@ export class LoopActuator implements Actuator {
         const b = blocked();
         if (b) return Promise.resolve({ ok: false, error: b, busy: true });
         return this.contractStart(store, c().backend, { ...req, env: { ...req.env, DS_BACKEND: name, DS_WT: req.cwd, ...(ident ? { DS_MEMBER: ident } : {}) } }, meta,
-          { key, project, squad: topic, member, at, sender }, setGen, req.cwd, squad.topic !== STUDIO_SQUAD);
+          { key, project, squad: topic, member, at, sender }, setGen, req.cwd, squad.topic !== STUDIO_SQUAD, host);
       },
       close: (cwd, id) => {
         const b = blocked();
@@ -828,7 +828,7 @@ export class LoopActuator implements Actuator {
   // in the Studio's folder stays. The launch line is typed once:
   // the row notes `typed` before the send, and a replay that finds it set never types again. A thrown
   // call leaves the row unsettled and out of the member lock (`absent`), so the replay keeps the id.
-  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string, sweep = true): ReturnType<ContractSeat["start"]> {
+  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string, sweep = true, host = "local"): ReturnType<ContractSeat["start"]> {
     const last = this.lastCall(store, o);
     if (last?.op === "terminal.create" && last.state === "completed") {
       setGen(String(last.retry_id));
@@ -862,8 +862,9 @@ export class LoopActuator implements Actuator {
         progress = { terminal: t, typed: true };
         store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [JSON.stringify(progress), retry]);
         // U20a: the full line goes to a file; the terminal gets a short one that fits a shell with no prompt yet.
+        // side-loop-host U10: on a side host the file is written there, under its own state root (a host job).
         let text: string;
-        try { text = writeLaunch(store.root, o.project, who, retry, m0.line); }
+        try { text = await writeLaunchOn(host, store.root, { project: o.project, member: who, gen: retry, line: m0.line }, this.hostJobs()); }
         catch (e) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: `launch file: ${(e as Error).message}` }), o.at); return { ok: false, error: `launch file: ${(e as Error).message}` }; }
         const s = await b.call("terminal.send", { id: t.id, text, submit: true });
         if (!s.ok) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: s.error.message }), o.at); return { ok: false, error: `terminal.send: ${s.error.message}` }; }

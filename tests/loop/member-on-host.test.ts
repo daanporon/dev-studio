@@ -6,7 +6,7 @@
 // adds DS_MAIN_URL and trusts the folder for the side's login; `ds request --host` (add-role --host) forces a host.
 // Hermetic: a copy of the fixture state, fakes for the side's backend and its host jobs, no link.
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LoopActuator, type Fulfiller, type Picker } from "../../bin/loop/core/actuator.ts";
@@ -17,11 +17,14 @@ import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
 import decider from "../../bin/loop/core/decide.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
+import { contractObserver } from "../../bin/loop/observers/contract.ts";
+import { orcaObserver } from "../../bin/loop/observers/orca.ts";
 import { git } from "../../bin/loop/io/worktrees.ts";
 import { offOrca, wtHost } from "../../bin/loop/squad/backend.ts";
 import { sideCreate } from "../../bin/link/channels/contract.ts";
 import { mainUrlFor } from "../../bin/link/relay.ts";
-import type { HostJob, Send } from "../../bin/link/host-jobs.ts";
+import { runHere, type HostJob, type Send } from "../../bin/link/host-jobs.ts";
+import { launchDir } from "../../bin/loop/squad/launch-file.ts";
 import { studioOn } from "./studio-on.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -80,6 +83,7 @@ async function rig(backend: "tmux" | "orca", o: { cloned?: boolean } = {}) {
     if (body.job === "probe") return { code: 0, out: "", err: "" };
     if (body.job === "rescue") return { listed: true, capped: 0, files: [], kept_dest: null, kept: [] };
     if (body.job === "worktree.remove") return { removed: true, already: false, branch: "kept" };
+    if (body.job === "launch.write") return runHere(body, { root: join(d, "side-state") });   // the side's own code and state root
     throw new Error(`no fake for ${body.job}`);
   };
   const act = new LoopActuator({ orca, pick: system, fulfillers: fulfillers.filter((f) => f.kinds), jobs: send,
@@ -143,6 +147,13 @@ for (const backend of ["tmux", "orca"] as const) {
       expect(orcaAbout(r, path)).toEqual([]);
       expect(orcaAbout(r, `/${r.sq}/builder/`)).toEqual([]);
       expect(wtHost(r.s, String(m.wt))).toBe(HOST);
+      // The launch file is the side's: written under its state root by a host job, and that is the path typed there.
+      const sideLaunch = launchDir(join(r.d, "side-state"), "fx", path);
+      expect(r.jobs.filter((j) => j.job === "launch.write").length).toBe(1);
+      const typed = r.side.calls.find((c) => c.op === "terminal.send")?.req as { text: string };
+      expect(typed.text).toStartWith(`exec bash '${sideLaunch}/`);
+      expect(readdirSync(sideLaunch).length).toBe(1);
+      expect(existsSync(launchDir(r.s.root, "fx", path))).toBe(false);
     });
 
     test("stops there: the side's terminal is closed, main's are untouched", async () => {
@@ -185,6 +196,40 @@ describe("side members and Orca", () => {
     const off = offOrca(r.s, "fx");
     expect(off.wts.has(String(m.wt))).toBe(true);
     expect(off.paths.has(String(m.wt).slice(HOST.length + 2))).toBe(false);
+  });
+
+  test("the Orca observer never reads it or marks it gone, even when Orca's directory names it", async () => {
+    const r = await rig("orca");
+    const m = await startOnSide(r);
+    const wt = String(m.wt), path = wt.slice(HOST.length + 2);
+    const ps = () => [], dir = () => [{ squad: r.sq, role: "builder", suffix: "u1", wt, live: false }];
+    const loop = new Loop(r.s, { observers: [orcaObserver(r.orca.observer(ps, dir))], reconcilers: [] }, { act() {} }, { projects: () => ["fx"] });
+    loop.boot(r.now());
+    await loop.tick(r.now() + 5);
+    expect(r.s.db.query("SELECT gone_at, host FROM observed_workers WHERE project = 'fx' AND wt = ?").get(wt)).toMatchObject({ gone_at: null, host: HOST });
+    expect(orcaAbout(r, path)).toEqual([]);
+  });
+
+  test("the side reads it on its own backend: its contract observer covers a squad on Orca there, not on main", async () => {
+    for (const role of ["side", "main"] as const) {
+      const d = mkdtempSync(join(tmpdir(), "zzsideobs-")); temps.push(d);
+      const s = open(join(d, "state")); stores.push(s);
+      const wt = join(d, "wt"); mkdirSync(wt);
+      // The side's down copy (link/replica.ts): the squad row as main has it, the member as host local.
+      s.upsert("squads", { project: "fx", topic: "sq" }, { status: "running", backend: "orca", doc: "{}", updated_at: T, observed_at: T });
+      s.db.run("INSERT INTO members (project, squad, role, suffix, wt, gen, status, host, updated_at, observed_at) VALUES ('fx', 'sq', 'builder', 'u1', ?, 'g1', 'running', 'local', ?, ?)", [`local::${wt}`, T, T]);
+      const tmux = fakeContract({}, { name: "tmux", now: () => T });
+      await tmux.call("terminal.create", { cwd: wt, label: "builder-u1", env: { DS_GEN: "g1" } });
+      const asked: string[] = [];
+      const backends = (name: string) => { asked.push(name); return { backend: tmux, caps: tmux.caps }; };
+      const walk = async () => [{ cwd: wt, agent: "claude", account: "system", kind: "main", model: "opus", pid: 4000, start: T }];
+      const loop = new Loop(s, { observers: [contractObserver({ backends, walk: walk as never })], reconcilers: [] }, { act() {} }, { projects: () => ["fx"], ...(role === "side" ? { role } : {}) });
+      loop.boot(T);
+      await loop.tick(T + 5);
+      const row = s.db.query("SELECT walk FROM observed_workers WHERE project = 'fx' AND wt = ?").get(`local::${wt}`) as Row | null;
+      if (role === "side") { expect(asked).toEqual(["tmux"]); expect(row?.walk).toBe("running"); }
+      else { expect(asked).toEqual([]); expect(row).toBeNull(); }
+    }
   });
 
   test("a host the project has no clone of is cloned once; an existing clone is adopted", async () => {
