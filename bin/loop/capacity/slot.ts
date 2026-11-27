@@ -31,6 +31,9 @@
 // So unlocking never fills a lane's last seat, and a one-seat lane ignores it. Off: the count ranks 0, today's line.
 // A Builder that is already live (a hung restart, a run-switch, a limit move, a phase switch)
 // replaces its own agent and is never refused; Studio, Leads, Thinkers and the rest are never limited.
+// Main only (side-loop-host U11, KTD16): a Builder whose row names a side host (members.host) is neither a live seat
+// nor in the line here; its host's own `seats` hold it (place.ts). One pinned there (a forced host or a worktree
+// there, place.ts pinnedSide) is never refused by max_builders; one the loop placed and not started yet asks again.
 // Light lane (adaptive-builder-capacity U3), on when `max_light_builders` > 0 (0, the default, takes the
 // single-lane path above unchanged). A unit's lane is its doc's `lane` (plan `Lane: light`, U1); a light
 // unit whose CPU (unit_cpu, U2) passes `light_lane_cpu_h` counts as normal from then on and records one
@@ -52,6 +55,8 @@ import { limit, reservationOf } from "./pick.ts";
 import { focusSquad, NOT_LIVE } from "../squad/focus.ts";
 import type { Row, Store } from "../core/store.ts";
 import { memo } from "./walk-memo.ts";
+import { pinnedSide } from "./place.ts";
+import { onSide } from "../squad/backend.ts";
 
 export type Slot = { ok: true; limit: number | null } | { ok: false; limit: number; live: number; ahead: number; why: string };
 // Who asks: a member row, or (a start with no row yet) squad + suffix.
@@ -366,7 +371,8 @@ export function newBuilderStart(store: Store, project: string, who: Asker, now: 
 // Who is in line now, as slot() and queue() see it: every Builder that waits for a seat (not `exclude`,
 // the asker), the live seats per lane and per squad, the lane of a unit, and the focus.
 function lineCtx(store: Store, project: string, n: number, now: number, exclude: string, record: boolean) {
-  const all = builders(store, project).map((m) => { const why = liveWhy(store, m, now); return { m, why, live: why != null }; });
+  // Main's seats only (U11): a Builder on a side host holds that host's seat, not one of max_builders.
+  const all = builders(store, project).filter((m) => !onSide(m.host)).map((m) => { const why = liveWhy(store, m, now); return { m, why, live: why != null }; });
   const key = (m: Row) => `${m.squad}\0${m.suffix ?? ""}`, liveKeys = new Set(all.filter((b) => b.live).map((b) => key(b.m)));
   const heldKeys = [...holds(store, project, now)].filter((k) => k !== exclude && !liveKeys.has(k));
   const resuming = memo(store, null, "resuming", project, () => new Map((store.db.query("SELECT * FROM pause_members WHERE project = ? AND role = 'builder' AND state = 'resuming'").all(project) as Row[])
@@ -490,6 +496,7 @@ export function slot(store: Store, project: string, who: Asker, now: number, rol
   const me = askerRow(store, project, who);
   if (n == null || String(me?.role ?? role) !== "builder") return { ok: true, limit: n };
   if (me && builderLive(store, me, now)) return { ok: true, limit: n };
+  if (pinnedSide(store, me)) return { ok: true, limit: n };   // U11: its side host's seats, not max_builders
   const squad = String(me?.squad ?? who.squad ?? ""), suffix = String(me?.suffix ?? who.suffix ?? "");
   const c = lineCtx(store, project, n, now, `${squad}\0${suffix}`, true);
   // An urgent asker jumps the queue (U168): nothing counts ahead of it — older non-urgent candidates
