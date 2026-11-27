@@ -16,7 +16,7 @@ import type { Row, Store } from "../loop/core/store.ts";
 import { handleDown, handleUp, wtDown, wtUp } from "../loop/drivers/contract.ts";
 
 /** The newest migration that changed an up-table: the hello's `up_migration` (KTD15). */
-export const UP_MIGRATION = "0062-account-folders-host";
+export const UP_MIGRATION = "0063-side-skills";
 
 /** Down: main → side. `where` picks the host's rows on main. */
 export const DOWN: readonly string[] = ["projects", "squads", "members", "units", "worktrees", "config", "host_config"];

@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { confirm, Gate, replace, sig } from "../core/gate.ts";
 import { copyLoginIds, mergeOrcaImport, parseAccountFolders, parseOrcaImport, syncAccountFolders } from "../capacity/accounts.ts";
 import { scanFolders } from "../../lib/accounts-list.ts";
+import { skillsValue } from "../../lib/account-skills.ts";
 import { accountRows, alertRows, dispatcherRows, doneRequests, isObj, mtime, num, readJson, requestFiles, requestRows, spendRows, tokenRows, tsv } from "../db/import-json.ts";
 import type { Observer, TickCtx } from "../core/plugins.ts";
 import { sideProjects } from "../core/side-plugins.ts";
@@ -226,8 +227,11 @@ export function stateObserver(opts: StateOpts = {}): Observer {
     if (at - scannedAt < maxAge) return;
     scannedAt = at;
     const lines = (opts.scanFolders ?? scanFolders)(process.env);
-    store.tx(() => gate.run("side-account-folders", lines.join("\n"),
-      () => replace(store, parseAccountFolders(lines.join("\n"), at), at, LOCAL_FOLDERS),
+    // U21: each Claude login folder's role skills, read here because main cannot read this host's files.
+    const rows = parseAccountFolders(lines.join("\n"), at).map((r) => ({ ...r, set: { ...r.set,
+      skills: r.set!.agent === "claude" && (r.set!.login_id || r.set!.logged_in) ? skillsValue(String(r.key.dir)) : null } }));
+    store.tx(() => gate.run("side-account-folders", JSON.stringify([lines, rows.map((r) => r.set.skills)]),
+      () => replace(store, rows, at, LOCAL_FOLDERS),
       () => confirm(store, at, LOCAL_FOLDERS)));
   }
 

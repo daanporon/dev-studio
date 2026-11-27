@@ -8,17 +8,19 @@
 //      install as `ds up` does, minus Studio and project (`install-ts`, the side unit ds-side-loop.service);
 //   3. make the host's key pair (the private key stays in <root>/link/host.key, 0600), send the join
 //      request, print the fingerprint and wait until the operator accepts it (`ds host accept` on main);
-//   4. start a probe tmux (or herdr) server as a unit of its own, to see this host can run one (each
+//   4. install the role skills for this host's own logins (bin/host/install-skills.sh; a failure is said and
+//      the join goes on: the side loop tries again, and main shows a card while a login lacks them);
+//   5. start a probe tmux (or herdr) server as a unit of its own, to see this host can run one (each
 //      project's server starts with its first agent, bin/backend/tmux.ts), then the side loop
 //      (`loop-ts --ensure`) and wait until it says its link is up.
 // Running it again is safe: an accepted host goes on to step 4.
-// Tests only: DS_JOIN_POLL_MS (default 3000), DS_JOIN_WAIT_S (default: the request's lifetime) and
-// DS_JOIN_CONNECT_S (default 60).
+// Tests only: DS_JOIN_POLL_MS (default 3000), DS_JOIN_WAIT_S (default: the request's lifetime),
+// DS_JOIN_CONNECT_S (default 60) and DS_JOIN_SKILLS (a command run instead of install-skills.sh).
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT, run as sh, stateRoot, writeErr, writeOut } from "../lib/shared";
-import { ensureLoop, installHost } from "../lib/host-setup.ts";
+import { ensureLoop, installHost, installRoleSkills } from "../lib/host-setup.ts";
 import { DialRefused, dialUrl, LinkClient, linkUrl, sendJoin } from "../link/client.ts";
 import { ensureHostKey, linkListenHint, nameProblem, PENDING_TTL_S } from "../link/host-keys.ts";
 import { readSideConfig, writeSideConfig } from "../lib/loop-unit.ts";
@@ -246,6 +248,7 @@ export async function run(argv: string[]): Promise<number> {
     if (r !== true) { complain(`main does not take this host's key for '${a.name}' (${r}): on main run \`ds host remove ${a.name}\`, or join under another --name`); return 1; }
   }
   say("main accepted this host");
+  await installRoleSkills("join");
 
   try { say(await probeBackend(root)); }
   catch (e) { complain(`this host cannot start a backend server: ${(e as Error).message}`); return 1; }

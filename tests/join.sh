@@ -15,8 +15,12 @@ unset DS_HERDR_BIN XDG_DATA_HOME
 cp "$ROOT/systemd/ds-side-loop.service" "$REPO/systemd/"
 cp -r "$ROOT/conventions" "$REPO/conventions"
 SIDE_STATE="$REPO/state"
+# The side loop reads Orca's login folders from here, never the host's (ORCA_USER_DATA_PATH beats HOME).
+export DS_ORCA_DATA="$TMP/orca"
 # Servers run detached (no unit on the host), tmux sockets stay in this test's folder.
 export DS_SERVER_SYSTEMD=0 DS_LOOP_SYSTEMD=0 DS_TICK_SECONDS=1 DS_JOIN_POLL_MS=200
+# The role skills step is recorded, never run (the real install-skills.sh reaches the network).
+export DS_JOIN_SKILLS="echo ran >> '$TMP/skills.ran'"
 export TMUX_TMPDIR="$TMP/tmux"; mkdir -p "$TMUX_TMPDIR"
 
 rm "$STUB/git"
@@ -106,6 +110,8 @@ LOOP="$(loop_pid)"; OWN_PIDS="$OWN_PIDS $LOOP"
 out="$(cat "$TMP/join.log")"
 eq "accepted: exit" "$rc" 0
 has "the backend probe" "tmux server starts as a detached process" "$out"
+has "the role skills step" "join: installing the role skills" "$out"
+eq "the role skills step ran" "$([ -s "$TMP/skills.ran" ] && echo ran || echo not)" ran
 has "connected" "join: connected: 'laptop' is a side host of 127.0.0.1:$PORT" "$out"
 has "the side loop runs as side" "main.ts --role side" "$(tr '\0' ' ' < "/proc/${LOOP:-0}/cmdline" 2>/dev/null || true)"
 eq "its link status" "$(jq -r .state "$SIDE_STATE/link/status.json")" up

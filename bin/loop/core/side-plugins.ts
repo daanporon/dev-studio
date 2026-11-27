@@ -11,14 +11,14 @@ export const SIDE_PLUGINS: Record<"observers" | "reconcilers" | "fulfil", readon
     "state",       // transcripts only on a side host: its other reads are main's own state/ files
     "worktrees",
   ],
-  reconcilers: ["side-fence", "side-push"],   // U14: the side pushes ahead and fences itself
+  reconcilers: ["side-fence", "side-push", "side-skills"],   // U14: push ahead, fence itself; U21: role skills
   fulfil: [],
 };
 
 /** Plugins that only a side host runs: a main loop leaves these files out (core/plugins.ts loadAll). */
 export const SIDE_ONLY: Record<"observers" | "reconcilers" | "fulfil", readonly string[]> = {
   observers: [],
-  reconcilers: ["side-fence", "side-push"],
+  reconcilers: ["side-fence", "side-push", "side-skills"],
   fulfil: [],
 };
 

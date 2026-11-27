@@ -9,6 +9,8 @@ import { accountFolder, listAccounts, readAccountsTable, type AccountRow } from 
 import { claude } from "./account-kinds/claude.ts";
 import type { Env } from "./account-kinds/index.ts";
 import { accountOwner, canon, exists, isDir, isFile, isLink } from "./install";
+import { scanFolders } from "./accounts-list.ts";
+import { readSideConfig } from "./loop-unit.ts";
 
 /** The skills the roles invoke (roles/*.md). ONE list: the check reads it, and tests/install-ce-accounts.sh
  *  greps roles/*.md so a new role skill can't be added without the check learning it. */
@@ -158,6 +160,17 @@ export function accountSkillsVerdict(cfg: string): string {
   return b ? `broken\t${b}` : w ? `warn\t${w}` : `ok\t${o}`;
 }
 
+/** A verdict as the `skills` columns hold it: `ok`, `broken: <reason>` or `warn: <reason>`. */
+export function skillsCell(kind: string, reason = ""): string {
+  return kind === "ok" ? "ok" : `${kind}: ${reason.replace(/[\t\r]/g, " ") || "?"}`;
+}
+
+/** skillsCell of one config dir. */
+export function skillsValue(cfg: string): string {
+  const [kind, reason] = accountSkillsVerdict(cfg).split("\t");
+  return skillsCell(kind, reason);
+}
+
 export type Sink = { out: (s: string) => void; err: (s: string) => void };
 const stdio: Sink = { out: writeOut, err: writeErr };
 
@@ -193,9 +206,20 @@ async function adapterOut(adapter: string, args: string[]): Promise<{ ok: boolea
 /** A Claude account and its config dir; `missing`: a table row whose login folder is gone. */
 export type SkillAccount = { account: string; dir: string; missing?: boolean };
 
+/** A side host holds no accounts table (side-loop-host U21): its Claude accounts are the login folders it scans,
+ *  or the system folder while none holds a login. */
+function sideSkillAccounts(env: Env): SkillAccount[] {
+  const system = claude.systemDir(env);
+  const logins = scanFolders(env).map((l) => l.split("\t")).filter((f) => f[0] === "claude" && (f[2] !== "-" || f[3] === "1")).map((f) => f[1]);
+  return (logins.length ? logins : [system]).map((dir) => ({ dir,
+    account: dir === system ? claude.systemId : basename(basename(dir) === "home" ? dirname(dir) : dir) }));
+}
+
 /** Every Claude account in loop.db's accounts table with its login folder (bin/lib/account-dirs.ts), so no backend
- *  is asked: the listed ones, the default first, then the rows whose folder is gone. No table: the system login. */
+ *  is asked: the listed ones, the default first, then the rows whose folder is gone. No table: the system login.
+ *  On a side host: its own logins (sideSkillAccounts). */
 export function claudeSkillAccounts(root: string = stateRoot(), env: Env = process.env): SkillAccount[] {
+  if (readSideConfig(root)) return sideSkillAccounts(env);
   const at = (r: AccountRow, missing?: boolean): SkillAccount => ({ account: r.account, dir: accountFolder(r, env), ...(missing ? { missing } : {}) });
   const t = readAccountsTable(root);
   const gone = ("rows" in t ? t.rows : []).filter((r) => r.agent === "claude" && r.source && r.removed_at == null
