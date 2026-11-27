@@ -122,7 +122,7 @@ test("the row's Move to main: checkpoint once idle, push, close, and the unit st
   expect(String(next().wt)).not.toStartWith(`${HOST}::`);
   expect(JSON.parse(String(next().want_payload))).toMatchObject({ main_only: true, unit: "u1" });
   expect(r.s.get("hosts", { name: HOST })!.fenced_at).toBeNull();
-});
+}, 60_000);   // real git, a board server and a mounted page: slow on a loaded host
 
 test("uncommitted files stop the move: the member runs on and its row says why", async () => {
   const r = await rig();
@@ -141,7 +141,7 @@ test("uncommitted files stop the move: the member runs on and its row says why",
   expect(r.jobs.filter((j) => j.job === "push")).toEqual([]);
   expect(member(r.s, Number(m.id))).toMatchObject({ want: "running", status: "running", wt });
   expect(boardMember(r).move).toEqual({ error: result(r).error });
-});
+}, 60_000);   // real git, a board server and a mounted page: slow on a loaded host
 
 test("a failed push keeps the member where it is, and the push is tried again", async () => {
   const r = await rig();
@@ -161,4 +161,4 @@ test("a failed push keeps the member where it is, and the push is tried again", 
   await until(r, wt, () => request(r).done_at != null);
   expect(result(r).ok).toBe(true);
   expect(r.jobs.filter((j) => j.job === "push").length).toBeGreaterThan(1);
-});
+}, 60_000);   // real git, a board server and a mounted page: slow on a loaded host

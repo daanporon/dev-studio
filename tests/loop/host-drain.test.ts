@@ -33,7 +33,7 @@ test("drain and undrain set the flag, say how many members run on, and refuse a 
   const none = ds(r, "drain", "nope");
   expect(none.rc).toBe(1);
   expect(none.err).toContain("no accepted host 'nope'");
-});
+}, 60_000);   // real git, a board server and a mounted page: slow on a loaded host
 
 test("a draining host takes no new start; the member it runs restarts there", async () => {
   const r = await rig();
@@ -61,4 +61,4 @@ test("a draining host takes no new start; the member it runs restarts there", as
   }
   expect(created()).toBeGreaterThan(before);
   expect(member(r.s, Number(m.id))).toMatchObject({ host: HOST, want: "running" });
-});
+}, 60_000);   // real git, a board server and a mounted page: slow on a loaded host
