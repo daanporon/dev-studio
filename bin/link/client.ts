@@ -102,6 +102,8 @@ export class LinkClient {
   refusal: string | null = null;
   private ws: WebSocket | null = null;
   private peer: Peer | null = null;
+  /** When main was last heard on the current link (epoch ms), or null while not up. */
+  get lastHeard(): number | null { return this.state === "up" ? this.peer?.lastHeard ?? null : null; }
   private timer: ReturnType<typeof setInterval> | null = null;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private pause = 1000;
