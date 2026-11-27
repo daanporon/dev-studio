@@ -91,7 +91,8 @@ import { wake } from "../pause/wake.ts";
 import { settledDispatch } from "./members.ts";
 import { RESTART_STUDIO, STUDIO_CARD_TITLE, STUDIO_FINE, studioBackend, studioView } from "../squad/studio.ts";
 import { memo } from "../capacity/walk-memo.ts";
-import { onContract } from "../squad/backend.ts";
+import { onContract, wtHost } from "../squad/backend.ts";
+import { hostUnreachable } from "../squad/host-reach.ts";
 import { finishOf } from "../squad/finish-read.ts";
 import { UNREAD } from "../messages/messages.ts";
 
@@ -688,6 +689,8 @@ class Pass {
   // usage-limited), so what sits below it goes one level up.
   check(squad: string, key: string, above: string, member: string, wt: string, run: string | null = null, standing = false): { cannot: boolean; parked: boolean } {
     if (paused(this.store, { project: this.project, squad, member: wt })) return { cannot: true, parked: true };
+    // side-loop-host U13: a member on an unreachable side host is unknown, never dead, hung or idle: left alone.
+    if (hostUnreachable(this.store, wtHost(this.store, wt))) return { cannot: true, parked: true };
     const w = this.worker(wt);
     if (this.limited(wt, w)) return { cannot: true, parked: true };
     if (standing && above !== "_operator" && this.crash(squad, key, above, member, wt)) return { cannot: true, parked: false };

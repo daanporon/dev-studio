@@ -46,6 +46,7 @@ import { ask as askCheckpoint, owed, pendingWhy, sweep as sweepCheckpoints } fro
 import { seed } from "../db/seed.ts";
 import { STANDING } from "../drivers/types.ts";
 import { onContract } from "../squad/backend.ts";
+import { hostUnreachable } from "../squad/host-reach.ts";
 import { finishOf } from "../squad/finish-read.ts";
 
 import type { Action, Reconciler, TickCtx } from "./plugins.ts";
@@ -76,6 +77,7 @@ export type Facts = {
   clearDue?: boolean;          // U156: clear_at newer than cleared_at
   clearCmd?: "/clear" | "/new" | null;  // U156: the agent's clear command (null: no signal, e.g. Muse)
   checkpoint?: string | null;  // U266: the why of an owed stop still waiting on its journal checkpoint (stop-checkpoint.ts)
+  hostDown?: boolean;          // side-loop-host U13: its side host's link is down (squad/host-reach.ts): unknown, but no card
 };
 export type Act = { act: "start" } | { act: "stop"; why: string } | { act: "checkpoint"; why: string } | { act: "tell"; why: "limit" | "credits-ok" | "login-ok" } | { act: "card"; why: "unknown" | "rebroke" }
   | { act: "reload" } | { act: "clear" } | { act: "close"; phase: "stop" | "remove"; why: string } | null;
@@ -98,7 +100,8 @@ export function compare(f: Facts): Act {
     return null;
   }
   if (f.view !== "running" || f.resume === false) return null;
-  if (f.reality === "unknown") return f.unknownS >= f.recheckS ? { act: "card", why: "unknown" } : null;
+  // U13: a member on an unreachable side host reads unknown; the host's grace and fence (U15) decide, not a card.
+  if (f.reality === "unknown") return !f.hostDown && f.unknownS >= f.recheckS ? { act: "card", why: "unknown" } : null;
   if (f.reality === "starting") return null;
   if (f.reality === "running") {
     // U266: an owed restart (idle mode), rss, fallback, pin or account (U5) stop asks for its journal checkpoint
@@ -126,7 +129,9 @@ export function compare(f: Facts): Act {
 // placed that no walk has read since (no worker row yet, or one older than the start) is "starting"
 // for the spawn grace (DS_SWEEP_SPAWN_GRACE_MIN), then unknown: never a second start beside it.
 // U12: a squad off Orca has no dispatch, so its reality is the process walk alone (walkReality).
+// side-loop-host U13: a member on a side host whose link is down is unknown, whatever its last uploaded rows say.
 export function reality(store: Store, m: Row, now: number): Reality {
+  if (hostUnreachable(store, m.host)) return "unknown";
   if (onContract(store, String(m.project), String(m.squad), m.host)) return walkReality(store, m, now);
   const w = m.wt ? store.get("observed_workers", { project: m.project, wt: m.wt }) : null, placed = lastStart(m);
   const unread = !w || w.gone_at != null || Number(w.account_at ?? 0) <= placed;
@@ -360,7 +365,7 @@ function look(store: Store, m: Row, now: number): Seen {
   const why = effective(store, m).why;
   const wtPath = tree?.path ? String(tree.path) : m.wt && String(m.wt).includes("::") ? String(m.wt).split("::").at(-1)! : "";
   return { m, resume: resuming ? resume : null, f: {
-    view: view(store, m), lock: lock(store, m), reality: r, hold: why === "archive-debrief", switchStuck: limitStuck(store, m, now),
+    view: view(store, m), lock: lock(store, m), reality: r, hostDown: hostUnreachable(store, m.host), hold: why === "archive-debrief", switchStuck: limitStuck(store, m, now),
     closeOK: ["stopped", "gone"].includes(String(m.want ?? "")) || why === "squad" || !closeBusy(store, m),
     hasWorktree: !!m.wt && ((!!tree && tree.gone_at == null) || (!!wtPath && existsSync(wtPath))),
     wt: !!m.wt,
