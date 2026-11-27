@@ -6,12 +6,15 @@
 // `reconnect` it dials again after a loss with a growing pause (1 s up to 30 s); a refusal (not accepted, removed,
 // a second link, a wrong version) is kept in `refusal` and also retried, since the operator may accept the host
 // later. `sendJoin` is the one-shot join request (U12's `ds join` calls it); its answer names main's public key,
-// which `ds join` pins (`<root>/link/main.pub`). U12b: each hello carries a fresh nonce, and the side signs main's
-// challenge only after main's signature over that nonce checks out against the pin; a main that cannot sign with
-// it, or a side with no pin, is refused, and a welcome before that proof closes the link. The link adds no
+// which `ds join` pins (`<root>/link/main.pub`). U12b: each hello carries a fresh nonce and X25519 share, and the
+// side signs main's challenge only after main's signature over the nonce and both shares checks out against the
+// pin; a main that cannot sign with it, or a side with no pin, is refused, and a welcome before that proof closes
+// the link. From the challenge on, every frame both ways is sealed with keys from that exchange (`seal.ts`), so
+// something relaying the handshake to the real main cannot inject a frame: one that does not open closes the link. The link adds no
 // encryption (KTD4), so every dial also goes through `dialUrl`: plain ws only to loopback or a tailnet address
 // (DS_LINK_ANY_MAIN=1 lifts that, as DS_LINK_BIND_ANY does for the server's binds).
 import { randomBytes } from "node:crypto";
+import { b64Bytes, KX_BYTES, newKx, sealer, type Sealer } from "./seal.ts";
 import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import { ROOT } from "../loop/core/store.ts";
@@ -122,6 +125,8 @@ export class LinkClient {
   refusal: string | null = null;
   private ws: WebSocket | null = null;
   private peer: Peer | null = null;
+  /** The open link's send: sealed once main proved itself (U12b). */
+  private send: ((f: Frame) => void) | null = null;
   /** When main was last heard on the current link (epoch ms), or null while not up. */
   get lastHeard(): number | null { return this.state === "up" ? this.peer?.lastHeard ?? null : null; }
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -195,11 +200,13 @@ export class LinkClient {
 
   // U12b: main's challenge must carry its signature over our nonce, made with the key `ds join` pinned. Null when
   // it does; else why this main is refused.
-  private mainProblem(f: Frame, sideNonce: Buffer, challenge: Buffer): string | null {
+  private mainProblem(f: Frame, sideNonce: Buffer, sideKx: string, challenge: Buffer): string | null {
     const pin = readMainPin(this.o.root);
     if (!pin) return `no main key is pinned on this host: run \`ds join ${this.o.main}\` again to pin main's key`;
-    if (f.main_signature === undefined) return `${this.o.main} did not sign this host's hello: update dev-studio on main, or it is not main`;
-    if (!verifyMain(pin, sideNonce, challenge, String(f.link_version ?? ""), this.o.name, f.main_signature))
+    const mainKx = b64Bytes(f.kx, KX_BYTES);
+    if (f.main_signature === undefined || !mainKx) return `${this.o.main} did not sign this host's hello: update dev-studio on main, or it is not main`;
+    const bound = Buffer.concat([sideNonce, Buffer.from(sideKx, "base64"), mainKx]);
+    if (!verifyMain(pin, bound, challenge, String(f.link_version ?? ""), this.o.name, f.main_signature))
       return `${this.o.main} cannot sign with the main key pinned at join (fingerprint ${fingerprint(pin)}): refusing it as not main. If main's key changed, run \`ds join ${this.o.main} --new-main-key\``;
     return null;
   }
@@ -207,31 +214,37 @@ export class LinkClient {
   private open(url: string): void {
     const ws = new WebSocket(url);
     this.ws = ws;
-    let welcomed = false, proven = false;
-    const sideNonce = randomBytes(CHALLENGE_BYTES);
+    let welcomed = false, seal: Sealer | null = null;
+    const sideNonce = randomBytes(CHALLENGE_BYTES), kx = newKx();
     const notMain = (why: string) => { this.refusal = why; try { ws.close(4001, why.slice(0, 120)); } catch { /* gone */ } };
-    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", name: this.o.name, nonce: sideNonce.toString("base64") }));
+    const send = (f: Frame) => ws.send(seal ? seal.seal(f) : JSON.stringify(f));
+    this.send = send;
+    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", name: this.o.name, nonce: sideNonce.toString("base64"), kx: kx.share }));
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
-      const f = parseFrame(typeof ev.data === "string" ? ev.data : Buffer.from(ev.data as ArrayBuffer), MAX_FRAME_BYTES);
+      const raw = typeof ev.data === "string" ? ev.data : Buffer.from(ev.data as ArrayBuffer).toString("utf8");
+      const opened = seal ? seal.open(raw) : raw;
+      if (opened === null) { notMain(`${this.o.main} sent a frame not sealed with this link's keys: something between this host and main altered the link`); return; }
+      const f = parseFrame(opened, MAX_FRAME_BYTES);
       if ("bad" in f) { ws.close(1003, String(f.bad)); return; }
       if (f.t === "refused") { if (!this.refusal) this.refusal = String(f.why ?? "refused"); return; }
       if (welcomed) { this.peer?.onFrame(f).then((known) => { if (!known) ws.close(1003, `unexpected frame '${f.t}'`); }); return; }
       if (f.t === "challenge") {
         const nonce = Buffer.from(String(f.nonce ?? ""), "base64");
-        const bad = proven ? "a second challenge" : this.mainProblem(f, sideNonce, nonce);
+        const bad = seal ? "a second challenge" : this.mainProblem(f, sideNonce, kx.share, nonce);
         if (bad) { notMain(bad); return; }
-        proven = true;
+        seal = sealer(kx.privateKey, b64Bytes(f.kx, KX_BYTES)!, sideNonce, nonce, "side");
+        if (!seal) { notMain(`${this.o.main} sent a key share this host cannot use`); return; }
         const key = readFileSync(hostKeyPath(this.o.root), "utf8");
-        ws.send(JSON.stringify({ t: "auth", signature: signHello(key, nonce, LINK_VERSION, this.o.name), link_version: LINK_VERSION, up_migration: newestMigration(), code_rev: codeRev(), env: hostEnv(), ...this.fencedField() } satisfies Frame));
+        send(({ t: "auth", signature: signHello(key, nonce, LINK_VERSION, this.o.name), link_version: LINK_VERSION, up_migration: newestMigration(), code_rev: codeRev(), env: hostEnv(), ...this.fencedField() } satisfies Frame));
         return;
       }
       if (f.t === "welcome") {
-        if (!proven) { notMain(`${this.o.main} welcomed this host without proving it is main`); return; }
+        if (!seal) { notMain(`${this.o.main} welcomed this host without proving it is main`); return; }
         welcomed = true;
         this.refusal = null;
         this.pause = 1000;
-        this.peer = new Peer((fr) => ws.send(JSON.stringify(fr)), this.channels!, { host: "main", end: "side", root: this.o.root }, "s", frameLog(this.o.log ?? ((l) => console.log(l))));
+        this.peer = new Peer(send, this.channels!, { host: "main", end: "side", root: this.o.root }, "s", frameLog(this.o.log ?? ((l) => console.log(l))));
         this.timer = setInterval(() => this.beat(ws), pingMs());
         this.set("up");
         return;
@@ -252,7 +265,7 @@ export class LinkClient {
     const p = this.peer;
     if (!p || this.ws !== ws) return;
     if (Date.now() - p.lastHeard >= deadMs()) { try { ws.close(4000, "main silent"); } catch { /* gone */ } this.forceDown(ws); return; }
-    try { ws.send(JSON.stringify({ t: "ping", at: Date.now() })); } catch { /* onclose settles it */ }
+    try { this.send?.({ t: "ping", at: Date.now() }); } catch { /* onclose settles it */ }
   }
 
   // A silent link may never deliver its close (the network is gone): settle it here once.

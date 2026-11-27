@@ -273,7 +273,8 @@ bin/ds join <main-host>[:<port>] [--name <name>] [--repo <git-url>]... [--new-ma
   `bin/ds host accept` (and `bin/ds host key`, and the board's join card) print main's fingerprint: if it differs,
   this is not main, so stop. From then on the side refuses any main that cannot sign with that key, even on main's
   address. A side that joined before this check has no pin and stays off until you run `bin/ds join <main>` on it
-  again. If main's key really changed (a new main state root), `join` refuses it; run it with `--new-main-key`.
+  again. If main's key really changed (a new main state root), or the host joins another main, `join` refuses it; run
+  it with `--new-main-key`.
 - **The role skills** are installed for this host's Claude logins once main accepts it (log `claude` in first). A
   failed install does not stop the join; the side loop tries again, and while a login that main also knows lacks a
   skill, main shows a card naming the host. Run `bin/host/install-skills.sh` on that host to repair it.

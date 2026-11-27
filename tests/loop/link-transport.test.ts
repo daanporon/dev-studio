@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { accept, ensureHostKey, hostKeyPath, remove, requestJoin, signHello, pinMainKey, ensureMainKey, newKeyPair, signMain } from "../../bin/link/host-keys.ts";
 import { LINK_VERSION, loadChannels, type Channel } from "../../bin/link/protocol.ts";
+import { b64Bytes, newKx, sealer, type Sealer } from "../../bin/link/seal.ts";
 import { LinkClient, linkUrl, sendJoin, type LinkState } from "../../bin/link/client.ts";
 import { linkRequest, startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { linkListen, linkWish, syncLinkWish } from "../../bin/loop/fulfil/link.ts";
@@ -203,11 +204,14 @@ describe("main proves itself (U12b)", () => {
       expect(c.state).toBe("refused");
       expect(m.srv.links()).toEqual([]);
       expect(events(m.store, "host_link_up").length).toBe(0);
+      // Main logs why the side closed on it (a side joined before U12b has no pin: only its own log said so).
+      await until("main's host_link_refused", () => events(m.store, "host_link_refused").length > 0);
+      expect(JSON.parse(String(events(m.store, "host_link_refused")[0].payload)).why).toMatch(/^the side refused main: /);
     });
   }
 
   // An impostor on main's address: it skips the challenge, or challenges without main's signature, or replays a
-  // signature main made for another nonce. The side signs nothing for it and stays off.
+  // signature main made for another nonce and key share. The side signs nothing for it and stays off.
   for (const [what, reply, why] of [
     ["welcomes at once", "welcome", /welcomed this host without proving it is main/],
     ["challenges unsigned", "unsigned", /did not sign this host's hello/],
@@ -219,7 +223,7 @@ describe("main proves itself (U12b)", () => {
       const real = new WebSocket(`${m.url}/link`), stale: Row[] = [];
       others.push({ stop: () => real.close() });
       real.onmessage = (ev) => stale.push(JSON.parse(String(ev.data)) as Row);
-      real.onopen = () => real.send(JSON.stringify({ t: "hello", name: "side-x", nonce: Buffer.alloc(32, 7).toString("base64") }));
+      real.onopen = () => real.send(JSON.stringify({ t: "hello", name: "side-x", nonce: Buffer.alloc(32, 7).toString("base64"), kx: newKx().share }));
       await until("main's signed challenge", () => stale.length > 0);
       expect(typeof stale[0].main_signature).toBe("string");
       const heard: Row[] = [];
@@ -233,7 +237,7 @@ describe("main proves itself (U12b)", () => {
             if (f.t !== "hello") return;
             if (reply === "welcome") ws.send(JSON.stringify({ t: "welcome", host: "side-x", link_version: LINK_VERSION }));
             else if (reply === "unsigned") ws.send(JSON.stringify({ t: "challenge", nonce: Buffer.alloc(32, 1).toString("base64"), link_version: LINK_VERSION }));
-            else ws.send(JSON.stringify({ t: "challenge", nonce: stale[0].nonce, link_version: stale[0].link_version, main_signature: stale[0].main_signature }));
+            else ws.send(JSON.stringify({ t: "challenge", nonce: stale[0].nonce, link_version: stale[0].link_version, kx: stale[0].kx, main_signature: stale[0].main_signature }));
           },
         },
       });
@@ -243,6 +247,43 @@ describe("main proves itself (U12b)", () => {
       expect(c.state).toBe("refused");
       expect(heard.map((f) => f.t)).toEqual(["hello"]);
       expect(String(heard[0].nonce).length).toBeGreaterThan(40);
+    });
+  }
+
+  // A relay on main's address that passes the handshake through to the real main: the side comes up (main signed
+  // the side's own share), but a frame the relay adds, either way, does not open with the link's keys.
+  for (const toward of ["side", "main"] as const) {
+    test(`a relay cannot inject a frame toward the ${toward}`, async () => {
+      const m = await mainUp();
+      const sroot = side(m.store, "side-y");
+      const pipes: { toSide: (t: string) => void; toMain: (t: string) => void }[] = [];
+      const relay = Bun.serve<{ up: WebSocket | null; held: string[] }, never>({
+        hostname: "127.0.0.1", port: 0,
+        fetch(req, srv) { return srv.upgrade(req, { data: { up: null, held: [] } }) ? undefined : new Response("no", { status: 400 }); },
+        websocket: {
+          open(ws) {
+            const up = new WebSocket(`${m.url}/link`);
+            ws.data.up = up;
+            up.onopen = () => { for (const t of ws.data.held.splice(0)) up.send(t); };
+            up.onmessage = (ev) => ws.send(String(ev.data));
+            up.onclose = () => ws.close();
+            pipes.push({ toSide: (t) => ws.send(t), toMain: (t) => up.send(t) });
+          },
+          message(ws, raw) { const up = ws.data.up!; if (up.readyState === WebSocket.OPEN) up.send(String(raw)); else ws.data.held.push(String(raw)); },
+          close(ws) { ws.data.up?.close(); },
+        },
+      });
+      others.push({ stop: () => relay.stop(true) });
+      const states: [string, string | undefined][] = [];
+      const c = client(`ws://127.0.0.1:${relay.port}`, sroot, "side-y", (st, why) => states.push([st, why]));
+      await c.start();
+      expect(c.state).toBe("up");
+      await until("main to list the link", () => m.srv.links().includes("side-y"));
+      const forged = JSON.stringify({ t: "ping", at: Date.now() });
+      if (toward === "side") pipes[0].toSide(forged); else pipes[0].toMain(`0.${"A".repeat(43)}.${forged}`);
+      await until("the link to drop", () => c.state !== "up" && !m.srv.links().includes("side-y"));
+      // Toward the side, the side closes; toward main, main refuses (its refusal sealed, so the side reads why).
+      expect(states.find(([st]) => st === "down")?.[1]).toMatch(/not sealed with this link's keys/);
     });
   }
 });
@@ -334,16 +375,22 @@ describe("liveness", () => {
     // A fake main (with a key of its own, pinned on the side) that welcomes, then never answers.
     const mk = newKeyPair(), sroot = temp();
     pinMainKey(sroot, mk.publicKey);
+    let seal: Sealer | null = null;
     const fake = Bun.serve({
       hostname: "127.0.0.1", port: 0,
       fetch(req, srv) { return srv.upgrade(req) ? undefined : new Response("no", { status: 400 }); },
       websocket: {
         message(ws, raw) {
+          if (seal) {
+            if ((JSON.parse(seal.open(String(raw)) ?? "{}") as Row).t === "auth") ws.send(seal.seal({ t: "welcome", host: "side-m" }));
+            return;
+          }
           const f = JSON.parse(String(raw)) as Row;
-          const challenge = Buffer.alloc(32);
-          if (f.t === "hello") ws.send(JSON.stringify({ t: "challenge", nonce: challenge.toString("base64"), link_version: LINK_VERSION,
-            main_signature: signMain(mk.privateKey, Buffer.from(String(f.nonce), "base64"), challenge, LINK_VERSION, "side-m") }));
-          if (f.t === "auth") ws.send(JSON.stringify({ t: "welcome", host: "side-m" }));
+          if (f.t !== "hello") return;
+          const challenge = Buffer.alloc(32), kx = newKx(), nonce = b64Bytes(f.nonce, 32)!, sideKx = b64Bytes(f.kx, 32)!;
+          ws.send(JSON.stringify({ t: "challenge", nonce: challenge.toString("base64"), link_version: LINK_VERSION, kx: kx.share,
+            main_signature: signMain(mk.privateKey, Buffer.concat([nonce, sideKx, Buffer.from(kx.share, "base64")]), challenge, LINK_VERSION, "side-m") }));
+          seal = sealer(kx.privateKey, sideKx, nonce, challenge, "main");
         },
       },
     });

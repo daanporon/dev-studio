@@ -136,6 +136,8 @@ export function mainFingerprint(root: string): string | null {
 }
 
 /** What main signs at a hello: its own tag, the link version, the host name, the side's nonce and main's challenge. */
+/** What main signs for a side's hello. `sideNonce` is the side's nonce followed by both key-exchange shares (side's,
+ *  then main's; 32 bytes each, `seal.ts`), so the signature binds the link's frame keys too. */
 export function mainMessage(sideNonce: Buffer, challenge: Buffer, linkVersion: string, name: string): Buffer {
   return Buffer.concat([Buffer.from(`${MAIN_TAG}\n${linkVersion}\n${name}\n`), sideNonce, challenge]);
 }

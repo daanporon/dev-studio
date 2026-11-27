@@ -9,8 +9,8 @@
 //   3. make the host's key pair (the private key stays in <root>/link/host.key, 0600), send the join
 //      request, print the fingerprint and wait until the operator accepts it (`ds host accept` on main);
 //      main's answer names main's own public key, which is pinned in <root>/link/main.pub (U12b): from then on
-//      the side loop refuses a main that cannot sign with it. A pin for this same main that differs from what
-//      main now sends is refused unless --new-main-key (main's key really changed);
+//      the side loop refuses a main that cannot sign with it. A pin that differs from what main now sends is
+//      refused unless --new-main-key (main's key really changed, or this host joins another main);
 //   4. install the role skills for this host's own logins (bin/host/install-skills.sh; a failure is said and
 //      the join goes on: the side loop tries again, and main shows a card while a login lacks them);
 //   5. start a probe tmux (or herdr) server as a unit of its own, to see this host can run one (each
@@ -161,11 +161,11 @@ async function waitAccepted(root: string, a: Args): Promise<boolean> {
 }
 
 /** Pin the main key a join answer names (U12b). Exit code on a refusal, else null. */
-function pinMain(root: string, a: Args, prevMain: string | null, key: string | null): number | null {
+function pinMain(root: string, a: Args, key: string | null): number | null {
   if (!key) { complain(`${a.main} sent no main key to pin: it runs a dev-studio older than this host's. Update main (\`ds update\` there), then run ds join again`); return 1; }
   const old = readMainPin(root), changed = !!old && old !== key;
-  if (changed && prevMain === a.main && !a.newMainKey) {
-    complain(`${a.main} answers with main key ${fingerprint(key)}, not the pinned ${fingerprint(old!)}: if main's key really changed (\`ds host key\` on main prints it), run ds join again with --new-main-key; else this is not main`);
+  if (changed && !a.newMainKey) {
+    complain(`${a.main} answers with main key ${fingerprint(key)}, not the pinned ${fingerprint(old!)}: if main's key really changed, or this host now joins another main (\`ds host key\` on main prints its key), run ds join again with --new-main-key; else this is not main`);
     return 1;
   }
   const r = pinMainKey(root, key);
@@ -217,7 +217,6 @@ export async function run(argv: string[]): Promise<number> {
   const root = stateRoot();
   // The install's unit and cron line run this checkout's own state root.
   if (root !== join(ROOT, "state")) { complain(`refused — DS_STATE_ROOT is ${root}; a side host's state root is ${join(ROOT, "state")} (unset DS_STATE_ROOT)`); return 2; }
-  const prevMain = readSideConfig(root)?.main ?? null;
   const isMain = mainHostProblem(root);
   if (isMain) { complain(`refused — ${isMain}. A side host is another machine with a fresh clone.`); return 2; }
 
@@ -255,7 +254,7 @@ export async function run(argv: string[]): Promise<number> {
     return 1;
   }
   if (!asked.ok && !/is already accepted/.test(asked.why)) { complain(`main refused the join request: ${asked.why}`); return 1; }
-  const pinRc = pinMain(root, a, prevMain, asked.mainKey);
+  const pinRc = pinMain(root, a, asked.mainKey);
   if (pinRc !== null) return pinRc;
   if (asked.ok) {
     say(`asked ${a.main} to accept this host as '${a.name}'`);
