@@ -157,6 +157,10 @@ describe("ds account add --host: a login on a side host", () => {
     const p = new Peer((f) => out.push(f), new Map([["echo", echo]]), { host: "main", end: "side", root: "/none" }, "s");
     await p.onFrame({ t: "req", id: "m1", ch: "echo", body: { envelope: { op: "terminal.send", req: { id: "t", text: CODE } } } });
     expect(out).toEqual([{ t: "res", id: "m1", ok: false, error: "could not type [redacted]" }]);
+    const ok: Channel = { name: "ok", answers: "side", handle: (b: any) => ({ screen: `$ ${b.envelope.req.text}`, lines: [b.envelope.req.text] }) };
+    const q = new Peer((f) => out.push(f), new Map([["ok", ok]]), { host: "main", end: "side", root: "/none" }, "s");
+    await q.onFrame({ t: "req", id: "m2", ch: "ok", body: { envelope: { op: "terminal.send", req: { id: "t", text: CODE } } } });
+    expect(out[1]).toEqual({ t: "res", id: "m2", ok: true, body: { screen: "$ [redacted]", lines: ["[redacted]"] } });
   });
 
   test("a login an account on main already has: 'logged in on side-a as <label>' and U18's sync links the folder", async () => {
