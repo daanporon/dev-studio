@@ -1296,9 +1296,9 @@ function machineSummary(db: Db | null, label: string, worktrees: number | null, 
   const names = hasHosts(db) ? db.all("SELECT name FROM hosts WHERE status = 'accepted' ORDER BY name").map((h) => String(h.name)) : [];
   if (!names.length) return main;
   const sides = names.map((name) => sideSample(db, label, name, squads, now));
-  const at = (x: any, isMain: boolean) => ({ host: isMain ? "main" : String(x.host), main: isMain, level: x.level as string, stale: !isMain && !!x.stale, load: x.load, mem: x.mem, swap: x.swap, disk: x.disk, worse: x.worse });
-  const { stale: _, ...w } = worstHost(at(main, true), sides.map((x: any) => at(x, false)));
-  return { ...main, sides, worst: w };
+  const w: any = worstHost<{ level?: string; stale?: boolean }>(main, sides);
+  const { level, load, mem, swap, disk, worse } = w;
+  return { ...main, sides, worst: { host: w === main ? "main" : String(w.host), level, load, mem, swap, disk, worse } };
 }
 // A side host's section: its numbers only while its sample is fresh; else its age (null = no sample yet).
 function sideSample(db: Db, label: string, name: string, squads: any[], now: number) {

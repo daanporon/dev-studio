@@ -105,7 +105,7 @@ test("the tile and summary name the worst host; a stale side host shows its age 
   f.sample("alpha", 16);                          // 160% of 10 cores: past the 150% crit line
   f.sample("beta", 90, { at: NOW - 600 });        // far worse, but ten minutes old
   const m = f.board().machine;
-  expect(m.worst).toMatchObject({ host: "alpha", level: "crit", main: false });
+  expect(m.worst).toMatchObject({ host: "alpha", level: "crit" });
   const beta = m.sides.find((x: any) => x.host === "beta");
   expect(beta).toMatchObject({ stale: true, observed_at: NOW - 600 });
   expect(beta.age_s).toBeGreaterThanOrEqual(600);
