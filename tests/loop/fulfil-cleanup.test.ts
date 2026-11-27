@@ -96,7 +96,7 @@ describe("card text", () => {
   test("an invalid glob is listed as matching nothing; a refusal and a failed backend list say so", () => {
     const s = store();
     project(s, "p"); scan(s, { ps: "failed (boom)" });
-    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: "/tmp/*", observed_at: 1 });
+    s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_tmp_globs', ?, 1)", ["/tmp/*"]);
     const t = cardText(s, "p", { refused: "project p has squads but nothing in loop.db names a worktree of it" })!;
     expect(t).toMatch(/^Invalid glob \/tmp\/\*: .+ \(matches nothing\)\.$/m);
     expect(t).toContain("Refused: project p has squads but nothing in loop.db names a worktree of it. Every row is report only.");
@@ -106,7 +106,7 @@ describe("card text", () => {
   test("apply (U3): the first line says so, the last 24 hours are totalled from the events, a failed row names its error", () => {
     const s = store();
     project(s, "p"); scan(s);
-    s.upsert("config", { project: "p", file: "limits.conf", key: "host_tidy" }, { value: "apply", observed_at: 1 });
+    s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'host_tidy', ?, 1)", ["apply"]);
     seed(s, "d", "/w/ds-p-u2", "removable", 50, { act_error: "worktree busy" });
     const ev = (kind: string, payload: Record<string, unknown>, at: number) =>
       s.db.query("INSERT INTO events (at, project, kind, payload) VALUES (?, 'p', ?, ?)").run(at, kind, JSON.stringify(payload));
@@ -155,7 +155,7 @@ describe("the card", () => {
   });
 });
 describe("shown only when it needs the operator (U8)", () => {
-  const mode = (s: Store, v: string) => s.upsert("config", { project: "p", file: "limits.conf", key: "host_tidy" }, { value: v, observed_at: 1 });
+  const mode = (s: Store, v: string) => s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'host_tidy', ?, 1)", [v]);
   const setup = (v: string | null) => { const s = store(); project(s, "p"); scan(s); if (v) mode(s, v); return s; };
   const id = alertId("cleanup:p", "card");
   const shown = (s: Store) => list(s).filter((x) => x.id === id);
@@ -204,7 +204,7 @@ describe("shown only when it needs the operator (U8)", () => {
   test("any mode: an invalid glob, a refusal or a scan ps_error shows the card", async () => {
     for (const m of ["apply", "report"]) {
       const s = setup(m);
-      s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: "/tmp/*", observed_at: 1 });
+      s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_tmp_globs', ?, 1)", ["/tmp/*"]);
       await exec(s);
       expect(String(shown(s)[0].question)).toMatch(/^Needs you: invalid glob \/tmp\/\*: /);
       const r = setup(m);

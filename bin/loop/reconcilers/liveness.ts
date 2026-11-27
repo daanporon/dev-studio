@@ -95,12 +95,15 @@ import { onContract, wtHost } from "../squad/backend.ts";
 import { hostUnreachable } from "../squad/host-reach.ts";
 import { finishOf } from "../squad/finish-read.ts";
 import { UNREAD } from "../messages/messages.ts";
+import { hostLine, isHostKey, SELF } from "../../lib/host-settings.ts";
 
 export const POKE_TEXT = "dev-studio loop: you went quiet with unread messages. Check your inbox now and carry on with your work.";
 export const QUIET_POKE_TEXT = "dev-studio loop: you have been working with no output for a while — are you stuck? If you are, ask your Lead; if not, carry on with your work.";
 
-// A limits.conf value: the project's row over the conventions' one.
+// A limits.conf value: the project's row over the conventions' one. A `[host]` key (restart_rss_gb, U25) is this
+// host's: its env var, its override, the default (host-settings.ts), never the project's row.
 export function limit(store: Store, project: string, key: string): string | null {
+  if (isHostKey(key)) return hostLine(store.db, SELF, key).value;
   const r = store.db.query("SELECT value FROM config WHERE file = 'limits.conf' AND key = ? AND project IN (?, '') ORDER BY project = '' LIMIT 1")
     .get(key, project) as { value: string | null } | null;
   return r?.value ?? null;

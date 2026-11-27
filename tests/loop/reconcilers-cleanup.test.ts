@@ -110,7 +110,7 @@ describe("floors and words (R9)", () => {
     seed(s, { class: "b", key: "/t/theirs", mtime: AT - 49 * H, facts: { uid: UID + 1 } });
     run(s);
     expect(["/t/old", "/t/new", "/t/held", "/t/theirs"].map((k) => verdict(s, k))).toEqual(["removable", "too new", "in use by pid 4242", "not ours"]);
-    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_age_h" }, { value: "46", observed_at: 1 });
+    s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_tmp_age_h', ?, 1)", ["46"]);
     run(s);
     expect(verdict(s, "/t/new")).toBe("removable");
   });
@@ -246,7 +246,7 @@ describe("the report action", () => {
 
   test("a rejected trim glob alone is a report action whose card names it", () => {
     const s = fixture();
-    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_trim_globs" }, { value: "relative-*", observed_at: 1 });
+    s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_trim_globs', ?, 1)", ["relative-*"]);
     const [one] = run(s);
     expect(one).toMatchObject({ project: "p", subject: "cleanup:p", kind: CLEANUP_REPORT });
     expect(cardText(s, "p")).toContain("Invalid trim glob relative-*");

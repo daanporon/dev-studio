@@ -64,6 +64,7 @@ import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
 import { feedbackOn, feedbackRepo } from "../loop/feedback/post.ts";
 import { DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
 import { studioBackend } from "../loop/squad/studio.ts";
+import { hostLine, isHostKey, SELF } from "../lib/host-settings.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
 
@@ -468,6 +469,10 @@ function debriefOnDb(db: Db, label: string): boolean {
 function dsLimit(db: Db, label: string, key: string): number | null {
   const ev = process.env[LIMIT_ENV[key] ?? "DS_LIMIT_" + key.toUpperCase()];
   if (ev && /^[0-9]+$/.test(ev)) return Number(ev);
+  if (isHostKey(key)) {   // U25, KTD16: a machine key is this host's (its override, else the default), never the project's
+    const v = db.memo(`host-limit:${key}`, () => hostLine(db.s.db, SELF, key).value?.split(/\s+/)[0] ?? "");
+    return /^[0-9]+$/.test(v) ? Number(v) : null;
+  }
   for (const p of [label, ""]) {
     const v = String(db.one("SELECT value FROM config WHERE project = ? AND file = 'limits.conf' AND key = ?", p, key)?.value ?? "").trim().split(/\s+/)[0];
     if (/^[0-9]+$/.test(v)) return Number(v);
@@ -2880,7 +2885,7 @@ function withDb<T>(fn: (db: Db) => T, root = stateRoot()): T | null {
 export const LIMIT_GROUPS: { name: string; keys?: string[]; prefixes?: string[] }[] = [
   { name: "Context & compaction", keys: ["studio_move"], prefixes: ["context_", "compact_", "auto_compact_"] },
   { name: "Accounts & model picking", keys: ["limit_pct", "limit_wait_max", "credits_hold_h", "fallback_return_min"], prefixes: ["pick_"] },
-  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "builder_host_brake", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "debrief", "archive_debrief_min", "notes_cap"] },
+  { name: "Agents & nudges", keys: ["quiet_nudge_min", "long_step_min", "max_builders", "max_light_builders", "light_lane_cpu_h", "focus_squad", "unblock_first", "seats", "builder_host_brake", "worktree_provider", "restart_rss_gb", "crash_window_min", "unit_token_x", "unit_token_max", "stale_min", "prompt_wait_min", "gone_min", "stale_lead_min", "stale_alert_min", "chat_quiet_s", "chat_queue_min", "chat_files_keep_d", "msg_chase_min", "msg_reply_alert_min", "debrief", "archive_debrief_min", "notes_cap"] },
   { name: "PRs & merging", keys: ["expected_checks", "auto_merge", "base_update", "github_budget_share", "pr_stale_min", "stale_repoke_min", "required_wait_min", "red_repoke_min"] },
   { name: "Review", prefixes: ["review_"] },
   { name: "Board & machine", keys: ["host_grace_min", "ticket_url", "update_run_max_min", "board_stale_ticks", "flow_stuck_floor_min", "flow_quiet_min", "needs_grace_min", "refusal_needs_min", "loop_stall_banner_n", "loop_stall_banner_min", "tick_alarm_ms", "tick_alarm_windows", "expose_down_min", "expose_stop_s", "expose_warn_min"], prefixes: ["machine_", "link_"] },
@@ -2904,6 +2909,16 @@ export function lastChange(db: Db, project: string, file: string, key: string) {
   } catch { return null; }
 }
 
+// U25: the last change of one host override (config_history rows with `host` set); no Undo here (`ds host rm`).
+function hostLastChange(db: Db, host: string, key: string) {
+  try {
+    const h = db.one("SELECT id, old_value, actor, at FROM config_history WHERE host = ? AND key = ? ORDER BY id DESC LIMIT 1", host, key);
+    if (!h) return null;
+    const by = String(h.actor);
+    return { id: Number(h.id), by, at: Number(h.at), from: h.old_value == null ? null : String(h.old_value), imported: by === "migration", undo: false };
+  } catch { return null; }
+}
+
 // GET /api/limits: what the limits script's `show --json` prints, from the limits.conf config rows — every key
 // of conventions/limits.conf with its value and source (env | override | default | unset).
 // Limits the board shows as read-only text: globs and a command run in worktrees are edited in
@@ -2917,11 +2932,15 @@ export function limitsJson(project: string, root = stateRoot()) {
       const fileOnly = FILE_ONLY_LIMITS.has(key);
       // A file-only value is shown whole (a glob list may be space-separated); the rest keep their first token.
       const first = (v: unknown) => fileOnly ? String(v ?? "").trim() : String(v ?? "").trim().split(/\s+/)[0] ?? "";
-      const [value, source] = process.env[env] ? [process.env[env]!, "env"]
+      // U25, KTD16: a `[host]` key is main's own (env, main's override, the default); a project row of it stays, unread.
+      const host = isHostKey(key), hl = host ? hostLine(db.s.db, SELF, key, env) : null;
+      const [value, source] = hl ? [first(hl.value), hl.value === null ? "unset" : hl.source === "host" ? "host" : hl.source!]
+        : process.env[env] ? [process.env[env]!, "env"]
         : first(own?.value) ? [first(own?.value), "override"] : first(d.value) ? [first(d.value), "default"] : ["", "unset"];
+      const nowPerHost = host && first(own?.value) ? first(own?.value) : null;
       const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "ticket_url" ? "https://tracker.example/issue/{id}, or -" : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
-      const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : null;
-      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
+      const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : source === "host" ? hostLastChange(db, SELF, key) : null;
+      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, host, nowPerHost, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
     const used = new Set(limits.map((l) => l.group));
     return { project, groups: [...LIMIT_GROUPS.map((g) => g.name).filter((n) => used.has(n)), ...(used.has("Other") ? ["Other"] : [])], limits };

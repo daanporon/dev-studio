@@ -9,6 +9,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stateRoot } from "./shared.ts";
+import { hostLine, SELF, type HostLine } from "./host-settings.ts";
 
 export const cutOver = (root = stateRoot()): boolean => existsSync(join(root, ".settings-migrated"));
 
@@ -49,3 +50,6 @@ export function ownText(label: string, file: string, root = stateRoot()): string
 
 /** Whether the project overrides anything in that file. */
 export const hasOwn = (label: string, file: string, root = stateRoot()): boolean => ownText(label, file, root).trim() !== "";
+
+/** U25: this host's line of a `[host]` key (env, its override in loop.db, the default); never a project's row. */
+export const ownHostLine = (key: string, env: string, root = stateRoot()): HostLine => hostLine(db(root), SELF, key, env);

@@ -408,7 +408,7 @@ describe("decide", () => {
     expect(s2.db.query("SELECT COUNT(*) AS n FROM events WHERE kind = 'wish_expired'").get()).toEqual({ n: 1 });
     // RSS: working waits, idle stops, '-' never
     const s3 = fixture();
-    s3.upsert("config", { project: "p", file: "limits.conf", key: "restart_rss_gb" }, { value: "6", observed_at: T });
+    s3.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'restart_rss_gb', ?, 1)", ["6"]);
     const b3 = member(s3, "builder", { want: "running", placed_at: T - 7200 }, { unit: "dispatched", presence: "running", walkAt: T });
     s3.upsert("observed_workers", { project: "p", wt: b3.wt }, { state: "working", rss_kb: 7 * 1024 * 1024, started_at: T - 7200, observed_at: T });
     expect(decide(ctx(s3)).filter((a) => (a.payload as Row).stop)).toEqual([]);

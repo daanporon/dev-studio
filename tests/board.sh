@@ -1562,7 +1562,7 @@ TIDY_TXT="$(bun -e '
   ins.run(p, "d", "/w/ds-measured", "/w/ds-measured", 3145728, at, "removable", JSON.stringify({ partial: true, size_from: "du", size_at: at }), at);
   ins.run(p, "c", "/h/partial", "/h/partial", 2048, at, "too new", JSON.stringify({ partial: true }), at);
   ins.run(p, "f", "/srv/zzcache-*", "/srv", 10240, at, "removable", JSON.stringify({ folders: 2, count: 40, removable: 30, too_new: 9, not_ours: 0, in_use: 1, partial: true, size_from: "du", size_at: at }), at);
-  s.upsert("config", { project: p, file: "limits.conf", key: "cleanup_trim_globs" }, { value: "/srv/zzcache-*, relative-*", observed_at: 1 });
+  s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES (?, ?, ?, 1)", ["local", "cleanup_trim_globs", "/srv/zzcache-*, relative-*"]);   // a host key (U25)
   process.stdout.write(cardText(s, p)); s.close();' "$ROOT" "$TMP/tidy-root" "$LBL")"
 "$ROOT/bin/lib/alerts.sh" "$CRA" add "cleanup:$LBL.card" "Host tidy: $LBL" "Needs you: 1 removable.
 $TIDY_TXT" "" "" '{"kind":"host_tidy","removable":1}' >/dev/null
