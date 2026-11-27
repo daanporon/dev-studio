@@ -277,7 +277,7 @@ test("the squads table row fits the narrowest wide layout (935px)", () => {
   const min = (c: string) => Number((c.match(/minmax\((\d+)px/) ?? c.match(/^(\d+)px/))![1]);
   const gap = Number(css.match(/gap:(\d+)px/)![1]), pad = css.match(/padding:\d+px (\d+)px/)![1], border = Number(css.match(/border-left:(\d+)px/)![1]);
   const total = cols.reduce((n, c) => n + min(c), 0) + gap * (cols.length - 1) + 2 * Number(pad) + border;
-  expect(cols.length).toBe(9);
+  expect(cols.length).toBe(8);
   expect(total).toBeLessThanOrEqual(935);
 });
 
