@@ -31,7 +31,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { now as nowS, open, stateRoot, type Row, type Store } from "../loop/core/store.ts";
 import { spawn, type Out } from "../loop/io/orca.ts";
 import { wtProbe } from "../loop/io/wt-probe.ts";
-import { canon, createWorktree, git, lastLine, provider, removeWorktree, WorktreeError, type Gone, type Made, type RemoveOpts, type Spec } from "../loop/io/worktrees.ts";
+import { canon, createWorktree, fetchBranch, git, lastLine, provider, removeWorktree, WorktreeError, type Gone, type Made, type RemoveOpts, type Spec } from "../loop/io/worktrees.ts";
 import { placeBody, planRescue, rescueDest, rescuePages, securable, sessionFiles, type Rescued } from "../loop/io/rescue.ts";
 import { writeLaunch } from "../loop/squad/launch-file.ts";
 import { LOCAL_HOST } from "./host-keys.ts";
@@ -119,6 +119,7 @@ function checkSpec(v: unknown): Spec {
     repo: absPath(s.repo, "the repo"), name: name(s.name, "the worktree name"), branch: branchName(s.branch, "the branch"), base: base as string,
     parent: s.parent == null ? null : absPath(s.parent, "the parent"), path: s.path == null ? null : absPath(s.path, "the path"),
     project: optStr(s.project, "the project") ?? null, squad: optStr(s.squad, "the squad") ?? null, role: optStr(s.role, "the role") ?? null,
+    ...(s.fetch == null ? {} : { fetch: branchName(s.fetch, "the fetched branch") }),
   };
 }
 function checkOpts(v: unknown): RemoveOpts {
@@ -243,6 +244,7 @@ async function cloneHere(j: Extract<HostJob, { job: "clone" }>): Promise<Cloned>
 async function addHere(j: Extract<HostJob, { job: "worktree.add" }>): Promise<Made & { repo: string }> {
   const p = await provider(j.provider);
   const spec = { ...j.spec, repo: canon(j.spec.repo) };
+  if (spec.fetch) await fetchBranch(spec.repo, spec.fetch);
   const fixed = p.pathFor(spec);
   const made = await p.create(spec, fixed == null ? null : canon(spec.path || fixed));
   return { ...made, path: canon(made.path), repo: spec.repo };

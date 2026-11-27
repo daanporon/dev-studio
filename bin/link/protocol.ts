@@ -3,7 +3,7 @@
 //   before the hello  side → main  {t:"join", name, public_key}         an unauthenticated join request (U1 caps)
 //                     main → side  {t:"joined", ok, fingerprint?, why?}  then main closes
 //                     side → main  {t:"hello", name}                     main answers {t:"challenge", nonce}
-//                     side → main  {t:"auth", signature, link_version, up_migration, code_rev}
+//                     side → main  {t:"auth", signature, link_version, up_migration, code_rev, fenced_at?}
 //                     main → side  {t:"welcome", host} | {t:"refused", why} (then main closes)
 //   after the hello   both ways    {t:"ping", at} / {t:"pong", at}        every PING_MS; DEAD_MS of silence = down
 //                     both ways    {t:"req", id, ch, body} / {t:"res", id, ok, body?, error?}

@@ -29,6 +29,7 @@ export type Spec = {
   role?: string | null;
   path?: string | null;    // where it goes; else the provider's pathFor()
   host?: string;
+  fetch?: string | null;   // side-loop-host U15: a branch fetched from origin into refs/remotes/origin/ before it is made
 };
 /** What the provider made, or found already made at the path (`adopted`). */
 export type Made = { path: string; branch: string; adopted: boolean; lease?: string | null; orca_id?: string | null };
@@ -51,6 +52,13 @@ export interface Provider {
 
 /** A refusal the caller can show as is (a bad name, a path that holds another branch, git's error). */
 export class WorktreeError extends Error {}
+
+/** Fetch `branch` from origin into refs/remotes/origin/<branch> (U15: a retry starts from the old branch as pushed). */
+export async function fetchBranch(repo: string, branch: string): Promise<void> {
+  if (!branch || branch.startsWith("-") || /[\0\s:]/.test(branch)) throw new WorktreeError(`worktrees: '${branch}' is not a branch to fetch`);
+  const g = await git(["-C", repo, "fetch", "-q", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+  if (g.code !== 0) throw new WorktreeError(`worktrees: fetching ${branch} from origin failed: ${(g.err || g.out).trim().slice(0, 300)}`);
+}
 
 const HOST = "local";
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -111,6 +119,7 @@ export async function createWorktree(s: Store, providerName: string, spec: Spec,
   const p = await provider(providerName);
   const repo = canon(spec.repo);
   spec = { ...spec, repo };
+  if (spec.fetch) await fetchBranch(repo, spec.fetch);
   const fixed = p.pathFor(spec);
   if (fixed == null) return createPicked(s, p, spec, at);
   const path = canon(spec.path || fixed);

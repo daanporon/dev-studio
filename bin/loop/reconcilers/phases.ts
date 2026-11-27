@@ -96,7 +96,7 @@ export function unitPrHead(store: Store, project: string, m: Row): { head: strin
 }
 
 // The unit's PR row: by <owner/name>#<n> (the squad's repo in config), else the unit-keyed ref.
-function prRow(store: Store, project: string, squad: Row, slug: string, n: number): Row | null {
+export function prRow(store: Store, project: string, squad: Row, slug: string, n: number): Row | null {
   const nwo = (store.get("config", { project, file: "github", key: `repo:${squad.repo}` })?.value as string) || null;
   return (nwo && store.get("observed_prs", { project, ref: `${nwo}#${n}` }))
     || (store.db.query("SELECT * FROM observed_prs WHERE project = ? AND ref = ? AND pr = ?").get(project, `${squad.topic}/${slug}`, n) as Row | null);
