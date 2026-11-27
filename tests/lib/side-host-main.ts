@@ -9,12 +9,13 @@
 //   builder <unit>                   a unit and its Builder, wished running
 //   gone <unit>                      that Builder wished gone
 //   busy <unit>                      the one observation main's missing observers would make of a Builder on main
+//   reality <member-id>              what main takes that member's state to be
 //   q <sql>                          one query's rows, tab-separated
 import { cpSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { syncAccountFolders } from "../../bin/loop/capacity/accounts.ts";
 import { LoopActuator, type Fulfiller } from "../../bin/loop/core/actuator.ts";
-import decider from "../../bin/loop/core/decide.ts";
+import decider, { reality } from "../../bin/loop/core/decide.ts";
 import { DIRS, load, type Reconciler } from "../../bin/loop/core/plugins.ts";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
@@ -37,7 +38,7 @@ function setup(s: Store, repo: string): void {
   const at = sec();
   importJson(s);
   // The fixture's own squad would take the side seats with its waiting Builders; only the project and accounts are used.
-  for (const table of ["members", "units", "squads"]) s.db.run(`DELETE FROM ${table} WHERE ${table === "squads" ? "topic" : "squad"} = 'demo'`);
+  for (const from of ["members WHERE squad", "units WHERE squad", "squads WHERE topic"]) s.db.run(`DELETE FROM ${from} = 'demo'`);
   const config = (file: string, key: string, value: string) => s.upsert("config", { project: PROJECT, file, key }, { value, observed_at: at });
   config("roles.conf", "lead", "claude sonnet always");
   config("roles.conf", "builder", "claude opus ondemand");
@@ -107,6 +108,8 @@ else {
   else if (verb === "busy") {
     const m = memberOf(s, args[0])!;
     s.upsert("observed_workers", { project: PROJECT, wt: String(m.wt) }, { state: "busy", walk: "running", presence: "running", observed_at: sec() });
+  } else if (verb === "reality") {
+    console.log(reality(s, s.db.query("SELECT * FROM members WHERE id = ?").get(Number(args[0])) as Row, sec()));
   } else if (verb === "q") {
     for (const r of s.db.query(args[0]).all() as Row[]) console.log(Object.values(r).map((v) => v ?? "-").join("\t"));
   } else throw new Error(`side-host-main: unknown verb ${verb}`);

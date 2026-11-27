@@ -88,8 +88,8 @@ main_env() { env "${MAIN_ENV[@]}" "$@"; }
 main_ds() { main_env "$ROOT/bin/ds" "$@"; }
 driver() { main_env "$BUN_REAL" "$ROOT/tests/lib/side-host-main.ts" "$@"; }
 q() { driver q "$1"; }
+side_q() { DS_STATE_ROOT="$SIDE_STATE" "$BUN_REAL" "$ROOT/tests/lib/side-host-main.ts" q "$1"; }
 
-MAIN_PID=""
 stop_side() {
   ( cd "$REPO" && PATH="$STUB" ./bin/ds loop-ts --stop >/dev/null 2>&1 ) || true
   TMUX_TMPDIR="$TMP/tmux" tmux -L ds-fx kill-server >/dev/null 2>&1 || true
@@ -99,8 +99,7 @@ state_root_on_exit 'stop_side; cleanup'
 dump() {
   echo "--- main driver log" >&2; tail -n 40 "$TMP/main.log" >&2 || true
   echo "--- side loop events" >&2
-  DS_STATE_ROOT="$SIDE_STATE" "$BUN_REAL" "$ROOT/tests/lib/side-host-main.ts" q \
-    "SELECT kind, member, substr(payload, 1, 300) FROM events ORDER BY id DESC LIMIT 25" >&2 || true
+  side_q "SELECT kind, member, substr(payload, 1, 300) FROM events ORDER BY id DESC LIMIT 25" >&2 || true
   echo "--- main events" >&2; q "SELECT kind, member, substr(payload, 1, 300) FROM events ORDER BY id DESC LIMIT 30" >&2 || true
   echo "--- main members" >&2; q "SELECT id, role, suffix, host, status, want, wt FROM members" >&2 || true
 }
@@ -176,8 +175,7 @@ eq "the Lead has it on main" "$(q "SELECT from_role, from_suffix, to_role FROM m
 agent builder-u1 "'$REPO/bin/ds' finish u1 --outcome ok --body 'done on the side'"
 eq "finish from the side: exit ($AGENT_OUT)" "$AGENT_RC" 0
 eq "u1's finish is main's row" "$(q "SELECT unit, outcome, body FROM finishes WHERE unit = 'u1'")" "$(printf 'u1\tok\tdone on the side')"
-eq "the side keeps no finish of its own" \
-  "$(DS_STATE_ROOT="$SIDE_STATE" "$BUN_REAL" "$ROOT/tests/lib/side-host-main.ts" q "SELECT COUNT(*) FROM finishes")" 0
+eq "the side keeps no finish of its own" "$(side_q "SELECT COUNT(*) FROM finishes")" 0
 
 # --- 2. a second side Builder pushes work, then the link is cut --------------------------------------
 # u1 is finished: its Builder is closed, as after a merge, so the cut below finds one live side member.
@@ -203,13 +201,7 @@ CUT_AT=$SECONDS
 unreachable() { nonempty "SELECT 1 FROM hosts WHERE name = 'laptop' AND unreachable_since IS NOT NULL"; }
 wait_for 60 "main saw the link go down" unreachable
 
-reads_unknown() { main_env "$BUN_REAL" -e '
-  const { open } = await import(process.argv[1] + "/bin/loop/core/store.ts");
-  const { reality } = await import(process.argv[1] + "/bin/loop/core/decide.ts");
-  const s = open();
-  const m = s.db.query("SELECT * FROM members WHERE id = ?").get(Number(process.argv[2]));
-  process.exit(reality(s, m, Math.floor(Date.now() / 1000)) === "unknown" ? 0 : 1);' "$ROOT" "$1"; }
-if reads_unknown "$OLD_ID"; then good; else bad "u2's member must read unknown while its host is unreachable"; fi
+eq "u2's member while its host is unreachable" "$(driver reality "$OLD_ID")" unknown
 eq "unknown is not requeued at once" "$(q "SELECT status = 'gone', fenced_at IS NULL FROM members WHERE id = $OLD_ID")" "$(printf '0\t1')"
 agent builder-u2 "'$REPO/bin/ds' finish u2 --outcome ok --body 'finished while cut off'"
 eq "a call while cut off: main unreachable ($AGENT_OUT)" "$AGENT_RC" 75
