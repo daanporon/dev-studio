@@ -282,6 +282,24 @@ describe("migrations", () => {
   });
 });
 
+describe("migration 0068: main's machine rows are host 'local'", () => {
+  test("only main's newest machine-name row is renamed; an older one and a side host's rows are kept", () => {
+    const root = tmp(), dir = join(tmp(), "migrations");
+    mkdirSync(dir);
+    for (const f of readdirSync(MIGRATIONS).filter((n) => n.endsWith(".sql") && n < "0068-machine-rows-local.sql")) copyFileSync(join(MIGRATIONS, f), join(dir, f));
+    const env = { ...process.env, DS_LOOP_MIGRATIONS: dir };
+    expect(Bun.spawnSync([DS, "--state", root, "migrate"], { env, stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+    const old = open(root, { migrations: dir });
+    old.db.run("INSERT INTO hosts (name, status, requested_at, accepted_at) VALUES ('sidebox', 'removed', 1, 1)");
+    for (const t of ["observed_machine", "observed_host_procs"])
+      old.db.run(`INSERT INTO ${t} (host, observed_at) VALUES ('old-name', 10), ('main-name', 20), ('sidebox', 30)`);
+    old.close();
+    const s = store(root);   // the real migrations: 0068 runs
+    for (const t of ["observed_machine", "observed_host_procs"])
+      expect(s.db.query(`SELECT host, observed_at FROM ${t} ORDER BY host`).all()).toEqual([{ host: "local", observed_at: 20 }, { host: "old-name", observed_at: 10 }, { host: "sidebox", observed_at: 30 }]);
+  });
+});
+
 describe("U204: the avoid column", () => {
   test("the migration drops members.avoid (and any mark set before it); the store opens and writes", () => {
     const root = tmp(), dir = join(tmp(), "migrations");

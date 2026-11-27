@@ -34,7 +34,7 @@ function root(): Store {
 }
 // `/` at pct free of a 1000 GB disk.
 function disk(s: Store, pct: number, path = "/") {
-  s.upsert("observed_machine", { host: "h" }, { disks: JSON.stringify([{ path, total_kb: 1000 * GB, free_kb: Math.round(10 * GB * pct) }]), observed_at: T });
+  s.upsert("observed_machine", { host: "local" }, { disks: JSON.stringify([{ path, total_kb: 1000 * GB, free_kb: Math.round(10 * GB * pct) }]), observed_at: T });
 }
 function docker(s: Store) {
   const row = (key: string, label: string, gb: number, rec: number) => s.upsert("observed_disk_usage", { key }, { label, size_kb: gb * GB, reclaimable_kb: rec * GB, read_at: T, observed_at: T });
@@ -98,7 +98,7 @@ describe("the disk-pressure reconciler", () => {
 
   test("a disk above the limit raises nothing, and each low disk has its own card", async () => {
     const s = root();
-    s.upsert("observed_machine", { host: "h" }, { disks: JSON.stringify([{ path: "/", total_kb: 1000 * GB, free_kb: 500 * GB }, { path: "/data", total_kb: 1000 * GB, free_kb: 100 * GB }]), observed_at: T });
+    s.upsert("observed_machine", { host: "local" }, { disks: JSON.stringify([{ path: "/", total_kb: 1000 * GB, free_kb: 500 * GB }, { path: "/data", total_kb: 1000 * GB, free_kb: 100 * GB }]), observed_at: T });
     const { tick } = loopOf(s, diskPressure);
     const got = alertsOf(await tick(T));
     expect(got.map((a) => (a.payload as Row).title).sort()).toEqual(["Disk /data low: 100 GB free (10%)", "Disk /data low: 100 GB free (10%)"]);

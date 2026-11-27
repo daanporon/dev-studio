@@ -4,12 +4,15 @@
 // Builder replacing its own agent and every other role go ahead. The picks reconciler, the actuator's
 // ladder pick and `ds pick` read the wait as a start wait (no reset time), never an error.
 import { afterEach, describe, expect, test } from "bun:test";
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { importConfig } from "../../bin/loop/db/import-config.ts";
 import { accountRows } from "../../bin/loop/db/import-json.ts";
+import { Loop } from "../../bin/loop/core/tick.ts";
+import { machineObserver } from "../../bin/loop/observers/machine.ts";
+import { disksOf } from "../../bin/loop/squad/disk-pressure.ts";
 import { brakeView, pick, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
 import { reconcile } from "../../bin/loop/capacity/picks.ts";
 import { ladderPick } from "../../bin/loop/core/actuator.ts";
@@ -71,6 +74,33 @@ const waits = (p: unknown) => { expect(p).toHaveProperty("wait"); return p as Wa
 const ctx = (s: Store) => ({ store: s, project: "", tick: 1, now: T, fired: [], poked: new Set() } as TickCtx);
 
 describe("U4: the Builder host brake", () => {
+  test("a machine observer tick feeds the brake and the board's brake view", async () => {
+    const s = fixture(), proc = mkdtempSync(join(tmpdir(), "zzhostbrake-proc-"));
+    temps.push(proc);
+    writeFileSync(join(proc, "loadavg"), "40.00 40.00 40.00 1/200 999\n");
+    writeFileSync(join(proc, "stat"), "cpu  1 2 3 4\ncpu0 1 2 3 4\n");
+    const loop = new Loop(s, { observers: [machineObserver(proc)], reconcilers: [] }, { act() {} }, { projects: () => [] });
+    loop.boot(T); await loop.tick(T);
+    brake(s);
+    expect(waits(builder(s, { member: asks(s) })).reason).toBe("WAIT host: load 4000% ≥ crit 150%");
+    expect(brakeView(s, T, "fx")).toMatchObject({ sample: "fresh", hit: { metric: "load" } });
+  });
+
+  test("a side host's newer row is never main's: the brake, its view and the disks ignore it", () => {
+    const s = fixture();
+    brake(s);
+    const side = () => s.upsert("observed_machine", { host: "sidebox" }, { ...CALM, host: "sidebox", psi_cpu_some: 40, observed_at: T,
+      disks: JSON.stringify([{ path: "/side", total_kb: 100, free_kb: 1 }]) });
+    side();                                                            // no row of main's own: nothing to read
+    starts(builder(s, { member: asks(s) }));
+    expect(brakeView(s, T, "fx")).toMatchObject({ sample: "missing", hit: null });
+    expect(disksOf(s)).toEqual([]);
+    sample(s, { observed_at: T - 30, disks: JSON.stringify([{ path: "/", total_kb: 100, free_kb: 50 }]) });
+    starts(builder(s, { member: asks(s) }));
+    expect(brakeView(s, T, "fx")).toMatchObject({ sample: "fresh", age_s: 30, hit: null });
+    expect(disksOf(s).map((d) => d.path)).toEqual(["/"]);
+  });
+
   test("crit CPU pressure with the brake on: a new Builder waits with WAIT host and no reset time", () => {
     const s = fixture();
     brake(s);

@@ -16,9 +16,9 @@ export const limitOf = (store: Store, project: string) => limitInt(store, projec
 export type Disk = { path: string; total_kb: number; free_kb: number; free_pct: number };
 export type Consumer = { label: string; size_kb: number; note: string };
 
-// The newest machine row's disks, each with its free share (a disk with no size is skipped).
+// The disks of this host's machine row (a side host's never counts), each with its free share (a disk with no size is skipped).
 export function disksOf(store: Store): Disk[] {
-  const r = store.db.query("SELECT disks FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as { disks: string | null } | null;
+  const r = store.db.query("SELECT disks FROM observed_machine WHERE host = 'local' ORDER BY observed_at DESC LIMIT 1").get() as { disks: string | null } | null;
   if (!r?.disks) return [];
   try {
     return (JSON.parse(r.disks) as { path: string; total_kb: number; free_kb: number }[])

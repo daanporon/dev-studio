@@ -1336,7 +1336,7 @@ function accountsSummary(db: Db | null, label: string, accts: any[], now = NOW()
 // side-loop-host U26: the top-level fields are main's own. With accepted side hosts it adds `sides` (one per
 // side host, in name order, from that host's own rows) and `worst` (the host the tile names); without any,
 // neither field exists. A row is a side host's when its host is one main ever accepted; main's rows carry
-// its machine name (observed_machine, observed_host_procs) or `local` (observed_procs).
+// `local` (an older loop.db's machine rows: its machine name).
 const NOT_SIDE = "host NOT IN (SELECT name FROM hosts WHERE accepted_at IS NOT NULL)";
 const hasHosts = (db: Db) => db.memo("tbl_hosts", () => !!db.one("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'hosts'"));
 // The latest row of a host-keyed table for one side host, or (side = null) for main.
