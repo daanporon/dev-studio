@@ -100,6 +100,17 @@ export async function markdown(binDir: string): Promise<string> {
 }
 
 const argv = process.argv.slice(2);
+// side-loop-host U7 (KTD5): on a side host a worker's terminal carries DS_MAIN_URL. Every call but help and the
+// forward table's `local` commands goes to main through the side loop's relay, --state and all (main refuses it).
+const mainUrl = process.env.DS_MAIN_URL;
+if (mainUrl && !process.env.DS_LINK_FORWARDED && argv[0] && !["help", "--help", "-h"].includes(argv[0])) {
+  const { kindOf } = await import("./link/forward-table.ts");
+  const { parseMember } = await import("./loop/core/whoami.ts");
+  if (kindOf(parseMember(process.env.DS_MEMBER)?.role ?? "", argv[0]) !== "local") {
+    const { forwardDs } = await import("./link/relay.ts");
+    process.exit(await forwardDs(mainUrl, argv));
+  }
+}
 const at = argv.indexOf("--state");
 if (at >= 0) {
   if (!argv[at + 1]) { console.error("ds: --state needs a directory"); process.exit(2); }
