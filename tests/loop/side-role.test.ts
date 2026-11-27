@@ -7,7 +7,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DIRS, load, loadAll } from "../../bin/loop/core/plugins.ts";
-import { sideActuator, SIDE_PLUGINS } from "../../bin/loop/core/side-plugins.ts";
+import { sideActuator } from "../../bin/loop/core/side-actuator.ts";
+import { SIDE_ONLY, SIDE_PLUGINS } from "../../bin/loop/core/side-plugins.ts";
 import { open } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { mangle } from "../../bin/loop/observers/orca.ts";
@@ -34,8 +35,9 @@ describe("the plugins each role loads", () => {
     const want: string[] = [];
     for (const f of [...SIDE_PLUGINS.observers].sort()) want.push((await import(join(DIRS.observers, `${f}.ts`))).default.name);
     expect(got.observers.map((o) => o.name)).toEqual(want);
-    expect(got.reconcilers).toEqual([]);
-    expect([...SIDE_PLUGINS.reconcilers, ...SIDE_PLUGINS.fulfil]).toEqual([]);
+    expect(got.reconcilers.map((r) => r.name)).toEqual([...SIDE_PLUGINS.reconcilers].sort());
+    expect(SIDE_PLUGINS.fulfil).toEqual([]);
+    expect(got.reconcilers.map((r) => r.name)).not.toContain("decide");
     for (const mainOnly of ["config", "documents", "github", "orca", "update"]) {
       expect(stems(DIRS.observers)).toContain(mainOnly);
       expect(SIDE_PLUGINS.observers).not.toContain(mainOnly);
@@ -45,7 +47,9 @@ describe("the plugins each role loads", () => {
   test("main: every observer, then the decider, the reconcilers and the fulfillers", async () => {
     const got = await loadAll();
     expect(got.observers.map((o) => o.name)).toEqual(await names(DIRS.observers));
-    expect(got.reconcilers.map((r) => r.name)).toEqual(["decide", ...await names(DIRS.reconcilers), ...await names(DIRS.fulfil)]);
+    const mainOf = async (dir: string, skip: readonly string[]) => (await names(dir)).filter((n) => !skip.includes(n));
+    expect(got.reconcilers.map((r) => r.name)).toEqual(["decide", ...await mainOf(DIRS.reconcilers, SIDE_ONLY.reconcilers), ...await mainOf(DIRS.fulfil, SIDE_ONLY.fulfil)]);
+    for (const n of SIDE_ONLY.reconcilers) expect(got.reconcilers.map((r) => r.name)).not.toContain(n);
     expect((await loadAll(DIRS, "main")).reconcilers).toEqual(got.reconcilers);
   });
 

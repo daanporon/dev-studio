@@ -413,10 +413,13 @@ migration not yet run), loads the plugins and ticks forever. `bin/loop/loop.sh` 
 `systemd/ds-loop.service` runs the daemon on the host.
 
 `main.ts --role side` is the loop of a side host (default `main`). It loads only
-the plugins `bin/loop/core/side-plugins.ts` names, all of them observers of that
+the plugins `bin/loop/core/side-plugins.ts` names: observers of that
 host (processes, transcripts and rollouts, chat, the backend contract, reviews,
 exposed URLs, cleanup, disk usage, worktrees), and writes their rows into its own
-`loop.db`. A plugin not on the list never runs there, so a new one is main-only
+`loop.db`. Two reconcilers run only there (U14): `side-push` pushes each Builder branch
+that is ahead of its remote, and `side-fence` pushes and then closes the host's
+own members once its link to main has been down for `host_grace_min` minutes;
+`core/side-actuator.ts` acts on both, and a main loop never loads them. A plugin not on the list never runs there, so a new one is main-only
 until someone names it. The decider is never loaded, and main's own steps are
 left out: the old files' migration, the actuator, retiring capacity facts, the
 squad JSON snapshots, and the rollback's export and board stop. Its projects are
