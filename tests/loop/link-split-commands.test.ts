@@ -15,7 +15,7 @@ import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { checkCall, EXIT, kindFor, kindOf, TABLE, WORKER_ROLES } from "../../bin/link/forward-table.ts";
 import { checkFacts, finishFacts, gather, SPLIT_COMMANDS } from "../../bin/link/split.ts";
 import { mainUrlFor, startRelay, type Relay } from "../../bin/link/relay.ts";
-import { toplevel } from "../../bin/loop/squad/exposed.ts";
+import { caller, toplevel } from "../../bin/loop/squad/exposed.ts";
 import { senderAt, sendMessage } from "../../bin/loop/messages/messages.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -195,6 +195,48 @@ describe("main's checks of a split or newly forwarded call", () => {
     expect(call(s, ["unexpose", "dev", "--topic", "other"])).toMatchObject({ ok: false });
     expect(call(s, ["exposed"])).toMatchObject({ ok: true, argv: ["exposed", "--project", "realp"] });
     expect(call(s, ["exposed", "--project", "otherp"])).toMatchObject({ ok: false });
+  });
+
+  test("u7b: expose and unexpose from a member row with no worktree (suspended) are refused; exposed still reads", () => {
+    const s = open(temp());
+    stores.push(s);
+    seedMain(s, "");
+    for (const argv of [["expose", "dev", "http://x"], ["expose", "dev", "http://x", "--stop", "touch /tmp/zz-u7b"],
+      ["expose", "dev", "http://x", "--project", "realp", "--topic", "sq", "--squad"], ["unexpose", "dev"], ["unexpose", "dev", "--project", "realp", "--topic", "sq"]])
+      expect({ argv, r: call(s, argv) }).toMatchObject({ argv, r: { ok: false, code: EXIT.refused } });
+    expect(call(s, ["exposed"])).toMatchObject({ ok: true });
+  });
+
+  test("u7b: a forwarded call never falls back to a squad-owned caller, nor to main's own folder", () => {
+    const s = open(temp());
+    stores.push(s);
+    seedMain(s);
+    process.env.DS_LINK_FORWARDED = "1";
+    expect(toplevel()).toBeNull();                                  // no DS_LINK_WT: no caller, not main's git folder
+    expect(caller(s, null, { project: "realp", topic: "sq" })).toMatchObject({ code: EXIT.refused });
+    expect(caller(s, "local::/nowhere", { project: "realp", topic: "sq" })).toMatchObject({ code: EXIT.refused });
+    expect(caller(s, "s1::/w/b1", {})).toMatchObject({ owner_wt: "s1::/w/b1", role: "builder", suffix: "u1", squadOwned: false });
+    delete process.env.DS_LINK_FORWARDED;
+    expect(caller(s, null, { project: "realp", topic: "sq" })).toMatchObject({ owner_wt: "", squadOwned: true });
+  });
+
+  test("u7b: a forwarded expose --stop with no member worktree writes no entry and runs nothing on main", async () => {
+    const root = temp(), s = open(root);
+    stores.push(s);
+    writeFileSync(join(root, ".loop-migrated"), "");
+    seedMain(s, "");
+    const mark = join(root, "stopped");
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(DS_|ORCA_)/.test(k) && k !== "CLAUDE_PROJECT_DIR") env[k] = v;
+    Object.assign(env, { DS_STATE_ROOT: root, DS_LINK_FORWARDED: "1", DS_MEMBER: B1, DS_GEN: "g1" });
+    for (const argv of [["expose", "dev", "http://localhost:3000", "--project", "realp", "--topic", "sq", "--squad", "--stop", `touch ${mark}`],
+      ["unexpose", "dev", "--project", "realp", "--topic", "sq"]]) {
+      const p = Bun.spawn([process.execPath, DS, ...argv], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+      const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+      expect({ argv, code, err }).toMatchObject({ argv, code: EXIT.refused, err: expect.stringContaining("worktree on main") });
+    }
+    expect(all(s, "SELECT name FROM exposed")).toEqual([]);
+    expect(existsSync(mark)).toBe(false);
   });
 
   test("the picker hook runs on main's state file as the member itself, with its worktree id and no input path (u8b)", () => {
@@ -384,6 +426,15 @@ describe("on a side host", () => {
     expect(await onSide(side, w.dir, ["unexpose", "dev"])).toMatchObject({ code: 0 });
     expect(await onSide(side, w.dir, ["unexpose", "web"])).toMatchObject({ code: 0 });
     expect(all(m.store, "SELECT 1 FROM exposed WHERE gone_at IS NULL")).toEqual([]);
+  }, 30_000);
+
+  test("u7b: a suspended side member (its row keeps gen, has no worktree) cannot expose --stop, even naming its squad", async () => {
+    const w = await worktree(false);
+    const m = await mainUp(""), side = await sideUp(m);
+    const e = await onSide(side, w.dir, ["expose", "dev", "http://localhost:3000", "--project", "realp", "--topic", "sq", "--squad", "--stop", "echo stop"]);
+    expect(e.code).toBe(EXIT.refused);
+    expect(e.stderr).toContain("needs the member's worktree");
+    expect(all(m.store, "SELECT 1 FROM exposed")).toEqual([]);
   }, 30_000);
 
   test("a side member's picker lands on main's board with its worktree id and clears on the answer (u8b)", async () => {

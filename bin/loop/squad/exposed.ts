@@ -62,11 +62,14 @@ export function parsePorts(v: string): number[] | string {
   return out;
 }
 
+/** Whether this process runs a call a side host forwarded (link/channels/ds-call.ts sets DS_LINK_FORWARDED). */
+const forwarded = (): boolean => process.env.DS_LINK_FORWARDED === "1";
+
 // The git toplevel of a directory (the caller's worktree), or null outside a repository.
 export function toplevel(cwd?: string): string | null {
-  // A call a side host forwarded runs on main, in main's state root: the caller is the member row's worktree id.
-  const linked = cwd === undefined ? linkWt() : null;
-  if (linked) return linked;
+  // A call a side host forwarded runs on main, in main's state root: the caller is the member row's worktree id,
+  // and without one there is no caller (u7b): main's own folder is never the side member's.
+  if (cwd === undefined && forwarded()) return linkWt();
   try { return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: cwd ?? process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
   catch { return null; }
 }
@@ -95,6 +98,9 @@ export function caller(s: Store, top: string | null, opt: { project?: string; to
       return hit;
     }
   }
+  // u7b: a call a side host forwarded is the member row's own, never the squad's: an entry with no owner worktree is
+  // main's (its stop would run on main), so a forwarded call whose worktree names no open member is refused.
+  if (forwarded()) return { error: "a call from a side host needs its member's worktree on main; this member has none (suspended or gone)", code: 77 };
   const projects = (s.db.query("SELECT DISTINCT project FROM squads").all() as { project: string }[]).map((r) => r.project);
   const dir = top ? roleOf(top, projects) : null;
   const project = opt.project ?? dir?.project;

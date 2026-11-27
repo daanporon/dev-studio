@@ -14,7 +14,7 @@
 // replaced" otherwise, no row written), the command is listed as forward for that member's role, and the call
 // names no other identity or scope: no --state, --as or --from, no --project, --squad or --topic but the member's
 // own, and a journal, notes, finish, reload or checkpoint target only inside the member's own project, squad and
-// unit. The caller is the member row, never an argument: main runs the call with DS_LINK_WT, the row's worktree id,
+// unit; expose and unexpose need the member row's worktree (u7b). The caller is the member row, never an argument: main runs the call with DS_LINK_WT, the row's worktree id,
 // which toplevel() (squad/exposed.ts) returns in place of main's own folder.
 import type { Row, Store } from "../loop/core/store.ts";
 import { parseMember } from "../loop/core/whoami.ts";
@@ -127,6 +127,9 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
   if (kind === "local") return refuse(`'ds ${cmd}' runs on the side host, not on main`);
   const bad = kind === "split" ? checkFacts(cmd, call.facts) : null;
   if (bad) return refuse(`'ds ${cmd}' from a side host: ${bad}`);
+  // u7b: an entry is owned by the member's worktree; a member row with none (suspended) would leave an entry main
+  // takes for its own, whose stop runs on main.
+  if ((cmd === "expose" || cmd === "unexpose") && !m.wt) return refuse(`'ds ${cmd}' from a side host needs the member's worktree; '${call.member}' has none on main`);
   if (call.argv.some((a) => a === "--state" || a.startsWith("--state="))) return refuse("--state is not allowed from a side host");
   const project = String(m.project), squad = String(m.squad), me = roleName(role, String(m.suffix ?? ""));
   // Flags: skip each valued flag's value; an identity flag or another project is refused.
