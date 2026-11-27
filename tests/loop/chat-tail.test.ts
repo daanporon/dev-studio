@@ -442,3 +442,16 @@ test("chat-image-upload U2: a board line's images suffix becomes `images`, in th
     { text: "", from: "operator", images: ["0123456789abcdef.png"] },
   ]);
 });
+
+test("markdown-file-upload-support U1 (D6): a board line's files and images marks split into text, images and files", () => {
+  const IM = "[images attached; open each with your file-reading tool: ", FM = "[files attached; read each with your file-reading tool: ";
+  const d = "/st/p/chat-files/sq";
+  const both = textTurn("user", chatLine(`read these ${IM}${d}/0123456789abcdef.png] ${FM}${d}/1111111111111111-spec.md, ${d}/2222222222222222.pdf]`), 1);
+  expect(both).toMatchObject({ text: "read these", from: "operator", images: ["0123456789abcdef.png"], files: ["1111111111111111-spec.md", "2222222222222222.pdf"] });
+  const only = textTurn("user", chatLine(`${FM}${d}/1111111111111111-spec.md, /elsewhere/not-a-name.md]`), 2);
+  expect(only).toMatchObject({ text: "", from: "operator", files: ["1111111111111111-spec.md", null] });
+  expect(only?.images).toBeUndefined();
+  const imagesOnly = textTurn("user", chatLine(`hi ${IM}${d}/0123456789abcdef.png]`), 3);
+  expect(imagesOnly?.files).toBeUndefined();
+  expect(imagesOnly?.images).toEqual(["0123456789abcdef.png"]);
+});

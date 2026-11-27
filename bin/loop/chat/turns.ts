@@ -3,7 +3,7 @@
 // 32 KB, each run of tool calls between two messages folded into one turn, a tool call one line and its
 // output never kept, and an operator's board line marked `from: "operator"` with its prefix stripped.
 import { redact } from "./redact.ts";
-import { CHAT_FILE_NAME, IMAGES_MARK } from "./files.ts";
+import { CHAT_FILE_NAME, FILES_MARK, IMAGES_MARK } from "./files.ts";
 
 export type Turn = {
   role: "user" | "assistant" | "screen"; text: string; at: number | null;
@@ -13,6 +13,7 @@ export type Turn = {
   from?: "operator" | "interrupted";   // a user turn the operator typed (board or terminal), or an interrupt
   via?: "terminal";                    // with from "operator": typed in the member's terminal, not on the board
   images?: (string | null)[];          // a board line's attached images: a stored file name, or null (a native attachment)
+  files?: (string | null)[];           // a board line's attached text files and PDFs: a stored file name, or null
 };
 
 export const MAX_TURNS = 20;           // messages, not tool calls
@@ -72,26 +73,30 @@ export function textTurn(role: Turn["role"], text: string, at: number | null): T
   const board = role === "user" ? PASTED.exec(t) : null;
   if (board && board[1].trim().startsWith(CHAT_PREFIX)) t = board[1].trim();
   const src = role === "user" ? userSource(t) : null;
-  let images: (string | null)[] | undefined;
+  let images: (string | null)[] | undefined, files: (string | null)[] | undefined;
   if (src === "operator-board") {
     t = t.slice(CHAT_PREFIX.length).trim();
-    // The suffix the loop typed for attached images (fulfil/chat.ts) is cut off before redaction and the
-    // text cut: each path becomes its file name, `[Image #N]` (the TUI made an attachment of it) or anything
-    // else becomes null.
-    const at = t.lastIndexOf(IMAGES_MARK);
-    if (at >= 0 && t.endsWith("]")) {
-      images = t.slice(at + IMAGES_MARK.length, -1).split(", ").map((p) => { const b = p.trim().split("/").pop() ?? ""; return CHAT_FILE_NAME.test(b) ? b : null; });
+    // The suffixes the loop typed for attached files, then images (fulfil/chat.ts), are cut off before
+    // redaction and the text cut: each path becomes its file name, `[Image #N]` (the TUI made an attachment
+    // of it) or anything else becomes null.
+    const mark = (m: string) => {
+      const at = t.lastIndexOf(m);
+      if (at < 0 || !t.endsWith("]")) return undefined;
+      const names = t.slice(at + m.length, -1).split(", ").map((p) => { const b = p.trim().split("/").pop() ?? ""; return CHAT_FILE_NAME.test(b) ? b : null; });
       t = t.slice(0, at).trim();
-    }
+      return names;
+    };
+    files = mark(FILES_MARK);
+    images = mark(IMAGES_MARK);
   }
   let max = MAX_TEXT;
   if (src === "operator-terminal") {
     const p = PASTED.exec(t);
     if (p) { t = p[1].trim(); max = PASTE_CUT; }
   }
-  if (!t && !images) return null;
+  if (!t && !images && !files) return null;
   const turn: Turn = { role, text: cut(redact(t), max), at };
-  if (src === "operator-board") { turn.from = "operator"; if (images) turn.images = images; }
+  if (src === "operator-board") { turn.from = "operator"; if (images) turn.images = images; if (files) turn.files = files; }
   else if (src === "operator-terminal") { turn.from = "operator"; turn.via = "terminal"; }
   else if (src === "interrupted") turn.from = "interrupted";
   return turn;
