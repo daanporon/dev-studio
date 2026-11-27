@@ -275,3 +275,87 @@ test("a close waits at most expose_stop_s + 180 s for a stop, then goes on with 
   expect(stopsPending(f.s, { project: "p", squad: "t" }, at + 400, 90)).toEqual([]);
   expect(events(f.s, "expose_stop_wait_over")).toHaveLength(1);
 });
+
+// side-loop-host u8b: the stop of an entry a side member owns runs on that host as the `expose.stop` host job, never
+// on main; held while the host is unreachable, settled lost once the host or the owner is fenced.
+function sideFixture(host: Row = {}) {
+  const f = fixture();
+  const owner = "hb::/home/u/wt/builder";
+  f.s.upsert("hosts", { name: "hb" }, { status: "accepted", public_key: "ssh-ed25519 AAAAtest", fingerprint: "SHA256:test", requested_at: 1, accepted_at: 1, last_seen_at: 1, ...host });
+  f.s.upsert("members", { project: "p", squad: "t", wt: owner }, { role: "builder", host: "hb", status: "running", observed_at: 1, updated_at: 1 });
+  const sent: Row[] = [];
+  const answer: Row = { code: 0, ms: 12, timed_out: false, cwd: "/home/u/wt/builder", cwd_fallback: false, tail: "stopped" };
+  let reply: () => unknown = () => answer;
+  const act = { hostJobs: () => ({ send: async (h: string, body: Row) => { sent.push({ h, ...body }); return reply(); } }) };
+  const exec = async (a: Action, now = 2_000): Promise<Result> => {
+    const r = await fulfiller.exec(a, { store: f.s, project: "p", now, act } as unknown as Exec);
+    return "background" in r ? await r.background : r;
+  };
+  return { ...f, owner, sent, exec, setReply: (r: () => unknown) => { reply = r; } };
+}
+
+test("a side owner's stop is a host job on its host: the action names the host and main runs nothing", async () => {
+  const f = sideFixture();
+  const id = f.entry(f.owner, "member", "make down");
+  f.s.db.run("UPDATE members SET status = 'gone' WHERE wt = ?", [f.owner]);
+  const [a] = stops(f.run(1_000));
+  expect(a.payload).toMatchObject({ ids: [id], cmd: "make down", cwd: "/home/u/wt/builder", host: "hb" });
+  expect(await f.exec(a)).toMatchObject({ done: true, result: "stop done (exit 0) on hb" });
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0]).toMatchObject({ h: "hb", job: "expose.stop", project: "p", squad: "t", cmd: "make down", cwd: "/home/u/wt/builder", low: id, timeout_s: 90 });
+  expect(f.row(id).stop_state).toBe("done");
+  expect(f.result(id)).toMatchObject({ ids: [id], code: 0, host: "hb", tail: "stopped" });
+  expect(existsSync(join(f.root, "state", "p", "loop", "cleanup", `expose-stop-${id}.log`))).toBe(false);
+});
+
+test("a side owner's stop is held while its host is unreachable, then runs once the link is back", async () => {
+  const f = sideFixture({ unreachable_since: 500 });
+  const id = f.entry(f.owner, "member", "make down");
+  f.s.db.run("UPDATE members SET status = 'gone' WHERE wt = ?", [f.owner]);
+  expect(stops(f.run(1_000))).toHaveLength(0);
+  expect(f.row(id).stop_state).toBe("queued");
+  // An action already in flight when the link dropped claims nothing and waits.
+  expect(await f.exec({ project: "p", squad: "t", kind: "expose.stop", subject: "x", payload: { ids: [id], cmd: "make down", host: "hb" } } as Action))
+    .toEqual({ wait: "host hb is unreachable" });
+  expect(f.row(id).stop_state).toBe("queued");
+  expect(f.sent).toHaveLength(0);
+  f.s.db.run("UPDATE hosts SET unreachable_since = NULL");
+  expect(stops(f.run(1_100))).toHaveLength(1);
+});
+
+test("a side owner's stop settles lost once its host or the owner is fenced, or the host is removed; the alert says why", () => {
+  for (const [sql, why] of [["UPDATE hosts SET fenced_at = 900, unreachable_since = 500", "host hb was fenced"],
+    ["UPDATE members SET fenced_at = 900", "host hb was fenced"], ["UPDATE hosts SET status = 'removed'", "host hb is no longer an accepted host"]]) {
+    const f = sideFixture();
+    const id = f.entry(f.owner, "member", "make down");
+    f.s.db.run("UPDATE members SET status = 'gone' WHERE wt = ?", [f.owner]);
+    f.s.db.run(sql);
+    const out = f.run(1_000);
+    expect(stops(out)).toHaveLength(0);
+    expect(f.row(id).stop_state).toBe("lost");
+    expect(f.result(id)).toMatchObject({ ids: [id], why, host: "hb" });
+    expect(events(f.s, "expose_stop").at(-1)?.payload).toContain(why);
+    expect(JSON.stringify(alerts(f.run(1_100)))).toContain(`was lost (${why}`);
+  }
+});
+
+test("a side stop whose link breaks mid-run settles lost, never retried on main", async () => {
+  const f = sideFixture();
+  const id = f.entry(f.owner, "member", "make down");
+  f.s.db.run("UPDATE members SET status = 'gone' WHERE wt = ?", [f.owner]);
+  const [a] = stops(f.run(1_000));
+  f.setReply(() => { throw new Error("link closed"); });
+  expect(await f.exec(a)).toMatchObject({ done: true });
+  expect(f.row(id).stop_state).toBe("lost");
+  expect(String(f.result(id).why)).toContain("link closed");
+});
+
+test("goneWhy: a side owner's worktree is removed by main's worktrees row, never by looking for the folder on main", () => {
+  const f = sideFixture();
+  const id = f.entry(f.owner, "member", null);
+  f.run(1_000);
+  expect(f.row(id).gone_at).toBeNull();   // the path does not exist on main, and that alone ends nothing
+  f.s.upsert("worktrees", { host: "hb", path: "/home/u/wt/builder" }, { project: "p", provider: "tmux", created_at: 1, gone_at: 900 });
+  f.run(1_100);
+  expect(f.row(id).gone_why).toBe("worktree-removed");
+});

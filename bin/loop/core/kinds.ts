@@ -124,7 +124,7 @@ const ONLY_ACTIONS = {
   "cleanup.act": obj({ class: str, key: str, path: opt(str) }),
   "cleanup.report": obj({ refused: opt(str) }),
   // exposed-cleanup U2: run one group of queued stop commands (exposed rows `ids`, one command) once.
-  "expose.stop": obj({ ids: arr(num), cmd: str, cwd: opt(str) }),
+  "expose.stop": obj({ ids: arr(num), cmd: str, cwd: opt(str), host: opt(str) }),
   // main-red-liveness-test U2: merge the base into a merge-ready unit PR that is only behind it.
   "update-branch": obj({ n: num, repo: str, ref: str, head: opt(str), unit: opt(str), topic: opt(str), base: opt(str) }),
   // ds-feedback-github-issues U2: one drafter pass over the `new` notes (`keys`, oldest first) for `repo`.

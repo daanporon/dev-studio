@@ -9,6 +9,9 @@ import { now, type Row, type Store } from "../core/store.ts";
 import { roleOf } from "../settings/skills.ts";
 import { limitInt } from "../settings/limits.ts";
 import { linkWt } from "../../link/split.ts";
+import { LOCAL_HOST } from "../../backend/registry.ts";
+import { onSide, wtHost } from "./backend.ts";
+import { hostLink } from "./host-reach.ts";
 
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
 export const NOTE_MAX = 200;
@@ -232,6 +235,32 @@ export function stopGroups(s: Store, project: string): { run: StopGroup[]; skip:
     if (have) have.ids.push(Number(r.id)); else groups.set(k, { project, ...g, ids: [Number(r.id)] });
   }
   return { run: [...groups.values()], skip };
+}
+
+// side-loop-host u8b: an entry's stop runs on its owner's host. The owner's host is its newest members row's host
+// (that row stays after the member ends), else the host a `<host>::<path>` worktree id names (squad/backend.ts wtHost).
+export function ownerHost(s: Store, project: string, ownerWt: unknown): string {
+  const wt = String(ownerWt ?? "");
+  if (!wt) return LOCAL_HOST;
+  const m = s.db.query("SELECT host FROM members WHERE project = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project, wt) as { host: unknown } | null;
+  return onSide(m?.host) ? String(m!.host) : wtHost(s, wt);
+}
+
+/** Whether the queued stop of a side owner runs now (`run`), waits for its host's link (`hold`), or is settled
+ *  `lost` (its host is gone, removed or fenced, or the owner was moved off it by a fence): never run on main. */
+export type StopGate = { run: true } | { hold: string } | { lost: string };
+export function sideStopGate(s: Store, project: string, ownerWt: unknown, host: string): StopGate {
+  const h = s.get("hosts", { name: host });
+  if (!h || h.status !== "accepted") return { lost: `host ${host} is no longer an accepted host` };
+  const m = s.db.query("SELECT fenced_at FROM members WHERE project = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project, String(ownerWt ?? "")) as { fenced_at: unknown } | null;
+  if (h.fenced_at != null || m?.fenced_at != null) return { lost: `host ${host} was fenced` };
+  if (hostLink(s, host).state !== "online") return { hold: `host ${host} is unreachable` };
+  return { run: true };
+}
+
+/** A side worktree main has recorded as removed (`worktrees (host, path)` with gone_at); main cannot look at the folder. */
+export function sideTreeGone(s: Store, host: string, path: string): boolean {
+  return s.get("worktrees", { host, path })?.gone_at != null;
 }
 
 // Settle rows (only those still in `from`) with a stop state and result, in one transaction.

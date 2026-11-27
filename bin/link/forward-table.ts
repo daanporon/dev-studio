@@ -131,7 +131,6 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
     if (name === "project" && (value === undefined || dsLabel(value) !== project)) return refuse(`--project names another project than ${project}`);
     // (`ds expose --squad` is a switch, not a squad name.)
     if ((name === "squad" || name === "topic") && (inline !== undefined || valued.includes(name)) && value !== squad) return refuse(`--${name} names another squad than ${squad}`);
-    if (cmd === "expose" && name === "stop") return refuse("--stop from a side host is not supported yet: a stop must run on the member's host, never on main");
     if (cmd === "watch-ts" && (name === "run" || name === "requests")) return refuse(`watch.sh --${name} is not a worker's tick`);
     if (name === "member" && !String(value ?? "").startsWith(`${project}/${squad}/`)) return refuse(`--member names a member outside ${project}/${squad}`);
     if (name === "project") named = true;
