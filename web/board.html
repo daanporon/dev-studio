@@ -57,7 +57,7 @@ h2{font-size:15px;margin:22px 0 10px} h2 small{font-weight:400;font-size:12px;co
 .ans .err{font-size:12px;color:var(--red)} .ans .ok{font-size:12px;color:var(--green)}
 .mach-sec{margin:22px 0 0} .mach-sec summary{cursor:pointer;font-size:15px;font-weight:600;margin-bottom:10px} .mach-sec summary small{font-weight:400;font-size:12px;color:var(--mut);margin-left:8px}
 .mach-sec .warn{color:var(--amber)} .mach-sec .crit{color:var(--red)} .tile .td .warn{color:var(--amber)} .tile .td .crit{color:var(--red)}
-.mach-tiles{margin:0 0 10px} .reloadbar{position:sticky;top:0;z-index:20;margin-bottom:14px;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.mach-tiles{margin:0 0 10px} .mhost{margin-top:16px;padding-top:10px;border-top:1px solid var(--line)} .mhost-line{margin:0 0 8px;overflow-wrap:anywhere} .mhost-stale{color:var(--amber)} .reloadbar{position:sticky;top:0;z-index:20;margin-bottom:14px;box-shadow:0 2px 10px rgba(0,0,0,.4)}
 .ucard{font:12px var(--mono);margin-top:8px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box} .ucard .uhd{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;margin-bottom:6px} .ucard .sp{flex:1} .ubar{margin:6px 0} .ubtrack{display:flex;height:10px;border-radius:3px;background:var(--line);overflow:hidden;margin:3px 0} .useg{display:block;height:100%} .useg.other{background:var(--dim)} .ubfig{overflow-wrap:anywhere} .ustall{font-size:11px;overflow-wrap:anywhere}
 .mtop{font:12px var(--mono);margin-top:8px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:6px;padding:8px 10px} .mtop .mg{display:grid;grid-template-columns:1fr 90px 60px 50px;gap:10px;padding:2px 0;border-top:1px solid var(--line)} .mtop .mg.head{color:var(--mut);border-top:0}
 .mtop .mtotal{padding:2px 0 6px} .mtop .mhead{display:flex;gap:8px;align-items:center;margin:4px 0} .mtop .seg{margin-left:auto;display:inline-flex} .mtop .seg button{font:inherit;padding:1px 8px;border:1px solid var(--line);background:transparent;color:var(--mut);cursor:pointer} .mtop .seg button[aria-pressed=true]{color:var(--fg,inherit);background:var(--line)} .mtop .mtip{cursor:help;color:var(--mut)} .mtop .mbreak{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;padding-top:6px;border-top:1px solid var(--line)} .mtop .mout{margin-top:8px;padding-top:6px;border-top:1px solid var(--line)} .mtop .warn{color:var(--amber)}
@@ -1347,9 +1347,9 @@ function ResourceCard({ M, project }) {
 const cpuText = (v) => (v == null ? "—" : Math.round(v) + "%");
 // The Machine panel's load line, ranked table (RAM | CPU switch), memory breakdown and outside block (plan U2).
 // RAM figures are `ram_kb`: charged memory counted once, or RSS for every item when M.ram_basis is "rss" (U4).
-function MachineTop({ M, lstore, showProject }) {
-  const [sort, setSort] = useState(() => (lstore.get("b:machine-sort", "ram") === "cpu" ? "cpu" : "ram"));
-  const pick = (s) => { setSort(s); lstore.set("b:machine-sort", s); };
+function MachineTop({ M, lstore, showProject, sortKey = "b:machine-sort" }) {
+  const [sort, setSort] = useState(() => (lstore.get(sortKey, "ram") === "cpu" ? "cpu" : "ram"));
+  const pick = (s) => { setSort(s); lstore.set(sortKey, s); };
   const rows = (M.consumers || []).slice().sort((a, b) => sort === "cpu" ? (b.cpu_pct ?? -1) - (a.cpu_pct ?? -1) : b.ram_kb - a.ram_kb).slice(0, 6);
   const O = M.outside || [], once = M.ram_basis === "charged";
   const ramCell = (x) => html`<span title=${once ? "RSS " + kbText(x.rss_kb) : null}>${kbText(x.ram_kb)}</span>`;
@@ -1360,6 +1360,17 @@ function MachineTop({ M, lstore, showProject }) {
       ${rows.map((g) => html`<div class="mg" key=${g.project + g.label}><span tabindex="0" title=${g.label}>${g.label} ${showProject && html`<small class="mut">${g.project}</small>`}</span>${ramCell(g)}<span>${cpuText(g.cpu_pct)}</span><span>${g.procs}</span></div>`)}`}
     ${O.length > 0 && html`<div class="mout"><b>Outside this project</b>${O.map((o) => html`<div class="mg" key=${o.label}><span tabindex="0" title=${o.label}>${o.label}</span><span class=${o.ram_hit ? "warn" : ""} title=${once ? "RSS " + kbText(o.rss_kb) : null}>${kbText(o.ram_kb)}</span><span class=${o.cpu_hit ? "warn" : ""}>${cpuText(o.cpu_pct)}</span><span></span></div>`)}</div>`}
   </div>`;
+}
+// A host's swap and disk words, coloured by level (the Machine summary and each host's line).
+const swapWord = (S) => S.swap.total_kb ? html`<span class=${S.swap.level}>swap ${S.swap.pct}%${S.swap.level === "crit" ? " ✖" : S.swap.level === "warn" ? " ⚠" : ""}</span>` : "no swap";
+const hostFigures = (S) => html`<span class=${S.load.level}>load ${S.load.x != null ? S.load.x + "× cores" : "?"}</span> · <span class=${S.mem.level}>mem ${S.mem.pct ?? "?"}%</span> · ${swapWord(S)}${S.disk && html` · <span class=${S.disk.level}>disk ${S.disk.free_pct}% free</span>`}`;
+// With side hosts, each host's section starts with its name and its load and memory line (side-loop-host U26).
+// A side host with no fresh sample shows the age of its last one and no numbers.
+function HostLine({ name, sub, S }) {
+  const stale = S.stale && S.load == null;
+  return html`<div class="mhost-line"><b>${name}</b>${sub && html` <small class="mut">${sub}</small>`} ${stale
+    ? html`<span class="mhost-stale">${S.age_s == null ? "no sample yet" : "no fresh sample: last one " + flowDur(S.age_s) + " ago"}</span>`
+    : html`<span>${hostFigures(S)}</span> <small class="mut">${[S.load.load1, S.load.load5, S.load.load15].map((v) => (v == null ? "?" : v.toFixed(1))).join(" / ") + " on " + (S.cores ?? "?") + " · " + kbText(S.mem.avail_kb) + " free of " + kbText(S.mem.total_kb)}</small>`}</div>`;
 }
 function FlowSection({ flow, lstore, focus, onOpen, now, showProject }) {
   const [open, setOpen] = useState(() => lstore.get("b:flow", true));
@@ -4646,6 +4657,7 @@ function App() {
   const accFlags = (data.accounts || []).filter((a) => /^broken/.test(a.skills || "") && !a.disabled);
   const H = data.header || {}, AS = data.accounts_summary || { total: 0, free: 0, limited: [], near: [], level: "ok" };
   const M = data.machine;
+  const MT = M && (M.worst || M);   // the host the Machine tile and summary show: the worst one when there are side hosts
   // Header Studio button(s) (chat-with-studio U1): one per `studio` entry of board.json, opening ChatPanel on topic _studio.
   // Mail badge = the Crew box's unread + reply_due; the dot = a reply newer than this browser's seen mark (b:chat-seen:<project>/<wt>);
   // a first visit with no mark takes reply_at as the mark, so only a later reply raises it. Settings is not rendered host-wide,
@@ -4716,8 +4728,8 @@ function App() {
         detail=${GHT.detail ? GHT.detail : FT ? FT.prsDetail : html`<button class="lnk" onClick=${() => setFilter("ci")} title="Filter the squads: CI running">${H.ci_running || 0} CI running</button> · <span class=${H.ci_failing > 0 ? "red" : ""}>${H.ci_failing || 0} failing</span> · ${H.drafts || 0} drafts`} />
       <${Tile} label="Accounts" value=${AS.free + "/" + AS.total} level=${AS.level} on=${openAccounts} title="Open the Accounts section"
         detail=${(AS.credits || []).length ? AS.credits.map((a) => a.label + " out of credits").join(" · ") : (AS.login || []).length ? AS.login.map((a) => a.label + " login ended").join(" · ") : AS.limited.length ? AS.limited.map((a) => a.label + " → " + a.reset).join(" · ") : AS.near.length ? AS.near.map((a) => a.label + " near limit").join(" · ") : "all free"} />
-      ${M && html`<${Tile} label="Machine" value=${M.load.x != null ? M.load.x + "×" : "—"} level=${M.level === "ok" ? "" : M.level} on=${openMachine} title="Open the Machine section: load ÷ cores, memory, swap, disk"
-        detail=${html`<span class=${M.worse === "mem" && M.mem.level !== "ok" ? M.mem.level : ""}>mem ${M.mem.pct ?? "?"}%</span> · <span class=${M.worse === "swap" && M.swap.level !== "ok" ? M.swap.level : ""}>${M.swap.total_kb ? "swap " + M.swap.pct + "%" : "no swap"}</span>`} />`}
+      ${MT && html`<${Tile} label="Machine" value=${MT.load.x != null ? MT.load.x + "×" : "—"} level=${MT.level === "ok" ? "" : MT.level} on=${openMachine} title=${"Open the Machine section: load ÷ cores, memory, swap, disk" + (M.worst ? ". Shows the worst level across hosts: " + MT.host : "")}
+        detail=${html`${M.worst && html`<b class="mhost-name">${MT.host}</b> · `}<span class=${MT.worse === "mem" && MT.mem.level !== "ok" ? MT.mem.level : ""}>mem ${MT.mem.pct ?? "?"}%</span> · <span class=${MT.worse === "swap" && MT.swap.level !== "ok" ? MT.swap.level : ""}>${MT.swap.total_kb ? "swap " + MT.swap.pct + "%" : "no swap"}</span>${M.worst && MT.disk && MT.disk.level !== "ok" && html` · <span class=${MT.disk.level}>disk ${MT.disk.free_pct}% free</span>`}`} />`}
       <${Tile} label="Updated" value=${lastOk ? hhmmss(lastOk) : "—"} level=${err ? "crit" : data.header && H.tick_slow ? "warn" : ""} title=${"Last successful board refresh" + (data.header && H.tick_slow && H.tick_slowest ? "; the loop's slowest steps: " + H.tick_slowest : "")}
         detail=${html`<span class=${err ? "stale-dot" : "live-dot"}>${err ? "stale" : "live"}</span>${data.header && H.tick_age_s != null ? " · tick " + H.tick_age_s + "s ago" : ""}${data.header && H.tick_ms != null ? " · ticks take " + Math.round(H.tick_ms / 1000) + "s" : ""}`} />
       ${accFlags.map((a) => html`<span key=${a.agent + "/" + a.account} class="aflag" title="Missing role skills; run bin/host/install-skills.sh">⚠ ${a.label || a.account}: skills broken</span>`)}
@@ -4803,7 +4815,8 @@ function App() {
         ${rows.map((a) => { const k = a.agent + "/" + a.account; return html`<${AccountRow} key=${k} a=${a} all=${data.accounts} toast=${setToast} project=${data.project} isDefault=${!!a.default} open=${acctOpen.has(k)} onToggle=${() => toggleAcct(k)} />`; })}</div>`}</details>`; })()}
 
     ${M && html`<details class="mach-sec" id="machine" open=${machOpen} onToggle=${(e) => { const o = e.currentTarget.open; if (o !== machOpen) { setMachOpen(o); lstore.set("b:machine", o); } }}>
-      <summary>Machine<small><span class=${M.load.level}>load ${M.load.x != null ? M.load.x + "× cores" : "?"}</span> · <span class=${M.mem.level}>mem ${M.mem.pct ?? "?"}%</span> · ${M.swap.total_kb ? html`<span class=${M.swap.level}>swap ${M.swap.pct}%${M.swap.level === "crit" ? " ✖" : M.swap.level === "warn" ? " ⚠" : ""}</span>` : "no swap"}${M.disk && html` · <span class=${M.disk.level}>disk ${M.disk.free_pct}% free</span>`}</small><span class="asof" style=${M.stale ? { color: "var(--amber)" } : {}} title=${M.stale ? "older than 3 × the sampling cadence" : ""}>${asOf(data.as_of && data.as_of.machine)}</span></summary>
+      <summary>Machine<small>${M.worst && html`${MT.host} · `}${hostFigures(MT)}</small><span class="asof" style=${M.stale ? { color: "var(--amber)" } : {}} title=${M.stale ? "older than 3 × the sampling cadence" : ""}>${asOf(data.as_of && data.as_of.machine)}</span></summary>
+      ${M.sides && html`<${HostLine} name="main" sub=${M.host} S=${M} />`}
       <div class="tiles mach-tiles">
         <${Tile} label="Load" value=${M.load.x != null ? M.load.x + "×" : "—"} level=${M.load.level} bar=${M.load.pct} title="load ÷ cores" detail=${[M.load.load1, M.load.load5, M.load.load15].map((v) => (v == null ? "?" : v.toFixed(1))).join(" / ") + " on " + (M.cores ?? "?")} />
         <${Tile} label="Memory" value=${(M.mem.pct ?? "?") + "%"} level=${M.mem.level} bar=${M.mem.pct} title="memory in use" detail=${"of " + kbText(M.mem.total_kb) + " · " + kbText(M.mem.avail_kb) + " free"} />
@@ -4814,6 +4827,11 @@ function App() {
       </div>
       ${M.card && html`<${ResourceCard} M=${M} project=${data.project} />`}
       ${(M.total || M.breakdown) && html`<${MachineTop} M=${M} lstore=${lstore} showProject=${!data.project} />`}
+      ${(M.sides || []).map((S) => html`<div class="mhost" key=${S.host}>
+        <${HostLine} name=${S.host} S=${S} />
+        ${S.card && html`<${ResourceCard} M=${S} project=${data.project} />`}
+        ${(S.total || S.breakdown) && html`<${MachineTop} M=${S} lstore=${lstore} showProject=${!data.project} sortKey=${"b:machine-sort:" + S.host} />`}
+      </div>`)}
     </details>`}
 
     <${Briefs} list=${data.briefings || []} schedule=${data.briefing_schedule} project=${data.project || (data.squads[0] && data.squads[0].label) || ""} />

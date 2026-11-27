@@ -58,7 +58,7 @@ import { focusSquad, focusValue, NO_FOCUS } from "../loop/squad/focus.ts";
 import { flowLine, flowOf, type FlowEvent, type FlowPick, type FlowReview, type FlowUnit } from "./flow.ts";
 import { retestDue, openPrUnits, type Retest } from "../loop/squad/retest.ts";
 import { settle, type Finish } from "../loop/squad/squad-finish.ts";
-import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst } from "../loop/capacity/machine-level.ts";
+import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst, worstHost } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
 import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
 import { feedbackOn, feedbackRepo } from "../loop/feedback/post.ts";
@@ -466,11 +466,11 @@ function debriefOnDb(db: Db, label: string): boolean {
   }
   return true;
 }
-function dsLimit(db: Db, label: string, key: string): number | null {
+function dsLimit(db: Db, label: string, key: string, host = SELF): number | null {
   const ev = process.env[LIMIT_ENV[key] ?? "DS_LIMIT_" + key.toUpperCase()];
-  if (ev && /^[0-9]+$/.test(ev)) return Number(ev);
-  if (isHostKey(key)) {   // U25, KTD16: a machine key is this host's (its override, else the default), never the project's
-    const v = db.memo(`host-limit:${key}`, () => hostLine(db.s.db, SELF, key).value?.split(/\s+/)[0] ?? "");
+  if (ev && /^[0-9]+$/.test(ev) && (host === SELF || !isHostKey(key))) return Number(ev);   // main's env says nothing about a side host's keys
+  if (isHostKey(key)) {   // U25, KTD16: a machine key is `host`'s (its override, else the default), never the project's
+    const v = db.memo(`host-limit:${host}\0${key}`, () => hostLine(db.s.db, host, key).value?.split(/\s+/)[0] ?? "");
     return /^[0-9]+$/.test(v) ? Number(v) : null;
   }
   for (const p of [label, ""]) {
@@ -1283,11 +1283,37 @@ function accountsSummary(db: Db | null, label: string, accts: any[], now = NOW()
 // Levels come from bin/loop/capacity/machine-level.ts, the same function the Builder host brake reads, from the
 // machine_*_warn/crit limits; a missing key means no coloring. The board may run before the loop applied
 // the migration: no table or no row = no field (null).
+// side-loop-host U26: the top-level fields are main's own. With accepted side hosts it adds `sides` (one per
+// side host, in name order, from that host's own rows) and `worst` (the host the tile names); without any,
+// neither field exists. A row is a side host's when its host is one main ever accepted; main's rows carry
+// its machine name (observed_machine, observed_host_procs) or `local` (observed_procs).
+const NOT_SIDE = "host NOT IN (SELECT name FROM hosts WHERE accepted_at IS NOT NULL)";
+const hasHosts = (db: Db) => db.memo("tbl_hosts", () => !!db.one("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'hosts'"));
+// The latest row of a host-keyed table for one side host, or (side = null) for main.
+const hostRow = (db: Db, table: "observed_machine" | "observed_host_procs", side: string | null) =>
+  side != null ? db.one(`SELECT * FROM ${table} WHERE host = ?`, side)
+    : db.one(`SELECT * FROM ${table}${hasHosts(db) ? ` WHERE ${NOT_SIDE}` : ""} ORDER BY observed_at DESC LIMIT 1`);
 function machineSummary(db: Db | null, label: string, worktrees: number | null, terminals: number | null, squads: any[] = [], now = NOW()) {
   if (!db || !db.memo("machine_table", () => !!db.one("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'observed_machine'"))) return null;
-  const r = db.one("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1");
+  const r = hostRow(db, "observed_machine", null);
   if (!r) return null;
-  const line = (k: string) => dsLimit(db, label, k), level = levelOf(line);
+  const main = { ...hostSample(db, label, r, squads, null, now), worktrees, terminals };
+  const names = hasHosts(db) ? db.all("SELECT name FROM hosts WHERE status = 'accepted' ORDER BY name").map((h) => String(h.name)) : [];
+  if (!names.length) return main;
+  const sides = names.map((name) => sideSample(db, label, name, squads, now));
+  const w: any = worstHost<{ level?: string; stale?: boolean }>(main, sides);
+  const { level, load, mem, swap, disk, worse } = w;
+  return { ...main, sides, worst: { host: w === main ? "main" : String(w.host), level, load, mem, swap, disk, worse } };
+}
+// A side host's section: its numbers only while its sample is fresh; else its age (null = no sample yet).
+function sideSample(db: Db, label: string, name: string, squads: any[], now: number) {
+  const r = hostRow(db, "observed_machine", name);
+  const at = r ? numOrNull(r.observed_at) : null;
+  if (at == null || machineStale(at, now)) return { host: name, stale: true as const, observed_at: at, age_s: at == null ? null : Math.max(0, now - at) };
+  return { ...hostSample(db, label, r!, squads, name, now), age_s: Math.max(0, now - at) };
+}
+function hostSample(db: Db, label: string, r: Record<string, any>, squads: any[], side: string | null, now: number) {
+  const line = (k: string) => dsLimit(db, label, k, side ?? SELF), level = levelOf(line);
   const rd = (x: number | null, d = 0) => (x == null ? null : Math.round(x * 10 ** d) / 10 ** d);
   const { cores, load1, loadPct, memTotal, memAvail, memPct, swapTotal, swapPct, psi, lv } = machineLevels(r, line);
   const n = (x: any) => (x == null ? null : Number(x));
@@ -1313,8 +1339,8 @@ function machineSummary(db: Db | null, label: string, worktrees: number | null, 
     disks,
     psi: { cpu: psi[0].avg10, mem: psi[1].avg10, io: psi[2].avg10, note: hot && { kind: hot.kind, avg10: hot.avg10, level: hot.level } },
     worse: worseOne, level: worst(lv.load, lv.mem, lv.swap, disk?.level ?? "ok"),
-    worktrees, terminals, groups,
-    ...machineView(db, label, squads, memTotal != null && memAvail != null ? memTotal - memAvail : null, memTotal, cores),
+    groups,
+    ...machineView(db, label, squads, memTotal != null && memAvail != null ? memTotal - memAvail : null, memTotal, cores, side, numOrNull(r.cpu_busy_pct)),
   };
 }
 
@@ -1331,7 +1357,7 @@ type ProcRow = Resources & { project: string; wt: string };
 type HostGroup = { label: string; procs: number; rss_kb: number; mem_kb: number | null; cpu_pct: number | null };
 const addCpu = (a: number | null, b: number | null) => (a == null && b == null ? null : (a ?? 0) + (b ?? 0));
 const numOrNull = (v: unknown) => (v == null ? null : Number(v));
-function procRows(db: Db | null, label: string) {
+function procRows(db: Db | null, label: string, host?: string) {
   const has = (t: string) => !!db && db.memo("tbl_" + t, () => !!db.one("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?", t));
   const rows: ProcRow[] = [];
   const mine = new Map<string, Resources>();
@@ -1339,7 +1365,8 @@ function procRows(db: Db | null, label: string) {
   const u4 = db.memo("procs_mem_kb", () => db.s.columns("observed_procs").has("mem_kb"));  // an older loop.db: RSS only
   const u9 = db.memo("procs_cpu_cg", () => db.s.columns("observed_procs").has("cpu_cg_pct"));  // an older loop.db: sampled CPU only
   // CPU is the leaf cgroups' figure (U9) when the scan had one, else the sampled process ticks.
-  for (const r of db.all(`SELECT project, wt, procs, rss_kb, cpu_pct, observed_at${u9 ? ", cpu_cg_pct" : ""}${u4 ? ", mem_kb, psi_cpu, psi_mem" : ""} FROM observed_procs`)) {
+  const byHost = host != null && db.memo("procs_host", () => db.s.columns("observed_procs").has("host"));  // an older loop.db: main only
+  for (const r of db.all(`SELECT project, wt, procs, rss_kb, cpu_pct, observed_at${u9 ? ", cpu_cg_pct" : ""}${u4 ? ", mem_kb, psi_cpu, psi_mem" : ""} FROM observed_procs${byHost ? " WHERE host = ?" : ""}`, ...(byHost ? [host] : []))) {
     const e: Resources = { rss_kb: Number(r.rss_kb) || 0, mem_kb: numOrNull(r.mem_kb), cpu_pct: numOrNull(r.cpu_cg_pct) ?? numOrNull(r.cpu_pct), procs: Number(r.procs) || 0,
       psi_cpu: numOrNull(r.psi_cpu), psi_mem: numOrNull(r.psi_mem), at: numOrNull(r.observed_at) };
     rows.push({ project: String(r.project), wt: String(r.wt), ...e });
@@ -1353,28 +1380,28 @@ function decorateResources(db: Db | null, label: string, squads: any[]) {
   for (const s of squads) for (const m of arr(s.members)) m.resources = (m.wt && mine.get(String(m.wt))) || null;
 }
 // Host groups (the processes no worktree owns), named `label ?? comm`; without observed_host_procs there are none.
-function hostGroups(db: Db): HostGroup[] | null {
+function hostGroups(db: Db, side: string | null): HostGroup[] | null {
   if (!db.memo("tbl_observed_host_procs", () => !!db.one("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'observed_host_procs'"))) return null;
-  const h = db.one("SELECT groups FROM observed_host_procs ORDER BY observed_at DESC LIMIT 1");
+  const h = hostRow(db, "observed_host_procs", side);
   if (!h) return null;
   try {
     return arr(JSON.parse(String(h.groups ?? "[]"))).map((g: any) => ({ label: String(g.label ?? g.comm), procs: Number(g.procs) || 0, rss_kb: Number(g.rss_kb) || 0, mem_kb: numOrNull(g.mem_kb), cpu_pct: numOrNull(g.cpu_cg_pct) ?? numOrNull(g.cpu_pct) }));
   } catch { return null; }
 }
-// The loop's own load (U5, R13/KTD12): the latest host row's loop columns, the same on every board and never in a
+// The loop's own load (U5, R13/KTD12): the host's latest row's loop columns, the same on every board and never in a
 // project's share. null on an older loop.db (no columns) or when every column is NULL.
-function loopLoad(db: Db) {
+function loopLoad(db: Db, side: string | null) {
   if (!db.memo("tbl_observed_host_procs", () => !!db.one("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'observed_host_procs'"))) return null;
   if (!db.memo("host_procs_loop", () => db.s.columns("observed_host_procs").has("loop_source"))) return null;
-  const h = db.one("SELECT loop_cpu_pct, loop_mem_kb, loop_cache_kb, loop_source FROM observed_host_procs ORDER BY observed_at DESC LIMIT 1");
+  const h = hostRow(db, "observed_host_procs", side);
   if (!h || (h.loop_cpu_pct == null && h.loop_mem_kb == null && h.loop_cache_kb == null)) return null;
   return { cpu_cores: h.loop_cpu_pct == null ? null : Math.round(Number(h.loop_cpu_pct)) / 100, mem_kb: numOrNull(h.loop_mem_kb),
     cache_kb: numOrNull(h.loop_cache_kb), source: h.loop_source == null ? null : String(h.loop_source) };
 }
 const baseName = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
-function machineView(db: Db, label: string, squads: any[], usedKb: number | null, totalKb: number | null, cores: number | null) {
-  const { rows, mine, studio } = procRows(db, label);
-  const host = hostGroups(db);
+function machineView(db: Db, label: string, squads: any[], usedKb: number | null, totalKb: number | null, cores: number | null, side: string | null, measured: number | null) {
+  const { rows, mine, studio } = procRows(db, label, side ?? "local");
+  const host = hostGroups(db, side);
   const charged = rows.length + (host?.length ?? 0) > 0 && rows.every((r) => r.mem_kb != null) && (host ?? []).every((g) => g.mem_kb != null);
   const ram = (x: { rss_kb: number; mem_kb: number | null }) => (charged ? x.mem_kb! : x.rss_kb);
   const wtName = (project: string, wt: string) => {
@@ -1410,10 +1437,8 @@ function machineView(db: Db, label: string, squads: any[], usedKb: number | null
   type Sum = { ram_kb: number; rss_kb: number; cpu_pct: number | null };
   const sum = (xs: { rss_kb: number; mem_kb: number | null; cpu_pct: number | null }[]) =>
     xs.reduce((a: Sum, x) => ({ ram_kb: a.ram_kb + ram(x), rss_kb: a.rss_kb + x.rss_kb, cpu_pct: addCpu(a.cpu_pct, x.cpu_pct) }), { ram_kb: 0, rss_kb: 0, cpu_pct: null });
-  // Machine CPU in use is the whole machine's busy CPU from /proc/stat (observed_machine.cpu_busy_pct, 100 = one core),
-  // never the process sum, which misses short-lived processes and small host groups (U6). NULL renders "—".
-  let measured: number | null = null;
-  try { measured = numOrNull(db.one("SELECT cpu_busy_pct FROM observed_machine ORDER BY observed_at DESC LIMIT 1")?.cpu_busy_pct); } catch { /* a loop.db from before migration 0036 */ }
+  // `measured`, the machine CPU in use, is the whole machine's busy CPU from /proc/stat (observed_machine.cpu_busy_pct,
+  // 100 = one core), never the process sum, which misses short-lived processes and small host groups (U6). NULL renders "—".
   const share = (kb: number) => (usedKb ? Math.round(kb / usedKb * 1000) / 10 : null);
   // A project's pressure stall (KTD11): its worst worktree per resource, never summed; the name goes in the tooltip.
   const worst = (xs: ProcRow[], k: "psi_cpu" | "psi_mem") => xs.reduce((w: ProcRow | null, r) => (r[k] != null && (w === null || r[k]! > w[k]!) ? r : w), null);
@@ -1450,7 +1475,7 @@ function machineView(db: Db, label: string, squads: any[], usedKb: number | null
     kernel_kb: kernel,
   };
   // Outside block: one other project's worktree or one host group at or past a threshold.
-  const ramT = dsLimit(db, label, "machine_outside_ram_pct"), cpuT = dsLimit(db, label, "machine_outside_cpu_pct");
+  const ramT = dsLimit(db, label, "machine_outside_ram_pct", side ?? SELF), cpuT = dsLimit(db, label, "machine_outside_cpu_pct", side ?? SELF);
   const outside: { label: string; ram_kb: number; rss_kb: number; cpu_pct: number | null; ram_pct: number | null; ram_hit: boolean; cpu_hit: boolean }[] = [];
   const consider = (lbl: string, x: { rss_kb: number; mem_kb: number | null; cpu_pct: number | null }) => {
     const ram_kb = ram(x), ram_pct = totalKb ? ram_kb / totalKb * 100 : null;
@@ -1471,7 +1496,7 @@ function machineView(db: Db, label: string, squads: any[], usedKb: number | null
   // all-projects view), everything else in use (hover: other projects, host, kernel & cache) and free. CPU is in
   // cores, RAM in kB. Segments + other = in use, in use <= cap; a missing figure is null (page: "—", empty bar).
   const r1 = (v: number) => Math.round(v * 100) / 100;
-  const loop = loopLoad(db);
+  const loop = loopLoad(db, side);
   const segsOf = (cpu: boolean) => (label ? [{ project: label, v: cpu ? (total as any).cpu_cores : (total as any).ram_kb }]
     : ((total as any).projects ?? []).map((p: any) => ({ project: p.project, v: cpu ? p.cpu_cores : p.ram_kb })))
     .filter((x: { v: number | null }) => x.v != null) as { project: string; v: number }[];
