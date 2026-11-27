@@ -36,8 +36,8 @@ const SKILLS = {
   ],
 };
 
-async function start() {
-  const board = { ...JSON.parse(readFileSync(join(ROOT, "tests/fixtures/board-empty.json"), "utf8")), project: "p", page_version: "v1" };
+async function start(extra: any = {}) {
+  const board = { ...JSON.parse(readFileSync(join(ROOT, "tests/fixtures/board-empty.json"), "utf8")), project: "p", page_version: "v1", ...extra };
   const r = await mount(board, false, { "api/limits": { limits: LIMITS, groups: GROUPS }, "api/roles": ROLES, "api/skills": SKILLS });
   const w = r.window, doc = w.document;
   const posts: { url: string; body: any }[] = [];
@@ -77,7 +77,9 @@ async function start() {
   const groups = () => texts(doc, "#settings .rt-grp");
   const status = () => doc.querySelector('#settings [role="status"]').textContent;
   const toggleRole = (name: string) => click(blocks().map((b) => b.querySelector(".role-name")).find((b: any) => b.textContent === name));
-  return { r, w, doc, posts, click, cats, box, type, setValue, esc, fold, view, opens, stored, tab, blocks, roleView, groups, status, toggleRole };
+  // Esc where focus sits after a click outside the box.
+  const escOn = async (el: any) => { el.focus(); el.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await tick(); await toggles(); };
+  return { r, w, doc, posts, escOn, click, cats, box, type, setValue, esc, fold, view, opens, stored, tab, blocks, roleView, groups, status, toggleRole };
 }
 
 test("typing opens only matching groups and rows; Esc restores the folds and keeps the window", async () => {
@@ -113,6 +115,65 @@ test("an empty box passes Esc on to the window, which closes", async () => {
   try {
     await p.esc();
     expect(p.doc.getElementById("settings")).toBeNull();
+  } finally { await p.w.happyDOM.close(); }
+});
+
+test("Esc clears after a group line took focus; the next Esc closes the window", async () => {
+  const p = await start();
+  try {
+    await p.fold(p.cats()[1], true);
+    await p.setValue(p.cats()[1].querySelectorAll("input")[1], "5");
+    const before = p.opens();
+    await p.type("compact");
+    await p.fold(p.cats()[0], false);
+    const line = p.cats()[0].querySelector("summary");
+    await p.escOn(line);
+    expect(p.doc.getElementById("settings")).not.toBeNull();
+    expect(p.box().value).toBe("");
+    expect(p.doc.activeElement).toBe(p.box());
+    expect(p.opens()).toEqual(before);
+    expect(p.cats()[1].querySelectorAll("input")[1].value).toBe("5");
+    await p.escOn(p.doc.body);
+    expect(p.doc.getElementById("settings")).toBeNull();
+    expect(p.r.errors).toEqual([]);
+  } finally { await p.w.happyDOM.close(); }
+});
+
+test("Esc clears after a role name took focus on Skills", async () => {
+  const p = await start();
+  try {
+    await p.tab("Skills");
+    const pick = p.doc.querySelector('#settings .role-block .role-name') as any;
+    await p.click(pick);
+    const level = () => p.doc.querySelector('#settings select[aria-label="commit level"]') as any;
+    level().value = "off"; level().dispatchEvent(new p.w.Event("change", { bubbles: true })); await tick();
+    const folds = () => p.roleView().map((v) => v.open);
+    const before = folds();
+    await p.type("ce-plan");
+    await p.toggleRole("lead");
+    await p.escOn(p.blocks()[0].querySelector(".role-name"));
+    expect(p.doc.getElementById("settings")).not.toBeNull();
+    expect(p.box().value).toBe("");
+    expect(p.doc.activeElement).toBe(p.box());
+    expect(folds()).toEqual(before);
+    expect(level().value).toBe("off");
+    await p.escOn(p.doc.body);
+    expect(p.doc.getElementById("settings")).toBeNull();
+    expect(p.r.errors).toEqual([]);
+  } finally { await p.w.happyDOM.close(); }
+});
+
+test("with the Add account dialog open, Esc closes it and keeps the search text", async () => {
+  const p = await start({ account_kinds: [{ agent: "claude", label: "Claude" }] });
+  try {
+    await p.type("compact");
+    await p.tab("Accounts");
+    await p.click(p.doc.querySelector("#settings button.acct-add"));
+    expect(p.doc.querySelector("#settings .acct-dlg")).not.toBeNull();
+    await p.escOn(p.doc.body);
+    expect(p.doc.querySelector("#settings .acct-dlg")).toBeNull();
+    expect(p.doc.getElementById("settings")).not.toBeNull();
+    expect(p.box().value).toBe("compact");
   } finally { await p.w.happyDOM.close(); }
 });
 
