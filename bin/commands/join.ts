@@ -8,6 +8,9 @@
 //      install as `ds up` does, minus Studio and project (`install-ts`, the side unit ds-side-loop.service);
 //   3. make the host's key pair (the private key stays in <root>/link/host.key, 0600), send the join
 //      request, print the fingerprint and wait until the operator accepts it (`ds host accept` on main);
+//      main's answer names main's own public key, which is pinned in <root>/link/main.pub (U12b): from then on
+//      the side loop refuses a main that cannot sign with it. A pin for this same main that differs from what
+//      main now sends is refused unless --new-main-key (main's key really changed);
 //   4. install the role skills for this host's own logins (bin/host/install-skills.sh; a failure is said and
 //      the join goes on: the side loop tries again, and main shows a card while a login lacks them);
 //   5. start a probe tmux (or herdr) server as a unit of its own, to see this host can run one (each
@@ -22,7 +25,7 @@ import { join } from "node:path";
 import { ROOT, run as sh, stateRoot, writeErr, writeOut } from "../lib/shared";
 import { ensureLoop, installHost, installRoleSkills } from "../lib/host-setup.ts";
 import { DialRefused, dialUrl, LinkClient, linkUrl, sendJoin } from "../link/client.ts";
-import { ensureHostKey, linkListenHint, nameProblem, PENDING_TTL_S } from "../link/host-keys.ts";
+import { ensureHostKey, fingerprint, linkListenHint, nameProblem, PENDING_TTL_S, pinMainKey, readMainPin } from "../link/host-keys.ts";
 import { readSideConfig, writeSideConfig } from "../lib/loop-unit.ts";
 import { readSideStatus } from "../link/side.ts";
 import { herdrBin } from "../backend/herdr-bin.ts";
@@ -33,13 +36,13 @@ import { DEFAULT_LINK_PORT } from "../loop/fulfil/link.ts";
 import { dbPath, openReadOnly } from "../loop/core/store.ts";
 import { whoAmI } from "../loop/core/whoami.ts";
 
-export const help = "<main-url> [--name <host-name>] [--repo <git-url>]... — make this host a side host of a main loop: check, install, ask main to accept it, start the side loop";
+export const help = "<main-url> [--name <host-name>] [--repo <git-url>]... [--new-main-key] — make this host a side host of a main loop: check, install, ask main to accept it, start the side loop";
 
 const say = (line: string) => writeOut(`join: ${line}\n`);
 const complain = (line: string) => writeErr(`join: ${line}\n`);
 const num = (name: string, dflt: number) => Number(process.env[name]) || dflt;
 
-type Args = { main: string; name: string; repos: string[] };
+type Args = { main: string; name: string; repos: string[]; newMainKey: boolean };
 
 /** This machine's short name as a host name (nameProblem's rule). */
 function defaultName(): string {
@@ -49,11 +52,12 @@ function defaultName(): string {
 
 function parseArgs(argv: string[]): Args | number {
   const usage = (why: string) => { complain(why); writeErr(`usage: ds join ${help}\n`); return 2; };
-  let main = "", name = "";
+  let main = "", name = "", newMainKey = false;
   const repos: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--help" || a === "-h") { writeOut(`usage: ds join ${help}\n`); return 0; }
+    if (a === "--new-main-key") { newMainKey = true; continue; }
     if (a === "--name" || a === "--repo") {
       const v = argv[++i];
       if (!v) return usage(`${a} needs a value`);
@@ -68,7 +72,7 @@ function parseArgs(argv: string[]): Args | number {
   try { linkUrl(main); } catch { return usage(`'${main}' is not a url`); }
   const chosen = name || readSideConfig(stateRoot())?.name || defaultName(), bad = nameProblem(chosen);
   if (bad) return usage(`${bad}${name ? "" : ` (this machine is '${hostname()}': give --name)`}`);
-  return { main, name: chosen, repos };
+  return { main, name: chosen, repos, newMainKey };
 }
 
 /** Why this state root cannot become a side root: it holds a main's projects or side hosts. */
@@ -156,6 +160,21 @@ async function waitAccepted(root: string, a: Args): Promise<boolean> {
   }
 }
 
+/** Pin the main key a join answer names (U12b). Exit code on a refusal, else null. */
+function pinMain(root: string, a: Args, prevMain: string | null, key: string | null): number | null {
+  if (!key) { complain(`${a.main} sent no main key to pin: it runs a dev-studio older than this host's. Update main (\`ds update\` there), then run ds join again`); return 1; }
+  const old = readMainPin(root), changed = !!old && old !== key;
+  if (changed && prevMain === a.main && !a.newMainKey) {
+    complain(`${a.main} answers with main key ${fingerprint(key)}, not the pinned ${fingerprint(old!)}: if main's key really changed (\`ds host key\` on main prints it), run ds join again with --new-main-key; else this is not main`);
+    return 1;
+  }
+  const r = pinMainKey(root, key);
+  if (!r.ok) { complain(`${a.main}: ${r.why}`); return 1; }
+  say(`main's key fingerprint ${r.fingerprint}, pinned in ${r.file}${changed ? ` (was ${fingerprint(old!)})` : ""}`);
+  say("on main, `ds host accept` and `ds host key` print main's fingerprint: if it differs, this is not main, stop here");
+  return null;
+}
+
 /** Start a throwaway backend server the way the side loop starts a project's, see it answer, stop it. */
 async function probeBackend(root: string): Promise<string> {
   const probe = `join-probe-${process.pid}`;
@@ -198,6 +217,7 @@ export async function run(argv: string[]): Promise<number> {
   const root = stateRoot();
   // The install's unit and cron line run this checkout's own state root.
   if (root !== join(ROOT, "state")) { complain(`refused — DS_STATE_ROOT is ${root}; a side host's state root is ${join(ROOT, "state")} (unset DS_STATE_ROOT)`); return 2; }
+  const prevMain = readSideConfig(root)?.main ?? null;
   const isMain = mainHostProblem(root);
   if (isMain) { complain(`refused — ${isMain}. A side host is another machine with a fresh clone.`); return 2; }
 
@@ -235,6 +255,8 @@ export async function run(argv: string[]): Promise<number> {
     return 1;
   }
   if (!asked.ok && !/is already accepted/.test(asked.why)) { complain(`main refused the join request: ${asked.why}`); return 1; }
+  const pinRc = pinMain(root, a, prevMain, asked.mainKey);
+  if (pinRc !== null) return pinRc;
   if (asked.ok) {
     say(`asked ${a.main} to accept this host as '${a.name}'`);
     say(`fingerprint ${key.fingerprint}`);

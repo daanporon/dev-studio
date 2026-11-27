@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { open, type Store } from "../../bin/loop/core/store.ts";
-import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureHostKey, requestJoin, pinMainKey } from "../../bin/link/host-keys.ts";
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { MAX_FILE_BYTES, mirrorable, MirrorSync, type MirrorList } from "../../bin/link/mirror.ts";
@@ -61,6 +61,7 @@ async function linked() {
   put(root, "alpha/squads/sq-plan.approved.md", "approved\n");
   put(root, "alpha/notes/builder.md", "a tip\n");
   put(root, "alpha/notes/reviews/r1.md", "a review\n");
+  pinMainKey(side, srv.mainKey.publicKey);
   const client = new LinkClient({ main: `ws://127.0.0.1:${srv.port}`, root: side, name: "side-a" });
   clients.push(client);
   await client.start();

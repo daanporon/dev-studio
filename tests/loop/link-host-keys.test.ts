@@ -2,15 +2,17 @@
 // makes a `pending` host within the caps (valid name, at most 3 pending, 15-minute expiry, size cap);
 // `ds host accept|reject|remove|list` work on main; a signature over main's challenge verifies only for an
 // accepted host's key, and a replayed or wrong signature fails; no private key ever reaches loop.db or events.
+// U12b: main's own key (made once, 0600), its signature over the side's nonce, and the side's pin.
 import { afterEach, describe, expect, test } from "bun:test";
 import { createPrivateKey } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import {
   accept, Challenges, ensureHostKey, expirePending, fingerprint, JOIN_MAX_BYTES, listHosts, MAX_PENDING, nameProblem,
   newKeyPair, parseJoinFrame, PENDING_TTL_S, reject, remove, requestJoin, signHello, verifyHello, verifySignature,
+  ensureMainKey, mainFingerprint, mainPinPath, pinMainKey, readMainPin, signMain, verifyMain,
 } from "../../bin/link/host-keys.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -141,6 +143,9 @@ describe("accept, reject, remove", () => {
     r = ds(root, "accept", "side-1", "--seats", "4");
     expect(r.code).toBe(0);
     expect(r.out).toContain("accepted with 4 seats");
+    expect(r.out).toContain(`main's key fingerprint ${ensureMainKey(root).fingerprint}`);   // U12b
+    expect(ds(root, "key").out).toContain(`main's key fingerprint ${ensureMainKey(root).fingerprint}`);
+    expect(ds(root, "key", "extra").code).toBe(2);
     expect(ds(root, "accept", "side-1").code).toBe(1);
     expect(ds(root, "reject", "side-2").code).toBe(0);
     r = ds(root, "list", "--json");
@@ -152,6 +157,42 @@ describe("accept, reject, remove", () => {
     expect(ds(root, "remove").code).toBe(2);
     expect(ds(root, "reject", "side-2", "--seats", "1").code).toBe(2);
     expect(ds(root).code).toBe(2);
+  });
+});
+
+describe("main's key (U12b)", () => {
+  test("main's key is made once, 0600, and the board can read its fingerprint without making one", () => {
+    const root = temp();
+    expect(mainFingerprint(root)).toBeNull();
+    const a = ensureMainKey(root), b = ensureMainKey(root);
+    expect(b).toEqual(a);
+    expect(statSync(a.file).mode & 0o777).toBe(0o600);
+    expect(mainFingerprint(root)).toBe(a.fingerprint);
+  });
+
+  test("main's signature binds the side's nonce, main's challenge, the version and the host name", () => {
+    const k = newKeyPair(), side = Buffer.alloc(32, 1), ch = Buffer.alloc(32, 2);
+    const sig = signMain(k.privateKey, side, ch, "1", "box");
+    expect(verifyMain(k.publicKey, side, ch, "1", "box", sig)).toBe(true);
+    expect(verifyMain(k.publicKey, Buffer.alloc(32, 3), ch, "1", "box", sig)).toBe(false);
+    expect(verifyMain(k.publicKey, side, Buffer.alloc(32, 3), "1", "box", sig)).toBe(false);
+    expect(verifyMain(k.publicKey, side, ch, "2", "box", sig)).toBe(false);
+    expect(verifyMain(k.publicKey, side, ch, "1", "other", sig)).toBe(false);
+    expect(verifyMain(newKeyPair().publicKey, side, ch, "1", "box", sig)).toBe(false);
+    // A side's hello signature is not main's: the tags differ.
+    expect(verifyMain(k.publicKey, side, ch, "1", "box", signHello(k.privateKey, Buffer.concat([side, ch]), "1", "box"))).toBe(false);
+  });
+
+  test("the side pins main's public key; a non-key is refused and an unreadable pin reads as none", () => {
+    const root = temp(), k = newKeyPair();
+    expect(readMainPin(root)).toBeNull();
+    expect(pinMainKey(root, "not a key").ok).toBe(false);
+    const r = pinMainKey(root, k.publicKey);
+    expect(r).toEqual({ ok: true, fingerprint: fingerprint(k.publicKey), file: mainPinPath(root) });
+    expect(readMainPin(root)).toBe(k.publicKey);
+    expect(readdirSync(join(root, "link"))).toEqual(["main.pub"]);
+    writeFileSync(mainPinPath(root), "garbage");
+    expect(readMainPin(root)).toBeNull();
   });
 });
 

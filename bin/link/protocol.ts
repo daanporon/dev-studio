@@ -1,8 +1,9 @@
 // protocol.ts — side-loop-host U2 (issue #127, KTD1): the link's frames and the request matcher both ends use.
 // One WebSocket carries JSON text frames in both directions:
 //   before the hello  side → main  {t:"join", name, public_key}         an unauthenticated join request (U1 caps)
-//                     main → side  {t:"joined", ok, fingerprint?, why?}  then main closes
-//                     side → main  {t:"hello", name}                     main answers {t:"challenge", nonce}
+//                     main → side  {t:"joined", ok, fingerprint?, why?, main_key}  then main closes (main_key: U12b)
+//                     side → main  {t:"hello", name, nonce}              main answers {t:"challenge", nonce,
+//                                  link_version, main_signature}: main's own key signs the side's nonce (U12b)
 //                     side → main  {t:"auth", signature, link_version, up_migration, code_rev, fenced_at?}
 //                     main → side  {t:"welcome", host} | {t:"refused", why} (then main closes)
 //   after the hello   both ways    {t:"ping", at} / {t:"pong", at}        every PING_MS; DEAD_MS of silence = down

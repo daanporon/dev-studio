@@ -5,15 +5,19 @@
 // after DEAD_MS without hearing main, the same half minute main uses, so both ends notice a loss together. With
 // `reconnect` it dials again after a loss with a growing pause (1 s up to 30 s); a refusal (not accepted, removed,
 // a second link, a wrong version) is kept in `refusal` and also retried, since the operator may accept the host
-// later. `sendJoin` is the one-shot join request (U12's `ds join` calls it). Main proves nothing to the side and
-// the link adds no encryption (KTD4), so every dial goes through `dialUrl`: plain ws only to loopback or a
-// tailnet address (DS_LINK_ANY_MAIN=1 lifts that, as DS_LINK_BIND_ANY does for the server's binds).
+// later. `sendJoin` is the one-shot join request (U12's `ds join` calls it); its answer names main's public key,
+// which `ds join` pins (`<root>/link/main.pub`). U12b: each hello carries a fresh nonce, and the side signs main's
+// challenge only after main's signature over that nonce checks out against the pin; a main that cannot sign with
+// it, or a side with no pin, is refused, and a welcome before that proof closes the link. The link adds no
+// encryption (KTD4), so every dial also goes through `dialUrl`: plain ws only to loopback or a tailnet address
+// (DS_LINK_ANY_MAIN=1 lifts that, as DS_LINK_BIND_ANY does for the server's binds).
+import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import { ROOT } from "../loop/core/store.ts";
 import { hostKeys } from "../lib/host-settings.ts";
 import { limitEnv } from "../loop/settings/limits.ts";
-import { ensureHostKey, hostKeyPath, signHello } from "./host-keys.ts";
+import { CHALLENGE_BYTES, ensureHostKey, fingerprint, hostKeyPath, readMainPin, signHello, verifyMain } from "./host-keys.ts";
 import { UP_MIGRATION } from "./replica.ts";
 import { deadMs, frameLog, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
 
@@ -72,8 +76,12 @@ export function codeRev(): string {
   } catch { return ""; }
 }
 
-/** One join request: resolves with main's answer ({ok, fingerprint} or {ok:false, why}); rejects when main is unreachable. */
-export async function sendJoin(main: string, name: string, publicKey: string, timeoutMs = 10_000): Promise<{ ok: true; fingerprint: string; created: boolean } | { ok: false; why: string }> {
+/** Main's key as a join answer names it (U12b), or null when the answer has none (a main older than U12b). */
+const answerKey = (f: Frame): string | null => typeof f.main_key === "string" && f.main_key ? f.main_key : null;
+
+/** One join request: resolves with main's answer ({ok, fingerprint} or {ok:false, why}, each with the main key it
+ *  names); rejects when main is unreachable. */
+export async function sendJoin(main: string, name: string, publicKey: string, timeoutMs = 10_000): Promise<({ ok: true; fingerprint: string; created: boolean } | { ok: false; why: string }) & { mainKey: string | null }> {
   const url = await dialUrl(main);
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
@@ -85,8 +93,8 @@ export async function sendJoin(main: string, name: string, publicKey: string, ti
       if ("bad" in f) return;
       done = true;
       clearTimeout(timer);
-      if (f.t === "joined" && f.ok) resolve({ ok: true, fingerprint: String(f.fingerprint), created: !!f.created });
-      else resolve({ ok: false, why: String(f.why ?? "main refused the join request") });
+      if (f.t === "joined" && f.ok) resolve({ ok: true, fingerprint: String(f.fingerprint), created: !!f.created, mainKey: answerKey(f) });
+      else resolve({ ok: false, why: String(f.why ?? "main refused the join request"), mainKey: f.t === "joined" ? answerKey(f) : null });
       try { ws.close(); } catch { /* gone */ }
     };
     ws.onerror = () => { if (!done) { clearTimeout(timer); reject(new Error(`link: cannot reach ${main}`)); } };
@@ -185,24 +193,41 @@ export class LinkClient {
     this.pause = Math.min(this.pause * 2, 30_000);
   }
 
+  // U12b: main's challenge must carry its signature over our nonce, made with the key `ds join` pinned. Null when
+  // it does; else why this main is refused.
+  private mainProblem(f: Frame, sideNonce: Buffer, challenge: Buffer): string | null {
+    const pin = readMainPin(this.o.root);
+    if (!pin) return `no main key is pinned on this host: run \`ds join ${this.o.main}\` again to pin main's key`;
+    if (f.main_signature === undefined) return `${this.o.main} did not sign this host's hello: update dev-studio on main, or it is not main`;
+    if (!verifyMain(pin, sideNonce, challenge, String(f.link_version ?? ""), this.o.name, f.main_signature))
+      return `${this.o.main} cannot sign with the main key pinned at join (fingerprint ${fingerprint(pin)}): refusing it as not main. If main's key changed, run \`ds join ${this.o.main} --new-main-key\``;
+    return null;
+  }
+
   private open(url: string): void {
     const ws = new WebSocket(url);
     this.ws = ws;
-    let welcomed = false;
-    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", name: this.o.name }));
+    let welcomed = false, proven = false;
+    const sideNonce = randomBytes(CHALLENGE_BYTES);
+    const notMain = (why: string) => { this.refusal = why; try { ws.close(4001, why.slice(0, 120)); } catch { /* gone */ } };
+    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", name: this.o.name, nonce: sideNonce.toString("base64") }));
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
       const f = parseFrame(typeof ev.data === "string" ? ev.data : Buffer.from(ev.data as ArrayBuffer), MAX_FRAME_BYTES);
       if ("bad" in f) { ws.close(1003, String(f.bad)); return; }
-      if (f.t === "refused") { this.refusal = String(f.why ?? "refused"); return; }
+      if (f.t === "refused") { if (!this.refusal) this.refusal = String(f.why ?? "refused"); return; }
       if (welcomed) { this.peer?.onFrame(f).then((known) => { if (!known) ws.close(1003, `unexpected frame '${f.t}'`); }); return; }
       if (f.t === "challenge") {
         const nonce = Buffer.from(String(f.nonce ?? ""), "base64");
+        const bad = proven ? "a second challenge" : this.mainProblem(f, sideNonce, nonce);
+        if (bad) { notMain(bad); return; }
+        proven = true;
         const key = readFileSync(hostKeyPath(this.o.root), "utf8");
         ws.send(JSON.stringify({ t: "auth", signature: signHello(key, nonce, LINK_VERSION, this.o.name), link_version: LINK_VERSION, up_migration: newestMigration(), code_rev: codeRev(), env: hostEnv(), ...this.fencedField() } satisfies Frame));
         return;
       }
       if (f.t === "welcome") {
+        if (!proven) { notMain(`${this.o.main} welcomed this host without proving it is main`); return; }
         welcomed = true;
         this.refusal = null;
         this.pause = 1000;

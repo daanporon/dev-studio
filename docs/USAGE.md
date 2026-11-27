@@ -257,7 +257,7 @@ A side host is a second machine that runs agents for your main host. On it, clon
 plain shell:
 
 ```sh
-bin/ds join <main-host>[:<port>] [--name <name>] [--repo <git-url>]...
+bin/ds join <main-host>[:<port>] [--name <name>] [--repo <git-url>]... [--new-main-key]
 ```
 
 - **It needs** `bun`, `git`, `jq`, `claude` (logged in), `crontab`, `tmux` or herdr, and its own git and GitHub
@@ -269,11 +269,16 @@ bin/ds join <main-host>[:<port>] [--name <name>] [--repo <git-url>]...
 - **It asks main to accept it** and prints this host's key fingerprint. On main, run `bin/ds host list`, check that
   the fingerprint matches, and run `bin/ds host accept <name>`. `join` waits for up to 15 minutes, then starts the
   side loop and prints `join: connected`. The private key stays in `state/link/host.key` (mode 0600).
+- **It pins main's key.** `join` prints `join: main's key fingerprint …, pinned in state/link/main.pub`. On main,
+  `bin/ds host accept` (and `bin/ds host key`, and the board's join card) print main's fingerprint: if it differs,
+  this is not main, so stop. From then on the side refuses any main that cannot sign with that key, even on main's
+  address. A side that joined before this check has no pin and stays off until you run `bin/ds join <main>` on it
+  again. If main's key really changed (a new main state root), `join` refuses it; run it with `--new-main-key`.
 - **The role skills** are installed for this host's Claude logins once main accepts it (log `claude` in first). A
   failed install does not stop the join; the side loop tries again, and while a login that main also knows lacks a
   skill, main shows a card naming the host. Run `bin/host/install-skills.sh` on that host to repair it.
-- **The network.** `<main-host>` is main's tailnet name or address: the link itself adds no encryption and main
-  proves nothing about itself, so a plain connection only goes to loopback or a tailnet address (an `https://` url
+- **The network.** `<main-host>` is main's tailnet name or address: the link itself adds no encryption, so a plain
+  connection only goes to loopback or a tailnet address (an `https://` url
   uses TLS).
 - **`--name`** is the name main knows this host by (default: the machine's short name). `<port>` defaults to 7790.
 
@@ -286,8 +291,8 @@ With no side host the panel and the tile show main alone, with no section headin
 
 **Hosts on the board.**
 
-- **A join request** is a Needs-you card with the host's name and key fingerprint. Check it matches what `ds join`
-  printed on that host, then press **Accept** (2 seats) or **Reject**. If the host asks again with another key before
+- **A join request** is a Needs-you card with the host's name and key fingerprint, and main's own key fingerprint.
+  Check both match what `ds join` printed on that host, then press **Accept** (2 seats) or **Reject**. If the host asks again with another key before
   you answer, the answer is refused.
 - **A member on a side host** carries a chip with the host's name in its squad's crew list. One on main has none.
 - **Settings → Hosts** has a row for main and for each accepted side host: online state, seats used and free, load,

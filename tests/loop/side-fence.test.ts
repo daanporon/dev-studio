@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Answer, Backend, Op, Request } from "../../bin/backend/contract.ts";
-import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureHostKey, requestJoin, pinMainKey } from "../../bin/link/host-keys.ts";
 import { startLinkServer } from "../../bin/link/server.ts";
 import { startSideLink } from "../../bin/link/side.ts";
 import { fencedAt, linkDown, noteHeard, noteLink } from "../../bin/link/side-state.ts";
@@ -221,6 +221,7 @@ describe("the side link writes the clock", () => {
       expect(requestJoin(main, { name: "side-a", public_key: k.publicKey }).ok).toBe(true);
       expect(accept(main, "side-a").ok).toBe(true);
       writeSideConfig(sroot, { main: `ws://127.0.0.1:${srv.port}`, name: "side-a" });
+      pinMainKey(sroot, srv.mainKey.publicKey);
       link = startSideLink(sideS, sroot, () => {});
       await until("the link up in side_link", () => state() === "up");
       expect(linkDown(sideS)).toBeNull();

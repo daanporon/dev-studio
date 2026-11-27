@@ -19,7 +19,7 @@ import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { git } from "../../bin/loop/io/worktrees.ts";
 import { runHere, type HostJob, type Send } from "../../bin/link/host-jobs.ts";
-import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureHostKey, requestJoin, pinMainKey } from "../../bin/link/host-keys.ts";
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { fenceDueAt, hostFence } from "../../bin/loop/reconcilers/host-fence.ts";
@@ -257,6 +257,7 @@ describe("after a main restart, or when the host fenced itself", () => {
     expect(requestJoin(store, { name: HOST, public_key: k.publicKey }).ok).toBe(true);
     expect(accept(store, HOST).ok).toBe(true);
     const fencedAt = Math.floor(Date.now() / 1000) - 100;
+    pinMainKey(sroot, srv.mainKey.publicKey);
     const c = new LinkClient({ main: `ws://127.0.0.1:${srv.port}`, root: sroot, name: HOST, fenced: () => fencedAt }); clients.push(c);
     await c.start();
     expect(Number(store.get("hosts", { name: HOST })!.fenced_at)).toBe(fencedAt);

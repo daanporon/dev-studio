@@ -6,16 +6,18 @@
 // U16: `drain <name>` stops new starts on a host while its members run on; `undrain <name>` takes it back.
 // U25 (KTD16): `set <host> <key> <value>`, `rm <host> <key>` and `show <host>` are the per-host overrides of the
 // `[host]` keys of conventions/limits.conf (main is `local`); bin/loop/settings/host-settings.ts writes them.
-import { now, open } from "../loop/core/store.ts";
+// U12b: `key` prints main's own key fingerprint, which `ds join` pins on the side; `accept` prints it too.
+import { now, open, stateRoot } from "../loop/core/store.ts";
 import { linkListen, linkWish } from "../loop/fulfil/link.ts";
 import { parse, print } from "../loop/core/cli.ts";
 import { liveOn } from "../loop/squad/host-requeue.ts";
-import { accept, hostLine, listHosts, reject, remove, setDrain, linkListenHint } from "../link/host-keys.ts";
+import { accept, ensureMainKey, hostLine, listHosts, reject, remove, setDrain, linkListenHint } from "../link/host-keys.ts";
 import { HostSettingsError, hostShow, knownHost, rmHostKey, setHostKey } from "../loop/settings/host-settings.ts";
 
-export const help = "list [--all] [--json] | accept <name> [--seats N] | reject <name> | remove <name> | drain <name> | undrain <name> | set <host> <key> <value> | rm <host> <key> | show <host> [--json] — side hosts that run worker seats (hosts rows) and each host's machine keys";
+export const help = "list [--all] [--json] | key | accept <name> [--seats N] | reject <name> | remove <name> | drain <name> | undrain <name> | set <host> <key> <value> | rm <host> <key> | show <host> [--json] — side hosts that run worker seats (hosts rows) and each host's machine keys";
 
 const USAGE = `usage: ds host list [--all] [--json]     (--all: removed hosts too)
+       ds host key                         (main's own key fingerprint: ds join pins it on the side)
        ds host accept <name> [--seats N]   (a pending join request; seats default 2)
        ds host reject <name>               (a pending join request)
        ds host remove <name>               (an accepted host: its key is deleted)
@@ -48,9 +50,14 @@ export async function run(args: string[]): Promise<number> {
       return 0;
     } finally { s.close(); }
   }
+  if (verb === "key") {
+    if (pos.length !== 1 || opt.seats !== undefined || flag.size) return usage("key takes nothing more");
+    console.log(`main's key fingerprint ${ensureMainKey(stateRoot()).fingerprint} (ds join printed the one it pinned: they match)`);
+    return 0;
+  }
   if (verb === "set" || verb === "rm" || verb === "show") return hostKeysVerb(verb, pos, opt.seats !== undefined, flag, usage);
   if (verb !== "accept" && verb !== "reject" && verb !== "remove" && verb !== "drain" && verb !== "undrain")
-    return usage(verb ? `unknown subcommand '${verb}'` : "name one of list, accept, reject, remove, drain, undrain, set, rm, show");
+    return usage(verb ? `unknown subcommand '${verb}'` : "name one of list, key, accept, reject, remove, drain, undrain, set, rm, show");
   if (pos.length !== 2) return usage(`${verb} takes one host name`);
   if (flag.has("all") || flag.has("json")) return usage(`${verb} takes no --all or --json`);
   if (verb !== "accept" && opt.seats !== undefined) return usage("--seats is for accept");
@@ -68,7 +75,8 @@ export async function run(args: string[]): Promise<number> {
     const r = verb === "accept" ? accept(s, pos[1], { seats, by }) : verb === "reject" ? reject(s, pos[1], { by }) : remove(s, pos[1], { by });
     if (!r.ok) { console.error(`ds host: ${r.why}`); return 1; }
     const h = r.host;
-    console.log(verb === "accept" ? `host ${h.name} accepted with ${h.seats} seats (fingerprint ${h.fingerprint})`
+    console.log(verb === "accept" ? `host ${h.name} accepted with ${h.seats} seats (fingerprint ${h.fingerprint})\n`
+      + `main's key fingerprint ${ensureMainKey(stateRoot()).fingerprint}: ds join on ${h.name} printed the main key it pinned, and it must be this one`
       : verb === "reject" ? `host ${h.name}: join request rejected` : `host ${h.name} removed: its key is deleted`);
     return 0;
   } finally { s.close(); }
