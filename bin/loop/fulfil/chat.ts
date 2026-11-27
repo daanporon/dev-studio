@@ -63,7 +63,8 @@ const sinceOf = (store: Store, id: number): number | undefined => { const n = pa
 function crewLog(store: Store, project: string, topic: string, role: string, suffix: string, text: string, at: number, images = 0, files = 0): void {
   const iso = new Date(at * 1000).toISOString().replace(/\.\d+Z$/, "Z");
   const who = `${topic}/${role}${suffix ? `-${suffix}` : ""}`;
-  appendFileSync(join(store.root, project, "crew-chat.md"), `- ${iso} operator → ${who}: ${Array.from(text.replace(/\s*\n\s*/g, " ↵ ")).slice(0, 200).join("")}${images ? ` (+${images} image${images === 1 ? "" : "s"})` : ""}${files ? ` (+${files} file${files === 1 ? "" : "s"})` : ""}\n`);
+  const plus = (n: number, word: string) => n ? ` (+${n} ${word}${n === 1 ? "" : "s"})` : "";
+  appendFileSync(join(store.root, project, "crew-chat.md"), `- ${iso} operator → ${who}: ${Array.from(text.replace(/\s*\n\s*/g, " ↵ ")).slice(0, 200).join("")}${plus(images, "image")}${plus(files, "file")}\n`);
 }
 
 // chat-cancel / chat-now (U4): act on the named chat request of the same project. A chat already done (typed,

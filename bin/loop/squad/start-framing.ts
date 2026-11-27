@@ -47,20 +47,19 @@ function attachFiles(root: string, label: string, fdir: string, request: number,
   const valid = names.filter((n) => CHAT_FILE_NAME.test(n));
   const images = copyAttached(root, label, fdir, request, valid.filter((n) => chatFileKind(n) === "image"), strict);
   const docs = copyAttached(root, label, fdir, request, valid.filter((n) => chatFileKind(n) !== "image"), strict);
-  return (images.length
-    ? `\n## Attached images\n\nThe operator attached these images to the brief. Open each with your file-reading tool:\n${images.join("\n")}\n`
-    : "") + (docs.length
-    ? `\n## Attached files\n\nThe operator attached these files to the brief. Read each with your file-reading tool:\n${docs.join("\n")}\n`
-    : "");
+  const section = (what: string, verb: string, lines: string[]) => lines.length
+    ? `\n## Attached ${what}\n\nThe operator attached these ${what} to the brief. ${verb} each with your file-reading tool:\n${lines.join("\n")}\n`
+    : "";
+  return section("images", "Open", images) + section("files", "Read", docs);
 }
 
 /** Write `<root>/<label>/framings/board-start-<request>.md` (the brief's bytes, then its attached files) and return its path. */
 export function writeStartFraming(root: string, label: string, request: number, framing: string, files: string[] | undefined, o: { strict?: boolean } = {}): string {
   const fdir = join(root, label, "framings"), ff = join(fdir, `board-start-${request}.md`);
   mkdirSync(fdir, { recursive: true });
-  const images = files?.length ? attachFiles(root, label, fdir, request, files, o.strict === true) : "";
+  const attached = files?.length ? attachFiles(root, label, fdir, request, files, o.strict === true) : "";
   // tmp+rename: a reader in the same instant never sees half a brief.
-  writeFileSync(`${ff}.tmp`, images ? `${framing}${framing.endsWith("\n") ? "" : "\n"}${images}` : framing);
+  writeFileSync(`${ff}.tmp`, attached ? `${framing}${framing.endsWith("\n") ? "" : "\n"}${attached}` : framing);
   renameSync(`${ff}.tmp`, ff);
   return ff;
 }
