@@ -6,7 +6,8 @@
 # each (timeout 15), and a PermissionRequest entry (matcher *, timeout 15) for safety-check
 # prompts. Only its own entries are replaced — the rewake Stop hook and any
 # other hooks stay untouched. Needs the worktree's local filesystem path (from ps); a
-# remote-host worktree can't be armed from here (prints a notice, exits 0).
+# remote-host worktree can't be armed from here (prints a notice, exits 0); a side host arms its own
+# members' worktrees when it makes their terminals (bin/link/channels/contract.ts sideArm).
 #
 # <role> is the member's role[-suffix] label (the asker on the mirrored entry, so a mirrored
 # picker clears watch.sh's "unasked" flag). Armed by the spawner (spawn-squad, add-role,

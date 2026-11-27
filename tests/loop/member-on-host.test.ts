@@ -21,7 +21,7 @@ import { contractObserver } from "../../bin/loop/observers/contract.ts";
 import { orcaObserver } from "../../bin/loop/observers/orca.ts";
 import { git } from "../../bin/loop/io/worktrees.ts";
 import { offOrca, wtHost } from "../../bin/loop/squad/backend.ts";
-import { sideCreate } from "../../bin/link/channels/contract.ts";
+import { contractChannel, sideCreate } from "../../bin/link/channels/contract.ts";
 import { mainUrlFor } from "../../bin/link/relay.ts";
 import { runHere, type HostJob, type Send } from "../../bin/link/host-jobs.ts";
 import { launchDir } from "../../bin/loop/squad/launch-file.ts";
@@ -266,6 +266,42 @@ describe("the side's contract channel (sideCreate)", () => {
     const plain = sideCreate({ op: "terminal.create", req: { cwd: "/side/x", label: "x" } }, "/side/state", env);
     expect((plain.req as { env: Record<string, string> }).env.DS_MAIN_URL).toBe(mainUrlFor("/side/state"));
     expect(JSON.parse(readFileSync(join(d, ".claude.json"), "utf8")).projects).toBeUndefined();
+  });
+});
+
+describe("the side's contract channel arms a member's hooks (u8c)", () => {
+  const worktree = () => {
+    const d = mkdtempSync(join(tmpdir(), "zzsidearm-")); temps.push(d);
+    expect(Bun.spawnSync(["git", "init", "-q", d]).exitCode).toBe(0);
+    return d;
+  };
+  // The channel as the side answers it; the fake backend has no ops, so only the arming is under test.
+  const send = (root: string, envelope: Record<string, unknown>) =>
+    contractChannel(() => ({}) as never).handle({ backend: "tmux", project: "fx", envelope }, { root } as never);
+  const armed = (d: string) => JSON.parse(readFileSync(join(d, ".claude", "settings.local.json"), "utf8")).hooks;
+  const create = (d: string, env: Record<string, string>) => ({ op: "terminal.create", req: { cwd: d, label: "builder-u1", env } });
+
+  test("a member's terminal.create installs the picker hooks and the kill guard, kept out of git status", async () => {
+    const d = worktree(), config = mkdtempSync(join(tmpdir(), "zzsidearm-login-")); temps.push(config);
+    const env = { DS_MEMBER: "fx/sq/builder-u1", CLAUDE_CONFIG_DIR: config };
+    await send("/side/state", create(d, env)).catch(() => {});
+    await send("/side/state", create(d, env)).catch(() => {});   // a restart re-arms, no second copy
+    const h = armed(d), tail = `/side/state/fx/squads/sq.json builder-u1 local::${d}`;
+    expect(h.PreToolUse.map((e: { matcher: string }) => e.matcher)).toEqual(["AskUserQuestion", "Bash"]);
+    expect(h.PreToolUse[0].hooks[0].command).toEndWith(`/bin/hooks/picker-hook.sh pre ${tail}`);
+    expect(h.PreToolUse[1].hooks[0].command).toEndWith("/bin/hooks/no-broad-kill-hook.sh");
+    expect(h.PostToolUse[0].hooks[0].command).toEndWith(`/bin/hooks/picker-hook.sh post ${tail}`);
+    expect(h.PermissionRequest[0].hooks[0].command).toEndWith(`/bin/hooks/picker-hook.sh permission ${tail}`);
+    expect(Bun.spawnSync(["git", "-C", d, "status", "--porcelain"]).stdout.toString()).toBe("");
+    expect(readFileSync(join(d, ".git", "info", "exclude"), "utf8").split("\n").filter((l) => l === ".claude/settings.local.json")).toHaveLength(1);
+  });
+
+  test("another op, a terminal that is no member's, or a name that is no path part arms nothing", async () => {
+    const d = worktree();
+    for (const env of [{}, { DS_MEMBER: "fx/../builder-u1" }, { DS_MEMBER: "fx/sq/builder-u1 x" }, { DS_MEMBER: "fx/sq/nobody" }])
+      await send("/side/state", create(d, env as Record<string, string>)).catch(() => {});
+    await send("/side/state", { op: "terminal.list", req: { cwd: d, env: { DS_MEMBER: "fx/sq/builder-u1" } } }).catch(() => {});
+    expect(existsSync(join(d, ".claude"))).toBe(false);
   });
 });
 
