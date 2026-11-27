@@ -16,7 +16,7 @@ import { fakeContract, type FakeContract } from "../../bin/loop/fakes/contract.t
 import { open, type Store } from "../../bin/loop/core/store.ts";
 import { contracts } from "../../bin/loop/squad/contracts.ts";
 import { makeBackend } from "../../bin/lib/contract-roles.ts";
-import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureHostKey, requestJoin, pinMainKey } from "../../bin/link/host-keys.ts";
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { contractChannel } from "../../bin/link/channels/contract.ts";
@@ -54,6 +54,7 @@ function rig(): Promise<Rig> {
     const srv = await startLinkServer({ root, store, binds: "127.0.0.1", port: 0 });
     const sroot = temp(), k = ensureHostKey(sroot);
     if (!requestJoin(store, { name: "side-a", public_key: k.publicKey }).ok || !accept(store, "side-a").ok) throw new Error("side-a not accepted");
+    pinMainKey(sroot, srv.mainKey.publicKey);
     const client = new LinkClient({ main: `ws://127.0.0.1:${srv.port}`, root: sroot, name: "side-a", channels: new Map([[CONTRACT_CHANNEL, contractChannel(sideFake)]]) });
     await client.start();
     if (client.state !== "up") throw new Error(`link not up: ${client.state}`);

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
-import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureHostKey, requestJoin, pinMainKey } from "../../bin/link/host-keys.ts";
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { DOWN, RowSync, UP, UP_MIGRATION, applyUp, upBatch } from "../../bin/link/replica.ts";
@@ -100,6 +100,7 @@ async function linked(main: Store, mainRoot: string, name: string): Promise<{ si
   const k = ensureHostKey(sideRoot);
   expect(requestJoin(main, { name, public_key: k.publicKey }).ok).toBe(true);
   expect(accept(main, name).ok).toBe(true);
+  pinMainKey(sideRoot, srv.mainKey.publicKey);
   const c = new LinkClient({ main: `ws://127.0.0.1:${srv.port}`, root: sideRoot, name });
   clients.push(c);
   await c.start();
@@ -194,6 +195,7 @@ describe("over a real link", () => {
     const sideRoot = temp(), k = ensureHostKey(sideRoot);
     expect(requestJoin(main, { name: "s2", public_key: k.publicKey }).ok).toBe(true);
     expect(accept(main, "s2").ok).toBe(true);
+    pinMainKey(sideRoot, servers[0].mainKey.publicKey);
     const c = new LinkClient({ main: `ws://127.0.0.1:${servers[0].port}`, root: sideRoot, name: "s2" });
     clients.push(c);
     await c.start();

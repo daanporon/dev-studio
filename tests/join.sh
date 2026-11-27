@@ -104,7 +104,7 @@ for _ in $(seq 200); do grep -q "join: waiting" "$TMP/join.log" && break; "$BUN_
 FP="$(sed -n 's/^join: fingerprint //p' "$TMP/join.log")"
 has "main shows the same fingerprint" "$FP" "$(main_ds host list)"
 if [ -n "$FP" ] && kill -0 "$JOIN_PID" 2>/dev/null; then good; else bad "join must wait for the accept: $(cat "$TMP/join.log")"; fi
-main_ds host accept laptop >/dev/null
+ACCEPTED="$(main_ds host accept laptop)"
 rc=0; wait "$JOIN_PID" || rc=$?
 LOOP="$(loop_pid)"; OWN_PIDS="$OWN_PIDS $LOOP"
 out="$(cat "$TMP/join.log")"
@@ -126,6 +126,23 @@ LOOP="$(loop_pid)"; OWN_PIDS="$OWN_PIDS $LOOP"
 eq "rejoin: exit" "$rc" 0
 has "rejoin" "already accepted a host named 'laptop'" "$out"
 has "rejoin connected" "join: connected" "$out"
+
+# U12b: join pinned main's own key; ds host accept and ds host key print the same fingerprint.
+MFP="$(sed -n "s/^join: main's key fingerprint \([0-9a-f:]*\), pinned in .*/\1/p" "$TMP/join.log")"
+if [ -n "$MFP" ]; then good; else bad "join must print main's key fingerprint: $(cat "$TMP/join.log")"; fi
+has "ds host accept prints main's fingerprint" "main's key fingerprint $MFP" "$ACCEPTED"
+has "ds host key prints it" "main's key fingerprint $MFP" "$(main_ds host key)"
+eq "pin mode" "$(stat -c %a "$SIDE_STATE/link/main.pub")" 600
+# A pin for this main that main cannot sign with: refused (another main, or main's key changed); --new-main-key re-pins.
+"$BUN_REAL" -e "import { newKeyPair } from '$ROOT/bin/link/host-keys.ts'; console.log(newKeyPair().publicKey)" > "$SIDE_STATE/link/main.pub"
+rc=0; out="$(join_run "127.0.0.1:$PORT")" || rc=$?
+eq "changed main key: exit" "$rc" 1
+has "changed main key" "not the pinned" "$out"
+rc=0; out="$(join_run "127.0.0.1:$PORT" --new-main-key)" || rc=$?
+LOOP="$(loop_pid)"; OWN_PIDS="$OWN_PIDS $LOOP"
+eq "--new-main-key: exit" "$rc" 0
+has "--new-main-key re-pins" "join: main's key fingerprint $MFP, pinned in $SIDE_STATE/link/main.pub (was " "$out"
+has "--new-main-key connected" "join: connected" "$out"
 
 # The cron watchdog's command keeps a side loop a side loop; ds up is refused here.
 has "ensure" "loop: running (pid $LOOP)" "$(cd "$REPO" && PATH="$STUB" ./bin/loop/loop.sh --ensure 2>&1)"

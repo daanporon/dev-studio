@@ -16,7 +16,7 @@ import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
 import { git } from "../../bin/loop/io/worktrees.ts";
 import { runHere, type HostJob, type Send } from "../../bin/link/host-jobs.ts";
-import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureHostKey, requestJoin, pinMainKey } from "../../bin/link/host-keys.ts";
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { hostLink, hostUnreachable } from "../../bin/loop/squad/host-reach.ts";
@@ -55,6 +55,7 @@ describe("main's view of a host's link (squad/host-reach.ts)", () => {
     // Accepted but never linked: unreachable (nothing is placed on a host main never heard).
     expect(accept(store, HOST).ok).toBe(true);
     expect(hostLink(store, HOST).state).toBe("unreachable");
+    pinMainKey(sroot, srv.mainKey.publicKey);
     const c = new LinkClient({ main: `ws://127.0.0.1:${srv.port}`, root: sroot, name: HOST }); clients.push(c);
     await c.start();
     await until("online", () => hostLink(store, HOST).state === "online");

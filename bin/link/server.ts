@@ -8,7 +8,12 @@
 //                          {ok, body} or {ok:false, error}; `GET /links` lists the hosts whose link is up.
 // Before the hello a frame is a join request (U1 `requestJoin`, answered then closed) or a hello. Only an
 // `accepted` host that signs main's fresh challenge gets in (U1 `verifyHello`); a wrong link version is refused
-// with the fix. A second connection for a host whose link is still live (heard within DEAD_MS) is refused and
+// with the fix. Main proves itself too (U12b): a hello carries the side's fresh nonce and X25519 share, and the
+// challenge carries main's share and main's signature over both shares and the nonce with main's own key
+// (`<root>/link/main.key`, made at start), which every join answer names (`main_key`) so `ds join` can pin it.
+// From the challenge on, every frame both ways is sealed with keys from that exchange (`seal.ts`); a frame that
+// does not open is refused. A hello with no nonce (a side older than U12b) gets the old unsigned, unsealed link.
+// A second connection for a host whose link is still live (heard within DEAD_MS) is refused and
 // logged (`host_link_refused`); it never replaces the first. Every PING_MS the server re-reads each linked
 // host's row: a host no longer accepted is closed (`host_link_closed`), a link silent for DEAD_MS is marked down
 // (`host_link_down`, hosts.unreachable_since = the last time it was heard), else it is pinged. Each hello and
@@ -17,26 +22,30 @@
 // (U13, KTD11): main's own downtime never uses up a host's grace (bin/loop/squad/host-reach.ts reads the row).
 // Run as a script: `bun bin/link/server.ts <binds> <port>`; it exits 75 when a file under bin/link/ changes, so
 // the loop restarts it on the new code (uncounted, like the board).
-import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createPrivateKey } from "node:crypto";
 import { join } from "node:path";
 import type { ServerWebSocket, Server } from "bun";
 import { open, stateRoot, type Store } from "../loop/core/store.ts";
 import { tailnetIp } from "../loop/io/tailnet.ts";
 import { isHostKey } from "../lib/host-settings.ts";
-import { Challenges, nameProblem, parseJoinFrame, requestJoin, verifyHello } from "./host-keys.ts";
+import { CHALLENGE_BYTES, Challenges, ensureMainKey, nameProblem, parseJoinFrame, requestJoin, signMain, verifyHello } from "./host-keys.ts";
+import { b64Bytes, KX_BYTES, newKx, sealer, type Sealer } from "./seal.ts";
 import { deadMs, frameLog, JOIN_MAX_BYTES, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
 
 import { socketPath } from "./request.ts";
 // The unix-socket client lives in request.ts (role-side code imports it without this server); re-exported here.
 export { linkRequest, socketPath } from "./request.ts";
 
-type Conn = { phase: "new" | "challenged" | "up" | "closing"; name: string; nonce: Buffer | null; peer: Peer | null; addr: string };
+type Conn = { phase: "new" | "challenged" | "up" | "closing"; name: string; nonce: Buffer | null; peer: Peer | null; addr: string; seal: Sealer | null };
 type WS = ServerWebSocket<Conn>;
 
 export type LinkServer = {
   /** The TCP port the network listener bound (the asked one, or the one Bun chose for port 0). */
   port: number;
   socket: string;
+  /** Main's own public key (U12b): what a side pins at `ds join`. */
+  mainKey: { publicKey: string; fingerprint: string };
   /** The hosts whose link is up now, by name. */
   links(): string[];
   /** Send one request to a linked host (what `POST /request` on the unix socket does). */
@@ -63,11 +72,13 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
   const ownStore = !opts.store;
   const channels = opts.channels ?? await loadChannels("main");
   const challenges = new Challenges();
+  const mainKey = ensureMainKey(root);
+  const mainPrivate = createPrivateKey(readFileSync(mainKey.file, "utf8"));
   const live = new Map<string, WS>();
   const sec = () => Math.floor(Date.now() / 1000);
 
   const fact = (kind: string, payload: Record<string, unknown>) => { try { store.fact(kind, [], { payload }); } catch (e) { console.error(`link: ${kind}: ${(e as Error).message}`); } };
-  const sendTo = (ws: WS, f: Frame) => { ws.send(JSON.stringify(f)); };
+  const sendTo = (ws: WS, f: Frame) => { ws.send(ws.data.seal ? ws.data.seal.seal(f) : JSON.stringify(f)); };
   const refuse = (ws: WS, why: string) => { ws.data.phase = "closing"; try { sendTo(ws, { t: "refused", why }); ws.close(1008, why.slice(0, 120)); } catch { /* gone */ } };
   const isLive = (ws: WS | undefined) => !!ws && ws.data.phase === "up" && !!ws.data.peer && Date.now() - ws.data.peer.lastHeard < deadMs();
 
@@ -99,7 +110,9 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
   async function onMessage(ws: WS, raw: string | Buffer): Promise<void> {
     const c = ws.data;
     if (c.phase === "closing") return;
-    const f = parseFrame(raw, c.phase === "up" ? MAX_FRAME_BYTES : JOIN_MAX_BYTES);
+    const opened = c.seal ? c.seal.open(typeof raw === "string" ? raw : raw.toString("utf8")) : raw;
+    if (opened === null) { refuse(ws, "a frame that is not sealed with this link's keys"); return; }
+    const f = parseFrame(opened, c.phase === "up" ? MAX_FRAME_BYTES : JOIN_MAX_BYTES);
     if ("bad" in f) { refuse(ws, String(f.bad)); return; }
     if (c.phase === "up") {
       if (!(await c.peer!.onFrame(f))) refuse(ws, `unexpected frame '${f.t}'`);
@@ -109,17 +122,31 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
       const j = parseJoinFrame(JSON.stringify({ name: f.name, public_key: f.public_key }));
       const r = j.ok ? requestJoin(store, j) : j;
       c.phase = "closing";
-      sendTo(ws, r.ok ? { t: "joined", ok: true, name: r.name, fingerprint: r.fingerprint, created: r.created } : { t: "joined", ok: false, why: r.why });
+      sendTo(ws, { ...(r.ok ? { t: "joined", ok: true, name: r.name, fingerprint: r.fingerprint, created: r.created } : { t: "joined", ok: false, why: r.why }), main_key: mainKey.publicKey });
       ws.close(1000, "join answered");
       return;
     }
     if (c.phase === "new" && f.t === "hello") {
       const bad = nameProblem(f.name);
       if (bad) { refuse(ws, bad); return; }
+      // U12b: the side's nonce and key share, signed below with main's share so the side knows this is main and
+      // both ends hold the link's frame keys. A side older than U12b sends neither.
+      const sideNonce = f.nonce === undefined ? null : b64Bytes(f.nonce, CHALLENGE_BYTES);
+      if (f.nonce !== undefined && !sideNonce) { refuse(ws, `a hello nonce is ${CHALLENGE_BYTES} bytes, base64`); return; }
+      const sideKx = sideNonce ? b64Bytes(f.kx, KX_BYTES) : null;
+      if (sideNonce && !sideKx) { refuse(ws, `a hello with a nonce carries a ${KX_BYTES}-byte key share (kx), base64`); return; }
       c.name = String(f.name);
-      c.nonce = challenges.issue(c.name);
+      const nonce = challenges.issue(c.name);
+      c.nonce = nonce;
       c.phase = "challenged";
-      sendTo(ws, { t: "challenge", nonce: c.nonce.toString("base64") });
+      if (!sideNonce || !sideKx) { sendTo(ws, { t: "challenge", nonce: nonce.toString("base64"), link_version: LINK_VERSION }); return; }
+      const kx = newKx();
+      const seal = sealer(kx.privateKey, sideKx, sideNonce, nonce, "main");
+      if (!seal) { refuse(ws, "the hello's key share is not usable"); return; }
+      const bound = Buffer.concat([sideNonce, sideKx, Buffer.from(kx.share, "base64")]);
+      sendTo(ws, { t: "challenge", nonce: nonce.toString("base64"), link_version: LINK_VERSION, kx: kx.share,
+        main_signature: signMain(mainPrivate, bound, nonce, LINK_VERSION, c.name) });
+      c.seal = seal;   // from here on every frame both ways is sealed
       return;
     }
     if (c.phase === "challenged" && f.t === "auth") {
@@ -177,15 +204,17 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
   }, pingMs());
 
   const websocket = {
-    maxPayloadLength: MAX_FRAME_BYTES,
+    maxPayloadLength: MAX_FRAME_BYTES + 128,   // a sealed frame's `<seq>.<mac>.` prefix
     idleTimeout: 0,
     sendPings: false,
     // A socket that has not finished its hello within DEAD_MS is closed (idleTimeout is off, so nothing else would).
     open(ws: WS) { setTimeout(() => { if (ws.data.phase === "new" || ws.data.phase === "challenged") refuse(ws, `no hello and auth within ${Math.round(deadMs() / 1000)} s`); }, deadMs()); },
     message(ws: WS, m: string | Buffer) { onMessage(ws, m).catch((e) => { console.error(`link: ${(e as Error).message}`); refuse(ws, "internal error"); }); },
-    close(ws: WS) {
+    close(ws: WS, code: number, reason: string) {
       const c = ws.data;
       if (c.phase === "up" && live.get(c.name) === ws) dropLink(ws, "the side closed the link", true);
+      // U12b: a side that refuses main (its pin, e.g. a side joined before U12b with none) closes 4001 with why.
+      if (c.phase === "challenged" && code === 4001) fact("host_link_refused", { name: c.name, addr: c.addr, why: `the side refused main: ${String(reason).slice(0, 200)}` });
       c.phase = "closing";
     },
   };
@@ -194,7 +223,7 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
     if (u.pathname === "/healthz") return Response.json({ ok: true, pid: process.pid, link_version: LINK_VERSION });
     if (u.pathname === "/link") {
       const addr = srv.requestIP(req)?.address ?? "";
-      if (srv.upgrade(req, { data: { phase: "new", name: "", nonce: null, peer: null, addr } satisfies Conn })) return undefined;
+      if (srv.upgrade(req, { data: { phase: "new", name: "", nonce: null, peer: null, addr, seal: null } satisfies Conn })) return undefined;
       return new Response("a WebSocket upgrade is expected", { status: 426 });
     }
     return new Response("not found", { status: 404 });
@@ -250,6 +279,7 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
   return {
     port,
     socket: sock,
+    mainKey: { publicKey: mainKey.publicKey, fingerprint: mainKey.fingerprint },
     links: () => [...live.keys()].filter((h) => isLive(live.get(h))).sort(),
     request,
     async stop() {

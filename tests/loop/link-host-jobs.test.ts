@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
-import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureHostKey, requestJoin, pinMainKey } from "../../bin/link/host-keys.ts";
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import {
@@ -64,6 +64,7 @@ async function linked(): Promise<{ root: string; store: Store; srv: LinkServer; 
   const sroot = temp(), k = ensureHostKey(sroot);
   expect(requestJoin(store, { name: "side-a", public_key: k.publicKey }).ok).toBe(true);
   expect(accept(store, "side-a").ok).toBe(true);
+  pinMainKey(sroot, srv.mainKey.publicKey);
   const c = new LinkClient({ main: `ws://127.0.0.1:${srv.port}`, root: sroot, name: "side-a" });
   clients.push(c);
   await c.start();

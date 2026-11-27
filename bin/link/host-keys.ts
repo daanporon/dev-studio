@@ -8,8 +8,11 @@
 //   accept | reject | remove   the operator's answer (`ds host`, and the board's Accept in U17)
 //   Challenges + verifyHello   main sends 32 fresh random bytes; the side signs them with the link version
 //                 and its name; a challenge is good once, so a replayed signature fails
+//   main's key (U12b) main has an Ed25519 key of its own (`<root>/link/main.key`, 0600). The join answer carries
+//                 its public half and `ds join` pins it on the side (`<root>/link/main.pub`); each hello carries
+//                 a fresh side nonce that main signs, and the side refuses a main that cannot sign with the pin
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, verify, type KeyObject } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { now, type Row, type Store } from "../loop/core/store.ts";
 import { acceptDefaults, dropHost } from "../loop/settings/host-settings.ts";
@@ -30,6 +33,7 @@ export type HostState = (typeof HOST_STATES)[number];
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 const SPKI_ED25519_BYTES = 44;
 const HELLO_TAG = "ds-link-hello";
+const MAIN_TAG = "ds-link-main";
 
 export type Result<T = Record<string, never>> = ({ ok: true } & T) | { ok: false; why: string };
 
@@ -72,17 +76,22 @@ export function newKeyPair(): { publicKey: string; privateKey: string } {
 
 export function hostKeyPath(root: string): string { return join(root, "link", "host.key"); }
 
-/** The side host's key: read from `<root>/link/host.key` (0600), made there on first use. Returns only the public half. */
-export function ensureHostKey(root: string): { publicKey: string; fingerprint: string; file: string } {
-  const file = hostKeyPath(root);
+/** A private key file (0600), made on first use; two processes making it at once both end up with the one file.
+ *  Returns only the public half. */
+function ensureKeyFile(file: string): { publicKey: string; fingerprint: string; file: string } {
   if (!existsSync(file)) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    const { privateKey } = newKeyPair();
-    writeFileSync(file, privateKey, { mode: 0o600, flag: "wx" });
+    try { writeFileSync(file, newKeyPair().privateKey, { mode: 0o600, flag: "wx" }); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
   }
   chmodSync(file, 0o600);
   const publicKey = createPublicKey(createPrivateKey(readFileSync(file, "utf8"))).export({ format: "der", type: "spki" }).toString("base64");
   return { publicKey, fingerprint: fingerprint(publicKey), file };
+}
+
+/** The side host's key: read from `<root>/link/host.key` (0600), made there on first use. Returns only the public half. */
+export function ensureHostKey(root: string): { publicKey: string; fingerprint: string; file: string } {
+  return ensureKeyFile(hostKeyPath(root));
 }
 
 /** What a hello signs: a fixed tag, the link version, the host name and main's challenge. */
@@ -96,13 +105,69 @@ export function signHello(privateKey: string | KeyObject, nonce: Buffer, linkVer
   return sign(null, helloMessage(nonce, linkVersion, name), k).toString("base64");
 }
 
-/** True only when `signature` is `publicKey`'s signature over this challenge, version and name. */
-export function verifySignature(publicKey: string, nonce: Buffer, linkVersion: string, name: string, signature: unknown): boolean {
+/** True only when `signature` (base64) is `publicKey`'s Ed25519 signature over `msg`. */
+function verifyMessage(publicKey: string, msg: Buffer, signature: unknown): boolean {
   const k = parsePublicKey(publicKey);
   if (!k || typeof signature !== "string" || signature.length > 128) return false;
   const sig = Buffer.from(signature, "base64");
   if (sig.length !== 64) return false;
-  try { return verify(null, helloMessage(nonce, linkVersion, name), k, sig); } catch { return false; }
+  try { return verify(null, msg, k, sig); } catch { return false; }
+}
+
+/** True only when `signature` is `publicKey`'s signature over this challenge, version and name. */
+export function verifySignature(publicKey: string, nonce: Buffer, linkVersion: string, name: string, signature: unknown): boolean {
+  return verifyMessage(publicKey, helloMessage(nonce, linkVersion, name), signature);
+}
+
+// ---------------------------------------------------------------- main's own key (U12b)
+
+export const mainKeyPath = (root: string): string => join(root, "link", "main.key");
+/** On a side host: main's public key, pinned by `ds join`. */
+export const mainPinPath = (root: string): string => join(root, "link", "main.pub");
+
+/** Main's key: read from `<root>/link/main.key` (0600), made there on first use (the link server, `ds host accept`). */
+export function ensureMainKey(root: string): { publicKey: string; fingerprint: string; file: string } {
+  return ensureKeyFile(mainKeyPath(root));
+}
+
+/** Main's key fingerprint without making a key (the board reads it): null while main has none yet. */
+export function mainFingerprint(root: string): string | null {
+  try { return fingerprint(createPublicKey(createPrivateKey(readFileSync(mainKeyPath(root), "utf8")))); } catch { return null; }
+}
+
+/** What main signs at a hello: its own tag, the link version, the host name, the side's nonce and main's challenge. */
+/** What main signs for a side's hello. `sideNonce` is the side's nonce followed by both key-exchange shares (side's,
+ *  then main's; 32 bytes each, `seal.ts`), so the signature binds the link's frame keys too. */
+export function mainMessage(sideNonce: Buffer, challenge: Buffer, linkVersion: string, name: string): Buffer {
+  return Buffer.concat([Buffer.from(`${MAIN_TAG}\n${linkVersion}\n${name}\n`), sideNonce, challenge]);
+}
+
+export function signMain(privateKey: string | KeyObject, sideNonce: Buffer, challenge: Buffer, linkVersion: string, name: string): string {
+  const k = typeof privateKey === "string" ? createPrivateKey(privateKey) : privateKey;
+  return sign(null, mainMessage(sideNonce, challenge, linkVersion, name), k).toString("base64");
+}
+
+export function verifyMain(publicKey: string, sideNonce: Buffer, challenge: Buffer, linkVersion: string, name: string, signature: unknown): boolean {
+  return verifyMessage(publicKey, mainMessage(sideNonce, challenge, linkVersion, name), signature);
+}
+
+/** The main key this side host pinned (base64 SPKI DER), or null when it has none or the file is not a key. */
+export function readMainPin(root: string): string | null {
+  try {
+    const k = parsePublicKey(readFileSync(mainPinPath(root), "utf8").trim());
+    return k ? k.export({ format: "der", type: "spki" }).toString("base64") : null;
+  } catch { return null; }
+}
+
+/** Pin `publicKey` as main's key on this side host (written whole, then renamed into place). */
+export function pinMainKey(root: string, publicKey: string): Result<{ fingerprint: string; file: string }> {
+  const k = parsePublicKey(publicKey);
+  if (!k) return { ok: false, why: "main sent no Ed25519 public key" };
+  const file = mainPinPath(root), tmp = `${file}.${process.pid}.tmp`;
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(tmp, `${k.export({ format: "der", type: "spki" }).toString("base64")}\n`, { mode: 0o600 });
+  renameSync(tmp, file);
+  return { ok: true, fingerprint: fingerprint(k), file };
 }
 
 // ---------------------------------------------------------------- main's challenges (held by the link server)

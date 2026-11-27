@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
-import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureHostKey, requestJoin, pinMainKey, ensureMainKey } from "../../bin/link/host-keys.ts";
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { checkCall, EXIT, kindFor, kindOf, TABLE, WORKER_ROLES } from "../../bin/link/forward-table.ts";
@@ -379,6 +379,7 @@ async function sideUp(m: Main): Promise<{ root: string }> {
   const root = temp(), k = ensureHostKey(root);
   expect(requestJoin(m.store, { name: "s1", public_key: k.publicKey }).ok).toBe(true);
   expect(accept(m.store, "s1").ok).toBe(true);
+  pinMainKey(root, ensureMainKey(m.root).publicKey);
   const client = new LinkClient({ main: m.url, root, name: "s1" });
   clients.push(client);
   await client.start();

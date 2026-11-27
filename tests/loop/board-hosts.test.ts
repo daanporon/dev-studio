@@ -11,7 +11,7 @@ import { importConfig } from "../../bin/loop/db/import-config.ts";
 import { open, type Row } from "../../bin/loop/core/store.ts";
 import { buildBoard, hostsJson } from "../../bin/board/board-data.ts";
 import fulfiller from "../../bin/loop/fulfil/host.ts";
-import { accept, requestJoin } from "../../bin/link/host-keys.ts";
+import { accept, ensureMainKey, requestJoin } from "../../bin/link/host-keys.ts";
 import { setHostKey } from "../../bin/loop/settings/host-settings.ts";
 import { codeRev, hostEnv } from "../../bin/link/client.ts";
 import { LINK_VERSION } from "../../bin/link/protocol.ts";
@@ -196,6 +196,9 @@ test("a pending join is a Needs-you card with its fingerprint; Accept sends it, 
   const card = board.needs_you.find((n: any) => n.card === "host-join");
   expect(card).toMatchObject({ host: "box-c", fingerprint: join_.fingerprint, kind: "studio" });
   expect(card.text).toContain(join_.fingerprint);
+  expect(card.main_fingerprint).toBeNull();   // U12b: main has no key of its own until its link server made one
+  const mainFp = ensureMainKey(f.s.root).fingerprint;
+  expect(f.board().needs_you.find((n: any) => n.card === "host-join")).toMatchObject({ main_fingerprint: mainFp, why: expect.stringContaining(`the main key it pinned is ${mainFp}`) });
   expect(board.needs_count).toBe(1);
   expect(f.rows().pending).toEqual(["box-c"]);
 

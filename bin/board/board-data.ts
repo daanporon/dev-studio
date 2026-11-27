@@ -73,7 +73,7 @@ import { onSide } from "../loop/squad/backend.ts";
 import { linkWish } from "../loop/fulfil/link.ts";
 import { tailnetIp } from "../loop/io/tailnet.ts";
 import { codeRev } from "../link/client.ts";
-import { linkListenHint, listHosts } from "../link/host-keys.ts";
+import { linkListenHint, listHosts, mainFingerprint } from "../link/host-keys.ts";
 import { LINK_VERSION } from "../link/protocol.ts";
 import { UP_MIGRATION } from "../link/replica.ts";
 
@@ -2460,13 +2460,15 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       squad: null, unit: null, suggestion: null, why: null, options: [], choices: [], when: null, acts_on_answer: false, age_min: null, place: "needs" }] : [];
   });
   // side-loop-host U17: a pending join is a Needs-you card with its fingerprint and Accept and Reject. A host is
-  // main's, not a project's, so each page shows it once, under the first label.
+  // main's, not a project's, so each page shows it once, under the first label. U12b: it also names main's own key
+  // fingerprint, the one `ds join` pinned on that host.
+  const mainFp = db && labels.length && hasHosts(db) ? mainFingerprint(db.s.root) : null;
   const hostCards: any[] = db && labels.length && hasHosts(db) ? listHosts(db.s, {}, NOW()).filter((h) => h.status === "pending").map((h) => ({
     repo_slug: null, pr: null, act: null, project: labels[0], id: `host-join-${h.name}-${h.requested_at}`, from: null, card: "host-join", reason: null, squad: null, unit: null, suggestion: null,
     title: `Host ${h.name} asks to join`, text: `Host ${h.name} asks to join. Fingerprint ${h.fingerprint}.`,
-    why: "Accept only when this fingerprint matches the one `ds join` printed on that host. Its Builders then run for main.",
+    why: `Accept only when this fingerprint matches the one \`ds join\` printed on that host${mainFp ? `, and the main key it pinned is ${mainFp}` : ""}. Its Builders then run for main.`,
     options: [], choices: [], when: null, acts_on_answer: false, age_min: Math.max(0, Math.floor((NOW() - Number(h.requested_at)) / 60)), place: "needs",
-    host: String(h.name), fingerprint: String(h.fingerprint),
+    host: String(h.name), fingerprint: String(h.fingerprint), main_fingerprint: mainFp,
   })) : [];
   // side-loop-host U24: a host still behind 10 minutes after its update job is a Needs-you card with the update log's
   // last lines and Update; it goes once the host reports main's commit.
@@ -2576,7 +2578,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     // The inbox: every question and proposed fix from squads that aren't on hold: blocking first,
     // then approvals, then questions, oldest first; each carries the command to copy.
     needs_you: [...studioAlerts.map((a) => ({
-      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, ...(a.card === "host-join" || a.card === "host-update" ? { host: (a as any).host, fingerprint: (a as any).fingerprint } : {}), id: a.id, from: a.from, text: a.text, title: a.title, titled: true, chat_wt: a.chat_wt, chat_label: a.chat_label,
+      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, ...(a.card === "host-join" || a.card === "host-update" ? { host: (a as any).host, fingerprint: (a as any).fingerprint, ...(a.card === "host-join" ? { main_fingerprint: (a as any).main_fingerprint } : {}) } : {}), id: a.id, from: a.from, text: a.text, title: a.title, titled: true, chat_wt: a.chat_wt, chat_label: a.chat_label,
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
