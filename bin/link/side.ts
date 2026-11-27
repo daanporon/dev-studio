@@ -11,7 +11,7 @@ import { LinkClient, type LinkState } from "./client.ts";
 import { MirrorSync } from "./mirror.ts";
 import { startRelay } from "./relay.ts";
 import { RowSync } from "./replica.ts";
-import { noteHeard, noteLink } from "./side-state.ts";
+import { fencedAt, noteHeard, noteLink } from "./side-state.ts";
 import type { Store } from "../loop/core/store.ts";
 
 export type SideStatus = { state: LinkState; why: string; main: string; at: number; pid: number };
@@ -39,7 +39,7 @@ export function startSideLink(store: Store, root: string, log: (line: string) =>
     busy = false;
   };
   const client: LinkClient = new LinkClient({
-    main: cfg.main, root, name: cfg.name, reconnect: true,
+    main: cfg.main, root, name: cfg.name, reconnect: true, fenced: () => fencedAt(store),
     onState: (state, why) => {
       if (state === "connecting") return;   // the last answer stands while it redials
       try { noteLink(store, state); } catch (e) { say(`link: the down clock was not written: ${(e as Error).message}`); }   // U14 side-fence

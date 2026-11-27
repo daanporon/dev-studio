@@ -75,6 +75,12 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
     const at = sec();
     store.db.run("UPDATE hosts SET last_seen_at = ?, link_version = ?, up_migration = ?, code_rev = ?, unreachable_since = NULL WHERE name = ?",
       [at, String(f.link_version ?? ""), String(f.up_migration ?? "") || null, String(f.code_rev ?? "") || null, name]);
+    // U15: the host fenced itself while the link was down (its push and close are done): main fences it too, now.
+    const fenced = Number(f.fenced_at);
+    if (Number.isInteger(fenced) && fenced > 0 && fenced <= at + 60) {
+      store.db.run("UPDATE hosts SET fenced_at = COALESCE(fenced_at, ?) WHERE name = ?", [fenced, name]);
+      fact("host_reported_fence", { name, fenced_at: fenced });
+    }
     ws.data.phase = "up";
     ws.data.peer = new Peer((fr) => sendTo(ws, fr), channels, { host: name, end: "main", root, store }, "m");
     live.set(name, ws);

@@ -94,6 +94,8 @@ export type LinkClientOpts = {
   channels?: Map<string, Channel>;
   reconnect?: boolean;
   onState?: (s: LinkState, why?: string) => void;
+  /** U15: when this host fenced itself while the link was down (side-state.ts fencedAt), sent with each hello. */
+  fenced?: () => number | null;
 };
 
 export class LinkClient {
@@ -111,6 +113,10 @@ export class LinkClient {
   private waiters: { resolve: () => void; reject: (e: Error) => void }[] = [];
 
   constructor(private o: LinkClientOpts) { this.channels = o.channels ?? null; }
+
+  private fencedField(): { fenced_at?: number } {
+    try { const at = this.o.fenced?.(); return at ? { fenced_at: at } : {}; } catch { return {}; }
+  }
 
   /** Dial main. Resolves once welcomed; rejects on a refusal or a close before the welcome. */
   async start(): Promise<void> {
@@ -183,7 +189,7 @@ export class LinkClient {
       if (f.t === "challenge") {
         const nonce = Buffer.from(String(f.nonce ?? ""), "base64");
         const key = readFileSync(hostKeyPath(this.o.root), "utf8");
-        ws.send(JSON.stringify({ t: "auth", signature: signHello(key, nonce, LINK_VERSION, this.o.name), link_version: LINK_VERSION, up_migration: newestMigration(), code_rev: codeRev() } satisfies Frame));
+        ws.send(JSON.stringify({ t: "auth", signature: signHello(key, nonce, LINK_VERSION, this.o.name), link_version: LINK_VERSION, up_migration: newestMigration(), code_rev: codeRev(), ...this.fencedField() } satisfies Frame));
         return;
       }
       if (f.t === "welcome") {
