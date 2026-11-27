@@ -211,6 +211,18 @@ describe("main's checks of a split or newly forwarded call", () => {
     expect(call(s, ["ds-feedback-ts", "the board was slow"])).toMatchObject({ ok: true });
   });
 
+  test("orch.sh send, send-worker and ask reach only the member's own project", () => {
+    const s = store();
+    put(s, "squads", { id: 2, project: "otherp", topic: "oq", status: "active", run_id: "run_other" });
+    put(s, "members", { id: 4, project: "otherp", squad: "oq", role: "builder", suffix: "x", wt: "local::/w/other", host: "local", status: "running", gen: "g4" });
+    s.db.run("UPDATE squads SET run_id = 'run_own' WHERE id = 1");
+    expect(call(s, ["orch-ts", "send", "run_own", "subj", "body"])).toMatchObject({ ok: true });
+    expect(call(s, ["orch-ts", "send-worker", "/w/lead", "subj", "body"])).toMatchObject({ ok: true });
+    expect(call(s, ["orch-ts", "send", "run_other", "subj", "body"])).toMatchObject({ ok: false, code: EXIT.refused });
+    expect(call(s, ["orch-ts", "ask", "run_other", "q"])).toMatchObject({ ok: false, code: EXIT.refused });
+    expect(call(s, ["orch-ts", "send-worker", "/w/other", "subj", "body"])).toMatchObject({ ok: false, code: EXIT.refused });
+  });
+
   test("what stays on the side host is refused on main", () => {
     const s = store();
     for (const cmd of ["review-unit-ts", "stop-mine", "contract-backend", "hook-gate", "no-broad-kill-hook-ts", "rewake-hook-ts"]) {
@@ -357,5 +369,18 @@ describe("on a side host", () => {
     // The seen mark is the side host's, written by its half; the next tick there says unchanged.
     const again = await onSide(side, w.dir, ["watch-ts", "--worktree", "200"], { DS_INSTR_SEEN: seen });
     expect(again.stdout).toContain("INSTRUCTIONS: unchanged");
+  }, 30_000);
+
+  test("reload ack from the side terminal settles main's reload wish", async () => {
+    const w = await worktree(false);
+    const m = await mainUp(`s1::${w.dir}`), side = await sideUp(m);
+    const at = Math.floor(Date.now() / 1000);
+    m.store.db.run("UPDATE members SET reload_at = ? WHERE id = 2", [at - 5]);
+    m.store.db.run("INSERT INTO observed_terminals (project, handle, wt, doc, observed_at) VALUES ('realp', 's1:h1', ?, ?, ?)",
+      [`s1::${w.dir}`, JSON.stringify({ gen: "g1" }), at]);
+    const r = await onSide(side, w.dir, ["reload", "ack", "realp", "sq", "builder", "u1"]);
+    expect(r.stderr).toBe("");
+    expect(r).toMatchObject({ code: 0 });
+    expect(all(m.store, "SELECT reloaded_at IS NOT NULL AS done FROM members WHERE id = 2")).toEqual([{ done: 1 }]);
   }, 30_000);
 });

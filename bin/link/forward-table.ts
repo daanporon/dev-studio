@@ -18,7 +18,7 @@
 // which toplevel() (squad/exposed.ts) returns in place of main's own folder.
 import type { Row, Store } from "../loop/core/store.ts";
 import { parseMember } from "../loop/core/whoami.ts";
-import { roleName } from "../loop/messages/messages.ts";
+import { memberAt, roleName, squadOfRun } from "../loop/messages/messages.ts";
 import { dsLabel } from "../lib/shared";
 import { checkFacts } from "./split.ts";
 import { join } from "node:path";
@@ -149,6 +149,9 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
     if (pos.length !== 1 || dsLabel(pos[0]) !== project) return refuse(`from a side host ship-mode only reads ${project}'s mode`);
   } else if (cmd === "orch-ts") {
     if (!(ORCH_OPS as readonly string[]).includes(pos[0] ?? "")) return refuse(`from a side host orch.sh only does ${ORCH_OPS.join(", ")}`);
+    // The target is the member's own project, as for `ds msg send`: a Run id's squad, or a worktree's member.
+    const target = pos[0] === "send-worker" ? memberAt(s, pos[1] ?? "") : pos[0] === "reply" ? null : squadOfRun(s, pos[1] ?? "");
+    if (target && target.project !== project) return refuse(`orch.sh ${pos[0]} from a side host only reaches ${project}`);
   } else if (cmd === "watch-ts") {
     if (!args.includes("--worktree")) return refuse("from a side host watch.sh only reads your own inbox (--worktree)");
   }
