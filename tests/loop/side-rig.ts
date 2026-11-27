@@ -35,7 +35,8 @@ const temp = (p: string) => { const d = mkdtempSync(join(tmpdir(), p)); temps.pu
 
 const fulfillers = await load<Fulfiller & Reconciler>(DIRS.fulfil);
 const reconcilers = await load<Reconciler>(DIRS.reconcilers);
-const system: Picker = async () => ({ agent: "claude", model: "opus", effort: null, account: "system" });
+// acct-a is the account with a login on the side host (U19, rig).
+const picker: Picker = async () => ({ agent: "claude", model: "opus", effort: null, account: "acct-a" });
 /** What the fake side answers a `probe` and a `push` with; a test changes them. */
 export type Answers = { probe: string; push: number };
 
@@ -68,6 +69,12 @@ export async function rig() {
     s.upsert("config", { project: "fx", file: "roles.conf", key: role }, { value, observed_at: T });
   let at = T;
   s.db.run("INSERT INTO hosts (name, status, public_key, fingerprint, seats, requested_at, accepted_at, last_seen_at) VALUES (?, 'accepted', 'a2V5', 'aaaa', 2, ?, ?, ?)", [HOST, T, T, T]);
+  // acct-a has a login on the side host (the launch reads account_folders from this state root) and one on main,
+  // where a requeued Builder starts.
+  process.env.DS_STATE_ROOT = state;
+  s.db.run("INSERT INTO account_folders (agent, account, host, dir, observed_at) VALUES ('claude', 'acct-a', ?, '/side/home/.claude', ?)", [HOST, T]);
+  mkdirSync(join(d, "acct-a"));
+  s.db.run("UPDATE accounts SET config_dir = ? WHERE agent = 'claude' AND account = 'acct-a'", [join(d, "acct-a")]);
   const orca = new FakeOrca();
   const local = fakeContract({}, { name: "tmux", now: () => at }), side = fakeContract({}, { name: "tmux", now: () => at });
   const jobs: HostJob[] = [];
@@ -82,7 +89,7 @@ export async function rig() {
     if (body.job === "launch.write") return runHere(body, { root: join(d, "side-state") });
     throw new Error(`no fake for ${body.job}`);
   };
-  const act = new LoopActuator({ orca, pick: system, fulfillers: fulfillers.filter((f) => f.kinds), jobs: send,
+  const act = new LoopActuator({ orca, pick: picker, fulfillers: fulfillers.filter((f) => f.kinds), jobs: send,
     backends: () => ({ backend: local, caps: local.caps }), remote: () => side });
   const loop = new Loop(s, { observers: [], reconcilers: [decider, ...reconcilers, ...fulfillers] }, act, { projects: () => ["fx"] });
   loop.boot(T);
@@ -103,7 +110,7 @@ export const closes = (f: FakeContract) => f.calls.filter((c) => c.op === "termi
 
 // A builder on the side host, running there, with its branch pushed to origin at one commit of its own.
 export async function builderOnSide(r: Rig): Promise<{ m: Row; branch: string; sha: string }> {
-  r.s.db.run("INSERT INTO members (project, squad, role, suffix, agent, model, account, host, observed_at, updated_at) VALUES ('fx', ?, 'builder', 'u1', 'claude', 'opus', 'system', ?, ?, ?)",
+  r.s.db.run("INSERT INTO members (project, squad, role, suffix, agent, model, account, host, observed_at, updated_at) VALUES ('fx', ?, 'builder', 'u1', 'claude', 'opus', 'acct-a', ?, ?, ?)",
     [r.sq, HOST, T, T]);
   const id = Number((r.s.db.query("SELECT id FROM members WHERE squad = ? AND suffix = 'u1'").get(r.sq) as Row).id);
   r.s.want("member", String(id), "running", { payload: { prompt: "build u1" } });
