@@ -37,7 +37,11 @@
 //   GET /review/<key>          one Lavish session's page in a plain view: its name and "review running" or
 //                              "review ended" over an iframe of GET /review/<key>/file/<path>, which serves the
 //                              page and the files beside it (the session's folder and below; saved-pages.ts
-//                              `serveReview`, sandboxed and read-only); 404 unless a squad in scope lists it and its file is there
+//                              `serveReview`, sandboxed and read-only); 404 unless a squad in scope lists it and its file is there.
+//                              Its "Open in Lavish" button posts /api/lavish-reopen
+//   POST /api/lavish-reopen {key}  that button, same scope rule: 200 {url} (an ended session is reopened in
+//                              Lavish first), 202 {starting} while the loop starts Lavish, 502 {error} when
+//                              Lavish refuses; 404 for a key /review/<key> would not show
 //   GET /lavish/<key>          302 to that Lavish review page; when Lavish is down, a `lavish`
 //                              request and a page that reloads until it is up
 // Writes (POST, JSON, same-origin), each a `requests` row unless said otherwise:
@@ -1491,6 +1495,37 @@ function pageGet(url: URL) {
 // HTML-escape one value printed into a page the server writes.
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
+// The session `key` as /review/<key> may show it, with the file at `path` under its folder (default: the page
+// itself, which must be servable: of an allowed type, no symlinked folder), or null.
+function reviewable(key: string, path?: string[]) {
+  const t = reviewTarget(key, scope);
+  const f = t ? serveReview(t.file, t.root, t.worktree, path ?? [t.name]) : null;
+  return t && f ? { t, f } : null;
+}
+
+// The wrapper's "Open in Lavish" button. It writes only text (textContent), and retries while Lavish starts.
+const OPEN_SCRIPT = `
+const b = document.getElementById("open"), m = document.getElementById("msg");
+let tries = 0;
+const say = (t) => { m.textContent = t; m.hidden = !t; };
+const reset = () => { b.disabled = false; b.textContent = "Open in Lavish"; };
+async function go() {
+  try {
+    const r = await fetch("/api/lavish-reopen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: b.dataset.key }) });
+    const t = await r.text();
+    let j = {};
+    try { j = JSON.parse(t); } catch { /* a plain-text refusal */ }
+    if (r.status === 200 && j.url) { location.assign(j.url); return; }
+    if (j.starting && ++tries < 40) { say("Starting Lavish…"); setTimeout(go, 3000); return; }
+    say(j.starting ? "Lavish did not start; try again." : j.error || t || "failed: " + r.status);
+  } catch (e) { say("not sent: " + (e.message || e)); }
+  reset();
+}
+b.addEventListener("click", () => { b.disabled = true; b.textContent = "Opening…"; tries = 0; say(""); go(); });
+// Back from the editor: a page the browser kept still shows "Opening…".
+addEventListener("pageshow", (e) => { if (e.persisted) { reset(); say(""); } });
+`;
+
 // GET /review/<key> -> the page of one Lavish session in a plain view (lavish-legacy-document-opening U1): a one-line
 // top bar (the page name, "review running" or "review ended") over an iframe of
 // GET /review/<key>/file/<name>, which serves the page and the files beside it (saved-pages.ts `serveReview`:
@@ -1500,10 +1535,9 @@ function reviewGet(url: URL) {
   let seg: string[];
   try { seg = url.pathname.slice("/review/".length).split("/").map(decodeURIComponent); } catch { return text(404, "not found\n"); }
   const [key, sub, ...rest] = seg;
-  const t = reviewTarget(key ?? "", scope);
-  // The page itself must be servable for the wrapper too (there, of an allowed type, no symlinked folder).
-  const f = t ? serveReview(t.file, t.root, t.worktree, sub === "file" ? rest : [t.name]) : null;
-  if (!t || !f) return text(404, "not found\n");
+  const shown = reviewable(key ?? "", sub === "file" ? rest : undefined);
+  if (!shown) return text(404, "not found\n");
+  const { t, f } = shown;
   if (sub === "file") {
     return new Response(f.bytes, { status: 200, headers: { "Content-Type": f.type, "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "sandbox allow-scripts", "Cache-Control": "no-store" } });
@@ -1511,6 +1545,7 @@ function reviewGet(url: URL) {
   if (sub !== undefined) return text(404, "not found\n");
   const name = esc(t.name), state = t.status === "ended" ? "review ended" : "review running";
   const src = esc(`/review/${encodeURIComponent(key)}/file/${encodeURIComponent(t.name)}`);
+  const nonce = crypto.randomUUID();
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>${name}</title>
 <style>
@@ -1519,14 +1554,19 @@ body { display: flex; flex-direction: column; font: 15px system-ui, sans-serif; 
 header { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-bottom: 1px solid #ddd; box-sizing: border-box; }
 .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .state { flex: none; color: #555; font-size: 13px; }
+button { flex: none; min-height: 44px; padding: 0 12px; font: inherit; color: inherit; background: none; border: 1px solid #bbb; border-radius: 6px; cursor: pointer; }
+button:disabled { opacity: .6; cursor: default; }
+.msg { margin: 0; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #ddd; overflow-wrap: anywhere; }
 iframe { flex: 1; min-height: 0; width: 100%; border: 0; display: block; }
-@media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } header { border-color: #333; } .state { color: #aaa; } }
+@media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } header, .msg { border-color: #333; } button { border-color: #555; } .state { color: #aaa; } }
 </style></head><body>
-<header><span class="name" title="${name}">${name}</span><span class="state">${esc(state)}</span></header>
+<header><span class="name" title="${name}">${name}</span><span class="state">${esc(state)}</span><button id="open" type="button" data-key="${esc(key)}">Open in Lavish</button></header>
+<p class="msg" id="msg" role="status" hidden></p>
 <iframe src="${src}" title="${name}" sandbox="allow-scripts"></iframe>
+<script nonce="${nonce}">${OPEN_SCRIPT}</script>
 </body></html>
 `, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'", "Cache-Control": "no-store" } });
+    "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; script-src 'nonce-${nonce}'; connect-src 'self'`, "Cache-Control": "no-store" } });
 }
 
 // GET /lavish/<key> -> 302 to that Lavish review page; when Lavish is down, one `lavish` request.
@@ -1536,6 +1576,12 @@ async function lavish(key: string) {
   if (!/^https?:\/\//.test(url)) return text(404, "no such Lavish session\n");
   const port = new URL(url).port || "80";
   if (await lavishUp(port)) return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store" } });
+  const { r, id } = askLavishStart(port);
+  return r.status === 202 ? waitPage(`request ${id}`) : r;
+}
+
+// One open `lavish` request asks the loop to start Lavish (202 and its id), or why it could not be filed.
+function askLavishStart(port: string) {
   let id = 0;
   const r = write((s) => {
     const open = one(s, "SELECT * FROM requests WHERE kind = 'lavish' AND done_at IS NULL ORDER BY id LIMIT 1");
@@ -1543,7 +1589,32 @@ async function lavish(key: string) {
     id = Number(row.id);
     return row;
   });
-  return r.status === 202 ? waitPage(`request ${id}`) : r;
+  return { r, id };
+}
+
+// POST /api/lavish-reopen {key} (lavish-legacy-document-opening U2): the editor URL of a session /review/<key>
+// shows. Lavish never shows an ended session, so the board reopens it first: server-side with no Origin
+// header, which Lavish accepts.
+async function lavishReopen(req: Request): Promise<Response> {
+  const p = await readPost(req);
+  if ("r" in p) return p.r;
+  const t = typeof p.b.key === "string" ? reviewable(p.b.key)?.t : undefined;
+  const url = t?.url ?? "";
+  if (!t || !/^https?:\/\//.test(url)) return json(404, { error: "no such review page" });
+  const port = new URL(url).port || "80";
+  if (!(await lavishUp(port))) {
+    const { r, id } = askLavishStart(port);
+    return r.status === 202 ? json(202, { starting: true, id }) : r;
+  }
+  if (t.status !== "ended") return json(200, { url });
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/sessions`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file: t.file, reopen: true }), redirect: "error", signal: AbortSignal.timeout(10_000) });
+    const b: any = await res.json().catch(() => null);
+    const opened = String(b?.url ?? "");
+    if (res.ok && b?.status !== "user-ended" && /^https?:\/\//.test(opened)) return json(200, { url: opened });
+    return json(502, { error: `Lavish would not reopen it: ${b?.error ?? b?.status ?? `HTTP ${res.status}`}` });
+  } catch (e) { return json(502, { error: `Lavish did not answer: ${(e as Error).message || e}` }); }
 }
 
 // remove-project U4: the board's half of `ds remove-project`. The refusal for a label this board may not
@@ -1616,7 +1687,7 @@ async function get(req: Request, url: URL) {
 
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
-  "/api/restart": restart, "/api/member-move": memberMove, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account-move": accountMovePost, "/api/host": hostPost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/restart": restart, "/api/member-move": memberMove, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account-move": accountMovePost, "/api/host": hostPost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost, "/api/lavish-reopen": lavishReopen,
   "/api/settings-import/preview": settingsImportPreview,
 };
 

@@ -607,7 +607,7 @@ function questionDoc(db: Db, label: string, topic: string, x: any, units: any[] 
 // Lavish review pages (observed_sessions) of a squad: the artifact sits in one of its worktrees, or in its
 // pages folder `<state root>/<label>/pages/<topic>/` or the legacy `<label>/squads/<topic>-board/`. A live
 // and an archived squad read the same way (an archived one has no worktrees: the worktrees its `pages_rescued`
-// events name stand in). A page whose file is gone gets `saved`, the path under the state root of the copy the
+// events name stand in). A session whose file is not there is `gone: true`, and gets `saved`, the path under the state root of the copy the
 // rescue made when its worktree closed (served by GET /page/<saved>); a saved page no session stands for is
 // listed too, with `key` null. Nothing is listed twice.
 function lavishScope(db: Db, st: any, label: string, topic: string) {
@@ -634,6 +634,7 @@ function lavish(db: Db, st: any, label: string, topic: string) {
       const d = parse(s.doc) ?? {}, f = String(s.file);
       const e: any = { key: d.key ?? null, name: basename(f), dir: basename(f.slice(0, f.lastIndexOf("/"))), mtime: Number(d.mtime) || 0, url: s.url ?? null, status: s.status ?? null };
       taken.add(f); sessionFile.set(e, f);
+      if (!isFile(f)) e.gone = true;
       for (const p of rescued) {
         if (!f.startsWith(String(p.path) + "/")) continue;
         const copy = savedCopy(db.s.root, label, topic, String(p.dest), f.slice(String(p.path).length + 1));
@@ -3709,12 +3710,12 @@ export function lavishUrl(key: string, root = stateRoot()): string | null {
 // The Lavish session of `key` for GET /review/<key> (lavish-legacy-document-opening U1): its file and status, the
 // squad whose Review pages list it (lavish()'s rule; live squads first, then archived ones) inside the board's scope
 // `want`, and the folder that put it in that squad's scope (`worktree`: a worktree, else a pages folder). Null when
-// the key is unknown or no squad in scope lists it.
-export type ReviewTarget = { file: string; name: string; status: string | null; label: string; topic: string; root: string; worktree: boolean };
+// the key is unknown or no squad in scope lists it. `url` is the session's Lavish page.
+export type ReviewTarget = { file: string; name: string; url: string | null; status: string | null; label: string; topic: string; root: string; worktree: boolean };
 export function reviewTarget(key: string, want: { project: string; topic: string }, root = stateRoot()): ReviewTarget | null {
   if (!/^[0-9a-f]{16}$/.test(key)) return null;
   return withDb((db) => {
-    const row = db.all("SELECT file, status, doc FROM observed_sessions WHERE COALESCE(status, '') != 'log' ORDER BY rowid").find((x) => parse(x.doc)?.key === key);
+    const row = db.all("SELECT file, url, status, doc FROM observed_sessions WHERE COALESCE(status, '') != 'log' ORDER BY rowid").find((x) => parse(x.doc)?.key === key);
     if (!row) return null;
     const file = String(row.file);
     const inScope = (l: string, t: string) => (!want.project || want.project === l) && (!want.topic || want.topic === t);
@@ -3735,7 +3736,7 @@ export function reviewTarget(key: string, want: { project: string; topic: string
     }
     for (const { l, t, st } of squads) {
       const h = lavishScope(db, st, l, t).home(file);
-      if (h) return { file, name: basename(file), status: row.status == null ? null : String(row.status), label: l, topic: t, ...h };
+      if (h) return { file, name: basename(file), url: row.url == null ? null : String(row.url), status: row.status == null ? null : String(row.status), label: l, topic: t, ...h };
     }
     return null;
   }, root);

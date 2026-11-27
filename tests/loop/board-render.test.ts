@@ -1169,3 +1169,33 @@ test("accounts: a moved account's duplicate warning names its own copy and the r
     expect(r.errors).toEqual([]);
   } finally { await r.window.happyDOM.close(); }
 });
+
+// ---- lavish-legacy-document-opening U2: a review page links the editor while its session is there, the page view
+// once it ended; a gone one links its saved copy, or says "gone" with no link.
+test("Documents: review pages link the session, the page view, the saved copy, or say gone", async () => {
+  const page = (name: string, key: string, over: any) => ({ key, name, dir: ".lavish", mtime: now - 600, url: "http://127.0.0.1:1/s", status: "open", ...over });
+  const sq = { ...udBoard.squads[0], lavish: [
+    page("open.html", "aaaaaaaaaaaaaaa1", {}),
+    page("ended.html", "aaaaaaaaaaaaaaa2", { status: "ended" }),
+    page("copied.html", "aaaaaaaaaaaaaaa3", { status: "ended", gone: true, saved: "p/pages/t/rescued/b/.lavish/copied.html" }),
+    page("lost.html", "aaaaaaaaaaaaaaa4", { gone: true })] };
+  const r = await mount({ ...udBoard, squads: [sq] }, false);
+  const w = r.window, doc = w.document;
+  try {
+    doc.getElementById("squads").open = true;
+    await new Promise((x) => setTimeout(x, 30));
+    doc.querySelector(".row.squad").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await new Promise((x) => setTimeout(x, 30));
+    const rows = [...doc.querySelectorAll('.docs[data-docs="pages"] .plan')] as any[];
+    const row = (name: string) => rows.find((e) => e.textContent.includes(name));
+    expect(row("open.html").getAttribute("href")).toBe("/lavish/aaaaaaaaaaaaaaa1");
+    expect(row("ended.html").getAttribute("href")).toBe("/review/aaaaaaaaaaaaaaa2");
+    expect(row("copied.html").getAttribute("href")).toBe("/page/p/pages/t/rescued/b/.lavish/copied.html");
+    expect(row("lost.html").getAttribute("href")).toBeNull();
+    expect(row("lost.html").tagName).toBe("SPAN");
+    expect(row("lost.html").textContent).toContain("gone");
+    expect(rows.filter((e) => e.querySelector(".page-view")).map((e) => e.getAttribute("href"))).toEqual(["/review/aaaaaaaaaaaaaaa2"]);
+    expect(row("ended.html").querySelector(".page-view").textContent).toBe("page");
+    expect(r.errors).toEqual([]);
+  } finally { await r.window.happyDOM.close(); }
+});

@@ -43,7 +43,7 @@ test("an archived squad lists its session pages with their old names, each with 
   const l = arch(f.board()).lavish;
   expect(l.map((e: any) => e.name).sort()).toEqual(["idea.html", "plan.html"]);
   const m = byName(l);
-  expect(m["plan.html"]).toMatchObject({ key: "aaaaaaaaaaaaaaaa", dir: ".lavish", saved: "realp/pages/t1/rescued/builder-u1/.lavish/plan.html" });
+  expect(m["plan.html"]).toMatchObject({ key: "aaaaaaaaaaaaaaaa", dir: ".lavish", gone: true, saved: "realp/pages/t1/rescued/builder-u1/.lavish/plan.html" });
   // the newest copy of a page the rescue wrote twice
   expect(m["idea.html"].saved).toBe("realp/pages/t1/rescued/builder-u1/.scratch/b/idea.2.html");
   expect(m["idea.html"].key).toBe("bbbbbbbbbbbbbbbb");
@@ -96,6 +96,6 @@ test("a gone session whose event names no copy still finds its copy by path, onc
   s.close();
   const l = arch(f.board()).lavish, m = byName(l);
   expect(l.map((e: any) => e.name).sort()).toEqual(["idea.html", "plan.html"]);
-  expect(m["plan.html"]).toMatchObject({ key: "aaaaaaaaaaaaaaaa", saved: "realp/pages/t1/rescued/builder-u1/.lavish/plan.html" });
+  expect(m["plan.html"]).toMatchObject({ key: "aaaaaaaaaaaaaaaa", gone: true, saved: "realp/pages/t1/rescued/builder-u1/.lavish/plan.html" });
   expect(m["idea.html"].saved).toBe("realp/pages/t1/rescued/builder-u1/.scratch/b/idea.2.html");
 });

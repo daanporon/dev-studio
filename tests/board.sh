@@ -480,7 +480,7 @@ mkdir -p "$TMP/lv" "$TMP/wtL/.lavish"
 printf '{"run_id":"l1","status":"running","members":[],"units":[],"worktrees":["u1::%s/wtL"]}' "$TMP" > "$SD/lav-sq.json"
 printf '{"sessions":{"k1":{"key":"k1","file":"%s/wtL/.lavish/brainstorm.html","url":"http://h:4387/session/k1","status":"open"},"k2":{"key":"k2","file":"%s/wtLx/.lavish/other.html","url":"http://h:4387/session/k2","status":"open"}}}' "$TMP" "$TMP" > "$TMP/lv/state.json"
 LAVISH_AXI_STATE_DIR="$TMP/lv" board "$LBL" > "$TMP/lv.json"
-jt "lavish session on its squad"  "$TMP/lv.json" '.squads[] | select(.topic=="lav-sq") | .lavish == [{"key":"k1","name":"brainstorm.html","dir":".lavish","mtime":0,"url":"http://h:4387/session/k1","status":"open"}]' '.squads[] | select(.topic=="lav-sq") | .lavish'
+jt "lavish session on its squad"  "$TMP/lv.json" '.squads[] | select(.topic=="lav-sq") | .lavish == [{"key":"k1","name":"brainstorm.html","dir":".lavish","mtime":0,"url":"http://h:4387/session/k1","status":"open","gone":true}]' '.squads[] | select(.topic=="lav-sq") | .lavish'
 jt "no lavish state = empty list" "$J" '.squads[0].lavish == []'
 rm -f "$SD/lav-sq.json"
 
