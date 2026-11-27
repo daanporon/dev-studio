@@ -621,7 +621,8 @@ eq "web page: Tile caps the bar fill at 100" "$(grep -cF 'Math.min(100, bar)' "$
 has "web page: Machine section stats sit in a .tiles grid" "$mp" 'class="tiles mach-tiles"'
 mt="$(sed -n '/^function MachineTop/,/^}/p' "$ROOT/web/board.html")"
 has "web page: the table switch is a two-button control with aria-pressed" "$mt" 'aria-pressed=${sort === "cpu"}'
-has "web page: the switch choice is stored under b:machine-sort" "$mt" 'lstore.set("b:machine-sort", s)'
+has "web page: the switch choice is stored under b:machine-sort" "$mt" 'sortKey = "b:machine-sort"'
+has "web page: the switch stores its choice under that key" "$mt" 'lstore.set(sortKey, s)'
 has "web page: the heading follows the switch" "$mt" 'Top by ${sort === "cpu" ? "CPU" : "RAM"}'
 has "web page: the heading tooltip says RAM is RSS" "$mt" 'RAM here is RSS'
 has "web page: the outside block is under the table" "$mt" 'Outside this project'
