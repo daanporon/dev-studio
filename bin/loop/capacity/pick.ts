@@ -65,6 +65,7 @@ import { findKind } from "../../lib/account-kinds/index.ts";
 import { loopProjects } from "../settings/projects.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 import { hostLine, isHostKey, SELF } from "../../lib/host-settings.ts";
+import { movable, pinnedSide, placeSide, sideBrake } from "./place.ts";
 
 export type PickReq = {
   project: string; role: string; tier?: string | null; phase?: string | null; squad?: string | null;
@@ -75,8 +76,10 @@ export type PickReq = {
   load?: Map<string, number>;                   // extra load per `<agent>\t<account>` (the reconciler's)
   sessionMax?: number; weeklyMax?: number;      // in place of pick_session_max / pick_weekly_max (U8's early pick)
   keep?: { agent: string; model: string; account: string; plan?: string | null };   // an earlier pick (U65): on its own rung it wins while it still has room
+  place?: boolean;                              // side-loop-host U11: the loop's own pick may move a worker start to a side host (place.ts)
 };
-export type Picked = { plan: string | null; agent: string; model: string; effort: string | null; account: string | null; fallback: boolean; rung: number; reason: string; why: string };
+// host (U11, with `place`): where the start runs, null = main; absent = the pick did not place it (it runs where its row says).
+export type Picked = { plan: string | null; agent: string; model: string; effort: string | null; account: string | null; fallback: boolean; rung: number; reason: string; why: string; host?: string | null };
 export type Waiting = { wait: number; known: boolean; reason: string; why: string;   // known: a real reset, not now + DS_PICK_WAIT_S
   slot?: { limit: number; live: number; ahead: number } };                           // why "slot": over max_builders (U145); "host": the host brake (U4)
 export type PickResult = Picked | Waiting | { error: string };
@@ -132,12 +135,16 @@ function wholeRow(store: Store, project: string, key: string): number | null {
 
 // The host brake (U4): with builder_host_brake on (a host key, U25: main's own value, read against main's own sample), the crit line a fresh machine sample crosses, for a
 // start that needs a new Builder agent; null = go ahead.
+// A member pinned to a side host (side-loop-host U11, KTD16) is braked by that host: its own brake (default on), its own sample.
 export function hostBrake(store: Store, project: string, who: Asker, now: number, role: string): string | null {
+  const side = pinnedSide(store, who.member ?? null);
+  if (side) return newBuilderStart(store, project, who, now, role) ? sideBrake(store, side, now) : null;
   if (limit(store, project, "builder_host_brake") !== "on") return null;
-  const r = memo(store, null, "machine", "", () => store.db.query("SELECT * FROM observed_machine WHERE host = 'local' ORDER BY observed_at DESC LIMIT 1").get() as Row | null);
-  const crit = hostCrit(r, (k) => wholeLimit(store, project, k), now);
+  const crit = hostCrit(mainSample(store), (k) => wholeLimit(store, project, k), now);
   return crit && newBuilderStart(store, project, who, now, role) ? crit : null;
 }
+const mainSample = (store: Store) =>
+  memo(store, null, "machine", "", () => store.db.query("SELECT * FROM observed_machine WHERE host = 'local' ORDER BY observed_at DESC LIMIT 1").get() as Row | null);
 
 // The host brake as one host-wide state (board-shows-host-brake U1), for the board: the host's latest
 // sample (`fresh`/`stale`/`missing`, its age), the crit line it crosses (`hit`, null = none or not fresh)
@@ -446,10 +453,27 @@ export function museResolve(model: string): string {
 export function pick(store: Store, req: PickReq, now: number): PickResult {
   const m = req.member ? store.db.query("SELECT * FROM members WHERE id = ?").get(req.member) as Row | null : null;
   const squad = req.squad ?? (m?.squad as string | null) ?? null;
-  const s = slot(store, req.project, { member: m, squad, suffix: req.suffix ?? null }, now, req.role);
-  if (!s.ok) return { wait: now, known: false, why: "slot", reason: s.why, slot: { limit: s.limit, live: s.live, ahead: s.ahead } };
-  const brake = hostBrake(store, req.project, { member: m, squad, suffix: req.suffix ?? null }, now, req.role);
-  if (brake) return { wait: now, known: false, why: "host", reason: `WAIT host: ${brake}` };
+  const who = { member: m, squad, suffix: req.suffix ?? null };
+  const s = slot(store, req.project, who, now, req.role);
+  const brake = s.ok ? hostBrake(store, req.project, who, now, req.role) : null;
+  const held: Waiting | null = !s.ok ? { wait: now, known: false, why: "slot", reason: s.why, slot: { limit: s.limit, live: s.live, ahead: s.ahead } }
+    : brake ? { wait: now, known: false, why: "host", reason: `WAIT host: ${brake}` } : null;
+  // Placement (side-loop-host U11, KTD10): main first; a Builder main holds, or a Tester/Researcher while main is
+  // critical, goes to the first side host that takes it (place.ts). None takes it: the Builder waits as before, the
+  // Tester or Researcher starts on main. The reason keeps main's wait on the same line, never at a line start (SLOT_WAIT).
+  if (!req.place || !movable(store, m, req.role)) return held ?? choose(store, req, m, squad, now);
+  const role = String(m?.role ?? req.role);
+  const mainCrit = role !== "builder" ? hostCritHit(mainSample(store), (k) => wholeLimit(store, req.project, k), now) : null;
+  const why = held ? held.reason.replace(/^WAIT /, "") : mainCrit ? `host: ${hostCrit(mainSample(store), (k) => wholeLimit(store, req.project, k), now)}` : null;
+  const side = why ? placeSide(store, role, now, m ? Number(m.id) : null) : null;
+  if (held && !side?.host) return side?.skipped.length ? { ...held, reason: `${held.reason}; side hosts: ${side.skipped.join(", ")}` } : held;
+  const r = choose(store, req, m, squad, now);
+  if (!("agent" in r)) return r;
+  return side?.host ? { ...r, host: side.host, reason: `${r.reason}; on side host ${side.host} (main ${why})` } : { ...r, host: null };
+}
+
+// The ladder and the account for a start that may go ahead (pick, after slot, brake and placement).
+function choose(store: Store, req: PickReq, m: Row | null, squad: string | null, now: number): PickResult {
   const repo = squad ? (store.get("squads", { project: req.project, topic: squad })?.repo as string | null) ?? null : null;
   const ov = overrideOf(store, m);
   const lad = ladder(store, req, repo);

@@ -36,6 +36,7 @@ import type { Row, Store } from "../core/store.ts";
 import { envInt } from "../core/tick.ts";
 import { startWait } from "./slot.ts";
 import { withWalkMemo } from "./walk-memo.ts";
+import { hostOf, onSide } from "../squad/backend.ts";
 
 export const startSlots = () => envInt("DS_LOOP_START_SLOTS", 4);
 // A start retry further away than this gives its slot up (U270).
@@ -86,7 +87,7 @@ export function reconcile({ store, now: at }: TickCtx, { eligible, moves }: Want
   const max = startSlots();
   let used = inFlight;
   const ids = JSON.stringify(eligible.map((m) => m.id));
-  const plan: { m: Row; id: number; phase: string; row: Row; override: unknown }[] = [];
+  const plan: { m: Row; id: number; phase: string; row: Row; placed: boolean; override: unknown }[] = [];
   const retryAt = new Map((store.db.query(`SELECT subject, next_at FROM episodes WHERE kind = 'action:member' AND state = 'pending'
     AND next_at > ? AND subject IN (SELECT 'member:' || value FROM json_each(?))`).all(at + RETRY_HOLD, ids) as { subject: string; next_at: number }[])
     .map((r) => [r.subject, Number(r.next_at)]));
@@ -107,13 +108,17 @@ export function reconcile({ store, now: at }: TickCtx, { eligible, moves }: Want
       const phase = String(m.role) === "builder" && !phaseMayWrite(m, reality) ? String(m.phase) : reality;
       let w: { agent?: string; model?: string; effort?: string } = {};
       try { w = m.want_payload && m.want_result == null ? JSON.parse(String(m.want_payload)) : {}; } catch { /* not JSON: nothing fixed */ }
-      const row: Row = { project, squad: m.squad, role, tier, phase, agent: null, model: null, effort: null, account: null, fallback: null, wait_until: null, wait_known: null, slot: 0, reason: null, picked_at: at };
+      const row: Row = { project, squad: m.squad, role, tier, phase, agent: null, model: null, effort: null, account: null, fallback: null, wait_until: null, wait_known: null, slot: 0, reason: null, picked_at: at, host: null };
+      // U11: a side host the loop placed this member on, kept while it waits (place.ts reads it as movable, not pinned).
+      const prior = store.get("picks", { member: id });
+      if (prior && onSide(prior.host) && String(prior.host) === String(m.host ?? "")) row.host = prior.host;
       const move = moves.get(id), held = reservationOf(store, id, at);
+      let placed = false;
       const retry = retryAt.get(`member:${id}`);
       if (retry !== undefined) row.reason = `waiting: start retry at ${new Date(retry * 1000).toISOString().slice(0, 19)}Z`;
       else if (used >= max) row.reason = `queued: ${used} of ${max} start slots in flight`;
       else {
-        const p = pick(store, { project, role, tier, phase, squad: String(m.squad), member: id, agent: w.agent ?? null, model: w.model ?? null, effort: w.effort ?? null,
+        const p = pick(store, { project, role, tier, phase, squad: String(m.squad), member: id, agent: w.agent ?? null, model: w.model ?? null, effort: w.effort ?? null, place: true,
           keep: held ? { agent: held.agent, model: held.model, account: held.account ?? "-" } : undefined }, at);
         if (move?.from && ("error" in p || "wait" in p || p.rung >= move.from))
           row.reason = `fallback: no higher rung than ${move.from} fits after this tick's moves`;
@@ -125,11 +130,12 @@ export function reconcile({ store, now: at }: TickCtx, { eligible, moves }: Want
         }
         else {
           Object.assign(row, { agent: p.agent, model: p.model, effort: p.effort, account: p.account, fallback: p.fallback ? 1 : 0, slot: 1, reason: p.reason });
+          if (p.host !== undefined) { row.host = p.host; placed = true; }   // U11: where it starts (null = main); place.ts counts it against that host's seats
           used++; go.add(id);
         }
       }
       store.upsert("picks", { member: id }, row);   // the temp copy: later picks of this walk see it
-      plan.push({ m, id, phase, row, override: overrideOf(store, m)?.id ?? null });
+      plan.push({ m, id, phase, row, placed, override: overrideOf(store, m)?.id ?? null });
     }
   }); } finally { store.db.run("DROP TABLE IF EXISTS temp.picks"); }
   store.tx(() => {
@@ -137,10 +143,13 @@ export function reconcile({ store, now: at }: TickCtx, { eligible, moves }: Want
     store.db.run("DELETE FROM picks WHERE member NOT IN (SELECT value FROM json_each(?))", [ids]);
     store.db.run("UPDATE picks SET slot = 0");
     const changed = new Map<string, Row[]>();     // `<project>\t<role>` -> its picks this tick
-    for (const { m, id, phase, row, override } of plan) {
+    for (const { m, id, phase, row, placed, override } of plan) {
       const project = String(m.project), role = String(m.role);
       if (String(m.role) === "builder" && (m.phase ?? null) !== phase)
         store.setIf("members", id, "phase", phase, (m.phase as string | null) ?? null);
+      // U11 (KTD10): the placed host goes on the member before its start; the fulfiller reads members.host.
+      if (placed && !m.wt && hostOf({ host: row.host }) !== hostOf(m))
+        store.setIf("members", id, "host", (row.host as string | null) ?? null, (m.host as string | null) ?? null);
       store.upsert("picks", { member: id }, row);
       const now = store.get("picks", { member: id });
       const k = `${project}\t${role}`;
