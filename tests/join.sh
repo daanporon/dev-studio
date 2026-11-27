@@ -15,6 +15,8 @@ unset DS_HERDR_BIN XDG_DATA_HOME
 cp "$ROOT/systemd/ds-side-loop.service" "$REPO/systemd/"
 cp -r "$ROOT/conventions" "$REPO/conventions"
 SIDE_STATE="$REPO/state"
+# The side loop reads Orca's login folders from here, never the host's (ORCA_USER_DATA_PATH beats HOME).
+export DS_ORCA_DATA="$TMP/orca"
 # Servers run detached (no unit on the host), tmux sockets stay in this test's folder.
 export DS_SERVER_SYSTEMD=0 DS_LOOP_SYSTEMD=0 DS_TICK_SECONDS=1 DS_JOIN_POLL_MS=200
 # The role skills step is recorded, never run (the real install-skills.sh reaches the network).
