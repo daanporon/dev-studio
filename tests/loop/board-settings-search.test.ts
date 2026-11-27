@@ -30,7 +30,7 @@ const skillRole = (role: string, skills: any[], hooks: any[] = [], mcp: any[] = 
 const SKILLS = {
   groups: ["Plan", "Ship"],
   roles: [
-    skillRole("lead", [skill("ce-plan", "write a plan"), skill("commit", "make a commit", "Ship")]),
+    skillRole("lead", [skill("ce-plan", "write a plan"), skill("ce-brainstorm", "explore before the plan"), skill("commit", "make a commit", "Ship")]),
     skillRole("thinker", [skill("ce-plan", "write a plan")], [skill("hook:resume", "restores a session")]),
     skillRole("builder", [skill("commit", "make a commit", "Ship")], [], [skill("mcp:browser", "drives a page")]),
   ],
