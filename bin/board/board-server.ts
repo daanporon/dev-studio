@@ -78,6 +78,10 @@
 //                 one-login agent or a folder with no login, 409 with one open for it
 //   /api/account-move {agent, account, force?}  `account-move` (issue #125, U9): `ds account move`'s request, host-wide;
 //                 409 with moveProblem's reason or with one open for it
+//   /api/host    {host, action: accept|reject, fingerprint} | {host, action: remove} | {host, action: set, key, value}
+//                 | {host, action: reset, key}  `host-member` and `host-key` (side-loop-host U17), host-wide; 400 for
+//                 a key that is not a host key or a bad shape, 409 for no such host, a file-only key set from the web
+//                 or the same action already open
 //   /api/account-login-code {request, code}  the pasted login code of an open paste-flow add in waiting_login, to
 //                 <state root>/account-login/<request> (0600; bin/lib/account-login-code.ts) for the add to type;
 //                 202 with no row, event or delivery, and no answer, log line or refusal ever carries the code
@@ -94,7 +98,9 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
+import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, FILE_ONLY_LIMITS, hostsJson, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
+import { isHostKey } from "../lib/host-settings.ts";
+import { knownHost } from "../loop/settings/host-settings.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
 import { BACKEND_NAMES, squadBackendRule } from "../backend/registry.ts";
 import { studioBackend } from "../loop/squad/studio.ts";
@@ -1056,6 +1062,34 @@ async function accountMovePost(req: Request) {
   });
 }
 
+// side-loop-host U17: Settings → Hosts and the pending-join card. The loop runs `ds host`'s own code (fulfil/host.ts),
+// which checks the host, the value and the fingerprint again.
+async function hostPost(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const { host, action, key, value, fingerprint } = pr.b;
+  if (!NAME.test(host ?? "")) return json(400, { error: "need host" });
+  let kind: string, payload: Record<string, string>;
+  if (action === "accept" || action === "reject" || action === "remove") {
+    if (action !== "remove" && (typeof fingerprint !== "string" || !fingerprint || fingerprint.length > 200)) return json(400, { error: `${action} needs the fingerprint shown` });
+    kind = "host-member"; payload = { host, action, ...(action === "remove" ? {} : { fingerprint }) };
+  } else if (action === "set" || action === "reset") {
+    if (typeof key !== "string" || !isHostKey(key)) return json(400, { error: `unknown host key ${String(key).slice(0, 60)}` });
+    if (action === "set" && FILE_ONLY_LIMITS.has(key)) return json(409, { error: `${key} is set with: ds host set ${host} ${key} <value>` });
+    if (action === "set" && (typeof value !== "string" || !value.trim() || value.length > 500)) return json(400, { error: "need value" });
+    kind = "host-key"; payload = { host, key, ...(action === "set" ? { value: value.trim() } : {}) };
+  } else return json(400, { error: "action is accept, reject, remove, set or reset" });
+  return write((s) => {
+    if (!knownHost(s, host)) no(409, `no host ${host}`);
+    const field = kind === "host-key" ? "key" : "action";
+    const open = one(s, "SELECT id FROM requests WHERE kind = ? AND done_at IS NULL AND json_extract(payload, '$.host') = ? AND json_extract(payload, '$.' || ?) = ?", kind, host, field, payload[field]);
+    if (open) no(409, `that change of ${host} is already in progress (request #${open.id})`);
+    const row = s.requestAny(kind, { ...payload, by: "board" }, { by: "board", project: null }).row;
+    cache.at = 0;
+    return row;
+  });
+}
+
 // account-login-code (issue #125, U6, KTD10): the pasted code goes to a 0600 drop file the add's fulfiller reads,
 // removes and types. Nothing here writes loop.db or logs, and no answer echoes the code.
 async function accountLoginCodePost(req: Request) {
@@ -1239,6 +1273,13 @@ function limitsGet(url: URL) {
   const project = url.searchParams.get("project") ?? "";
   if (!NAME.test(project)) return json(400, { error: "need project" });
   const r = limitsJson(project);
+  return r ? json(200, r) : json(503, NO_DB);
+}
+
+function hostsGet(url: URL) {
+  const project = url.searchParams.get("project") ?? "";
+  if (!NAME.test(project)) return json(400, { error: "need project" });
+  const r = hostsJson(project);
   return r ? json(200, r) : json(503, NO_DB);
 }
 
@@ -1433,6 +1474,7 @@ async function get(req: Request, url: URL) {
   if (url.pathname === "/api/stream") return stream(req, url);
   const path = url.pathname;
   if (path === "/api/limits") return limitsGet(url);
+  if (path === "/api/hosts") return hostsGet(url);
   if (path === "/api/roles") return rolesGet(url);
   if (path === "/api/skills") return skillsGet(url);
   if (path === "/api/settings-export") return settingsExportGet(url);
@@ -1462,7 +1504,7 @@ async function get(req: Request, url: URL) {
 
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
-  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account-move": accountMovePost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account-move": accountMovePost, "/api/host": hostPost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
   "/api/settings-import/preview": settingsImportPreview,
 };
 

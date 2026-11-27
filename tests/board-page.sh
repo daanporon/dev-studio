@@ -803,7 +803,7 @@ eq "U6 page: the Merged column renders FlowCard, not its own div" "$(grep -cF 'F
 eq "U6 page: a card whose unit is not on the board opens FlowCardDetails (squad, stage, PR, merged ago, took, gone line, Answer)" "$(grep -cF ': html`<${FlowCardDetails} card=${flowUnit.card}' "$BP")$(sed -n '/^function FlowCardDetails(/,/^}/p' "$BP" | grep -c 'fcd-squad\|fcd-stage\|fcd-pr\|fcd-merged\|fcd-took\|fcd-gone\|fcd-answer')" "16"
 
 # issue #125 U9: accounts live in Settings' Accounts tab; the strip's Manage button sits above the table and only opens it.
-eq "U9 page: the Accounts tab mounts its pane, with the shared-by-all-projects note" "$(grep -cF '["accounts", "Accounts"]]' "$W")$(grep -cF 'tab === "accounts" && html`<${AccountsPane}' "$W")$(grep -cF "Shared by all projects on this host — not part of this project's Export/Import." "$W")" "111"
+eq "U9 page: the Accounts tab mounts its pane, with the shared-by-all-projects note" "$(grep -cF '["accounts", "Accounts"], ["hosts", "Hosts"]]' "$W")$(grep -cF 'tab === "accounts" && html`<${AccountsPane}' "$W")$(grep -cF "Shared by all projects on this host — not part of this project's Export/Import." "$W")" "111"
 eq "U9 page: #settings/<tab> opens Settings on that tab" "$(grep -cF '/^#settings(?:\/([a-z]+))?$/.exec(location.hash)' "$W")$(grep -cF 'at=${settingsAt}' "$W")" "11"
 acc_summary=$(grep -F '<summary>Accounts<small>' "$W")
 eq "U9 page: the summary line has no Manage button" "$(printf '%s' "$acc_summary" | grep -c 'amanage\|<button')" "0"

@@ -194,8 +194,12 @@ export function requestJoin(s: Store, req: { name: unknown; public_key: unknown 
   });
 }
 
+/** `seen` is the fingerprint the operator answered (the board's card): another key under that name is not it. */
+const otherKey = (row: Row, seen?: string): string | null =>
+  seen && row.fingerprint !== seen ? `host ${row.name} now asks with another key (${row.fingerprint}), not ${seen}: check it and answer again` : null;
+
 /** The operator accepts a pending host with `seats` Builder seats (default 2). */
-export function accept(s: Store, name: string, opts: { seats?: number; by?: string } = {}, at = now()): Result<{ host: Row }> {
+export function accept(s: Store, name: string, opts: { seats?: number; by?: string; fingerprint?: string } = {}, at = now()): Result<{ host: Row }> {
   const seats = opts.seats ?? DEFAULT_SEATS;
   if (!Number.isInteger(seats) || seats < 0) return { ok: false, why: "seats is a whole number, 0 or more" };
   expirePending(s, at);
@@ -203,6 +207,8 @@ export function accept(s: Store, name: string, opts: { seats?: number; by?: stri
     const row = s.get("hosts", { name });
     if (!row) return { ok: false as const, why: `no host ${name} (a join request expires after ${PENDING_TTL_S / 60} minutes)` };
     if (row.status !== "pending") return { ok: false as const, why: `host ${name} is ${row.status}, not pending` };
+    const stale = otherKey(row, opts.fingerprint);
+    if (stale) return { ok: false as const, why: stale };
     const by = opts.by ?? "ds";
     s.db.run("UPDATE hosts SET status = 'accepted', seats = ?, accepted_at = ?, accepted_by = ? WHERE name = ?", [seats, at, by, name]);
     acceptDefaults(s, name, seats, `accept by ${by}`, at);   // U25, KTD16: its seats and its brake on, as host overrides
@@ -212,11 +218,13 @@ export function accept(s: Store, name: string, opts: { seats?: number; by?: stri
 }
 
 /** Reject (a pending host) or remove (any host not removed yet): the key is deleted, the row stays as `removed`. */
-function drop(s: Store, verb: "reject" | "remove", name: string, by: string, at: number): Result<{ host: Row }> {
+function drop(s: Store, verb: "reject" | "remove", name: string, by: string, at: number, seen?: string): Result<{ host: Row }> {
   return s.tx(() => {
     const row = s.get("hosts", { name });
     if (!row || row.status === "removed") return { ok: false as const, why: `no host ${name}` };
     if (verb === "reject" && row.status !== "pending") return { ok: false as const, why: `host ${name} is ${row.status}: remove it instead` };
+    const stale = otherKey(row, seen);
+    if (stale) return { ok: false as const, why: stale };
     s.db.run("UPDATE hosts SET status = 'removed', public_key = NULL, removed_at = ?, removed_by = ? WHERE name = ?", [at, by, name]);
     dropHost(s, name, `${verb} by ${by}`, at);   // U25: a rejoin starts from the side defaults again
     s.fact(verb === "reject" ? "host_rejected" : "host_removed", [], { payload: { name, fingerprint: String(row.fingerprint), was: String(row.status), by } });
@@ -224,9 +232,9 @@ function drop(s: Store, verb: "reject" | "remove", name: string, by: string, at:
   });
 }
 
-export function reject(s: Store, name: string, opts: { by?: string } = {}, at = now()): Result<{ host: Row }> {
+export function reject(s: Store, name: string, opts: { by?: string; fingerprint?: string } = {}, at = now()): Result<{ host: Row }> {
   expirePending(s, at);
-  return drop(s, "reject", name, opts.by ?? "ds", at);
+  return drop(s, "reject", name, opts.by ?? "ds", at, opts.fingerprint);
 }
 
 export function remove(s: Store, name: string, opts: { by?: string } = {}, at = now()): Result<{ host: Row }> {

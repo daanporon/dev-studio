@@ -43,7 +43,7 @@ import { planUnitFacts } from "../loop/squad/plan-lines.ts";
 import { blockingForUnit, entryOf, list, pressing, pressRefused, questionUnit, waiting as waitingQuestions } from "../loop/messages/questions.ts";
 import { promptTitle } from "../lib/permission-prompt.ts";
 import { DEFAULTS as BRIEFING_DEFAULTS, gaveUp as briefingGaveUp, localDate, nextSlot, parseDays, parseTime, scheduleSince } from "../loop/reconcilers/briefing.ts";
-import { limit } from "../loop/settings/limits.ts";
+import { limit, limitEnv } from "../loop/settings/limits.ts";
 import { ANSWERED, ANSWERED_BY, ENDED, RECEIVER_RUNNING, UNREAD, WAITING } from "../loop/messages/messages.ts";
 import { creditsNotice, liveHolds } from "../loop/capacity/credits.ts";
 import { LOGIN_ENDED, liveLoginHolds } from "../loop/capacity/login.ts";
@@ -58,13 +58,23 @@ import { focusSquad, focusValue, NO_FOCUS } from "../loop/squad/focus.ts";
 import { flowLine, flowOf, type FlowEvent, type FlowPick, type FlowReview, type FlowUnit } from "./flow.ts";
 import { retestDue, openPrUnits, type Retest } from "../loop/squad/retest.ts";
 import { settle, type Finish } from "../loop/squad/squad-finish.ts";
-import { LVL, levelOf, machineCadence, machineLevels, machineStale, worst, worstHost } from "../loop/capacity/machine-level.ts";
+import { LVL, levelOf, machineCadence, machineLevels, machineStale, sampleState, worst, worstHost, type CritHit } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
 import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
 import { feedbackOn, feedbackRepo } from "../loop/feedback/post.ts";
 import { DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
 import { studioBackend } from "../loop/squad/studio.ts";
-import { hostLine, isHostKey, SELF } from "../lib/host-settings.ts";
+import { hostKeys, hostLine, hostOverride, isHostKey, SELF } from "../lib/host-settings.ts";
+import { hostSample as placeSample, hostSeats, seatsUsed, sideBrake, sideValue } from "../loop/capacity/place.ts";
+import { SIDE_DEFAULTS } from "../loop/settings/host-settings.ts";
+import { hostLink } from "../loop/squad/host-reach.ts";
+import { onSide } from "../loop/squad/backend.ts";
+import { linkWish } from "../loop/fulfil/link.ts";
+import { tailnetIp } from "../loop/io/tailnet.ts";
+import { codeRev } from "../link/client.ts";
+import { linkListenHint, listHosts } from "../link/host-keys.ts";
+import { LINK_VERSION } from "../link/protocol.ts";
+import { UP_MIGRATION } from "../link/replica.ts";
 
 const SQUAD_ROLE = /-(lead|thinker|builder|reviewer|tester|researcher)(-|$)/;
 
@@ -1012,8 +1022,15 @@ const memberRows = (db: Db) => db.memo("member_rows", () => {
   }
   return by;
 });
+const memberRow = (db: Db, project: string, squad: string, m: any): Row | undefined =>
+  (m.wt && memberRows(db).get(String(m.wt))) || memberRows(db).get(`${project}/${squad}/${m.role ?? ""}/${m.suffix ?? ""}`);
+// U17: `{host}` for a member that runs on a side host, nothing for one on main.
+const sideChip = (db: Db, project: string, squad: string, m: any) => {
+  const host = memberRow(db, project, squad, m)?.host;
+  return onSide(host) ? { host: String(host) } : {};
+};
 function wishOf(db: Db, project: string, squad: string, m: any): { state: string | null; own: string | null; pending: Pending[] } | null {
-  const rows = memberRows(db), r = (m.wt && rows.get(String(m.wt))) || rows.get(`${project}/${squad}/${m.role ?? ""}/${m.suffix ?? ""}`);
+  const r = memberRow(db, project, squad, m);
   if (!r) return null;
   const e = effective(db.s, r);
   return { state: e.state, own: e.own, pending: pendingWishes(r, clockNow()) };
@@ -2008,6 +2025,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
       // The board's "until done" model/account override on this member (overrides, keyed by worktree).
       override: overrides(db).get(String(m.wt)) ?? broaderFor(db, label, topic, (m.role as string | null) ?? null),
       wish: wishOf(db, label, topic, m),
+      ...sideChip(db, label, topic, m),
       state: inactive ? wst(m.wt) : memberState(db, label, topic, m, wst(m.wt)), owns: arr(m.owns).map(String).join(", "), for: m.for ?? "",
       limited: ((l) => (l ? { line: l.line ?? null, since: l.since ?? null, switching: l.switching === true,
         wait_until: null, wait_label: null } : null))(limited.find((l) => l?.wt === m.wt)),
@@ -2408,6 +2426,15 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     return c ? [{ repo_slug: null, pr: null, act: null, project: l, id: c.id, from: null, text: c.text, title: c.title, card: c.kind, reason: null,
       squad: null, unit: null, suggestion: null, why: null, options: [], choices: [], when: null, acts_on_answer: false, age_min: null, place: "needs" }] : [];
   });
+  // side-loop-host U17: a pending join is a Needs-you card with its fingerprint and Accept and Reject. A host is
+  // main's, not a project's, so each page shows it once, under the first label.
+  const hostCards: any[] = db && labels.length && hasHosts(db) ? listHosts(db.s, {}, NOW()).filter((h) => h.status === "pending").map((h) => ({
+    repo_slug: null, pr: null, act: null, project: labels[0], id: `host-join-${h.name}-${h.requested_at}`, from: null, card: "host-join", reason: null, squad: null, unit: null, suggestion: null,
+    title: `Host ${h.name} asks to join`, text: `Host ${h.name} asks to join. Fingerprint ${h.fingerprint}.`,
+    why: "Accept only when this fingerprint matches the one `ds join` printed on that host. Its Builders then run for main.",
+    options: [], choices: [], when: null, acts_on_answer: false, age_min: Math.max(0, Math.floor((NOW() - Number(h.requested_at)) / 60)), place: "needs",
+    host: String(h.name), fingerprint: String(h.fingerprint),
+  })) : [];
   const allAlerts = (db ? labels.flatMap((l) => db.all("SELECT doc FROM observed_alerts WHERE project = ? ORDER BY rowid", l).map((r) => {
     const x = parse(r.doc) ?? {};
     const text = String(x.question ?? x.text ?? "");
@@ -2430,7 +2457,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       age_min: ageMin(x.since),
       place: placeAlert({ ...x, text }, NOW(), db ? dsLimit(db, l, "needs_grace_min") : null, db ? dsLimit(db, l, "refusal_needs_min") : null),
     };
-  })) : []).concat(githubCards).filter((a) => a.id).sort((a, b) => (b.age_min ?? 0) - (a.age_min ?? 0));
+  })) : []).concat(githubCards, hostCards).filter((a) => a.id).sort((a, b) => (b.age_min ?? 0) - (a.age_min ?? 0));
   // U1: only the asks are Needs-you. The rest are loop notes (newest first), also on their squad's row;
   // a card still in its grace period is held back until it has lasted.
   const studioAlerts = allAlerts.filter((a) => a.place === "needs");
@@ -2503,7 +2530,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     // The inbox: every question and proposed fix from squads that aren't on hold: blocking first,
     // then approvals, then questions, oldest first; each carries the command to copy.
     needs_you: [...studioAlerts.map((a) => ({
-      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, id: a.id, from: a.from, text: a.text, title: a.title, titled: true, chat_wt: a.chat_wt, chat_label: a.chat_label,
+      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, ...(a.card === "host-join" ? { host: (a as any).host, fingerprint: (a as any).fingerprint } : {}), id: a.id, from: a.from, text: a.text, title: a.title, titled: true, chat_wt: a.chat_wt, chat_label: a.chat_label,
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
@@ -2949,6 +2976,8 @@ function hostLastChange(db: Db, host: string, key: string) {
 // Limits the board shows as read-only text: globs and a command run in worktrees are edited in
 // through `ds config import` (docs/settings.md), never from a web form. `reset` of an override stays allowed.
 export const FILE_ONLY_LIMITS = new Set(["cleanup_tmp_globs", "cleanup_trim_globs", "cleanup_on_close", "disk_watch_paths", "feedback_repo"]);
+// The values a key's picker offers; null = free text.
+const allowedValues = (key: string): string[] | null => key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null;
 export function limitsJson(project: string, root = stateRoot()) {
   return withDb((db) => {
     const limits = db.all("SELECT key, value, comment FROM config WHERE project = '' AND file = 'limits.conf' ORDER BY rowid").map((d) => {
@@ -2965,10 +2994,76 @@ export function limitsJson(project: string, root = stateRoot()) {
       const nowPerHost = host && first(own?.value) ? first(own?.value) : null;
       const hint = key === "feedback_repo" ? `in use: ${feedbackRepo(db.s) ?? (feedbackOn(db.s, project) ? "none (the checkout's origin is not a GitHub repo)" : "none (Feedback is off)")}` : key === "ticket_url" ? "https://tracker.example/issue/{id}, or -" : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
       const changed = source === "override" ? lastChange(db, project, "limits.conf", key) : source === "host" ? hostLastChange(db, SELF, key) : null;
-      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: key === "review_block_severity" || key === "review_block_severity_risky" ? ["P0", "P1", "P2", "P3"] : key === "compact_mode_studio" ? ["compact", "off"] : key === "studio_move" ? ["auto", "ask", "off"] : key.startsWith("compact_mode_") ? ["compact", "clear", "off"] : key === "host_tidy" ? ["report", "apply"] : key === "builder_host_brake" || key === "feedback" ? ["off", "on"] : key === "unblock_first" || key === "debrief" ? ["on", "off"] : key === "worktree_provider" ? [...PROVIDER_SETTINGS] : null, fileOnly, host, nowPerHost, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
+      return { key, value, source, env, changed, hint, comment: String(d.comment ?? ""), allowed: allowedValues(key), fileOnly, host, nowPerHost, list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses", group: limitGroup(key) };
     });
     const used = new Set(limits.map((l) => l.group));
     return { project, groups: [...LIMIT_GROUPS.map((g) => g.name).filter((n) => used.has(n)), ...(used.has("Other") ? ["Other"] : [])], limits };
+  }, root);
+}
+
+// GET /api/hosts (side-loop-host U17, issue #127): Settings → Hosts. A row for main (`local`) and one per accepted
+// side host, with every [host] key and where its value comes from on that host (env | override | default | unset),
+// and the command a new side host joins with. Pending joins are Needs-you cards, listed here by name only.
+// A side's env values are the ones its last hello reported (hosts.env); `main_reads` is what main uses instead.
+function hostKeyRows(db: Db, host: string, reported: Record<string, string>) {
+  const comments = new Map(db.all("SELECT key, value, comment FROM config WHERE project = '' AND file = 'limits.conf'").map((r) => [String(r.key), String(r.comment ?? "")]));
+  // Main's seats are its projects' max_builders (the Limits tab), so main has no `seats` to edit here.
+  return hostKeys().filter((key) => !(host === SELF && key === "seats")).map((key) => {
+    const env = limitEnv(key), fileOnly = FILE_ONLY_LIMITS.has(key), line = hostLine(db.s.db, host, key, env);
+    const sideDefault = host !== SELF && line.source !== "host" ? SIDE_DEFAULTS[key] : undefined;
+    const first = (v: string | null | undefined) => v == null ? "" : fileOnly ? v.trim() : v.trim().split(/\s+/)[0] ?? "";
+    const here = first(sideDefault ?? line.value), own = host === SELF ? undefined : reported[key];
+    const value = own === undefined ? here : first(own);
+    const source = own !== undefined ? "env" : !value ? "unset" : line.source === "host" ? "override" : line.source ?? "default";
+    return { key, value, source, env, override: hostOverride(db.s.db, host, key), main_reads: own !== undefined && here !== value ? here || "-" : null,
+      comment: comments.get(key) ?? "", allowed: allowedValues(key), fileOnly };
+  });
+}
+
+// The `ds join <address:port>` a new side host runs. The address is where the link server listens: DS_LINK_BIND's
+// first address that is not loopback, else main's tailnet one. With the server not running, a first join cannot
+// reach it: the same hint `ds join` and `ds host list` give.
+function joinInfo(db: Db, now: number) {
+  const bound = (process.env.DS_LINK_BIND ?? "").split(/\s+/).find((a) => a && !/^(127\.|localhost$|::1$|0\.0\.0\.0$)/.test(a));
+  const addr = bound || tailnetIp(), wish = linkWish(db.s, now);
+  return {
+    command: `ds join ${addr || "<main-address>"}:${wish.port}`,
+    note: addr ? null : "main has no tailnet address: put the address the side host reaches main at in place of <main-address>",
+    hint: wish.want === "stopped" ? linkListenHint(wish.port) : null,
+  };
+}
+
+export function hostsJson(project: string, root = stateRoot()) {
+  return withDb((db) => {
+    const now = NOW(), ago = (at: unknown) => at == null ? null : Math.max(0, now - Number(at));
+    const loadOf = (r: Row | null) => {
+      const s = sampleState(r, now);
+      return r && s.state !== "missing" ? { load1: Number(r.load1), cores: Number(r.cores), pct: Number(r.cores) ? Math.round(100 * Number(r.load1) / Number(r.cores)) : null, state: s.state, age_s: s.age_s } : null;
+    };
+    const critLine = (h: CritHit | null) => h ? `${h.metric} ${h.value}${h.unit} ≥ crit ${h.crit}${h.unit}` : null;
+    const mine = codeRev();
+    const s = seats(db.s, project, now), total = s.limit == null ? null : s.limit + s.light, used = s.used.normal + s.used.light;
+    const view = brakeView(db.s, now, project, [project]), on = !!view.projects[0]?.on;
+    const main = { name: SELF, main: true, online: true, last_seen_s: null, fingerprint: null, drain: false, fenced: false, behind: null,
+      seats: { used, total, free: total == null ? null : Math.max(0, total - used) }, load: loadOf(hostRow(db, "observed_machine", null)),
+      brake: { on, hit: on ? critLine(view.hit) : null }, keys: hostKeyRows(db, SELF, {}) };
+    const rows = hasHosts(db) ? db.all("SELECT * FROM hosts WHERE status = 'accepted' ORDER BY name") : [];
+    const sides = rows.map((h) => {
+      const name = String(h.name), link = hostLink(db.s, name), total = hostSeats(db.s, name), used = seatsUsed(db.s, name);
+      const rev = String(h.code_rev ?? "");
+      // KTD15: another link version or up-table migration takes no new start; other code alone still does.
+      const behind = h.link_version != null && (String(h.link_version) !== LINK_VERSION || String(h.up_migration ?? "") !== UP_MIGRATION)
+        ? "its link version or tables differ from main's: it takes no new starts until it is updated"
+        : rev && mine && rev !== mine ? `it runs ${rev}, main runs ${mine}` : null;
+      let reported: Record<string, string> = {};
+      try { reported = JSON.parse(String(h.env ?? "{}")); } catch { /* not ours to fail on */ }
+      return { name, main: false, online: link.state === "online", last_seen_s: ago(h.last_seen_at), fingerprint: String(h.fingerprint ?? ""),
+        drain: !!Number(h.drain ?? 0), fenced: h.fenced_at != null, behind,
+        seats: { used, total, free: Math.max(0, total - used) }, load: loadOf(placeSample(db.s, name)),
+        brake: { on: sideValue(db.s, name, "builder_host_brake") === "on", hit: sideBrake(db.s, name, now) }, keys: hostKeyRows(db, name, reported) };
+    });
+    const pending = hasHosts(db) ? listHosts(db.s, {}, now).filter((h) => h.status === "pending").map((h) => String(h.name)) : [];
+    return { project, join: joinInfo(db, now), hosts: [main, ...sides], pending };
   }, root);
 }
 

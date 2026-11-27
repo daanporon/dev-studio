@@ -70,6 +70,9 @@ export const REQUESTS = {
   "settings-import": obj({ text: opt(str), from: opt(str), name: opt(str), picks: arr(any) }),
   "limit-lift": obj({ agent: str, account: str, ...THROUGH }),
   limits: obj({ key: str, value: opt(either(str, num)) }),
+  // side-loop-host U17 (fulfil/host.ts): the board's Hosts actions.
+  "host-member": obj({ host: str, action: str, fingerprint: opt(str), by: opt(str), ...THROUGH }),
+  "host-key": obj({ host: str, key: str, value: opt(str), by: opt(str), ...THROUGH }),
   merge: MERGE,
   "notify-squads": replay,
   override: obj({ model: opt(str), effort: opt(str), plan: opt(str), account: opt(str), clear: opt(bool), scope: opt(str), role: opt(str) }),

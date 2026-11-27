@@ -22,6 +22,7 @@ import { join } from "node:path";
 import type { ServerWebSocket, Server } from "bun";
 import { open, stateRoot, type Store } from "../loop/core/store.ts";
 import { tailnetIp } from "../loop/io/tailnet.ts";
+import { isHostKey } from "../lib/host-settings.ts";
 import { Challenges, nameProblem, parseJoinFrame, requestJoin, verifyHello } from "./host-keys.ts";
 import { deadMs, JOIN_MAX_BYTES, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
 
@@ -70,11 +71,18 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
   const refuse = (ws: WS, why: string) => { ws.data.phase = "closing"; try { sendTo(ws, { t: "refused", why }); ws.close(1008, why.slice(0, 120)); } catch { /* gone */ } };
   const isLive = (ws: WS | undefined) => !!ws && ws.data.phase === "up" && !!ws.data.peer && Date.now() - ws.data.peer.lastHeard < deadMs();
 
+  /** The hello's `env` as stored: only `[host]` keys with a short string value (U17), NULL when none. */
+  function reportedEnv(v: unknown): string | null {
+    if (!v || typeof v !== "object") return null;
+    const kept = Object.entries(v).filter(([k, x]) => isHostKey(k) && typeof x === "string" && x.length <= 500);
+    return kept.length ? JSON.stringify(Object.fromEntries(kept)) : null;
+  }
+
   function hostUp(ws: WS, f: Frame): void {
     const name = ws.data.name;
     const at = sec();
-    store.db.run("UPDATE hosts SET last_seen_at = ?, link_version = ?, up_migration = ?, code_rev = ?, unreachable_since = NULL WHERE name = ?",
-      [at, String(f.link_version ?? ""), String(f.up_migration ?? "") || null, String(f.code_rev ?? "") || null, name]);
+    store.db.run("UPDATE hosts SET last_seen_at = ?, link_version = ?, up_migration = ?, code_rev = ?, env = ?, unreachable_since = NULL WHERE name = ?",
+      [at, String(f.link_version ?? ""), String(f.up_migration ?? "") || null, String(f.code_rev ?? "") || null, reportedEnv(f.env), name]);
     // U15: the host fenced itself while the link was down (its push and close are done): main fences it too, now.
     const fenced = Number(f.fenced_at);
     if (Number.isInteger(fenced) && fenced > 0 && fenced <= at + 60) {
