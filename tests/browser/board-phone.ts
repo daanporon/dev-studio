@@ -107,10 +107,11 @@ const openLongMenu: Open = async (p) => {
   return true;
 };
 // chat-view-switcher U1: a question longer than the card (set on the api/chat reply) for builder-platform, with no screen menu.
-const longQuestion = (choices: boolean): Open => async (p) => {
+const longQuestion = (choices: boolean, turns = 0): Open => async (p) => {
   await p.route("**/api/chat?*", async (r: any) => {
     const res = await r.fetch(), j = await res.json();
     if (j.screen) j.screen.menu = 0;
+    if (turns) j.turns = Array.from({ length: turns }, (_, i) => ({ role: i % 2 ? "assistant" : "user", from: "operator", text: `turn ${i}: a line of a long conversation`, at: Date.parse("2026-11-25T09:00:00Z") + i * 1000 }));
     j.questions = [{ id: "long-q", title: "Which way should the long migration go?", question: choices ? Array.from({ length: 40 }, (_, i) => `- point ${i + 1}: a line of detail the operator reads before answering`).join("\n") : "Say which way.",
       choices: choices ? [{ label: "Yes", does: "do it" }, { label: "No", does: null }] : [], since: "2026-11-25T10:00:00Z", blocking: true, source: "lead", answerable: true }];
     await r.fulfill({ response: res, json: j });
@@ -136,6 +137,15 @@ const LONG_CARD = `(() => { const q = (s) => document.querySelector(".chat " + s
     if (!on(".mhd .mclose")) bad.push("⤢: ✕ is off screen"); if (!on(".chat-send")) bad.push("⤢: Send is off screen");
     ok(bad);
   }, 300)); })()`;
+// phone-chat-card U1: under a long conversation the open card keeps its header and its body's first line, and the body stays inside it.
+const SQUEEZE = `(() => { const box = document.querySelector(".mbox.chat"), dock = box && box.querySelector(".chat-dock.open"), body = dock && dock.querySelector(".chat-dbody");
+  if (!body) return ["no open card"];
+  const bad = [], n = box.querySelectorAll(".chat-turn").length, d = dock.getBoundingClientRect(), b = body.getBoundingClientRect(), h = dock.querySelector(".chat-dhd").getBoundingClientRect(), s = getComputedStyle(body);
+  const need = h.height + parseFloat(s.paddingTop) + parseFloat(getComputedStyle(body.querySelector(".chat-qprompt") || body).lineHeight);
+  if (n < 80) bad.push("only " + n + " turns in the log");
+  if (d.height < need) bad.push("card " + Math.round(d.height) + " px, header and first line need " + Math.round(need));
+  if (b.top < d.top - 1 || b.bottom > d.bottom + 1 || b.left < d.left - 1 || b.right > d.right + 1) bad.push("the body " + Math.round(b.top) + "→" + Math.round(b.bottom) + " leaves the card " + Math.round(d.top) + "→" + Math.round(d.bottom));
+  return bad; })()`;
 // chat-key-buttons U1: what each chat view must show, run in the page; returns the list of problems.
 const CHAT_CHECK = (want: string) => `((want) => { const q = (s) => document.querySelector(".chat " + s), all = (s) => [...document.querySelectorAll(".chat " + s)], bad = [];
   const card = q(".chat-card"), vis = (e) => e && e.getBoundingClientRect().width > 0;
@@ -187,6 +197,7 @@ const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; cha
   { name: "chat-question", strict: true, chat: "question", open: openChatOf("builder-platform") },
   { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-scrtog")) },
   { name: "chat-long-question", strict: true, chat: "long-card", open: longQuestion(true) },
+  { name: "chat-long-log-question", strict: true, chat: "squeeze", open: longQuestion(true, 90) },
   { name: "long-name-chat", strict: true, chat: "long", open: openLongName },
   { name: "long-name-menu", strict: true, chat: "long-menu", open: openLongMenu },
   { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
@@ -276,7 +287,7 @@ const shoot = async (size: any, view: string, base: boolean) => {
     return { opened, m: null, kb, back, cover, stays, hide, after, y0 };
   }
   const m = opened ? await p.evaluate(MEASURE) : null;
-  if (m && v.chat) m.chat = await p.evaluate(v.chat === "long-card" ? LONG_CARD : CHAT_CHECK(v.chat));
+  if (m && v.chat) m.chat = await p.evaluate(v.chat === "long-card" ? LONG_CARD : v.chat === "squeeze" ? SQUEEZE : CHAT_CHECK(v.chat));
   if (opened && !base && v.chat === "long-card") await p.screenshot({ path: join(OUT, `${size.w}-${view}-full.png`) });
   if (opened && !base) await p.screenshot({ path: join(OUT, `${size.w}-${view}.png`) });
   await ctx.close();
