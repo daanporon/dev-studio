@@ -26,6 +26,18 @@ INSERT INTO host_config (host, key, value, set_at)
   WHERE EXISTS (SELECT 1 FROM config WHERE project <> '' AND file = 'limits.conf' AND key = 'builder_host_brake'
                 AND (TRIM(value) = 'on' OR TRIM(value) LIKE 'on %'));
 
+-- Main's host tidy and cleanup globs keep today's effect too: `apply` when any project had it, and each glob key the
+-- union of the projects' lists (each glob was already allowed for some project; cleanupGlobs splits on spaces and commas).
+INSERT INTO host_config (host, key, value, set_at)
+  SELECT 'local', 'host_tidy', 'apply', CAST(strftime('%s', 'now') AS INTEGER)
+  WHERE EXISTS (SELECT 1 FROM config WHERE project <> '' AND file = 'limits.conf' AND key = 'host_tidy'
+                AND (TRIM(value) = 'apply' OR TRIM(value) LIKE 'apply %'));
+INSERT INTO host_config (host, key, value, set_at)
+  SELECT 'local', key, group_concat(TRIM(value), ' '), CAST(strftime('%s', 'now') AS INTEGER)
+  FROM (SELECT key, value FROM config WHERE project <> '' AND file = 'limits.conf'
+          AND key IN ('cleanup_tmp_globs', 'cleanup_trim_globs') AND TRIM(value) NOT IN ('', '-') ORDER BY project)
+  GROUP BY key;
+
 -- A side host accepted before this migration: its seats (hosts.seats) and its brake on, as `ds host accept` now writes.
 INSERT OR IGNORE INTO host_config (host, key, value, set_at)
   SELECT name, 'seats', CAST(seats AS TEXT), CAST(strftime('%s', 'now') AS INTEGER) FROM hosts WHERE status = 'accepted';

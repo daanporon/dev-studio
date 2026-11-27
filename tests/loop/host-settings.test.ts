@@ -187,6 +187,20 @@ describe("migration 0063", () => {
     db.close();
   });
 
+  test("main's host tidy is apply when any project had it; each cleanup glob key is the union of the projects' lists", () => {
+    const { db, full } = before0063();
+    const row = (p: string, k: string, v: string) => db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES (?, 'limits.conf', ?, ?, ?)", [p, k, v, T0]);
+    row("pa", "host_tidy", "apply"); row("pb", "host_tidy", "report");
+    row("pa", "cleanup_tmp_globs", "/tmp/aa-*,/tmp/ab-*"); row("pb", "cleanup_tmp_globs", "/tmp/bb-*"); row("pc", "cleanup_tmp_globs", "-");
+    row("pb", "cleanup_trim_globs", "/tmp/cache/v1.*");
+    migrate(db, full);
+    expect(db.query("SELECT key, value FROM host_config WHERE host = 'local' ORDER BY key").all()).toEqual([
+      { key: "cleanup_tmp_globs", value: "/tmp/aa-*,/tmp/ab-* /tmp/bb-*" },
+      { key: "cleanup_trim_globs", value: "/tmp/cache/v1.*" },
+      { key: "host_tidy", value: "apply" }]);
+    db.close();
+  });
+
   test("no project with the brake on: main keeps the default off", () => {
     const { db, full } = before0063();
     db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES ('realp', 'limits.conf', 'builder_host_brake', 'off', ?)", [T0]);
