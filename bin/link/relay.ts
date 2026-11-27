@@ -1,6 +1,6 @@
 // relay.ts — side-loop-host U7 (issue #127, KTD5): the side host's half of a forwarded `bin/ds` call.
 // A worker terminal on a side host gets DS_MAIN_URL=unix:<side state root>/loop/link.sock, so agents hold no key:
-//   forwardDs (bin/ds.ts)  POSTs {id, argv, stdin, member, gen} to that socket and prints the answer as its own
+//   forwardDs (bin/ds.ts)  POSTs {id, argv, stdin, member, gen, facts?} to that socket and prints the answer as its own
 //   startRelay (side loop) listens on the socket (mode 0600) and sends each call up the link on the `ds-call`
 //                          channel, which main answers (channels/ds-call.ts).
 // When the link drops mid-call the relay sends the same id again after the link is back, for up to
@@ -67,7 +67,8 @@ export function startRelay(root: string, request: Requester): Relay {
       let b: Record<string, unknown>;
       try { b = JSON.parse(text); } catch { return Response.json({ code: 2, stdout: "", stderr: "ds: the relay takes JSON\n" }); }
       const body = { id: typeof b.id === "string" && b.id ? b.id : randomUUID(), argv: Array.isArray(b.argv) ? b.argv.map(String) : [],
-        stdin: typeof b.stdin === "string" ? b.stdin.slice(0, STDIN_MAX) : "", member: String(b.member ?? ""), gen: String(b.gen ?? "") };
+        stdin: typeof b.stdin === "string" ? b.stdin.slice(0, STDIN_MAX) : "", member: String(b.member ?? ""), gen: String(b.gen ?? ""),
+        ...(b.facts && typeof b.facts === "object" ? { facts: b.facts } : {}) };
       return Response.json(await relayCall(request, body));
     },
   });
@@ -85,12 +86,12 @@ function readStdin(): string {
 }
 
 /** bin/ds on a side host: hand argv to the relay at DS_MAIN_URL, print main's answer, return its exit code. */
-export async function forwardDs(url: string, argv: string[], env: Record<string, string | undefined> = process.env): Promise<number> {
+export async function forwardDs(url: string, argv: string[], env: Record<string, string | undefined> = process.env, facts?: Record<string, unknown>): Promise<number> {
   const out = (r: DsResult) => { if (r.stdout) process.stdout.write(r.stdout); if (r.stderr) process.stderr.write(r.stderr); return r.code; };
   if (!url.startsWith("unix:")) return out({ code: 2, stdout: "", stderr: `ds: DS_MAIN_URL is unix:<socket>, not '${url}'\n` });
   const sock = url.slice(5);
   if (!existsSync(sock)) return out(unreachable("the side loop's relay is not running"));
-  const body = { id: randomUUID(), argv, stdin: readStdin(), member: env.DS_MEMBER ?? "", gen: env.DS_GEN ?? "" };
+  const body = { id: randomUUID(), argv, stdin: readStdin(), member: env.DS_MEMBER ?? "", gen: env.DS_GEN ?? "", ...(facts ? { facts } : {}) };
   try {
     const r = await fetch("http://relay/ds", { unix: sock, method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } } as RequestInit);
     return out((await r.json()) as DsResult);

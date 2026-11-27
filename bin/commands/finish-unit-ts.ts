@@ -1,5 +1,5 @@
 // ds finish-unit-ts — a Builder ends its unit with one call (U192): what bin/role/finish-unit.sh runs.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ROOT, backendPath, callerScript, dsLoopArgs, dsLoopFront, dsLoopOn, readJson, run as runCmd, writeErr, writeOut } from "../lib/shared";
 import { prHealthLine, repoSlug } from "../lib/lib";
@@ -7,6 +7,7 @@ import { shipMode } from "../lib/operator";
 import { open } from "../loop/core/store";
 import { toplevel } from "../loop/squad/exposed";
 import { parseMember, recordFinish, type Member, type Outcome } from "../loop/squad/finish";
+import { factsOf, finishFacts, type FinishFacts } from "../link/split";
 
 export const help = `<state> <unit> [--check | --no-pr | --failed <why>] — end a Builder's unit: record its branch PR and its finish, journal, send worker_done (finish-unit.sh)`;
 
@@ -50,9 +51,11 @@ export async function run(raw: string[]): Promise<number> {
   let PR = "", verdict = "", br = "", detail = "", reviewNote = "";
   const sd = dirname(STATE);
   const label = basename(sd) === "squads" ? basename(dirname(sd)) : "";
+  // The worktree's git, read here or, on a side host, by bin/ds there (link/split.ts): main has no worktree.
+  const forwarded = factsOf<FinishFacts>();
+  const g = forwarded ?? await finishFacts();
   if (!NO_PR) {
-    const b = await runCmd(["git", "rev-parse", "--abbrev-ref", "HEAD"]);
-    br = b.rc === 0 ? trim(b.out) : "";
+    br = g.branch ?? "";
     if (br === "" || br === "HEAD") { writeErr("finish-unit: not on a branch — check out the unit branch first\n"); return 1; }
     if (br === "main" || br === "master") { writeErr(`finish-unit: checked out on '${br}' — check out the unit branch first\n`); return 1; }
     const slug = await repoSlug(repo);
@@ -95,28 +98,18 @@ export async function run(raw: string[]): Promise<number> {
     if (verdict === "ready" && label) {
       const mode = shipMode(label, repo);
       if (mode === "ce-pipeline") {
-        const gd = await runCmd(["git", "rev-parse", "--git-dir"]);
-        const gdir = gd.rc === 0 ? trim(gd.out) : "";
-        let rsha = "", engine = "", proof = "";
-        const rfile = gdir ? join(gdir, "ds-review") : "";
-        if (rfile && existsSync(rfile)) {
-          const lines = readFileSync(rfile, "utf8").split("\n");
-          rsha = (lines[0] ?? "").split("\t")[0] ?? "";
-          const c = (lines[0] ?? "").split("\t"); engine = c[4] ?? ""; proof = c[5] ?? "";
-        }
-        const short = async (sha: string) => { const r = await runCmd(["git", "rev-parse", "--short", sha]); return r.rc === 0 && trim(r.out) ? trim(r.out) : sha.slice(0, 7); };
+        const c = (g.receipt ?? "").split("\t");
+        const rsha = c[0] ?? "", engine = c[4] ?? "", proof = c[5] ?? "";
+        const short = g.short || rsha.slice(0, 7);
         if (!rsha) {
-          const d = await runCmd(["git", "symbolic-ref", "refs/remotes/origin/HEAD"]);
-          const defbr = d.rc === 0 ? trim(d.out).replace(/^refs\/remotes\/origin\//, "") : "";
+          const defbr = (g.origin_head ?? "").replace(/^refs\/remotes\/origin\//, "");
           rRefuse = `no review receipt — run review-unit.sh ${label} origin/${defbr || "main"}, apply its findings, then re-run`;
         } else if (proof !== "proof=1") {
           rRefuse = "legacy review receipt has no artifact proof — run review-unit.sh for a fresh review, apply its findings, then re-run";
-        } else if ((await runCmd(["git", "merge-base", "--is-ancestor", rsha, "HEAD"])).rc === 0) {
-          const cnt = await runCmd(["git", "rev-list", "--count", `${rsha}..HEAD`]);
-          const n = cnt.rc === 0 ? trim(cnt.out) : "0";
-          reviewNote = `Reviewed at ${await short(rsha)}${engine ? ` on ${engine}` : ""}; ${n} commit(s) since.`;
+        } else if (g.ancestor) {
+          reviewNote = `Reviewed at ${short}${engine ? ` on ${engine}` : ""}; ${g.since ?? "0"} commit(s) since.`;
         } else {
-          rRefuse = `review receipt is for ${await short(rsha)}, not on this branch's history (rebased?) — re-run review-unit.sh`;
+          rRefuse = `review receipt is for ${short}, not on this branch's history (rebased?) — re-run review-unit.sh`;
         }
       }
     }
@@ -139,9 +132,9 @@ export async function run(raw: string[]): Promise<number> {
   }
 
   const topic = basename(STATE, ".json");
-  const hd = await runCmd(["git", "rev-parse", "HEAD"]);
-  const head = hd.rc === 0 && trim(hd.out) ? trim(hd.out) : "none";
-  if (dsLoopOn()) {
+  const head = g.head ?? "none";
+  // A forwarded call runs here, inline: the loop's replay would run without the side host's facts.
+  if (dsLoopOn() && !forwarded) {
     return dsLoopFront({ label, kind: "finish-unit", subject: topic, id: "", key: `finish-unit:${label || "?"}/${topic}/${UNIT}@${head}${FAILED ? ":failed" : ""}`, script, argv, wait: la.wait });
   }
 
@@ -170,6 +163,7 @@ export async function run(raw: string[]): Promise<number> {
   // key is the unit, HEAD and outcome, so a replayed or re-run finish writes no second row.
   // U11: a squad on a contract backend (DS_BACKEND, set on its terminals; else its loop.db row) has no
   // Run: the finish row is its whole finish, and no worker_done is sent.
+  // A member on a side host is never on an Orca Run (side-loop-host U8): its finish row is its finish too.
   let squadOn = process.env.DS_BACKEND || "";
   if (label) {
     const env = process.env.DS_MEMBER ? parseMember(process.env.DS_MEMBER) : null;
@@ -181,6 +175,7 @@ export async function run(raw: string[]): Promise<number> {
         recordFinish(s, { member, unit: UNIT, outcome, body, gen: process.env.DS_GEN || null, wt: toplevel(),
           key: `finish-unit:${label}/${topic}/${UNIT}@${head}:${outcome}` });
         squadOn ||= String(s.get("squads", { project: label, topic })?.backend ?? "");
+        if (forwarded) squadOn = "a side host";
       } finally { s.close(); }
     } catch (e) {
       writeErr(`finish-unit: could not record the finish in loop.db (${(e as Error).message}) — fix it and re-run; nothing was sent\n`);
@@ -198,7 +193,7 @@ export async function run(raw: string[]): Promise<number> {
 
   const done = FAILED ? `finish-unit: unit '${UNIT}' ended failed\n` : NO_PR ? `finish-unit: unit '${UNIT}' finished (no PR)\n` : `finish-unit: unit '${UNIT}' finished (PR #${PR})\n`;
   if (squadOn && squadOn !== "orca") {
-    writeOut(`finish-unit: squad on backend ${squadOn}: no worker_done (the finish row is the finish)\n${done}`);
+    writeOut(`finish-unit: ${forwarded ? "member on a side host" : `squad on backend ${squadOn}`}: no worker_done (the finish row is the finish)\n${done}`);
     return 0;
   }
   const wd = await runCmd([BACKEND, "worker-done", ...(FAILED ? ["--outcome", "failed"] : []), subject, body]);

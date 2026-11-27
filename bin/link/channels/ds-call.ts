@@ -1,8 +1,8 @@
 // channels/ds-call.ts — side-loop-host U7 (issue #127, KTD5): main runs a side host worker's forwarded `bin/ds`
-// call. The body is `{id, argv, stdin?, member, gen}` from the side relay (relay.ts); main checks it
-// (forward-table.ts checkCall), runs the real `bin/ds` with the member row's identity (DS_MEMBER, DS_GEN, DS_WT)
-// against main's state root, and answers `{code, stdout, stderr}`. A refusal is an answer too, with its own exit
-// code and line, and runs nothing. Each request id's answer is kept for RESULT_KEEP_MS: a resent id (its answer was
+// call. The body is `{id, argv, stdin?, member, gen, facts?}` from the side relay (relay.ts); main checks it
+// (forward-table.ts checkCall), runs the real `bin/ds` with the member row's identity (DS_MEMBER, DS_GEN, DS_WT,
+// DS_LINK_WT) and a split command's facts (DS_LINK_FACTS, link/split.ts) against main's state root, and answers
+// `{code, stdout, stderr}`. A refusal is an answer too, with its own exit code and line, and runs nothing. Each request id's answer is kept for RESULT_KEEP_MS: a resent id (its answer was
 // lost on a dropped link) gets the same answer, and one still running is awaited, so a call runs once on main.
 import { join } from "node:path";
 import { open, ROOT, type Store } from "../../loop/core/store.ts";
@@ -20,7 +20,7 @@ const opened = new Map<string, Store>();
 const storeFor = (root: string) => { let s = opened.get(root); if (!s) { s = open(root); opened.set(root, s); } return s; };
 
 // The environment main runs a forwarded call with: main's own, minus any identity of main's process, plus the member's.
-const DROP = ["DS_MEMBER", "DS_GEN", "DS_WT", "DS_MAIN_URL", "ORCA_TERMINAL_HANDLE", "CLAUDE_PROJECT_DIR", "DS_START_MEMBER", "DS_START_GEN"];
+const DROP = ["DS_MEMBER", "DS_GEN", "DS_WT", "DS_LINK_WT", "DS_LINK_FACTS", "DS_MAIN_URL", "ORCA_TERMINAL_HANDLE", "CLAUDE_PROJECT_DIR", "DS_START_MEMBER", "DS_START_GEN"];
 
 const cut = (t: string) => (Buffer.byteLength(t) > OUTPUT_MAX ? `${Buffer.from(t).subarray(0, OUTPUT_MAX).toString("utf8")}\n[ds: output cut at ${OUTPUT_MAX} bytes]\n` : t);
 
@@ -45,7 +45,7 @@ export function dsCall(store: Store, root: string, host: string, body: unknown):
   if (had) return had.result;
   const argv = Array.isArray(b.argv) ? b.argv.map(String) : [];
   const stdin = typeof b.stdin === "string" ? b.stdin.slice(0, STDIN_MAX) : "";
-  const c = checkCall(store, host, { argv, member: String(b.member ?? ""), gen: String(b.gen ?? "") });
+  const c = checkCall(store, host, { argv, member: String(b.member ?? ""), gen: String(b.gen ?? ""), facts: b.facts });
   const result: Promise<DsResult> = c.ok
     ? runDs(root, c.argv, c.env, stdin).catch((e) => ({ code: 1, stdout: "", stderr: `ds: main could not run the call: ${(e as Error).message}\n` }))
     : Promise.resolve({ code: c.code, stdout: "", stderr: `ds: refused on main: ${c.why}\n` });

@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { now, type Row, type Store } from "../core/store.ts";
 import { roleOf } from "../settings/skills.ts";
 import { limitInt } from "../settings/limits.ts";
+import { linkWt } from "../../link/split.ts";
 
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
 export const NOTE_MAX = 200;
@@ -59,8 +60,11 @@ export function parsePorts(v: string): number[] | string {
 }
 
 // The git toplevel of a directory (the caller's worktree), or null outside a repository.
-export function toplevel(cwd = process.cwd()): string | null {
-  try { return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
+export function toplevel(cwd?: string): string | null {
+  // A call a side host forwarded runs on main, in main's state root: the caller is the member row's worktree id.
+  const linked = cwd === undefined ? linkWt() : null;
+  if (linked) return linked;
+  try { return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: cwd ?? process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; }
   catch { return null; }
 }
 

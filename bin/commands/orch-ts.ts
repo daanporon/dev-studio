@@ -114,6 +114,11 @@ export async function run(argv: string[]): Promise<number> {
     const rc = await viaRows(op, argv.slice(1));
     if (rc != null) return rc;
   }
+  // A call a side host forwarded (side-loop-host U8) is only ever a row: main's backend is not the member's.
+  if (process.env.DS_LINK_FORWARDED === "1") {
+    writeErr(`orch.sh: '${op}' from a side host is only sent as a loop.db row, and this one could not be (check its arguments)\n`);
+    return 2;
+  }
   if (op !== "ask") {
     if (!existsSync(BACKEND)) { writeErr(`orch.sh: ${BACKEND}: No such file or directory\n`); return 127; }
     return inherit([BACKEND, ...argv]);

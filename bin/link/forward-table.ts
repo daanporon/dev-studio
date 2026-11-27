@@ -5,19 +5,25 @@
 // Tester or Researcher calls is listed per role as
 //   forward  pure loop.db: runs on main, output and exit code come back as they are
 //   local    runs on the side host only (bin/ds runs it there, nothing goes up)
-// U8 adds `split` (a local half gathers facts, the main half uses them) and the walk test over the role scripts.
-// Any other command is refused, and Lead, Thinker and Studio commands are never in the table.
+//   split    U8: reads the worktree and writes rows: bin/ds on the side gathers the facts (split.ts gather), main
+//            checks them and runs the real command with them (DS_LINK_FACTS)
+// Any other command is refused, and Lead, Thinker and Studio commands are never in the table. The walk test
+// (tests/loop/link-split-commands.test.ts) reads the worker role files and fails on a command they call that is
+// not listed here.
 // Main's checks, in order (checkCall): the member row is this link's host's, its generation is current ("you were
 // replaced" otherwise, no row written), the command is listed as forward for that member's role, and the call
-// names no other identity or scope: no --state, --as or --from, no --project but the member's own, and a
-// journal, notes or finish target only inside the member's own project, squad and unit. The caller is the
-// member row, never an argument.
+// names no other identity or scope: no --state, --as or --from, no --project, --squad or --topic but the member's
+// own, and a journal, notes, finish, reload or checkpoint target only inside the member's own project, squad and
+// unit. The caller is the member row, never an argument: main runs the call with DS_LINK_WT, the row's worktree id,
+// which toplevel() (squad/exposed.ts) returns in place of main's own folder.
 import type { Row, Store } from "../loop/core/store.ts";
 import { parseMember } from "../loop/core/whoami.ts";
 import { roleName } from "../loop/messages/messages.ts";
 import { dsLabel } from "../lib/shared";
+import { checkFacts } from "./split.ts";
+import { join } from "node:path";
 
-export type Kind = "forward" | "local";
+export type Kind = "forward" | "local" | "split";
 export const WORKER_ROLES = ["builder", "tester", "researcher"] as const;
 
 /** Exit codes of a forwarded call that never ran: refused by main, a stale generation, main unreachable (retry). */
@@ -26,12 +32,24 @@ export const REPLACED_LINE = "you were replaced";
 /** The most stdin a forwarded call carries (the side reads at most this, main passes at most this on). */
 export const STDIN_MAX = 256 * 1024;
 
-// Every worker role forwards the same pure loop.db commands. `local` lists the shell wrappers that only exec a
-// listed `-ts` command (their own call to bin/ds is forwarded) and help.
-const PURE = ["msg", "send-role-ts", "journal-ts", "notes-ts", "finish"] as const;
+// Every worker role forwards the same loop.db commands (U8 adds expose, unexpose, exposed, reload, ds-feedback,
+// ship-mode, the row ops of orch.sh and the pause checkpoint). `local` lists the shell wrappers that only exec a
+// listed `-ts` command (their own call to bin/ds is forwarded), help, and what only touches the side host: the
+// kill guard and rewake hooks (the rewake hook's watch.sh call is itself split), the start-hook gate, stop-mine
+// (processes under this worktree), the contract adapter (`current` is `local::<worktree>`, KTD9) and the review
+// (a headless session on this worktree; its receipt stays in the worktree and its row goes up as observed_reviews).
+const PURE = ["msg", "send-role-ts", "journal-ts", "notes-ts", "finish", "expose", "unexpose", "exposed", "reload", "ds-feedback-ts",
+  "ship-mode-ts", "orch-ts", "pause-checkpoint-ts"] as const;
 const WRAPPERS = ["journal", "notes", "send-role", "help"] as const;
-const ROW: Record<string, Kind> = Object.fromEntries([...PURE.map((c) => [c, "forward"]), ...WRAPPERS.map((c) => [c, "local"])]);
-export const TABLE: Record<(typeof WORKER_ROLES)[number], Record<string, Kind>> = { builder: { ...ROW }, tester: { ...ROW }, researcher: { ...ROW } };
+const ON_SIDE = ["stop-mine", "contract-backend", "hook-gate", "no-broad-kill-hook-ts", "rewake-hook-ts"] as const;
+const ROW: Record<string, Kind> = Object.fromEntries([...PURE.map((c) => [c, "forward"]), ...[...WRAPPERS, ...ON_SIDE].map((c) => [c, "local"]),
+  ["watch-ts", "split"]]);
+// Only a Builder ends a unit with a PR and reviews it (roles/builder.md); a Tester or Researcher finishes with `ds finish`.
+const BUILDER: Record<string, Kind> = { "finish-unit-ts": "split", "review-unit-ts": "local" };
+export const TABLE: Record<(typeof WORKER_ROLES)[number], Record<string, Kind>> = { builder: { ...ROW, ...BUILDER }, tester: { ...ROW }, researcher: { ...ROW } };
+
+/** The orch.sh ops a side host forwards: the ones written as loop.db rows (orch-ts ROW_OPS), never a backend verb. */
+export const ORCH_OPS = ["send", "send-worker", "reply", "ask"] as const;
 
 /** The class of `cmd` for a member of `role`; null when it is not listed (refused). */
 export function kindOf(role: string, cmd: string): Kind | null {
@@ -45,10 +63,15 @@ const VALUED: Record<string, string[]> = {
   "send-role-ts": ["project", "from", "wait"],
   "journal-ts": [],
   "notes-ts": [],
+  expose: ["note", "stop", "ports", "project", "topic", "owner"],
+  unexpose: ["project", "topic", "owner"],
+  exposed: ["project", "topic"],
+  "finish-unit-ts": ["failed", "wait"],
+  "watch-ts": ["ack", "run", "requests"],
 };
 const IDENTITY_FLAGS = ["as", "from"];
 
-export type Call = { argv: string[]; member: string; gen: string };
+export type Call = { argv: string[]; member: string; gen: string; facts?: unknown };
 export type Checked = { ok: true; member: Row; env: Record<string, string>; argv: string[] } | { ok: false; code: number; why: string };
 
 const refuse = (why: string, code: number = EXIT.refused): Checked => ({ ok: false, code, why });
@@ -83,21 +106,26 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
   const role = String(m.role);
   const kind = kindOf(role, cmd);
   if (kind === null) return refuse(`'ds ${cmd}' is not a command a ${role} may run from a side host`);
-  if (kind !== "forward") return refuse(`'ds ${cmd}' runs on the side host, not on main`);
+  if (kind === "local") return refuse(`'ds ${cmd}' runs on the side host, not on main`);
+  const bad = kind === "split" ? checkFacts(cmd, call.facts) : null;
+  if (bad) return refuse(`'ds ${cmd}' from a side host: ${bad}`);
   if (call.argv.some((a) => a === "--state" || a.startsWith("--state="))) return refuse("--state is not allowed from a side host");
   const project = String(m.project), squad = String(m.squad), me = roleName(role, String(m.suffix ?? ""));
   // Flags: skip each valued flag's value; an identity flag or another project is refused.
   const valued = VALUED[cmd] ?? [];
-  const pos: string[] = [];
+  const pos: string[] = [], posAt: number[] = [];
   let named = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (!a.startsWith("--") || a === "--") { pos.push(a); continue; }
+    if (!a.startsWith("--") || a === "--") { pos.push(a); posAt.push(i + 1); continue; }
     const [name, inline] = a.slice(2).split(/=(.*)/s, 2);
     if (IDENTITY_FLAGS.includes(name)) return refuse(`--${name} is not allowed from a side host: the caller is the member row`);
     const value = inline ?? (valued.includes(name) ? args[++i] : undefined);
     if (name === "project" && (value === undefined || dsLabel(value) !== project)) return refuse(`--project names another project than ${project}`);
-    if (name === "squad" && value !== squad) return refuse(`--squad names another squad than ${squad}`);
+    // (`ds expose --squad` is a switch, not a squad name.)
+    if ((name === "squad" || name === "topic") && (inline !== undefined || valued.includes(name)) && value !== squad) return refuse(`--${name} names another squad than ${squad}`);
+    if (cmd === "expose" && name === "stop") return refuse("--stop from a side host is not supported yet: a stop must run on the member's host, never on main");
+    if (cmd === "watch-ts" && (name === "run" || name === "requests")) return refuse(`watch.sh --${name} is not a worker's tick`);
     if (name === "member" && !String(value ?? "").startsWith(`${project}/${squad}/`)) return refuse(`--member names a member outside ${project}/${squad}`);
     if (name === "project") named = true;
   }
@@ -112,13 +140,36 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
   } else if (cmd === "finish") {
     const unit = pos[0];
     if (unit !== undefined && unit !== "list" && unit !== "-" && !ownUnit(s, m, role, unit)) return refuse(`a finish from a side host is only for this member's own unit, not '${unit}'`);
+  } else if (cmd === "reload" || cmd === "pause-checkpoint-ts") {
+    // reload ack <project> <squad> <role> [suffix]; pause-checkpoint <project> <squad> <role> <suffix|-> …
+    const [p, sq, r, sfx = ""] = cmd === "reload" ? pos.slice(1) : pos;
+    const suffix = sfx === "-" ? "" : sfx;
+    if (p !== project || sq !== squad || r !== role || suffix !== String(m.suffix ?? "")) return refuse(`'ds ${cmd}' from a side host is only for ${project} ${squad} ${me}`);
+  } else if (cmd === "ship-mode-ts") {
+    if (pos.length !== 1 || dsLabel(pos[0]) !== project) return refuse(`from a side host ship-mode only reads ${project}'s mode`);
+  } else if (cmd === "orch-ts") {
+    if (!(ORCH_OPS as readonly string[]).includes(pos[0] ?? "")) return refuse(`from a side host orch.sh only does ${ORCH_OPS.join(", ")}`);
+  } else if (cmd === "watch-ts") {
+    if (!args.includes("--worktree")) return refuse("from a side host watch.sh only reads your own inbox (--worktree)");
+  }
+  let argv = call.argv;
+  if (cmd === "finish-unit-ts") {
+    // The state file is main's: <state root>/<project>/squads/<squad>.json, named on the side by the same tail.
+    const [state, unit] = pos;
+    const tail = String(state ?? "").split("/").slice(-3);
+    if (tail[0] !== project || tail[1] !== "squads" || tail[2] !== `${squad}.json`) return refuse(`finish-unit from a side host takes ${project}/squads/${squad}.json`);
+    if (unit === undefined || !ownUnit(s, m, role, unit)) return refuse(`finish-unit from a side host is only for this member's own unit, not '${unit ?? ""}'`);
+    argv = [...argv];
+    argv[posAt[0]] = join(s.root, project, "squads", `${squad}.json`);
   }
   const env: Record<string, string> = { DS_MEMBER: call.member, DS_GEN: String(m.gen) };
   const wt = wtPath(m.wt);
   if (wt) env.DS_WT = wt;
+  if (m.wt) env.DS_LINK_WT = String(m.wt);
+  if (kind === "split") env.DS_LINK_FACTS = JSON.stringify(call.facts);
   // Main's cwd is its state root, so a command that finds its project from the caller's worktree is told it:
   // the member's own project, the only one it may name.
-  const scoped = cmd === "send-role-ts" || (cmd === "finish" && pos[0] === "list");
-  const argv = scoped && !named ? [...call.argv, "--project", project] : call.argv;
+  const scoped = cmd === "send-role-ts" || cmd === "exposed" || (cmd === "finish" && pos[0] === "list");
+  if (scoped && !named) argv = [...argv, "--project", project];
   return { ok: true, member: m, env, argv };
 }
