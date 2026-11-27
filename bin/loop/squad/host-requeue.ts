@@ -67,14 +67,15 @@ export async function lookups(store: Store, host: string, members: Row[]): Promi
 
 const iso = (at: number) => new Date(at * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-function keepLine(store: Store, m: Row, slug: string, host: string, attempt: number, l: Lookup, at: number): void {
+function keepLine(store: Store, m: Row, slug: string, host: string, attempt: number, l: Lookup, base: Lookup | null, at: number): void {
   // The unit's journal (`journal.sh <project> <squad> builder-<slug>`), which a fresh Builder on it reads first.
   const file = journalPath(store, { project: String(m.project), squad: String(m.squad), role: "builder", suffix: slug });
   mkdirSync(dirname(file), { recursive: true });
   const next = `${wtName({ ...(m as unknown as Member), suffix: String(m.suffix ?? "") })}-r${attempt}`;
-  const what = l.branch && l.sha
-    ? `host ${host} was lost; this unit moved to attempt ${attempt} on branch ${next}, started from the old branch ${l.branch} at its last pushed commit ${l.sha}`
-    : `host ${host} was lost; this unit moved to attempt ${attempt} on branch ${next}, started from HEAD: the old branch ${l.branch ?? "(none)"} was never pushed`;
+  const lost = `host ${host} was lost; this unit moved to attempt ${attempt} on branch ${next}`;
+  const what = l.branch && l.sha ? `${lost}, started from the old branch ${l.branch} at its last pushed commit ${l.sha}`
+    : base?.branch && base.sha ? `${lost}, started from ${base.branch} at ${base.sha}: the old branch ${l.branch ?? "(none)"} was never pushed`
+    : `${lost}, started from HEAD: the old branch ${l.branch ?? "(none)"} was never pushed`;
   appendFileSync(file, `- ${iso(at)} [keep] ${what} — work after that push stayed on ${host}; this journal may be behind it\n`);
 }
 
@@ -82,7 +83,7 @@ function keepLine(store: Store, m: Row, slug: string, host: string, attempt: num
 export function requeue(store: Store, host: string, m: Row, l: Lookup | undefined, at: number): Requeued {
   const project = String(m.project), squad = String(m.squad), role = String(m.role), suffix = String(m.suffix ?? "");
   const u = unitOf(store, m), slug = u ? String(u.slug) : null;
-  let attempt: number | null = null;
+  let attempt: number | null = null, base: Lookup | null = null;
   const again = m.want === "running";
   let old: Record<string, unknown> = {};
   try { old = JSON.parse(String(m.want_payload ?? "{}")) ?? {}; } catch { /* a torn payload: start plain */ }
@@ -92,7 +93,9 @@ export function requeue(store: Store, host: string, m: Row, l: Lookup | undefine
       { project, squad, member: `${role}/${suffix}`, ...(slug ? { unit: slug } : {}), payload: { id: Number(m.id), host, role, suffix, unit: slug } });
     if (u && again) {
       attempt = Number(u.attempt ?? 1) + 1;
-      const pushed = l?.branch && l.sha ? l : null;
+      // Nothing pushed this attempt: keep the base the attempt started from, so pushed work is never dropped.
+      const pushed = l?.branch && l.sha ? l : u.retry_from && u.retry_sha ? { branch: String(u.retry_from), sha: String(u.retry_sha) } : null;
+      base = pushed;
       store.db.run("UPDATE units SET attempt = ?, retry_from = ?, retry_sha = ?, retry_host = ?, retry_pr = COALESCE(pr, retry_pr) WHERE id = ?",
         [attempt, pushed?.branch ?? null, pushed?.sha ?? null, host, u.id as number]);
     }
@@ -104,7 +107,7 @@ export function requeue(store: Store, host: string, m: Row, l: Lookup | undefine
       phase: m.phase ?? null, ...(m.tier ? { tier: m.tier } : {}), status: "wanted", updated_at: at,
     } }], { project, squad, member: `${role}/${suffix}`, payload: { id: Number(wanted.id), role, suffix, ...(slug ? { unit: slug } : {}), by: "loop" } });
   });
-  if (u && again && attempt) keepLine(store, m, slug!, host, attempt, l ?? { branch: null, sha: null }, at);
+  if (u && again && attempt) keepLine(store, m, slug!, host, attempt, l ?? { branch: null, sha: null }, base, at);
   return { id: Number(m.id), role, suffix, unit: slug, attempt, branch: l?.branch ?? null, sha: l?.sha ?? null };
 }
 

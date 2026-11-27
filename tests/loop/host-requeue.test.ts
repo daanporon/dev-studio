@@ -168,6 +168,19 @@ describe("main fences a lost host at the grace plus 60 s", () => {
     expect(r.jobs.filter((j) => j.job === "worktree.add").length).toBe(1);   // nothing more on the lost host
   }, 30_000);
 
+  test("a second loss with nothing pushed keeps the base the attempt started from", async () => {
+    const r = await rig();
+    const { m, branch } = await onSide(r);
+    await run(["-C", r.repo, "push", "-q", "origin", "--delete", branch]);   // this attempt pushed nothing
+    r.s.db.run("UPDATE units SET attempt = 2, retry_from = 'old-x', retry_sha = 'abc123' WHERE squad = ? AND slug = 'u1'", [r.sq]);
+    down(r, r.now() - GRACE - 61);
+    await r.tick();
+    expect(member(r.s, Number(m.id)).status).toBe("gone");
+    expect(unit(r)).toMatchObject({ attempt: 3, retry_from: "old-x", retry_sha: "abc123" });
+    const journal = readFileSync(join(r.s.root, "fx", "journals", `${r.sq}-builder-u1.md`), "utf8");
+    expect(journal).toContain("started from old-x at abc123");
+  }, 30_000);
+
   test("when the host comes back, the moved member's terminals are closed there first, then the host is free again", async () => {
     const r = await rig();
     const { m } = await onSide(r);

@@ -57,7 +57,11 @@ export class WorktreeError extends Error {}
 export async function fetchBranch(repo: string, branch: string): Promise<void> {
   if (!branch || branch.startsWith("-") || /[\0\s:]/.test(branch)) throw new WorktreeError(`worktrees: '${branch}' is not a branch to fetch`);
   const g = await git(["-C", repo, "fetch", "-q", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
-  if (g.code !== 0) throw new WorktreeError(`worktrees: fetching ${branch} from origin failed: ${(g.err || g.out).trim().slice(0, 300)}`);
+  if (g.code === 0) return;
+  // A later start of the same attempt: the branch may be gone from origin by now (its old PR closed), but the copy
+  // fetched for the first start is still here, and that start's worktree already exists.
+  if ((await git(["-C", repo, "rev-parse", "--verify", "-q", `refs/remotes/origin/${branch}`])).code === 0) return;
+  throw new WorktreeError(`worktrees: fetching ${branch} from origin failed: ${(g.err || g.out).trim().slice(0, 300)}`);
 }
 
 const HOST = "local";
