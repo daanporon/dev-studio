@@ -5,10 +5,10 @@
 // launch line (claude-launch.ts) is typed in it. A member on a side host (side-loop-host U10) has the id
 // `<host>::<path>`: its worktree and terminal are made there, over the link (core/actuator.ts contractSeat). Codex and Muse have no launch line here: spawn refuses
 // such a roster (bin/commands/spawn-squad-ts.ts), and a start of one fails.
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { ROOT, stateRoot } from "../core/store.ts";
-import { folderOf } from "../../lib/account-dirs.ts";
+import { folderOf, folderOn } from "../../lib/account-dirs.ts";
 import { answerMenu, resumeSpec } from "./claude.ts";
 import { claudeLine, markTrusted, systemJsonDir, utf8Locale, type ClaudeConfig } from "./claude-launch.ts";
 import type { ContractSeat, Driver, DriverModule, Keyed, Member, Poked, Seat, StartMeta, Started } from "./types.ts";
@@ -48,6 +48,18 @@ function account(acct: string | null): { config: ClaudeConfig; dir: string } | {
   return isDir(home) ? { config: { home }, dir: home } : { error: `no Claude home for account ${acct} (${home})` };
 }
 
+// side-loop-host U19: the account's config on side host `host`: its login folder there (account_folders, never main's
+// folder: a login folder is not copied), or an error when that host has none. The folder is not read here (it is on
+// the other host); the side's `contract` channel marks the worktree trusted in it (CLAUDE_CONFIG_DIR in the
+// terminal's env). That host's own folder (`~/.claude`, the claude kind's system folder) is its system login: no
+// CLAUDE_CONFIG_DIR, as on main. None or `-` is that host's default login (a member started before U19).
+export function sideAccount(host: string, acct: string | null): { config: ClaudeConfig; env: Record<string, string> } | { error: string } {
+  if (!acct || acct === "-") return { config: null, env: {} };
+  const home = folderOn(stateRoot(), host, "claude", acct);
+  if (!home) return { error: `account ${acct} has no login on host ${host}` };
+  return basename(home) === ".claude" ? { config: { system: true }, env: {} } : { config: { home }, env: { CLAUDE_CONFIG_DIR: home } };
+}
+
 // side-loop-host U10: whether the seat's terminals are on a side host, and the folder of member id `wt` on the
 // seat's host: `local::<path>` here, `<host>::<path>` on a side host.
 const onSideHost = (c: ContractSeat): boolean => !!c.host && c.host !== "local";
@@ -74,10 +86,10 @@ export const contract: DriverModule = {
     const launch = async (m: Member, acct: string | null, meta: Omit<StartMeta, "line">, opts: string[], text: string): Promise<Started> => {
       if ((m.agent ?? "claude") !== "claude") return { ok: false, error: `agent ${m.agent} has no launch line on backend ${c.backend}` };
       // side-loop-host U10: on a side host the folder is that host's, so nothing here reads or marks it: the side's
-      // `contract` channel marks it trusted for its login when it makes the terminal. Until the accounts units land
-      // the agent runs on that host's own default login.
+      // `contract` channel marks it trusted for its login when it makes the terminal. U19: the agent runs on the
+      // account's own login folder on that host (sideAccount).
       const side = onSideHost(c);
-      const a = side ? { config: null, dir: "" } : account(acct);
+      const a = side ? sideAccount(c.host!, acct) : account(acct);
       if ("error" in a) return { ok: false, error: a.error };
       let path = pathOn(c, m.wt);
       if (!path) {
@@ -86,10 +98,10 @@ export const contract: DriverModule = {
         path = w.path;
       }
       if (!side && !existsSync(path)) return { ok: false, error: `worktree ${path} is gone` };
-      if (!side) markTrusted(a.dir, path);   // claude stops at the folder-trust prompt otherwise
+      if ("dir" in a) markTrusted(a.dir, path);   // claude stops at the folder-trust prompt otherwise
       const line = claudeLine({ config: a.config, gates: isDir(gates) ? gates : "", args: [...opts, ...c.settings(m.role, path), ...(text ? [text] : [])], utf8: utf8Locale(process.env), exec: true });
       const parent = side ? null : wtFolder(m.role === "lead" ? seat.squad.studio_wt : seat.squad.lead_wt);
-      const r = await c.start({ cwd: path, label: `${m.role}${m.suffix ? `-${m.suffix}` : ""}`,
+      const r = await c.start({ cwd: path, label: `${m.role}${m.suffix ? `-${m.suffix}` : ""}`, ...("env" in a && Object.keys(a.env).length ? { env: a.env } : {}),
         ...(c.caps.parents === "groups" ? { group: m.squad } : {}), ...(c.caps.parents === "native" && parent ? { parent } : {}) }, { ...meta, line });
       return r.ok ? { ok: true, wt: side ? hostWt(c.host!, path) : `${LOCAL}${path}` } : { ok: false, error: r.error, ...(r.busy ? { busy: true } : {}) };
     };

@@ -234,7 +234,9 @@ main checks the answer (`checked()`), so one outside its op's type throws on mai
   reads each squad on that backend, so its rows come up the link. Close stops it there and removes
   its worktree with `worktree.remove` (`squad/removal.ts`; rescue and probe as host jobs, `fulfil/close.ts`). Main
   never reads it through Orca: the Orca observer skips side ids, and the drift check reads main's `worktrees` row
-  for its folder, not main's disk. Until the accounts units land, the agent uses that host's own default login.
+  for its folder, not main's disk. The agent runs on its account's login folder on that host (U19:
+  `account_folders`, never a copied folder): the picker offers a start there only an account with a usable login on it,
+  and placement skips a host with none (`no usable login: …`).
   `ds add-role … --host <name>` (and `ds request member … --host <name>`) asks for a member on a named host.
 
 ### The herdr backend (`bin/backend/herdr.ts`)

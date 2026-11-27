@@ -49,6 +49,14 @@
 // pressure: machine-level.ts, the levels the board colours): WAIT with why `host`, no reset time, reason
 // `WAIT host: <metric> <value> ≥ crit <line>`. A missing or stale sample never brakes; a live Builder
 // replacing its own agent and every other role are never braked. Ask again next tick.
+//
+// Logins per host (side-loop-host U19, KTD: per-host logins, never a copied folder): a start that runs on a side
+// host (placed there this pick, or its row names one) is offered only the accounts with a usable login on that host
+// (loginsOn: an account_folders row there whose scanned folder is not logged out); an override or explicit account
+// without one waits (`account <a> has no login on <host>`), and there is no "default login" there: with no such
+// account the rung is skipped. Limits, holds and expected load stay the account's (its login's), so a login used on
+// two hosts counts once. Placement asks the same question per candidate host (place.ts `fits`): a host where this
+// start gets no account is skipped with `no usable login: <why>`. A start on main is picked as before.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { memberIds, type Row, type Store } from "../core/store.ts";
@@ -66,6 +74,7 @@ import { loopProjects } from "../settings/projects.ts";
 import { effectiveRoster } from "../settings/roster.ts";
 import { hostLine, isHostKey, SELF } from "../../lib/host-settings.ts";
 import { movable, pinnedSide, placeSide, sideBrake } from "./place.ts";
+import { onSide } from "../squad/backend.ts";
 
 export type PickReq = {
   project: string; role: string; tier?: string | null; phase?: string | null; squad?: string | null;
@@ -273,6 +282,15 @@ function tableOf(store: Store, agent: string): { gone: Set<string>; off: Set<str
   return { gone, off, same: (account) => logins.get(loginOf.get(account) ?? "") ?? [account] };
 }
 
+// U19: the accounts of `agent` with a usable login on side host `host`: an account_folders row there (its scanned
+// folder is logged in as the account's login, capacity/accounts.ts syncAccountFolders) whose folder the host's last
+// scan did not find logged out (observed_account_folders.logged_in 0; its dir is `<host>::<path>`).
+export function loginsOn(store: Store, agent: string, host: string): Set<string> {
+  return new Set((store.db.query(`SELECT f.account FROM account_folders f WHERE f.agent = ?1 AND f.host = ?2 AND f.dir IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM observed_account_folders o WHERE o.host = f.host AND o.dir = f.host || '::' || f.dir AND o.logged_in = 0)`)
+    .all(agent, host) as { account: string }[]).map((r) => r.account));
+}
+
 // The agent's current rows of accounts.tsv, or null when it has none. The system login alone is a list:
 // the refresh builds it from the accounts table and keeps its last files when it cannot read that.
 function readList(store: Store, agent: string): { accounts: Set<string>; updated: number } | null {
@@ -465,19 +483,27 @@ export function pick(store: Store, req: PickReq, now: number): PickResult {
   // Placement (side-loop-host U11, KTD10): main first; a Builder main holds, or a Tester/Researcher while main is
   // critical, goes to the first side host that takes it (place.ts). None takes it: the Builder waits as before, the
   // Tester or Researcher starts on main. The reason keeps main's wait on the same line, never at a line start (SLOT_WAIT).
-  if (!req.place || !movable(store, m, req.role)) return held ?? choose(store, req, m, squad, now);
+  // U19: a start that is not placed runs where its row says, and takes only that host's logins.
+  if (!req.place || !movable(store, m, req.role)) return held ?? choose(store, req, m, squad, now, onSide(m?.host) ? String(m!.host) : null);
   const role = String(m?.role ?? req.role);
   const mainCrit = role !== "builder" ? hostCrit(mainSample(store), (k) => wholeLimit(store, req.project, k), now) : null;
   const why = held ? held.reason.replace(/^WAIT /, "") : mainCrit ? `host: ${mainCrit}` : null;
-  const side = why ? placeSide(store, role, now, m ? Number(m.id) : null) : null;
+  // U19: a side host takes the start only when this pick gives it an account with a usable login there.
+  const there = new Map<string, PickResult>();
+  const side = why ? placeSide(store, role, now, m ? Number(m.id) : null, (h) => {
+    const r = choose(store, req, m, squad, now, h);
+    there.set(h, r);
+    return "agent" in r ? null : `no usable login: ${"wait" in r ? r.reason.replace(/; wait until .*$/, "") : r.error}`;
+  }) : null;
   if (held && !side?.host) return side?.skipped.length ? { ...held, reason: `${held.reason}; side hosts: ${side.skipped.join(", ")}` } : held;
-  const r = choose(store, req, m, squad, now);
+  const r = side?.host ? there.get(side.host)! : choose(store, req, m, squad, now, null);
   if (!("agent" in r)) return r;
   return side?.host ? { ...r, host: side.host, reason: `${r.reason}; on side host ${side.host} (main ${why})` } : { ...r, host: null };
 }
 
-// The ladder and the account for a start that may go ahead (pick, after slot, brake and placement).
-function choose(store: Store, req: PickReq, m: Row | null, squad: string | null, now: number): PickResult {
+// The ladder and the account for a start that may go ahead (pick, after slot, brake and placement); `host` is the
+// side host it runs on (only accounts with a login there, U19), null for main.
+function choose(store: Store, req: PickReq, m: Row | null, squad: string | null, now: number, host: string | null): PickResult {
   const repo = squad ? (store.get("squads", { project: req.project, topic: squad })?.repo as string | null) ?? null : null;
   const ov = overrideOf(store, m);
   const lad = ladder(store, req, repo);
@@ -524,14 +550,23 @@ function choose(store: Store, req: PickReq, m: Row | null, squad: string | null,
   const noLaunch = new Set<string>();   // U31: agents this squad's backend has no launch line for, named in a wait's reason
   let off = false;                // the override's or explicit account is disabled
   let lost = false;               // ... or gone
+  let away = false;               // ... or has no login on the side host (U19)
 
   for (let i = 0; i < floor.n; i++) {
     const r = rungs[i], tag = rungTag(r);
     if (!canLaunch(backend, r.agent)) { noLaunch.add(r.agent); skipped.push(`${tag} (no launch line on ${backend})`); continue; }
-    let accts = accounts(store, r.agent, now, req.limited ?? []).filter((a) => matchesPlan(r.plan, a.plan));
+    // U19: on a side host only the accounts with a usable login there.
+    const here = host ? loginsOn(store, r.agent, host) : null;
+    let accts = accounts(store, r.agent, now, req.limited ?? []).filter((a) => matchesPlan(r.plan, a.plan) && (!here || here.has(a.account)));
     if (account && tableOf(store, r.agent).gone.has(String(account))) {
       lost = true;
       skipped.push(`${tag} (${account} gone)`);
+      tried.push(tag);
+      continue;
+    }
+    if (account && here && !here.has(String(account))) {
+      away = true;
+      skipped.push(`${tag} (${account} has no login on ${host})`);
       tried.push(tag);
       continue;
     }
@@ -550,8 +585,9 @@ function choose(store: Store, req: PickReq, m: Row | null, squad: string | null,
       fallback: i > 0, rung: i + 1, reason: `${how} rung ${i + 1} ${tag}: ${reason}`,
       why: [base, ...why.filter((w) => w.endsWith(` ${DISABLED}`)), ...(skipped.length ? [`skipped ${skipped.join("; ")}`] : [])].join("; "),
     });
-    if (!accts.length && !r.plan) return out(null, "default_login", "no account listed, its default login");
-    if (!accts.length) why.push(`no account on plan ${r.plan}`);
+    // A side host has no default login to fall back on (U19): only an account with a login there.
+    if (!accts.length && !r.plan && !host) return out(null, "default_login", "no account listed, its default login");
+    if (!accts.length) why.push(host ? `no account${r.plan ? ` on plan ${r.plan}` : ""} with a login on ${host}` : `no account on plan ${r.plan}`);
     const ok: (Acct & { key: number })[] = [];
     for (const a of accts) {
       if (a.disabled) { why.push(`${a.account} ${DISABLED}`); if (account) off = true; continue; }
@@ -594,11 +630,13 @@ function choose(store: Store, req: PickReq, m: Row | null, squad: string | null,
   const until = `wait until ${known ? at : `${at} (no known reset)`}`;
   if (lost) return { wait: at, known, why: "wait", reason: `${how}: account gone (${account}); ${until}` };
   if (off) return { wait: at, known, why: "wait", reason: `${how}: account disabled (${account}); ${until}` };
+  if (away) return { wait: at, known, why: "wait", reason: `${how}: account ${account} has no login on ${host}; ${until}` };
   const credits = broke.size ? `; ${[...broke].join(", ")} ${OUT_OF_CREDITS}` : "";
   const login = loggedOut.size ? `; ${[...loggedOut].join(", ")} ${LOGIN_ENDED}` : "";
   const nolaunch = noLaunch.size ? `; ${[...noLaunch].join(", ")} cannot start on ${backend}` : "";
   const rest = [...new Set(rungs.slice(0, floor.n).filter((r) => canLaunch(backend, r.agent)).map((r) => r.agent))];
-  const what = noLaunch.size ? `host busy: no account for ${rest.length ? rest.join(", ") : "an agent it can start"} on ${backend}` : `${how}: no account with room on ${tried.join(", ")}`;
+  const what = noLaunch.size ? `host busy: no account for ${rest.length ? rest.join(", ") : "an agent it can start"} on ${backend}`
+    : `${how}: no account${host ? ` with a login on ${host}` : ""} with room on ${tried.join(", ")}`;
   return { wait: at, known, why: "wait", reason: `${what}${below}${credits}${login}${nolaunch}; ${until}` };
 }
 

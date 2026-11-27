@@ -6,7 +6,8 @@
 // state root), checked before anything is made; a backend this host has no adapter for is refused.
 // side-loop-host U10: a terminal made here is a side member's, so its env gets DS_MAIN_URL (the side relay's socket
 // under this host's state root, relay.ts mainUrlFor: its `bin/ds` calls go up the link) whatever main sent, and its
-// folder (a member start: DS_MEMBER set) is marked trusted for this host's own default login (claude stops at the folder-trust prompt otherwise).
+// folder (a member start: DS_MEMBER set) is marked trusted for the login it runs on (claude stops at the folder-trust prompt otherwise):
+// U19: the account's folder main names in CLAUDE_CONFIG_DIR, else this host's own default login.
 import { isAbsolute } from "node:path";
 import { handle, type Backend } from "../../backend/contract.ts";
 import { markTrusted, systemJsonDir } from "../../loop/drivers/claude-launch.ts";
@@ -27,7 +28,9 @@ export function sideCreate(envelope: Record<string, unknown>, root: string, env:
   if (envelope.op !== "terminal.create" || !isObj(req)) return envelope;
   const cwd = req.cwd, given = isObj(req.env) ? req.env : {};
   // Only a member's start (main sets DS_MEMBER) is an agent's folder to trust.
-  if (given.DS_MEMBER && typeof cwd === "string" && isAbsolute(cwd)) { try { markTrusted(systemJsonDir(env), cwd); } catch { /* the launch shows the prompt */ } }
+  // U19: in the account's login folder when main named one (CLAUDE_CONFIG_DIR), else this host's own login.
+  const home = typeof given.CLAUDE_CONFIG_DIR === "string" && isAbsolute(given.CLAUDE_CONFIG_DIR) ? given.CLAUDE_CONFIG_DIR : null;
+  if (given.DS_MEMBER && typeof cwd === "string" && isAbsolute(cwd)) { try { markTrusted(home ?? systemJsonDir(env), cwd); } catch { /* the launch shows the prompt */ } }
   return { ...envelope, req: { ...req, env: { ...given, DS_MAIN_URL: mainUrlFor(root) } } };
 }
 
