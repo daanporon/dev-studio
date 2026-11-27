@@ -5,7 +5,7 @@
 // connection for the same host is refused, and a silent link is marked down within DEAD_MS on both ends; main
 // records the host's last seen, versions and unreachable time. Plus the link service's wish (link_listen,
 // link_port) and the server script's bind rule.
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +87,23 @@ describe("connect and request", () => {
     expect(h.unreachable_since).toBeNull();
     expect(events(m.store, "host_link_up").length).toBe(1);
   });
+
+  // U2b: Bun.serve's default idle timeout is 10 s and a host job answers much later. Bun 1.4.4 cuts a slow GET at that
+  // default but not a POST with a body, so the slow request alone passes without the setting: the options pin it.
+  test("the unix socket has no idle timeout, and a request slower than 10 s gets its answer", async () => {
+    const slow: Channel = { name: "slow", answers: "both", handle: async () => { await Bun.sleep(13_000); return "done"; } };
+    const chans = new Map([...(await loadChannels("side")), ["slow", slow]]);
+    const serve = spyOn(Bun, "serve");
+    let m: Awaited<ReturnType<typeof mainUp>>, served: Row[];
+    try { m = await mainUp(); served = serve.mock.calls.map((c) => c[0] as Row); }
+    finally { serve.mockRestore(); }
+    expect(served.find((o) => o.unix === m.srv.socket)?.idleTimeout).toBe(0);
+    expect(served.find((o) => o.hostname === "127.0.0.1")?.idleTimeout).toBe(30);
+    const c = new LinkClient({ main: m.url, root: side(m.store, "side-s"), name: "side-s", channels: chans });
+    clients.push(c);
+    await c.start();
+    expect(await linkRequest(m.root, "side-s", "slow", null, 25_000)).toBe("done");
+  }, 30_000);
 
   test("a channel handler's error comes back as the request's error", async () => {
     const boom: Channel = { name: "boom", answers: "both", handle: () => { throw new Error("it broke"); } };

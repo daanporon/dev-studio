@@ -228,7 +228,10 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
   rmSync(sock, { force: true });
   const local = Bun.serve({
     unix: sock,
-    async fetch(req) {
+    // No idle timeout (Bun's default is 10 s): a /request answers when the side host does, and a host job runs for
+    // minutes. linkRequest and the peer's own request timeout bound the wait.
+    idleTimeout: 0,
+    async fetch(req: Request) {
       const u = new URL(req.url);
       if (req.method === "GET" && u.pathname === "/links") return Response.json({ ok: true, links: [...live.keys()].filter((h) => isLive(live.get(h))).sort() });
       if (req.method === "POST" && u.pathname === "/request") {
@@ -240,7 +243,8 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
       }
       return new Response("not found", { status: 404 });
     },
-  });
+  // bun's types leave idleTimeout out for a unix socket.
+  } as unknown as Parameters<typeof Bun.serve>[0]);
   chmodSync(sock, 0o600);
 
   return {
