@@ -275,6 +275,13 @@ bin/ds join <main-host>[:<port>] [--name <name>] [--repo <git-url>]...
   uses TLS).
 - **`--name`** is the name main knows this host by (default: the machine's short name). `<port>` defaults to 7790.
 
+**On the board,** once a side host is accepted, the Machine panel has one section per host: `main` first, then the
+side hosts in name order. Each starts with the host's load and memory line and has its own breakdown and Top by
+RAM | CPU table, from the figures that host reported. A side host with no fresh sample (older than three sampling
+cadences, or none yet) shows the age of its last one and no numbers. The Machine tile shows the host with the worst
+level and names it; `main` wins a tie, and a stale side host never counts. The text board's `MACHINE` line is main's.
+With no side host the panel and the tile show main alone, with no section headings.
+
 **If main cannot be reached:** a main with no side host yet does not run its link server. On main, run
 `bin/ds config set <project> limits.conf link_listen on` (`link_port` defaults to 7790), then run `ds join` again.
 

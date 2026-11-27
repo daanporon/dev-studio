@@ -25,6 +25,12 @@ export const levelOf = (line: Line) => (v: number | null, m: string, sfx = "_pct
 const num = (x: unknown) => (x == null ? null : Number(x));
 const psiOf = (...v: unknown[]) => { const m = v.map(num).filter((x): x is number => x != null); return m.length ? Math.max(...m) : null; };
 
+// The host the Machine tile names: the worst level of main and the side hosts. A stale side sample says
+// nothing about now, so it never wins; main is listed first and keeps a tie (then the side hosts in name order).
+export function worstHost<T extends { level?: string; stale?: boolean }>(main: T, sides: T[]): T {
+  return sides.reduce((w, s) => (!s.stale && LVL[s.level ?? "ok"] > LVL[w.level ?? "ok"] ? s : w), main);
+}
+
 // Load, memory, swap and pressure of one sample, each with its level. Disks are the board's own (it
 // colours them with levelOf); the brake leaves them out.
 export function machineLevels(r: MachineRow, line: Line) {
