@@ -39,7 +39,6 @@
 // from the previous row while the port stays, else now. The socket scan stops after LISTEN_MS (300 ms):
 // a worktree it did not finish keeps its previous `listen` and goes first on the next scan.
 import { existsSync, readlinkSync, realpathSync } from "node:fs";
-import { hostname } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { Observer } from "../core/plugins.ts";
 import type { Store } from "../core/store.ts";
@@ -552,7 +551,7 @@ export function procsObserver(opts: ProcsOpts = {}): Observer {
         }
         const g = [...groups.values()].map((e) => ({ label: e.label, comm: e.comm, procs: e.procs, rss_kb: e.rss_kb, mem_kb: memOf(`\x01${e.label}`), cpu_pct: pct(e.ticks), cpu_cg_pct: cpuCgOf(`\x01${e.label}`) }))
           .sort((a, b) => b.rss_kb - a.rss_kb);
-        store.upsert("observed_host_procs", { host: hostname() }, { groups: JSON.stringify(g), procs: hostProcs, rss_kb: hostRss, scan_ms: ms, ...lp.load, observed_at: now });
+        store.upsert("observed_host_procs", { host: "local" }, { groups: JSON.stringify(g), procs: hostProcs, rss_kb: hostRss, scan_ms: ms, ...lp.load, observed_at: now });
       });
     },
   };

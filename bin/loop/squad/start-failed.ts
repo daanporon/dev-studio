@@ -3,7 +3,7 @@
 // line: the tab's last 40 screen lines (what Claude printed before it quit), or what Orca's `terminal create`
 // said when no tab opened. Every Orca mutation goes through the actuator's call(), which hands its answer
 // here: each such line becomes one `start_failed` event (project, squad, member, worktree, account, the
-// failure, the screen or Orca's output, and the load1 of the last machine sample), and leaves the answer.
+// failure, the screen or Orca's output, and the load1 of this host's last machine sample), and leaves the answer.
 // The failure's line gains only a pointer ("screen in event start_failed <id>"), so the refusal text, its
 // class, its card and every fingerprint stay as they were.
 import type { Out } from "../io/orca.ts";
@@ -15,7 +15,7 @@ type Who = { project: string; squad: string | null; member: string | null };
 type Doc = { failure?: unknown; worktree?: unknown; account?: unknown; screen?: unknown; orca?: unknown };
 
 function load1(store: Store): number | null {
-  const r = store.db.query("SELECT load1 FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as { load1: number | null } | null;
+  const r = store.db.query("SELECT load1 FROM observed_machine WHERE host = 'local' ORDER BY observed_at DESC LIMIT 1").get() as { load1: number | null } | null;
   return r?.load1 ?? null;
 }
 

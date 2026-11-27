@@ -1357,7 +1357,7 @@ describe("refusals", () => {
   test("U270: a start_failed line is one event with the screen and load1; the answer keeps only a pointer", async () => {
     const doc = { failure: NEVER.slice("orca adapter: ".length), worktree: "wt_1", account: "acctA", screen: "Error: ~/.claude.json is locked", orca: "orca: wait timed out\nexit 1" };
     const { s, tick } = probe({ answers: () => ({ code: 1, err: `${NEVER}\norca adapter: start_failed ${JSON.stringify(doc)}\n` }) });
-    s.db.run("INSERT INTO observed_machine (host, cores, load1, observed_at) VALUES ('h', 8, 3.5, ?), ('h2', 8, 12.25, ?)", [T - 60, T - 5]);
+    s.db.run("INSERT INTO observed_machine (host, cores, load1, observed_at) VALUES ('local', 8, 12.25, ?), ('sidebox', 8, 3.5, ?)", [T - 60, T - 5]);   // the side's newer sample is not main's
     await tick(T);
     const ev = s.db.query("SELECT id, project, payload FROM events WHERE kind = 'start_failed'").all() as { id: number; project: string; payload: string }[];
     expect(ev).toHaveLength(1);
