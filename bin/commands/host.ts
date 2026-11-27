@@ -3,20 +3,24 @@
 // a pending join down, `remove <name>` deletes an accepted host's key. With no hosts and link_listen not `on`,
 // `list` says to turn link_listen on so a first join can reach main's link server (U2). Same code as the board's Accept (U17):
 // bin/link/host-keys.ts. A join request itself arrives over the link (U2), never through this command.
+// U16: `drain <name>` stops new starts on a host while its members run on; `undrain <name>` takes it back.
 // U25 (KTD16): `set <host> <key> <value>`, `rm <host> <key>` and `show <host>` are the per-host overrides of the
 // `[host]` keys of conventions/limits.conf (main is `local`); bin/loop/settings/host-settings.ts writes them.
 import { now, open } from "../loop/core/store.ts";
 import { linkListen, linkWish } from "../loop/fulfil/link.ts";
 import { parse, print } from "../loop/core/cli.ts";
-import { accept, hostLine, listHosts, reject, remove, linkListenHint } from "../link/host-keys.ts";
+import { liveOn } from "../loop/squad/host-requeue.ts";
+import { accept, hostLine, listHosts, reject, remove, setDrain, linkListenHint } from "../link/host-keys.ts";
 import { HostSettingsError, hostShow, knownHost, rmHostKey, setHostKey } from "../loop/settings/host-settings.ts";
 
-export const help = "list [--all] [--json] | accept <name> [--seats N] | reject <name> | remove <name> | set <host> <key> <value> | rm <host> <key> | show <host> [--json] — side hosts that run worker seats (hosts rows) and each host's machine keys";
+export const help = "list [--all] [--json] | accept <name> [--seats N] | reject <name> | remove <name> | drain <name> | undrain <name> | set <host> <key> <value> | rm <host> <key> | show <host> [--json] — side hosts that run worker seats (hosts rows) and each host's machine keys";
 
 const USAGE = `usage: ds host list [--all] [--json]     (--all: removed hosts too)
        ds host accept <name> [--seats N]   (a pending join request; seats default 2)
        ds host reject <name>               (a pending join request)
        ds host remove <name>               (an accepted host: its key is deleted)
+       ds host drain <name>                (no new starts there; the members it has run on)
+       ds host undrain <name>              (it takes new starts again)
        ds host set <host> <key> <value>    (a [host] key of limits.conf for one host; main is local)
        ds host rm <host> <key>             (that host back to the repo default)
        ds host show <host> [--json]        (every [host] key: value and source env|host|default)`;
@@ -45,7 +49,8 @@ export async function run(args: string[]): Promise<number> {
     } finally { s.close(); }
   }
   if (verb === "set" || verb === "rm" || verb === "show") return hostKeysVerb(verb, pos, opt.seats !== undefined, flag, usage);
-  if (verb !== "accept" && verb !== "reject" && verb !== "remove") return usage(verb ? `unknown subcommand '${verb}'` : "name one of list, accept, reject, remove, set, rm, show");
+  if (verb !== "accept" && verb !== "reject" && verb !== "remove" && verb !== "drain" && verb !== "undrain")
+    return usage(verb ? `unknown subcommand '${verb}'` : "name one of list, accept, reject, remove, drain, undrain, set, rm, show");
   if (pos.length !== 2) return usage(`${verb} takes one host name`);
   if (flag.has("all") || flag.has("json")) return usage(`${verb} takes no --all or --json`);
   if (verb !== "accept" && opt.seats !== undefined) return usage("--seats is for accept");
@@ -54,6 +59,12 @@ export async function run(args: string[]): Promise<number> {
   const by = process.env.DS_WHO || "ds";
   const s = open();
   try {
+    if (verb === "drain" || verb === "undrain") {
+      const r = setDrain(s, pos[1], verb === "drain", { by });
+      if (!r.ok) { console.error(`ds host: ${r.why}`); return 1; }
+      console.log(verb === "drain" ? `host ${pos[1]} is draining: no new starts there, ${liveOn(s, pos[1]).length} members run on` : `host ${pos[1]} takes new starts again`);
+      return 0;
+    }
     const r = verb === "accept" ? accept(s, pos[1], { seats, by }) : verb === "reject" ? reject(s, pos[1], { by }) : remove(s, pos[1], { by });
     if (!r.ok) { console.error(`ds host: ${r.why}`); return 1; }
     const h = r.host;

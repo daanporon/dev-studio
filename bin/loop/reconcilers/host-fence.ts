@@ -63,7 +63,9 @@ function prCards(store: Store): Action[] {
     const slug = String(u.slug), attempt = Number(u.attempt ?? 2);
     out.push(...alertAction(store, { project, squad: null, key: `host-requeue.${u.squad}.${slug}`, episode: `${slug}#${attempt}`, unit: slug,
       title: `Old PR #${n} of ${slug} is still open`,
-      text: `Host ${u.retry_host ?? "?"} was lost, so unit ${slug} of squad ${u.squad} started again on another seat (attempt ${attempt}). `
+      // No retry_host: the operator moved the unit's Builder to main (U16), no host was lost.
+      text: (u.retry_host ? `Host ${u.retry_host} was lost, so unit ${slug} of squad ${u.squad} started again on another seat (attempt ${attempt}). `
+        : `Unit ${slug} of squad ${u.squad} was moved to main and started again there (attempt ${attempt}). `)
         + `PR #${n} from its old branch ${u.retry_from ?? "(not pushed)"} is still open.`,
       option: "close the old PR, or tell the Lead to have the new Builder take it over",
       why: "a requeued unit's old PR is still open" }));
