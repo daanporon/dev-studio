@@ -3,11 +3,13 @@
 // or --tier), the member fulfiller (U11) starts it with add-role.sh's worktree name and prompt and
 // records the members and units rows, and reconcilers/requests.ts tells the Lead once it started.
 // Nothing free at or above the floor: the unfinished wish stays idle and re-picks every tick. Asking again for a live member is a no-op; asking again after its start
-// failed starts it afresh.
+// failed starts it afresh, and placement picks its side host again unless --host forced it.
 import { execFileSync } from "node:child_process";
 import { now, open, type Row, type Store } from "../loop/core/store.ts";
 import { parse, print, seconds, shape, waitFor } from "../loop/core/cli.ts";
 import { unknownRole } from "../loop/reconcilers/requests.ts";
+import { movable } from "../loop/capacity/place.ts";
+import { onSide } from "../loop/squad/backend.ts";
 
 export const help = `<role> [--unit <slug>] [--suffix <s>] [--tier standard|hard] [--spec <text>] [--squad <project>/<topic>] [--by <who>] [--wait <s>] — start a role in the squad: a builder takes --unit (its suffix), other roles --suffix; the squad defaults to the one this worktree belongs to; --host <name> starts it on that side host`;
 
@@ -77,12 +79,15 @@ export async function run(args: string[]): Promise<number> {
     } else {
       const payload: Row = { why: "start", request: true, ...(unit && role === "builder" ? { unit } : {}), ...(opt.spec ? { spec: opt.spec } : {}) };
       row = s.tx(() => {
+        // U11b: a side host placement chose (movable: no worktree, and the member's picks row still names it) is
+        // cleared with that row, so the new start is placed again; left alone it would read as a --host pin.
+        const repick = opt.host === undefined && !!live && onSide(live.host) && movable(s, live, role);
         const wanted = s.want("member", id, "running", { payload, by, rearm: true }).row;
         s.db.run("DELETE FROM picks WHERE member = ?", [wanted.id as number]);
         // No doc yet: squadDoc exports members with one, and a wt-less member in the squad doc would
         // round-trip onto every other wt-less member. The fulfiller writes it with the worktree.
         s.fact("member_requested", [{ table: "members", key: { id: wanted.id }, set: {
-          phase: "build", ...(opt.tier ? { tier: opt.tier } : {}), ...(opt.host !== undefined ? { host } : {}), status: "wanted", updated_at: now(),
+          phase: "build", ...(opt.tier ? { tier: opt.tier } : {}), ...(opt.host !== undefined || repick ? { host } : {}), status: "wanted", updated_at: now(),
         } }], { project: sq!.project, squad: sq!.topic, member: `${role}/${suffix}`, payload: { id: wanted.id, role, suffix, unit: unit ?? null, tier: opt.tier ?? null, by } });
         return s.wish("member", Number(wanted.id))!;
       });
