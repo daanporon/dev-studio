@@ -19,7 +19,9 @@ checkout, an account folder or a disk path adds its line here.
 **How the facts reach main (side-loop-host U6).** A side host's loop runs the same observers over its own
 copy of its members, squads, projects, units, worktrees and settings, which main sends down the link; the
 observed rows they write go up and land in main's tables tagged with the host (`host = <name>`), worktree ids
-as `<host>::<path>` and terminal handles as `<host>:<handle>` (`bin/link/replica.ts`, `docs/scripts.md`).
+as `<host>::<path>` and terminal handles as `<host>:<handle>` (`bin/link/replica.ts`, `docs/scripts.md`). A side
+host's login folders travel the same way (`observed_account_folders`, U18); main records each login's folder on
+that host in `account_folders` by login id.
 Main's own observers read and prune only `host = 'local'` rows, so they never touch a side host's facts.
 
 ## `/proc`: processes
@@ -77,7 +79,7 @@ writes a rescued file each path must be relative with no `.`/`..` segment and no
 | File | What it reads |
 |---|---|
 | `bin/backend/orca.ts` | Each listed account's folder, as its `accounts` row names it: the login file the usage and reset calls read (Claude's `.credentials.json`, Codex's `auth.json`), a Claude folder's `.claude.json` and its `projects/` link; `system`'s `~/.claude`. |
-| `bin/lib/accounts-list.ts` | The accounts refresh's folder scan: Orca's `<orca data>/claude-profiles/*/home`, `<accounts root>/<agent>/*` and each agent's own folder: whether the login file is there, and the login id in it (`.claude.json`, `auth.json`). Only the id leaves the file. |
+| `bin/lib/accounts-list.ts` | The accounts refresh's folder scan: Orca's `<orca data>/claude-profiles/*/home`, `<accounts root>/<agent>/*` and each agent's own folder: whether the login file is there, and the login id in it (`.claude.json`, `auth.json`). Only the id leaves the file. A side host runs the same scan (`scanFolders`) from its state observer every `DS_LOOP_ACCOUNTS_S` and sends the rows up as `observed_account_folders` with `dir` as `<host>::<path>` (side-loop-host U18); a login folder is never copied between hosts. |
 | `bin/lib/account-dirs.ts` | Whether a listed account's folder still exists (the list; the picker's "account gone"). |
 | `bin/loop/fulfil/account-add.ts`, `bin/lib/account-folder.ts` | A new account's folder: made with links into the agent's own folder, then watched for the login file, the login id and `.ds-login-exit`; a `--dir` folder's login file and id, read only. The kind's `afterLogin` copies Claude's onboarding keys from the system `.claude.json`. |
 | `bin/loop/fulfil/account-move.ts`, `bin/lib/account-folder.ts` | `ds account move`: `cp -a` of an Orca-folder account into the accounts root (Orca's folder is left alone), and the copy's plugin `installPaths` that still point into Orca's folder. |

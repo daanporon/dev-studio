@@ -5,6 +5,7 @@
 //   resolveAccount(store, "<agent>:<account|label>")            the account a CLI name means
 //   knownAccounts(store)                                        every known account with its state
 //   mergeOrcaImport / parseAccountFolders / copyLoginIds        the state observer's merge of the refresh's files
+//   syncAccountFolders(store)                                   account_folders: each login's folder per host (side-loop-host U18)
 //   setDefaultAccount / removeAccount                           `ds account default|remove` (issue #125)
 //   addAccount                                                  `ds account add`'s row: added, back or already there (U5)
 //   moveProblem / moveAccountRow / accountMembers               `ds account move`: its refusals and its row (U8)
@@ -164,15 +165,46 @@ export function parseAccountFolders(text: string, at: number): FactRow[] {
     key: { dir: f[1] }, set: { agent: f[0], login_id: f[2] && f[2] !== "-" ? f[2] : null, logged_in: f[3] === "1" ? 1 : 0, observed_at: at } }));
 }
 
-/** Copy each scanned folder's login id onto the accounts row whose folder it is (KTD4). */
+/** Copy each folder main scanned's login id onto the accounts row whose folder it is (KTD4). */
 export function copyLoginIds(store: Store, env: Record<string, string | undefined> = process.env): void {
-  const ids = new Map((store.db.query("SELECT dir, login_id FROM observed_account_folders WHERE login_id IS NOT NULL").all() as Row[])
+  const ids = new Map((store.db.query("SELECT dir, login_id FROM observed_account_folders WHERE host = 'local' AND login_id IS NOT NULL").all() as Row[])
     .map((r) => [String(r.dir), String(r.login_id)]));
   if (!ids.size) return;
   for (const r of store.db.query("SELECT agent, account, config_dir, source, login_id FROM accounts").all() as AccountRow[]) {
     const id = ids.get(accountFolder(r, env));
     if (id && id !== r.login_id) store.db.run("UPDATE accounts SET login_id = ? WHERE agent = ? AND account = ?", [id, r.agent, r.account]);
   }
+}
+
+/** Keep account_folders (side-loop-host U18): a `local` row per accounts row with its config_dir, and a row per
+ *  side host folder whose login id is an account's (a login has a folder on a host when that host scanned a
+ *  folder logged in as it). A side folder's dir comes up as `<host>::<path>` and is stored as the path. Writes
+ *  only what changed; a row no longer found goes. */
+export function syncAccountFolders(store: Store, at = now()): void {
+  type F = { agent: string; account: string; host: string; dir: string | null };
+  const want = new Map<string, F>(), k = (f: F) => `${f.agent}\0${f.account}\0${f.host}`;
+  const accts = store.db.query("SELECT agent, account, config_dir, login_id FROM accounts").all() as { agent: string; account: string; config_dir: string | null; login_id: string | null }[];
+  for (const a of accts) { const f = { agent: a.agent, account: a.account, host: "local", dir: a.config_dir }; want.set(k(f), f); }
+  const scanned = store.db.query("SELECT host, dir, agent, login_id FROM observed_account_folders WHERE host != 'local' AND login_id IS NOT NULL ORDER BY host, dir").all() as { host: string; dir: string; agent: string; login_id: string }[];
+  for (const s of scanned) {
+    const pre = `${s.host}::`, dir = s.dir.startsWith(pre) ? s.dir.slice(pre.length) : s.dir;
+    for (const a of accts) {
+      if (a.agent !== s.agent || a.login_id !== s.login_id) continue;
+      const f = { agent: a.agent, account: a.account, host: s.host, dir };
+      if (!want.has(k(f))) want.set(k(f), f);
+    }
+  }
+  store.tx(() => {
+    const have = store.db.query("SELECT agent, account, host, dir FROM account_folders").all() as F[];
+    for (const h of have) if (!want.has(k(h))) store.db.run("DELETE FROM account_folders WHERE agent = ? AND account = ? AND host = ?", [h.agent, h.account, h.host]);
+    const old = new Map(have.map((h) => [k(h), h]));
+    for (const [key, f] of want) {
+      const o = old.get(key);
+      if (o && o.dir === f.dir) continue;
+      store.db.run(`INSERT INTO account_folders (agent, account, host, dir, observed_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (agent, account, host) DO UPDATE SET dir = excluded.dir, observed_at = excluded.observed_at`, [f.agent, f.account, f.host, f.dir, at]);
+    }
+  });
 }
 
 /** The listed row `agent:account` names, or why it is not one. */

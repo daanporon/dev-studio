@@ -6,6 +6,7 @@
 //   defaultAccount(root, "claude")    // the agent's default (the system row when no row is marked)
 //   accountFolder(row)                // the login folder a launch points the agent at
 //   accountsRoot()                    // where `ds account add` makes folders (<state>/accounts, KTD7)
+//   folderOn(root, "s1", "claude", id) // the login's folder on host s1 (account_folders), null when it has none
 //
 // The list is every row with a source, no removed_at and a folder on disk (a system row needs no folder: it is
 // the agent's own login), plus the agent's system row when it has no listed row. A loop.db from before
@@ -98,6 +99,22 @@ function tableRows(root: string): AccountRow[] {
 export function folderOf(root: string, agent: string, account: string, env: Env = process.env): string {
   const row = tableRows(root).find((r) => r.agent === agent && r.account === account);
   return accountFolder(row ?? { agent, account, config_dir: null, source: agent === "claude" ? null : "ds" }, env);
+}
+
+/** The login folder of `account` on `host` (side-loop-host U18): on `local` folderOf's answer; on a side host its
+ *  account_folders row's folder, or null when that host has no folder logged in as it (or loop.db is unreadable,
+ *  or from before migration 0062). Never main's folder for a side host: a login folder is not copied. */
+export function folderOn(root: string, host: string, agent: string, account: string, env: Env = process.env): string | null {
+  if (host === "local") return folderOf(root, agent, account, env);
+  const path = join(root, "loop.db");
+  try {
+    if (!existsSync(path)) return null;
+    const d = new Database(path, { readonly: true });
+    try {
+      const r = d.query("SELECT dir FROM account_folders WHERE agent = ? AND account = ? AND host = ?").get(agent, account, host) as { dir: string | null } | null;
+      return r?.dir ?? null;
+    } finally { d.close(); }
+  } catch { return null; }
 }
 
 /** [folder, account] for every row of `agent` with a source, rows not removed first. */
