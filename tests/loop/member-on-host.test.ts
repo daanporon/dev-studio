@@ -68,7 +68,8 @@ async function rig(backend: "tmux" | "orca", o: { cloned?: boolean } = {}) {
   importJson(s);
   for (const [role, value] of [["lead", "claude sonnet always"], ["builder", "claude opus ondemand"]] as const)
     s.upsert("config", { project: "fx", file: "roles.conf", key: role }, { value, observed_at: T });
-  s.db.run("INSERT INTO hosts (name, status, public_key, fingerprint, seats, requested_at, accepted_at) VALUES (?, 'accepted', 'a2V5', 'aaaa', 2, ?, ?)", [HOST, T, T]);
+  // The host's link is up (U13: a host main never heard reads unreachable, and nothing starts there).
+  s.db.run("INSERT INTO hosts (name, status, public_key, fingerprint, seats, requested_at, accepted_at, last_seen_at) VALUES (?, 'accepted', 'a2V5', 'aaaa', 2, ?, ?, ?)", [HOST, T, T, T]);
   const orca = new FakeOrca();
   const local = fakeContract({}, { name: "tmux", now: () => at }), side = fakeContract({}, { name: "tmux", now: () => at });
   const remotes: string[] = [];
