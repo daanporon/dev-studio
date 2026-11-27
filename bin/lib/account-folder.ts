@@ -87,6 +87,16 @@ export function loginExit(folder: string): number | null {
   } catch { return null; }
 }
 
+/** A login folder's state: its credentials file there, its login id (once there), the login command's exit. */
+export type FolderCheck = { creds: boolean; login_id: string | null; exit: number | null };
+/** `folder`'s login as `kind` reads it; `after` runs the kind's afterLogin once the credentials are there. The
+ *  account-add fulfiller reads main's folders with it and a side host answers `account.check` with it (U20). */
+export function folderCheck(kind: AccountKind, folder: string, after: boolean, env: Env = process.env): FolderCheck {
+  const creds = existsSync(join(folder, kind.credentialsFile));
+  if (creds && after) kind.afterLogin?.(folder, env);
+  return { creds, login_id: creds ? kind.loginId(folder, false, env) : null, exit: loginExit(folder) };
+}
+
 /** The file that records which `ds account move` request copied a folder in (U8). */
 export const MOVE_MARKER = ".ds-account-move";
 const movedBy = (folder: string, id: number | string): boolean => {

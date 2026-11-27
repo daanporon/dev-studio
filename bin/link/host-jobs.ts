@@ -15,6 +15,12 @@
 //   push             {path, branch, remote?}        → Out                `git push <remote> refs/heads/<b>:refs/heads/<b>`, never forced
 //   launch.write     {project, member, gen, line}   → {text}             a member's launch file under this host's state root
 //                                                                          (squad/launch-file.ts, U10); text is the `exec bash` to type
+//   account.folder   {agent, name, request}         → {folder}           a new login folder under this host's accounts root
+//                                                                          (account-folder.ts makeAccountFolder, U20)
+//   account.check    {agent, folder, after?}        → {creds, login_id, exit}
+//                                                                          that folder's login: credentials there, its login id,
+//                                                                          the login command's exit; `after` runs the kind's
+//                                                                          afterLogin once the credentials are there (U20)
 // The `*On(host, …)` functions are what main calls. For host `local` each runs the same code as before this unit
 // (createWorktree, removeWorktree, wtProbe, rescuePages, the same git calls); for any other host it sends the job down
 // that host's link (server.ts linkRequest, or `o.send` in tests) and checks the answer's shape before using it. Both
@@ -34,6 +40,9 @@ import { wtProbe } from "../loop/io/wt-probe.ts";
 import { canon, createWorktree, fetchBranch, git, lastLine, provider, removeWorktree, WorktreeError, type Gone, type Made, type RemoveOpts, type Spec } from "../loop/io/worktrees.ts";
 import { placeBody, planRescue, rescueDest, rescuePages, securable, sessionFiles, type Rescued } from "../loop/io/rescue.ts";
 import { writeLaunch } from "../loop/squad/launch-file.ts";
+import { accountsRoot } from "../lib/account-dirs.ts";
+import { folderCheck, makeAccountFolder, type FolderCheck } from "../lib/account-folder.ts";
+import { findKind, type AccountKind, type Env } from "../lib/account-kinds/index.ts";
 import { LOCAL_HOST } from "./host-keys.ts";
 import { linkRequest } from "./server.ts";
 
@@ -48,7 +57,9 @@ export type HostJob =
   | { job: "ref.read"; path: string; ref: string }
   | { job: "ref.set"; path: string; ref: string; sha: string; no_deref?: boolean }
   | { job: "push"; path: string; branch: string; remote?: string }
-  | { job: "launch.write"; project: string; member: string; gen: string; line: string };
+  | { job: "launch.write"; project: string; member: string; gen: string; line: string }
+  | { job: "account.folder"; agent: string; name: string; request: number }
+  | { job: "account.check"; agent: string; folder: string; after?: boolean };
 export type JobName = HostJob["job"];
 
 export type Cloned = { path: string; cloned: boolean };
@@ -181,6 +192,12 @@ export function checkJob(v: unknown): HostJob {
       };
       return { job: "launch.write", project: name(v.project, "the project"), member: text(v.member, "the member", 4096), gen: text(v.gen, "the generation", 200), line: text(v.line, "the launch line", 262_144) };
     }
+    case "account.folder": {
+      if (!Number.isSafeInteger(v.request) || (v.request as number) <= 0) bad("the request is a positive integer");
+      return { job: "account.folder", agent: name(v.agent, "the agent"), name: name(v.name, "the account"), request: v.request as number };
+    }
+    case "account.check":
+      return { job: "account.check", agent: name(v.agent, "the agent"), folder: absPath(v.folder, "the login folder"), ...(v.after ? { after: true } : {}) };
     default:
       return bad(`unknown job '${String(v.job)}'`);
   }
@@ -290,7 +307,20 @@ export const pushHere = (path: string, branch: string, remote = "origin", timeou
   git(["-C", path, "push", "--porcelain", remote, `refs/heads/${branch}:refs/heads/${branch}`], timeoutMs);
 
 /** Run a checked job on this host: what the side's `host-jobs` channel answers. `root` is this host's state root. */
-export async function runHere(job: unknown, ctx: { root: string; store?: Store }): Promise<unknown> {
+// A login job's kind: one with more than one login (account-kinds), as `ds account add` takes.
+function loginKind(agent: string): AccountKind {
+  const kind = findKind(agent);
+  if (!kind?.multi) bad(`no account kind '${agent}' with more than one login`);
+  return kind!;
+}
+// The folder must be one login folder of the kind under this host's accounts root: the job reads no other folder.
+function checkHere(j: Extract<HostJob, { job: "account.check" }>, env: Env): FolderCheck {
+  const kind = loginKind(j.agent), top = join(accountsRoot(env), kind.agent);
+  if (dirname(resolve(j.folder)) !== top) bad(`${j.folder} is not a login folder under ${top}`);
+  return folderCheck(kind, j.folder, !!j.after, env);
+}
+
+export async function runHere(job: unknown, ctx: { root: string; store?: Store; env?: Env }): Promise<unknown> {
   const j = checkJob(job);
   switch (j.job) {
     case "clone": return cloneHere(j);
@@ -302,6 +332,8 @@ export async function runHere(job: unknown, ctx: { root: string; store?: Store }
     case "ref.set": return refSet(j.path, j.ref, j.sha, !!j.no_deref);
     case "push": return pushHere(j.path, j.branch, j.remote);
     case "launch.write": return { text: writeLaunch(ctx.root, j.project, j.member, j.gen, j.line) };
+    case "account.folder": return { folder: makeAccountFolder(loginKind(j.agent), j.name, j.request, ctx.env ?? process.env) };
+    case "account.check": return checkHere(j, ctx.env ?? process.env);
   }
 }
 
@@ -310,6 +342,7 @@ export async function runHere(job: unknown, ctx: { root: string; store?: Store }
 const TIMEOUT: Record<JobName, number> = {
   "clone": 910_000, "worktree.add": 630_000, "worktree.remove": 180_000, "probe": 0, "rescue": 180_000,
   "ref.read": 45_000, "ref.set": 45_000, "push": 330_000, "launch.write": 45_000,
+  "account.folder": 45_000, "account.check": 45_000,
 };
 const timeoutOf = (j: HostJob) => (j.job === "probe" ? j.timeout_ms + 15_000 : TIMEOUT[j.job]);
 
@@ -381,6 +414,22 @@ export async function writeLaunchOn(host: string, root: string, job: { project: 
   const a = await sendJob(host, j, { root, ...o });
   if (!isObj(a) || typeof a.text !== "string" || !a.text.startsWith("exec bash '") || /[\0\n\r]/.test(a.text)) return wrong(host, "launch.write", "not {text: \"exec bash '<file>'\"}");
   return a.text;
+}
+
+/** A new login folder for `agent`:`name` (request `request`) on side host `host`; the side's path. */
+export async function accountFolderOn(host: string, job: { agent: string; name: string; request: number }, o: JobOpts = {}): Promise<string> {
+  const a = await sendJob(host, { job: "account.folder", ...job }, o);
+  if (!isObj(a) || typeof a.folder !== "string" || !isAbsolute(a.folder) || /[\0\n\r]/.test(a.folder)) return wrong(host, "account.folder", "not {folder: <absolute path>}");
+  return a.folder;
+}
+
+/** The login in side host `host`'s folder `folder` (account.check); `after` runs the kind's afterLogin there. */
+export async function accountCheckOn(host: string, job: { agent: string; folder: string; after?: boolean }, o: JobOpts = {}): Promise<FolderCheck> {
+  const a = await sendJob(host, { job: "account.check", ...job }, o);
+  if (!isObj(a) || typeof a.creds !== "boolean" || !(a.login_id === null || typeof a.login_id === "string") || !(a.exit === null || Number.isFinite(a.exit))) {
+    return wrong(host, "account.check", "not {creds, login_id, exit}");
+  }
+  return { creds: a.creds, login_id: a.login_id as string | null, exit: a.exit as number | null };
 }
 
 /** The remove-safety probe of the tree at `path` on `host` (io/wt-probe.ts's output). */

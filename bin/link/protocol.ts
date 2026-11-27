@@ -9,6 +9,10 @@
 //                     both ways    {t:"req", id, ch, body} / {t:"res", id, ok, body?, error?}
 // A frame before the hello is at most JOIN_MAX_BYTES (U1); after it at most MAX_FRAME_BYTES. A request names a
 // channel (bin/link/channels/<name>.ts, KTD3); the answering end runs that channel's handler.
+// With DS_LINK_LOG_FRAMES=1 each end logs its req and res frames (frameLog), redacted (U20): the string under every
+// `text`, `secret` and `code` key (a terminal.send's text, as a pasted login code, and a screen that may show it) is
+// replaced by its length, and the request's such strings are cut out of every other string of its answer (an
+// adapter's error may echo its input), both in the log line and in the answer the answering end sends back.
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { JOIN_MAX_BYTES } from "./host-keys.ts";
@@ -68,23 +72,68 @@ export async function loadChannels(end: "main" | "side", dir = CHANNEL_DIR): Pro
   return out;
 }
 
+// ---------------------------------------------------------------- redaction (U20)
+
+const SECRET_KEYS = new Set(["text", "secret", "code"]);
+const isRec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** `v` with the string under each `text`, `secret` and `code` key, at any depth, replaced by its length. */
+export function redact(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(redact);
+  if (!isRec(v)) return v;
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, typeof x === "string" && SECRET_KEYS.has(k) ? `[redacted ${x.length} chars]` : redact(x)]));
+}
+/** The strings `redact` replaces in `v` (4 characters or more: shorter ones would cut ordinary words). */
+export function secretsOf(v: unknown, out: string[] = []): string[] {
+  if (Array.isArray(v)) for (const x of v) secretsOf(x, out);
+  else if (isRec(v)) for (const [k, x] of Object.entries(v)) { if (typeof x === "string" && SECRET_KEYS.has(k)) { if (x.length >= 4) out.push(x); } else secretsOf(x, out); }
+  return out;
+}
+/** `text` with each secret (and each of its lines) cut out. */
+export function scrub(text: string, secrets: readonly string[]): string {
+  let t = text;
+  for (const x of secrets) for (const part of [x, ...x.split(/\r?\n/)]) if (part.trim().length >= 4) t = t.split(part).join("[redacted]");
+  return t;
+}
+/** `v` with `scrub` applied to every string in it, at any depth. */
+export function scrubAll(v: unknown, secrets: readonly string[]): unknown {
+  if (!secrets.length) return v;
+  if (typeof v === "string") return scrub(v, secrets);
+  if (Array.isArray(v)) return v.map((x) => scrubAll(x, secrets));
+  return isRec(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrubAll(x, secrets)])) : v;
+}
+/** The log line of a req or res frame: redacted, and scrubbed of its request's secrets. */
+export const frameForLog = (dir: "in" | "out", f: Frame, secrets: readonly string[] = []): string =>
+  `link frame ${dir}: ${JSON.stringify(scrubAll(redact(f), secrets))}`;
+/** The frame log `log` writes to when DS_LINK_LOG_FRAMES=1, else none. */
+export const frameLog = (log: (line: string) => void): ((line: string) => void) | undefined =>
+  process.env.DS_LINK_LOG_FRAMES === "1" ? log : undefined;
+
 // ---------------------------------------------------------------- one end of an authenticated link
 
 /** Requests in flight and the answers to the other end's requests, over one send function. */
 export class Peer {
   private next = 1;
-  private waiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private waiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout>; secrets: string[] }>();
   lastHeard = Date.now();
 
-  constructor(private send: (f: Frame) => void, private channels: Map<string, Channel>, private ctx: ChannelCtx, private prefix = "") {}
+  /** `log`: the frame log (frameLog), which gets each req and res frame redacted. */
+  constructor(private send: (f: Frame) => void, private channels: Map<string, Channel>, private ctx: ChannelCtx, private prefix = "",
+    private log?: (line: string) => void) {}
+
+  private out(f: Frame, secrets: readonly string[] = []): void {
+    if (this.log && (f.t === "req" || f.t === "res")) this.log(frameForLog("out", f, secrets));
+    this.send(f);
+  }
 
   /** Ask the other end: resolves with its answer's body, rejects with its error, a timeout or the link closing. */
   request(ch: string, body: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
     const id = `${this.prefix}${this.next++}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.waiting.delete(id); reject(new Error(`link: no answer on ${ch} within ${timeoutMs} ms`)); }, timeoutMs);
-      this.waiting.set(id, { resolve, reject, timer });
-      try { this.send({ t: "req", id, ch, body }); } catch (e) { clearTimeout(timer); this.waiting.delete(id); reject(e as Error); }
+      const secrets = secretsOf(body);
+      this.waiting.set(id, { resolve, reject, timer, secrets });
+      try { this.out({ t: "req", id, ch, body }); } catch (e) { clearTimeout(timer); this.waiting.delete(id); reject(e as Error); }
     });
   }
 
@@ -95,6 +144,7 @@ export class Peer {
     if (f.t === "pong") return true;
     if (f.t === "res") {
       const w = this.waiting.get(String(f.id));
+      if (this.log) this.log(frameForLog("in", f, w?.secrets));
       if (!w) return true;                     // late: its request timed out
       this.waiting.delete(String(f.id));
       clearTimeout(w.timer);
@@ -102,10 +152,12 @@ export class Peer {
       return true;
     }
     if (f.t === "req") {
+      const secrets = secretsOf(f.body);
+      if (this.log) this.log(frameForLog("in", f));
       const id = String(f.id ?? ""), ch = this.channels.get(String(f.ch));
-      if (!ch) { this.send({ t: "res", id, ok: false, error: `link: no channel '${String(f.ch)}' on this end` }); return true; }
-      try { this.send({ t: "res", id, ok: true, body: (await ch.handle(f.body, this.ctx)) ?? null }); }
-      catch (e) { this.send({ t: "res", id, ok: false, error: (e as Error).message || String(e) }); }
+      if (!ch) { this.out({ t: "res", id, ok: false, error: `link: no channel '${String(f.ch)}' on this end` }); return true; }
+      try { this.out({ t: "res", id, ok: true, body: scrubAll((await ch.handle(f.body, this.ctx)) ?? null, secrets) }); }
+      catch (e) { this.out({ t: "res", id, ok: false, error: scrub((e as Error).message || String(e), secrets) }); }
       return true;
     }
     return false;

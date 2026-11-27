@@ -39,7 +39,7 @@ export function startSideLink(store: Store, root: string, log: (line: string) =>
     busy = false;
   };
   const client: LinkClient = new LinkClient({
-    main: cfg.main, root, name: cfg.name, reconnect: true, fenced: () => fencedAt(store),
+    main: cfg.main, root, name: cfg.name, reconnect: true, fenced: () => fencedAt(store), log,
     onState: (state, why) => {
       if (state === "connecting") return;   // the last answer stands while it redials
       try { noteLink(store, state); } catch (e) { say(`link: the down clock was not written: ${(e as Error).message}`); }   // U14 side-fence
