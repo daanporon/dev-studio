@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { ROOT, stateRoot, readIfs } from "./shared";
 import { PROVIDER_SETTINGS } from "../backend/registry";
 import { confWord, textWord } from "./lib";
-import { ownText } from "./settings-rows.ts";
+import { ownHostLine, ownText } from "./settings-rows.ts";
+import { isHostKey } from "./host-settings.ts";
 import { ticketUrlProblem } from "../loop/squad/plan-lines.ts";
 
 /** `exec "$ROOT/bin/ds" --state "$STATE" <args>`: the loop's CLI with this process's stdio; returns its exit code. */
@@ -69,6 +70,8 @@ export const limitEnvName = (key: string): string => ENV_NAMES[key] ?? `DS_LIMIT
 
 /** ds_limit_src <label> <key>: [value, env|override|default|unset]; the override is the project's limits.conf rows. */
 export function limitSrc(label: string, key: string): [string, string] {
+  // U25, KTD16: a `[host]` key is this host's (env|host|default); the project's row of it is unread.
+  if (isHostKey(key)) { const h = ownHostLine(key, limitEnvName(key)); return [h.value?.split(/\s+/)[0] ?? "", h.source ?? "unset"]; }
   const ev = process.env[limitEnvName(key)] ?? "";
   if (ev) return [ev, "env"];
   const own = textWord(ownText(label, "limits.conf"), key);

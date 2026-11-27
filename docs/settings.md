@@ -116,6 +116,32 @@ order for every key: **env var** beats **per-project override**
 (the project's `limits.conf` rows) beats **repo default**. `show` marks each
 key's source.
 
+### Host keys: set per machine, not per project
+
+A key whose comment in `conventions/limits.conf` starts with `[host]` is about a
+machine: `seats`, `builder_host_brake`, `restart_rss_gb`, the `machine_*` lines,
+`host_tidy` and the `cleanup_tmp_*`/`cleanup_trim_globs` thresholds,
+`disk_card_free_pct`, `disk_watch_paths` and `tick_alarm_*` (side-loop-host U25,
+KTD16). Its order is **env var on the host that reads it** beats **that host's
+override** beats **repo default**. A project's own row of a host key is never
+read: an old one stays in place, and the board's Settings marks it "now per
+host". Main is the host `local`; a side host reads its own overrides from the
+settings copy main sends it.
+
+    ds host set <host> <key> <value>    # one host's override (one config_history row)
+    ds host rm <host> <key>             # back to the repo default
+    ds host show <host> [--json]        # every host key with its value and source
+
+`ds limits set` refuses a host key and names `ds host set`. `ds limits show` and
+the board's Settings show main's value with source `env`, `host` or `default`.
+`ds host accept` gives a new side host `seats` (its `--seats`, default 2) and
+`builder_host_brake on`; main's brake default stays `off`. Migration 0063 set
+main's brake `on` when any project had it on.
+
+Two keys KTD16 named stay per project, because they are bound to a project:
+`cleanup_on_close` (what closing that project's squads tidies) and
+`worktree_provider` (the worktree tool that project's squads use).
+
 | Key | What it does | Default | Allowed | Env override |
 |---|---|---|---|---|
 | `context_warn` | Context tokens at which the board goes amber; a Builder under this resumes on an account switch | 100000 | non-negative integer | `DS_RESUME_MAX_CTX` |
@@ -147,7 +173,8 @@ key's source.
 | `ticket_url` | The project tracker's address. When set, a unit whose title starts with `[ID]`, or else ends with a single `[ID]`, gets a link chip labelled with the id, first in its links (a plan `Link:` with the same URL is not shown twice, and it does not count toward the 5-link cap). An id is like `ABC-12`, `12` or `#12`; the `#` is dropped from the address. Set it per project: `ds config set <project> limits.conf ticket_url https://tracker.example/issue/{id}`, or in the board's Settings. A settings import skips it unless picked | `-` (none) | an http(s) URL holding `{id}`, at most 500 characters, without spaces, quotes or a login; or `-` | `DS_LIMIT_TICKET_URL` |
 | `flow_quiet_min` | A late Flow card reads **stuck** (red) only when its Builder shows no sign of work for this many minutes: not working, no review or checks running, no output, and under 5% CPU. A late card whose Builder is active reads **slow** (amber). A stale card, and a ready PR waiting for its Builder to run `finish-unit`, are stuck whatever the activity (U279) | 20 | positive integer, minutes | `DS_LIMIT_FLOW_QUIET_MIN` |
 | `unblock_first` | With `on`, while Builder seats are full, a queued unit that open units wait on takes the next free seat before an older one nothing waits on (picker-prefers-unblocking-units U1): after urgent units, units that block started work, the focus squad's room and resumed work, the unit with the most open dependents goes first (`planned` or `dispatched` units waiting on it through `deps` and `ext_deps`, the whole chain, each once, not held or superseded, in a live squad). Inside the focus squad it always counts; outside it only while the lane has room (its seats − 1 − its live seats whose unit has open dependents), so the last seat of each lane still goes oldest first and a one-seat lane ignores it. Never over `max_builders`. `slot()`'s wait says `(next: unlocks N)` | on | `on` or `off` | `DS_LIMIT_UNBLOCK_FIRST` |
-| `builder_host_brake` | With `on`, no new Builder agent starts, in any project that has it on, while the latest host sample (the board's machine panel) crosses a `machine_*_crit` line: load, memory, swap or pressure (U4; the same levels the board colours red). The start waits with `WAIT host: <metric> <value> ≥ crit <line>` and is asked again next tick. A missing or stale sample (older than 3 × `DS_LOOP_MACHINE_S`) never brakes; a running Builder, a live Builder replacing its own agent and every other role are never braked The board shows it while it holds (board-shows-host-brake U2): the Builders tile turns red with `⛔ host brake`, the queued lane opens with a banner naming the metric, its value, the crit line and key, how many queued units would start without it and this setting, those cards sit under `for the host`, and the text board prints a `BRAKE` line; with the brake off in this project but on in another, the same host sample shows as a muted note, never as holding. | off | `on` or `off` | `DS_LIMIT_BUILDER_HOST_BRAKE` |
+| `seats` | A host key (side hosts): the Builder seats the host gives main, shared by all projects; `ds host accept --seats` sets it, `ds host set <host> seats N` changes it (U25) | 2 | non-negative integer | — |
+| `builder_host_brake` | A host key (U25): with `on`, no new Builder agent starts on that host, in any project, while the latest host sample (the board's machine panel) crosses a `machine_*_crit` line: load, memory, swap or pressure (U4; the same levels the board colours red). The start waits with `WAIT host: <metric> <value> ≥ crit <line>` and is asked again next tick. A missing or stale sample (older than 3 × `DS_LOOP_MACHINE_S`) never brakes; a running Builder, a live Builder replacing its own agent and every other role are never braked The board shows it while it holds (board-shows-host-brake U2): the Builders tile turns red with `⛔ host brake`, the queued lane opens with a banner naming the metric, its value, the crit line and key, how many queued units would start without it and this setting, those cards sit under `for the host`, and the text board prints a `BRAKE` line; with the brake off in this project but on in another, the same host sample shows as a muted note, never as holding. | off | `on` or `off` | `DS_LIMIT_BUILDER_HOST_BRAKE` |
 | `restart_rss_gb` | An idle agent whose resident memory (RSS, U149) passes this many GB is restarted once it is idle (U153), at most once per 60 minutes per member; a fresh start drops a Codex agent's retained heap. `-` turns it off | - (off) | positive number, or `-` | `DS_LIMIT_RESTART_RSS_GB` |
 | `expected_checks` | Checks a PR must have run before `finish-unit.sh` and the board read it ready; absent or only skipped reads `required:<context>` | - (none) | comma-separated context names, no spaces | `DS_LIMIT_EXPECTED_CHECKS` |
 | `auto_merge` | Merge method the loop arms GitHub auto-merge with on a merge-ready unit PR (U166): `off` keeps today's Lead merge poke (KTD17) | `off` | `off`, `squash`, `merge`, `rebase` | `DS_LOOP_AUTO_MERGE` |

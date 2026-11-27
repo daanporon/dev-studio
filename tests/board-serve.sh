@@ -491,16 +491,20 @@ done
 has "limits: a malformed lens list says why" "$(cat "$TMP/post.out")" "lens names"
 post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"review_skip_lenses\",\"value\":\"correctness-reviewer\"}" "$LU" >/dev/null
 has "limits: dropping correctness says why" "$(cat "$TMP/post.out")" "cannot drop correctness"
-# U9: file-only limits (glob list, close command) show whole as text and are not set from the board.
-dbw "INSERT OR REPLACE INTO config (project, file, key, value, observed_at) VALUES ('$LBL', 'limits.conf', 'cleanup_tmp_globs', '/tmp/u9-a-* /tmp/u9-b-*', 1)"  # hand-edited: limits.sh refuses a space list
-jt "U9: a file-only limit is flagged, with its whole value" <(curl -s "$LU?project=$LBL") '[.limits[] | select(.key=="cleanup_tmp_globs" or .key=="cleanup_on_close") | .fileOnly] == [true,true] and (.limits[] | select(.key=="cleanup_tmp_globs") | .value=="/tmp/u9-a-* /tmp/u9-b-*" and .source=="override")'
-jt "U9: other limits are not file-only" <(curl -s "$LU?project=$LBL") '[.limits[] | select(.key=="context_compact" or .key=="host_tidy") | .fileOnly] == [false,false]'
-eq "U9: setting a file-only limit is 400" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"cleanup_tmp_globs\",\"value\":\"/tmp/x-*\"}" "$LU")" "400"
+# U9: file-only limits (the close command) show whole as text and are not set from the board.
+dbw "INSERT OR REPLACE INTO config (project, file, key, value, observed_at) VALUES ('$LBL', 'limits.conf', 'cleanup_on_close', 'make clean all', 1)"  # hand-edited
+jt "U9: a file-only limit is flagged, with its whole value" <(curl -s "$LU?project=$LBL") '[.limits[] | select(.key=="cleanup_on_close") | .fileOnly] == [true] and (.limits[] | select(.key=="cleanup_on_close") | .value=="make clean all")'
+jt "U9: other limits are not file-only" <(curl -s "$LU?project=$LBL") '[.limits[] | select(.key=="context_compact" or .key=="max_builders") | .fileOnly] == [false,false]'
+eq "U9: setting a file-only limit is 400" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"cleanup_on_close\",\"value\":\"rm -rf x\"}" "$LU")" "400"
 has "U9: ... says where to edit" "$(cat "$TMP/post.out")" "is set with \`ds config export --project $LBL\`"
-eq "U9: the close command too" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"cleanup_on_close\",\"value\":\"rm -rf x\"}" "$LU")" "400"
-eq "U9: reset of a file-only override is 202" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"cleanup_tmp_globs\",\"value\":null}" "$LU")" "202"
+eq "U9: reset of a file-only override is 202" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"cleanup_on_close\",\"value\":null}" "$LU")" "202"
 ff
-eq "U9: ... and the loop dropped it" "$(lim cleanup_tmp_globs)" "- default"
+eq "U9: ... and the loop dropped it" "$(lim cleanup_on_close)" "- default"
+# U25: a host key is main's (host_config), shown with its source; a project row of it is marked, and the board refuses a change.
+dbw "INSERT OR REPLACE INTO config (project, file, key, value, observed_at) VALUES ('$LBL', 'limits.conf', 'cleanup_tmp_globs', '/tmp/u9-a-*', 1)"
+jt "U25: a host key shows main's value and marks the project row now per host" <(curl -s "$LU?project=$LBL") '.limits[] | select(.key=="cleanup_tmp_globs") | .host == true and .source == "default" and .nowPerHost == "/tmp/u9-a-*"'
+eq "U25: setting a host key from the board is 400" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"cleanup_tmp_globs\",\"value\":\"/tmp/x-*\"}" "$LU")" "400"
+has "U25: ... says ds host set" "$(cat "$TMP/post.out")" "ds host set <host> cleanup_tmp_globs"
 eq "limits: severity accepted" "$(post -H "$O" -H "$CT" -d "{\"project\":\"$LBL\",\"key\":\"review_block_severity\",\"value\":\"P2\"}" "$LU")" "202"
 ff
 eq "limits: loop writes severity" "$(lim review_block_severity)" 'P2 override'

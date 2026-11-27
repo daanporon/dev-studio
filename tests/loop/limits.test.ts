@@ -1708,7 +1708,7 @@ describe("U6: cleanup keys and the whole-value reader", () => {
   });
   test("cleanupGlobs splits on commas and spaces", () => {
     for (const v of ["/tmp/aaa-*,/tmp/bbb-*", "/tmp/aaa-* /tmp/bbb-*"]) {
-      const s = store({}, { cleanup_tmp_globs: v });
+      const s = store({ cleanup_tmp_globs: v });   // a host key (U25): the default row, no project row
       expect(cleanupGlobs(s, "fx")).toEqual({ valid: ["/tmp/aaa-*", "/tmp/bbb-*"], rejected: [] });
       s.close();
     }
@@ -1716,7 +1716,7 @@ describe("U6: cleanup keys and the whole-value reader", () => {
   test("cleanupGlobs rejects unsafe globs with a reason", () => {
     const s = store();
     const bad = ["tmp/x-*", "/tmp/*", "/tmp/*/x-*", "/xxx-*", `${s.root}/xxx-*`, `${s.root}/fx/xxx-*`, "/tmp/ab*", "/tmp/[a-z]*", "/tmp/[abc][de]*", "/tmp/plain"];
-    s.db.run("INSERT INTO config (project, file, key, value, observed_at) VALUES ('fx', 'limits.conf', 'cleanup_tmp_globs', ?, 1)", [bad.join(" ")]);
+    s.db.run("INSERT INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_tmp_globs', ?, 1)", [bad.join(" ")]);   // a host key (U25)
     const r = cleanupGlobs(s, "fx");
     expect(r.valid).toEqual([]);
     expect(r.rejected.map((x) => x.glob)).toEqual(bad);

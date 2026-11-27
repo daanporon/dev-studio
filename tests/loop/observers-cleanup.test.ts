@@ -158,7 +158,7 @@ describe("classes c and d: git and the backend", () => {
 });
 
 describe("class e: globs (KTD5)", () => {
-  const glob = (s: Store, g: string) => s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: g, observed_at: 1 });
+  const glob = (s: Store, g: string) => s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_tmp_globs', ?, 1)", [g]);
 
   test("100,000 entries, 10 matches: one row, the parent iterated through the reader and never read whole", async () => {
     const s = store(), dir = tmp();
@@ -197,7 +197,7 @@ describe("class e: globs (KTD5)", () => {
 });
 
 describe("class f: trim globs (investigate-disk-cleanup U2)", () => {
-  const trim = (s: Store, g: string) => s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_trim_globs" }, { value: g, observed_at: 1 });
+  const trim = (s: Store, g: string) => s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_trim_globs', ?, 1)", [g]);
   // <dir>/zzcache-v1/ with an old, a new and a held file and an old folder; a matched symlink and file beside it.
   function cache() {
     const dir = tmp(), folder = join(dir, "zzcache-v1"), outside = tmp();
@@ -238,7 +238,7 @@ describe("class f: trim globs (investigate-disk-cleanup U2)", () => {
   test("a glob in both keys gives an e row and an f row", async () => {
     const s = store(), { dir } = cache();
     project(s, "p"); trim(s, `${dir}/zzcache-*`);
-    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: `${dir}/zzcache-*`, observed_at: 1 });
+    s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_tmp_globs', ?, 1)", [`${dir}/zzcache-*`]);
     const r = await scanCleanup(s, AT, opts({ proc: fakeProc([]), tmpRoot: tmp() }));
     expect([rows(r, "e").length, rows(r, "f").length]).toEqual([1, 1]);
   });
@@ -285,7 +285,7 @@ describe("the write and the schedule (KTD4)", () => {
 });
 
 describe("the measuring pass (investigate-disk-cleanup U1)", () => {
-  const glob = (s: Store, g: string) => s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: g, observed_at: 1 });
+  const glob = (s: Store, g: string) => s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_tmp_globs', ?, 1)", [g]);
   const seed = (s: Store, cls: string, key: string, kb: number, facts: Record<string, unknown>) =>
     s.db.query(`INSERT INTO observed_cleanup (project, class, key, path, size_kb, first_seen, facts, observed_at) VALUES ('p', ?, ?, ?, ?, ?, ?, ?)`)
       .run(cls, key, key, kb, AT, JSON.stringify(facts), AT);
@@ -321,7 +321,7 @@ describe("the measuring pass (investigate-disk-cleanup U1)", () => {
   test("a class f row is the du of the folders its glob matches; a matched file or symlink adds nothing", async () => {
     const s = store(), dir = tmp();
     project(s, "p");
-    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_trim_globs" }, { value: `${dir}/zzcache-*`, observed_at: 1 });
+    s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_trim_globs', ?, 1)", [`${dir}/zzcache-*`]);
     folder(join(dir, "zzcache-a"), 10, 100);
     folder(join(dir, "zzcache-b"), 5, 100);
     writeFileSync(join(dir, "zzcache-f"), "x".repeat(100_000));

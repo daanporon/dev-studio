@@ -762,6 +762,7 @@ async function limitsPost(req: Request) {
   const row = shown.limits.find((l) => l.key === key);
   if (typeof key !== "string" || !row) return json(400, { error: `unknown limit ${String(key).slice(0, 60)}` });
   if (row.source === "env") return json(409, { error: `${key} is set by env var ${row.env}; unset it there` });
+  if (row.host) return json(400, { error: `${key} is set per host, not per project: \`ds host set <host> ${key} <value>\` (main is local)` });   // U25
   // U258: Undo puts the key back to what its last change replaced; `undo` is that change's history id.
   if (undo !== undefined) {
     if (!row.changed?.undo || row.changed.id !== undo) return json(409, { error: `${key} changed since this page loaded, or has nothing to undo; reload` });

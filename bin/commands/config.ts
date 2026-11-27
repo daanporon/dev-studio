@@ -1,7 +1,7 @@
 // ds config — the config rows the loop keeps of conventions/*.conf and a project's settings, and
 // (U255) a project's settings read and changed through bin/loop/settings/settings.ts, the one writer:
 //   ds config [--project <label>] [--file <file>]          the rows: conventions ('') and that project's
-//   ds config get <project> <file> <key>                   the value and where it came from (env, project, default)
+//   ds config get <project> <file> <key>                   the value and where it came from (env, project, host, default)
 //   ds config set <project> <file> <key> <value…>          change the project's row (one history row)
 //   ds config rm <project> <file> <key>                    drop it (back to the default)
 //   ds config reset <project> <file> [<key>]               a key (roles: the role) or the whole file back to the default

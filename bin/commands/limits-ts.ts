@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, dsLabel, writeErr, writeOut } from "../lib/shared";
 import { confLines, limitEnvName, limitSrc, readFields } from "../lib/operator";
+import { isHostKey } from "../lib/host-settings.ts";
 import { backendChangeNote, rm, set } from "../loop/settings/settings.ts";
 import { PROVIDER_SETTINGS } from "../backend/registry.ts";
 import { changeSettings } from "../loop/settings/settings-migrate.ts";
@@ -46,7 +47,7 @@ export async function run(argv: string[]): Promise<number> {
       const limits = rows.map(({ key, comment }) => {
         const [value, source] = limitSrc(label, key);
         const hint = key === "ticket_url" ? "https://tracker.example/issue/{id}, or -" : key === "briefing_time" ? "off or HH:MM (24h), e.g. 08:30" : key === "briefing_days" ? "daily, mon-fri, or mon,wed,fri" : null;
-        return { key, value, source, env: limitEnvName(key), comment, allowed: allowedFor(key), hint,
+        return { key, value, source, env: limitEnvName(key), comment, allowed: allowedFor(key), hint, host: isHostKey(key),
           list: key === "expected_checks" || key === "review_risk_paths" || key === "review_skip_lenses" };
       });
       writeOut(JSON.stringify({ project: label, limits }, null, 2) + "\n");
@@ -57,7 +58,7 @@ export async function run(argv: string[]): Promise<number> {
     writeOut("-".repeat(70) + "\n");
     for (const { key, comment } of rows) {
       const [v, src] = limitSrc(label, key);
-      writeOut(`${key.padEnd(24)} ${v.padEnd(12)} ${src.padEnd(9)} ${comment}\n`);
+      writeOut(`${key.padEnd(24)} ${v.padEnd(12)} ${src.padEnd(9)} ${comment}\n`);   // a [host] key: env|host|default of this host
     }
     return 0;
   }

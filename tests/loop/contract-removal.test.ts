@@ -228,7 +228,7 @@ describe("a squad on a contract backend removes through its provider (U11c)", ()
     const { b, path, branch } = await startBuilder(r);
     r.s.upsert("members", { id: b.id }, { status: "gone", want: "gone" });
     ended(r, b);
-    r.s.upsert("config", { project: "fx", file: "limits.conf", key: "host_tidy" }, { value: "apply", observed_at: T });
+    r.s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'host_tidy', ?, 1)", ["apply"]);
     r.s.db.query(`INSERT INTO observed_cleanup (project, class, key, path, size_kb, mtime, first_seen, orphaned_since, verdict, facts, observed_at)
       VALUES ('fx', 'd', ?, ?, 10, NULL, ?, ?, 'removable', '{}', ?)`).run(path, path, r.now() - 30 * H, r.now() - 30 * H, r.now() - 60);
     const ps = r.orca.calls.ps;

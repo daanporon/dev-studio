@@ -1,6 +1,7 @@
 // replica.ts — side-loop-host U6 (issue #127, KTD8/KTD9): the side database is a one-way copy in each direction.
 //   down   main → side: the projects, squads, members, units and worktrees of that host, and the settings its
-//          observers read (`config`: the host's projects and the repo defaults). The side replaces its copy whole.
+//          observers read (`config`: the host's projects and the repo defaults; `host_config`: that host's own machine
+//          keys, U25, renamed to `local`). The side replaces its copy whole.
 //   up     side → main: the observed_* tables its observers write, each listed with its key. Main forces `host` to
 //          the link's host and drops a row about a worktree, unit or project that is not that host's.
 // No table is in both lists (a test checks). Table and column names come from these lists and the local schema,
@@ -18,7 +19,7 @@ import { handleDown, handleUp, wtDown, wtUp } from "../loop/drivers/contract.ts"
 export const UP_MIGRATION = "0061-link-replica";
 
 /** Down: main → side. `where` picks the host's rows on main. */
-export const DOWN: readonly string[] = ["projects", "squads", "members", "units", "worktrees", "config"];
+export const DOWN: readonly string[] = ["projects", "squads", "members", "units", "worktrees", "config", "host_config"];
 
 type UpSpec = {
   table: string;
@@ -82,6 +83,7 @@ export function downManifest(store: Store, host: string): DownManifest {
       .filter((u) => wts.has(String(u.builder_wt))).map((u) => ({ ...u, builder_wt: wtDown(host, u.builder_wt as string) })),
     worktrees: q("SELECT * FROM worktrees WHERE host = ? ORDER BY path", host).map((w) => ({ ...w, host: "local" })),
     config: q("SELECT * FROM config WHERE project = '' OR project IN (SELECT value FROM json_each(?)) ORDER BY project, file, key", inP),
+    host_config: q("SELECT * FROM host_config WHERE host = ? ORDER BY key", host).map((r) => ({ ...r, host: "local" })),
   };
   return { host, rows };
 }

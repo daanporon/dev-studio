@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { posix } from "node:path";
 import type { Store } from "../core/store.ts";
 import { limitEnv, limitInt } from "../settings/limits.ts";
-import { loopProjects } from "../settings/projects.ts";
+import { hostLine, SELF } from "../../lib/host-settings.ts";
 
 export const KIND = "disk-pressure";
 export const MARGIN_PCT = 5;           // a spell closes only above the limit plus these points
@@ -52,18 +52,12 @@ export function parseDockerDf(out: string): { key: string; label: string; size_k
   return out2;
 }
 
-// disk_watch_paths: absolute, no `..`, no wildcard; a leading ~/ is the home. The env value wins alone. Otherwise the
-// union of the default row and the row of every project the loop ticks (default first, then projects by name), each
-// path checked on its own, so a bad one in one row costs only itself; a skipped project's row is not read.
+// disk_watch_paths: absolute, no `..`, no wildcard; a leading ~/ is the home. A host key (U25): the env value, else this
+// host's override, else the default; each path checked on its own, so a bad one costs only itself. No project row is read.
 export function watchPaths(store: Store): string[] {
-  const env = process.env[limitEnv("disk_watch_paths")]?.trim();
-  const lines: string[] = [];
-  if (env) lines.push(env);
-  else for (const p of ["", ...[...loopProjects(store.root)].sort()]) {
-    const r = store.db.query("SELECT value FROM config WHERE project = ? AND file = 'limits.conf' AND key = 'disk_watch_paths'").get(p) as { value: string | null } | null;
-    const v = (r?.value ?? "").trim();
-    if (v) lines.push(v);
-  }
+  // A host key (U25, KTD16): this host's line (env, its override, the default), never a project's row.
+  const line = hostLine(store.db, SELF, "disk_watch_paths", limitEnv("disk_watch_paths")).value;
+  const lines = line ? [line] : [];
   const out: string[] = [];
   for (const line of lines) for (const raw of line.split(/[,\s]+/).filter(Boolean)) {
     if (raw === "-") continue;

@@ -157,19 +157,15 @@ describe("the disk-usage observer", () => {
     expect(s.db.query("SELECT key FROM observed_disk_usage WHERE key LIKE 'du:%'").all().length).toBe(1);
     expect(s.get("observed_disk_usage", { key: "meta:docker" })?.error).toBeNull();
   });
-  test("disk_watch_paths set on a project through ds config import is sized and named on another project's card", async () => {
+  test("disk_watch_paths is this host's (ds host set): sized and named on the card; a project row or import is not read", async () => {
     const s = root();
-    const imp = (project: string, line: string) => {
-      const f = join(s.root, `${project}.export`);
-      writeFileSync(f, `#== limits.conf\ndisk_watch_paths ${line}\n`);
-      const r = Bun.spawnSync([join(import.meta.dir, "..", "..", "bin", "ds"), "--state", s.root, "config", "import", "--project", project, f], { stdout: "pipe", stderr: "pipe" });
-      expect(r.exitCode).toBe(0);
-    };
-    mkdirSync(join(s.root, "zzskip", "squads"), { recursive: true });
-    imp("pa", "/srv/a,/srv/../etc,/srv/b");
-    imp("pb", "/srv/b /srv/c");
-    imp("zzskip", "/srv/skipped");
-    expect(watchPaths(s)).toEqual(["/srv/a", "/srv/b", "/srv/c"]); // bad path dropped, b once, zz… row unread
+    const ds = (...a: string[]) => Bun.spawnSync([join(import.meta.dir, "..", "..", "bin", "ds"), "--state", s.root, ...a], { stdout: "pipe", stderr: "pipe" });
+    const f = join(s.root, "pa.export");
+    writeFileSync(f, "#== limits.conf\ndisk_watch_paths /srv/skipped\n");
+    expect(ds("config", "import", "--project", "pa", f).exitCode).toBe(0);   // skipped as now per host
+    s.upsert("config", { project: "pb", file: "limits.conf", key: "disk_watch_paths" }, { value: "/srv/old", observed_at: T });   // unread
+    expect(ds("host", "set", "local", "disk_watch_paths", "/srv/a,/srv/../etc,/srv/b", "/srv/b", "/srv/c").exitCode).toBe(0);
+    expect(watchPaths(s)).toEqual(["/srv/a", "/srv/b", "/srv/c"]); // bad path dropped, b once
     const calls: string[] = [];
     await diskUsageObserver({ run: async (c, t) => { calls.push(c[c.length - 1]); return ok(c, t); }, hasDocker: () => false }).run(ctx(s, T));
     expect(calls).toEqual(["/srv/a", "/srv/b", "/srv/c"]);

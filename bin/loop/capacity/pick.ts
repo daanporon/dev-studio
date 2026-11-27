@@ -64,6 +64,7 @@ import { accountFolder, type AccountRow } from "../../lib/account-dirs.ts";
 import { findKind } from "../../lib/account-kinds/index.ts";
 import { loopProjects } from "../settings/projects.ts";
 import { effectiveRoster } from "../settings/roster.ts";
+import { hostLine, isHostKey, SELF } from "../../lib/host-settings.ts";
 
 export type PickReq = {
   project: string; role: string; tier?: string | null; phase?: string | null; squad?: string | null;
@@ -97,7 +98,9 @@ export const loadKey = (agent: string, account: string | null) => `${agent}\t${a
 // A limit as ds_limit reads it: the env var (DS_LIMIT_<KEY> or its old name), the project's
 // limits.conf row, the conventions row, else the built-in default.
 export function limit(store: Store, project: string, key: string): string | null {
+  // A `[host]` key (U25, KTD16): env, this host's override, the default; never the project's row.
   const ev = process.env[ENV[key] ?? `DS_LIMIT_${key.toUpperCase()}`];
+  if (isHostKey(key)) return ev || memo(store, null, "host-limit", key, () => hostLine(store.db, SELF, key).value?.split(/\s+/)[0] || DEFAULTS[key] || null);
   if (ev) return ev;
   return memo(store, null, "limit", `${project}\0${key}`, () => limitRow(store, project, key));
 }
@@ -114,6 +117,7 @@ export const limitNum = (store: Store, project: string, key: string) => Number(l
 // A whole-number line as the board reads it (board-data.ts dsLimit): the env var, the project's row,
 // the conventions row; the first whole number wins, else null (no line).
 function wholeLimit(store: Store, project: string, key: string): number | null {
+  if (isHostKey(key)) { const v = limit(store, project, key); return v !== null && /^[0-9]+$/.test(v) ? Number(v) : null; }
   const ev = process.env[ENV[key] ?? `DS_LIMIT_${key.toUpperCase()}`];
   if (ev && /^[0-9]+$/.test(ev)) return Number(ev);
   return memo(store, null, "whole-limit", `${project}\0${key}`, () => wholeRow(store, project, key));
@@ -126,11 +130,11 @@ function wholeRow(store: Store, project: string, key: string): number | null {
   return null;
 }
 
-// The host brake (U4): with builder_host_brake on, the crit line a fresh machine sample crosses, for a
+// The host brake (U4): with builder_host_brake on (a host key, U25: main's own value, read against main's own sample), the crit line a fresh machine sample crosses, for a
 // start that needs a new Builder agent; null = go ahead.
 export function hostBrake(store: Store, project: string, who: Asker, now: number, role: string): string | null {
   if (limit(store, project, "builder_host_brake") !== "on") return null;
-  const r = memo(store, null, "machine", "", () => store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null);
+  const r = memo(store, null, "machine", "", () => store.db.query("SELECT * FROM observed_machine WHERE host = 'local' ORDER BY observed_at DESC LIMIT 1").get() as Row | null);
   const crit = hostCrit(r, (k) => wholeLimit(store, project, k), now);
   return crit && newBuilderStart(store, project, who, now, role) ? crit : null;
 }
@@ -143,7 +147,7 @@ export function hostBrake(store: Store, project: string, who: Asker, now: number
 // Only reads: no pick, no event.
 export type BrakeView = { setting: "builder_host_brake"; sample: SampleState["state"]; age_s: number | null; hit: CritHit | null; projects: { project: string; on: boolean }[] };
 export function brakeView(store: Store, now: number, project = "", projects = loopProjects(store.root)): BrakeView {
-  const r = store.db.query("SELECT * FROM observed_machine ORDER BY observed_at DESC LIMIT 1").get() as Row | null;
+  const r = store.db.query("SELECT * FROM observed_machine WHERE host = 'local' ORDER BY observed_at DESC LIMIT 1").get() as Row | null;
   const s = sampleState(r, now);
   return { setting: "builder_host_brake", sample: s.state, age_s: s.age_s, hit: hostCritHit(r, (k) => wholeLimit(store, project, k), now),
     projects: projects.map((p) => ({ project: p, on: limit(store, p, "builder_host_brake") === "on" })) };

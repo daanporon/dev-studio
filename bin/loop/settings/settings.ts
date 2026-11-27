@@ -20,6 +20,7 @@ import { limitValueProblem, SHIP_MODES } from "../../lib/operator.ts";
 import { backendChangeProblem } from "../../backend/backend-change.ts";
 import { confRows, confText } from "../db/import-config.ts";
 import { limitEnv } from "./limits.ts";
+import { hostLine, isHostKey, SELF } from "../../lib/host-settings.ts";
 import { FOCUS_KEY, focusProblem, NO_FOCUS } from "../squad/focus.ts";
 import { studioBackend } from "../squad/studio.ts";
 import { levelOf, PROJECT_PATTERN, ROLES, shippedRules, skillRuleProblem } from "./skills.ts";
@@ -33,7 +34,7 @@ export type SettingsFile = (typeof SETTINGS_FILES)[number];
 // rows, which would wipe the skills rows on restoring a backup made before they were exported.
 export const IMPORT_FILES = [...SETTINGS_FILES, "skills.conf"] as const;
 export type ImportFile = (typeof IMPORT_FILES)[number];
-export type Source = "env" | "project" | "default";
+export type Source = "env" | "project" | "default" | "host";
 
 export interface Got { project: string; file: SettingsFile; key: string; value: string | null; source: Source | null; env?: string }
 export interface Change { project: string; file: ImportFile; key: string; old: string | null; new: string | null }
@@ -84,6 +85,11 @@ export function get(store: Store | null, project: string, file: string, key: str
   checkProject(project);
   const f = checkFile(file);
   if (f === "limits.conf") {
+    // U25, KTD16: a `[host]` key is this host's, whatever the project (host-settings.ts); its project row is unread.
+    if (isHostKey(key, join(conv(o), "limits.conf"))) {
+      const h = hostLine(store?.db ?? null, SELF, key, limitEnv(key), join(conv(o), "limits.conf"));
+      return { project, file: f, key, value: h.value, source: h.source, ...(h.source === "env" ? { env: h.env } : {}) };
+    }
     const env = limitEnv(key), ev = process.env[env];
     if (ev) return { project, file: f, key, value: ev, source: "env", env };
   }
@@ -162,6 +168,8 @@ function checked(store: Store, project: string, file: SettingsFile, key: string,
     if (key === "default_backend")
       fail(`default_backend is not a setting: a project's squads start on its Studio's backend; to change it: ds up ${project} --backend ${v || "<name>"}`);
     if (!knownLimit(key, o)) fail(`unknown key '${key}' (see: limits.sh show)`);
+    // U25, KTD16: a machine key has no per-project value; it is set per host.
+    if (isHostKey(key, join(conv(o), "limits.conf"))) fail(`${key} is set per host, not per project: ds host set <host> ${key} ${v || "<value>"} (main is local)`);
     const problem = limitValueProblem(key, v);
     if (problem) fail(problem);
     // squad-priority U1: the focus names a live feature squad of this project, or `-` (none).
@@ -528,6 +536,7 @@ function planOne(store: Store, target: string, file: ImportFile, key: string, ra
   const skip = (why: string, value: string | null = null, can = false): PlanRow => ({ file, key, value, ...(value === null ? { raw: raw.trim() } : {}), current, action: "skip", why, pick: false, can_pick: can });
   if (unknownKey(store, target, file, key, o)) return skip("unknown key");
   if (o.board && shellOnly(file, key)) return skip("shell only", raw.trim());
+  if (file === "limits.conf" && isHostKey(key, join(conv(o), "limits.conf"))) return skip("now per host", raw.trim());   // U25: ds host set
   let value: string;
   try { value = targetValue(store, target, file, key, raw, o); } catch (e) {
     if (e instanceof SettingsError) return skip(`refused: ${e.message}`);

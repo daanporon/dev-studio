@@ -27,7 +27,8 @@ function seed(s: Store, r: Seed): void {
     NOW - 30 * H, r.orphaned ?? NOW - 30 * H, JSON.stringify(r.facts ?? {}), NOW - 60);
   s.db.query("INSERT OR REPLACE INTO observed_cleanup_scan (host, started_at, ms, entries, ps_error, loose_count, loose_kb, observed_at) VALUES ('h', ?, 1, 1, NULL, 0, 0, ?)").run(NOW - 60, NOW - 60);
 }
-const setLimit = (s: Store, key: string, value: string) => s.upsert("config", { project: "p", file: "limits.conf", key }, { value, observed_at: 1 });
+// The cleanup keys are host keys (U25): this host's override, never a project row.
+const setLimit = (s: Store, key: string, value: string) => s.upsert("host_config", { host: "local", key }, { value, set_at: 1 });
 let tickNo = 0;
 const ctx = (s: Store, now = NOW) => ({ store: s, project: "p", tick: ++tickNo, now, fired: [], poked: new Set<string>() });
 const acts = (s: Store, now = NOW) => reconcile(ctx(s, now), UID).filter((a) => a.kind === CLEANUP_ACT);
