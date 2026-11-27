@@ -4,7 +4,8 @@ A side host is a second machine that runs worker seats (Builders, Testers, Resea
 main host. Leads, Thinkers and the Studio stay on main, and so do `loop.db`, the board and every decision.
 The side host runs its own loop, which dials main, does what main asks on its own disk and sends what it
 observes back over the link. Terms: **main** is the host that runs your projects; **side host** is the other
-one. `tests/side-host.sh` runs everything below on one machine.
+one. `tests/side-host.sh` runs a join, a Builder's placement, a lost link, the requeue and the refused late finish
+on one machine; it does not run Drain, Remove or the side's own fence.
 
 ## Join
 
@@ -75,8 +76,8 @@ bin/ds host remove <name>          # or Remove on the host's row in Settings →
 ```
 
 It deletes the host's key and drops its settings, so main refuses the link from then on. Main only requeues
-work from an **accepted** host. A member still running on a host you removed is never requeued: it reads
-`unknown` until you close it. If a host is broken and not coming back, do not remove it first: wait until
+work from an **accepted** host. A member still running on a host you removed is never requeued: it stays
+`unknown`, and closing it from main does nothing. If a host is broken and not coming back, do not remove it first: wait until
 main has moved its work (next section), then remove it.
 
 Then, on the removed host, stop the side loop for good:

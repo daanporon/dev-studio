@@ -137,11 +137,12 @@ has "the first Builder is on main" "local::" "$(member_col u0 wt)"
 driver busy u0
 
 # --- the side joins over the link and is accepted ---------------------------------------------------
+# exec: $! must be ds join itself, which the cleanup stops.
 join_env() {
-  ( cd "$REPO" && PATH="$STUB" SHELL="$STUB/bash" TMUX_TMPDIR="$TMP/tmux" DS_ORCA_DATA="$TMP/orca" \
+  cd "$REPO" && exec env PATH="$STUB" SHELL="$STUB/bash" TMUX_TMPDIR="$TMP/tmux" DS_ORCA_DATA="$TMP/orca" \
     DS_SERVER_SYSTEMD=0 DS_LOOP_SYSTEMD=0 DS_TICK_SECONDS=1 DS_JOIN_POLL_MS=200 DS_JOIN_SKILLS=true \
     DS_WORKTREE_ROOT="$TMP/side-wts" DS_SIDE_CLONE_ROOT="$TMP/side-clones" DS_TOKEN_CACHE=0 DS_TOKEN_DIR="$TMP/side-tokens" \
-    DS_LIMIT_HOST_GRACE_MIN=30 DS_LINK_RESEND_MS=2000 ./bin/ds join "127.0.0.1:$PROXY_PORT" --name laptop 2>&1 )
+    DS_LIMIT_HOST_GRACE_MIN=30 DS_LINK_RESEND_MS=2000 ./bin/ds join "127.0.0.1:$PROXY_PORT" --name laptop 2>&1
 }
 join_env > "$TMP/join.log" &
 JOIN_PID=$!; OWN_PIDS="$OWN_PIDS $JOIN_PID"
