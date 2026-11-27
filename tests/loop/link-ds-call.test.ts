@@ -169,6 +169,15 @@ describe("refusals", () => {
     expect(all(m.store, "SELECT id FROM messages WHERE subject = 'late'")).toEqual([]);
   }, 30_000);
 
+  test("a member requeued onto another host: the old one's call is 'you were replaced', a host that never had it is refused", async () => {
+    const m = await mainUp();
+    m.store.db.run("UPDATE members SET status = 'gone' WHERE id = 2");
+    put(m.store, "members", { id: 20, project: "realp", squad: "sq", role: "builder", suffix: "u1", wt: "local::/w/b1-r2", host: "local", status: "running", gen: "g1-r2" });
+    const call = { argv: ["msg", "send", "sq", "lead", "late", "late"], member: B1, gen: "g1" };
+    expect(checkCall(m.store, "s1", call)).toEqual({ ok: false, code: EXIT.replaced, why: REPLACED_LINE });
+    expect(checkCall(m.store, "s2", call)).toMatchObject({ ok: false, code: EXIT.refused });
+  }, 30_000);
+
   test("identity and scope: --state, --as, --from, another project, and targets outside the member's own unit", () => {
     const s = open(temp());
     stores.push(s);

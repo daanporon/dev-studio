@@ -84,6 +84,12 @@ export function memberRow(s: Store, member: string): Row | null {
     .get(id.project, id.squad, id.role, id.suffix) as Row | null;
 }
 
+/** Whether an earlier row of this member ran on `host`. */
+function ranOn(s: Store, m: Row, host: string): boolean {
+  return !!s.db.query("SELECT 1 FROM members WHERE project = ? AND squad = ? AND role = ? AND COALESCE(suffix, '') = ? AND host = ?")
+    .get(String(m.project), String(m.squad), String(m.role), String(m.suffix ?? ""), host);
+}
+
 /** A member's own unit: a Builder's suffix, or a unit whose builder worktree is the member's. A Tester or Researcher
  *  reports on another member's unit (roles/tester.md), so for them it is any unit of their own squad. */
 function ownUnit(s: Store, m: Row, role: string, unit: string): boolean {
@@ -99,7 +105,8 @@ export const wtPath = (wt: unknown): string => { const w = String(wt ?? ""); ret
 export function checkCall(s: Store, host: string, call: Call): Checked {
   const m = memberRow(s, call.member);
   if (!m) return refuse(`no member '${call.member}' on main`);
-  if (String(m.host ?? "local") !== host) return refuse(`member '${call.member}' is not on host ${host}`);
+  // A requeue gives the same member name a new row, often on another host (KTD11): the old one there was replaced.
+  if (String(m.host ?? "local") !== host) return ranOn(s, m, host) ? refuse(REPLACED_LINE, EXIT.replaced) : refuse(`member '${call.member}' is not on host ${host}`);
   if (!call.gen || !m.gen || call.gen !== String(m.gen)) return refuse(REPLACED_LINE, EXIT.replaced);
   const [cmd, ...args] = call.argv;
   if (!cmd) return refuse("no command");
