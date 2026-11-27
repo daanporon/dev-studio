@@ -13,6 +13,8 @@
 // host's row: a host no longer accepted is closed (`host_link_closed`), a link silent for DEAD_MS is marked down
 // (`host_link_down`, hosts.unreachable_since = the last time it was heard), else it is pinged. Each hello and
 // ping pass records hosts.last_seen_at; the hello also records link_version, up_migration and code_rev (KTD15).
+// At its start the server sets every accepted host's unreachable_since to the later of its last pong and the start
+// (U13, KTD11): main's own downtime never uses up a host's grace (bin/loop/squad/host-reach.ts reads the row).
 // Run as a script: `bun bin/link/server.ts <binds> <port>`; it exits 75 when a file under bin/link/ changes, so
 // the loop restarts it on the new code (uncounted, like the board).
 import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -195,6 +197,10 @@ export async function startLinkServer(opts: { root?: string; binds: string; port
     } catch (e) { errors.push(`${hostname}: ${(e as Error).message}`); }
   }
   if (!servers.length) { clearInterval(tick); if (ownStore) store.close(); throw new Error(`link: could not bind port ${opts.port} (${errors.join("; ")})`); }
+  // U13 (KTD11): no link is up yet, so every accepted host is unreachable from now; its clock starts at the later of
+  // its last pong and this start, so main's own downtime does not use up a host's grace. A hello clears it.
+  const started = sec();
+  store.db.run("UPDATE hosts SET unreachable_since = MAX(COALESCE(last_seen_at, 0), ?) WHERE status = 'accepted'", [started]);
 
   const request = async (host: string, ch: string, body: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> => {
     const ws = live.get(host);
