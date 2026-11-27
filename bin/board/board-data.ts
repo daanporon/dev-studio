@@ -60,7 +60,7 @@ import { retestDue, openPrUnits, type Retest } from "../loop/squad/retest.ts";
 import { settle, type Finish } from "../loop/squad/squad-finish.ts";
 import { LVL, levelOf, machineCadence, machineLevels, machineStale, sampleState, worst, worstHost, type CritHit } from "../loop/capacity/machine-level.ts";
 import { CAT_SQL, NOISE, catList, catWhere, sqlList as kindList } from "./event-cats.ts";
-import { CHAT_FILE_NAME, chatFileUrl } from "../loop/chat/files.ts";
+import { CHAT_FILE_NAME, chatFileKind, chatFileUrl } from "../loop/chat/files.ts";
 import { feedbackOn, feedbackRepo } from "../loop/feedback/post.ts";
 import { DEFAULT_BACKEND, PROVIDER_SETTINGS, defaultProvider, isBackend } from "../backend/registry.ts";
 import { studioBackend } from "../loop/squad/studio.ts";
@@ -3560,7 +3560,7 @@ export function chatMember(store: Store | Db, project: string, topic: string, wt
 function chatSend(db: Db, r: Row, topic: string, now = Math.floor(Date.now() / 1000)) {
   const p = parse(String(r.payload ?? "")) ?? {}, res = parse(String(r.result ?? "")) ?? {};
   const files = (Array.isArray(p.files) ? p.files : []).filter((n: unknown): n is string => typeof n === "string" && CHAT_FILE_NAME.test(n))
-    .map((name: string) => ({ name, url: chatFileUrl(String(r.project ?? ""), topic, name) }));
+    .map((name: string) => ({ name, kind: chatFileKind(name), url: chatFileUrl(String(r.project ?? ""), topic, name) }));
   const base = { id: Number(r.id), text: redact(String(p.text ?? "")), files, at: Number(r.created_at), done_at: r.done_at == null ? null : Number(r.done_at) };
   if (r.done_at == null) {
     const since = res.state === "queued" && res.since != null ? Number(res.since) : null;
