@@ -32,14 +32,9 @@ export function strip(entries: any, prefixes: string[]): any[] {
   }))).filter((e) => e.hooks.length > 0);
 }
 
-export async function run(argv: string[]): Promise<number> {
-  if (argv.length !== 3) { writeErr("usage: arm-picker.sh <worktree_id> <state> <role>\n"); return 2; }
-  const [WT, STATE, ROLE] = argv;
-  const path = await worktreePath(WT);
-  if (!path || !isDir(path)) {
-    writeErr(`arm-picker: no local path for worktree ${WT} (remote host?) — not arming\n`);
-    return 0;
-  }
+/** Merge the picker hooks and the broad-kill guard into the settings of the worktree folder `path`; `wt` is the id the
+ *  hooks name. Prints nothing: `rc` is mergeSettings' exit code, `pre` the armed PreToolUse command. */
+export function armPicker(path: string, STATE: string, ROLE: string, WT: string): { rc: number; pre: string } {
   const self = join(ROOT, "bin", "hooks", "picker-hook.sh");
   const pre = `${self} pre ${STATE} ${ROLE} ${WT}`, post = `${self} post ${STATE} ${ROLE} ${WT}`;
   const permission = `${self} permission ${STATE} ${ROLE} ${WT}`;
@@ -57,6 +52,18 @@ export async function run(argv: string[]): Promise<number> {
     return setKey(s, "hooks", setKey(s.hooks, "PermissionRequest", [...askHooks,
       { matcher: "*", hooks: [{ type: "command", command: permission, timeout: 15 }] }]));
   });
+  return { rc, pre };
+}
+
+export async function run(argv: string[]): Promise<number> {
+  if (argv.length !== 3) { writeErr("usage: arm-picker.sh <worktree_id> <state> <role>\n"); return 2; }
+  const [WT, STATE, ROLE] = argv;
+  const path = await worktreePath(WT);
+  if (!path || !isDir(path)) {
+    writeErr(`arm-picker: no local path for worktree ${WT} (remote host?) — not arming\n`);
+    return 0;
+  }
+  const { rc, pre } = armPicker(path, STATE, ROLE, WT);
   if (rc !== 0) return rc;
   writeOut(`armed picker PreToolUse/PostToolUse/PermissionRequest hooks + broad-kill Bash guard in ${join(path, ".claude", "settings.local.json")} -> ${pre}\n`);
   return 0;

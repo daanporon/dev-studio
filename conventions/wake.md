@@ -72,6 +72,8 @@ A second hook pair lives next to the rewake Stop hook in every squad role's work
 armed by `bin/hooks/arm-picker.sh <wt> <state> <role>`, which `reassert-roles.sh` runs for each live
 squad role (`/ds-update`, through the loop's `reassert-roles` request). The loop's member start does
 not run it, so a member started since the last reassert has neither this pair nor the guard below.
+A member on a side host is the exception: that host installs both at every start of its terminal
+(`bin/link/channels/contract.ts`).
 The Studio is not a squad role and is never armed. Both entries carry `timeout: 15`.
 
 - **Pre** (`bin/hooks/picker-hook.sh pre <state> <role> <wt>`) copies its hook JSON to a temp file,
