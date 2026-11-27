@@ -197,7 +197,7 @@ const VIEWS: { name: string; strict: boolean; kind?: string; field?: string; cha
   { name: "chat-question", strict: true, chat: "question", open: openChatOf("builder-platform") },
   { name: "chat-screen", strict: true, chat: "screen", open: async (p) => (await openChatOf("builder-platform")(p)) && (await click(p, ".chat-scrtog")) },
   { name: "chat-long-question", strict: true, chat: "long-card", open: longQuestion(true) },
-  { name: "chat-long-log-question", strict: true, chat: "squeeze", open: longQuestion(true, 90) },
+  { name: "chat-long-log-question", strict: true, chat: "squeeze", open: longQuestion(false, 90) },
   { name: "long-name-chat", strict: true, chat: "long", open: openLongName },
   { name: "long-name-menu", strict: true, chat: "long-menu", open: openLongMenu },
   { name: "start-squad", strict: true, open: (p) => click(p, "button", /Start squad/) },
