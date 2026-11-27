@@ -309,6 +309,13 @@ files the move is refused, the member carries on and its row says why. The old w
 **If main cannot be reached:** a main with no side host yet does not run its link server. On main, run
 `bin/ds config set <project> limits.conf link_listen on` (`link_port` defaults to 7790), then run `ds join` again.
 
+**Updating:** a side host follows main. When an update of main ends (`ds update <project>`), each online side host is
+sent the commit main is on: it resets its checkout to that commit, reinstalls and restarts its side loop. A host that
+was away gets it when its link is back. A host still behind 10 minutes after that raises a Needs-you card with the end
+of its update log; **Update** on the card sends it again. Settings → Hosts shows each host's commit next to main's.
+A side host's branch on `origin` must hold main's commit, so keep it on the branch main is on. A host whose code is
+older than this feature cannot take the job: run `bin/host/update-host.sh` on it once.
+
 Running `ds join` again is safe: an accepted host goes straight on to the connection. `ds up` is refused on a side
 host, and a host that already runs a main loop's project cannot join.
 

@@ -1104,7 +1104,9 @@ async function hostPost(req: Request) {
   const { host, action, key, value, fingerprint } = pr.b;
   if (!NAME.test(host ?? "")) return json(400, { error: "need host" });
   let kind: string, payload: Record<string, string>;
-  if (action === "accept" || action === "reject" || action === "remove") {
+  if (action === "update") {
+    kind = "host-update"; payload = { host, action };
+  } else if (action === "accept" || action === "reject" || action === "remove") {
     if (action !== "remove" && (typeof fingerprint !== "string" || !fingerprint || fingerprint.length > 200)) return json(400, { error: `${action} needs the fingerprint shown` });
     kind = "host-member"; payload = { host, action, ...(action === "remove" ? {} : { fingerprint }) };
   } else if (action === "set" || action === "reset") {
@@ -1112,7 +1114,7 @@ async function hostPost(req: Request) {
     if (action === "set" && FILE_ONLY_LIMITS.has(key)) return json(409, { error: `${key} is set with: ds host set ${host} ${key} <value>` });
     if (action === "set" && (typeof value !== "string" || !value.trim() || value.length > 500)) return json(400, { error: "need value" });
     kind = "host-key"; payload = { host, key, ...(action === "set" ? { value: value.trim() } : {}) };
-  } else return json(400, { error: "action is accept, reject, remove, set or reset" });
+  } else return json(400, { error: "action is accept, reject, remove, set, reset or update" });
   return write((s) => {
     if (!knownHost(s, host)) no(409, `no host ${host}`);
     const field = kind === "host-key" ? "key" : "action";

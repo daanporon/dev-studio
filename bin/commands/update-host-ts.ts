@@ -2,14 +2,18 @@
 // running loop when the commit moved (U191): what bin/host/update-host.sh runs. The pull half of /ds-update,
 // which branches on the DS-UPDATE: line printed here. All modules are loaded before the reset below replaces
 // them on disk, so the run finishes on the code it started with.
+// `--side <commit>` (side-loop-host U24) is a side host's update, which main's `update` host job starts
+// (bin/lib/side-update-job.ts): the checkout goes to that commit, which must be on its branch's remote; no
+// project or Studio steps run; and the run writes its pid and last state into <state root>/link/update.json.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ROOT, chomp, run as sh, stateRoot, writeOut, writeErr } from "../lib/shared";
 import { inherit } from "../lib/upkeep";
 import { loopProjects } from "../loop/settings/projects";
 import { hostUpdateHold } from "../loop/core/code-watch";
+import { readRecord, writeRecord, type SideUpdateRecord } from "../lib/side-update-record";
 
-export const help = `— pull the host checkout to its branch head, reinstall, restart the loop if it moved (update-host.sh)`;
+export const help = `[--side <commit>] — pull the host checkout to its branch head, reinstall, restart the loop if it moved (update-host.sh)`;
 
 type Outcome = "advanced" | "already" | "refused" | "failed";
 
@@ -34,8 +38,20 @@ export async function run(argv: string[]): Promise<number> {
   }
 }
 
-async function update(_argv: string[]): Promise<number> {
+async function update(argv: string[]): Promise<number> {
   const root = ROOT;
+  const side = argv[0] === "--side";
+  const commit = side ? (argv[1] ?? "") : "";
+  if (argv.length && (!side || argv.length !== 2 || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(commit))) {
+    writeErr(`usage: ds update-host-ts ${help}\n`);
+    return 2;
+  }
+  // The record the job wrote for this commit; a run started by hand has none to keep.
+  const sideRecord = (more: Partial<SideUpdateRecord>) => {
+    const rec = side ? readRecord(stateRoot()) : null;
+    if (rec?.commit === commit) writeRecord(stateRoot(), { ...rec, ...more });
+  };
+  sideRecord({ pid: process.pid });
   const git = async (...a: string[]) => sh(["git", ...a], { cwd: root });
   let branch: string | null = null, before = "", after = "";
   // Every exit path says its line once and records it in <state root>/loop/host-update.json (the board reads it).
@@ -44,6 +60,7 @@ async function update(_argv: string[]): Promise<number> {
     const m = s.match(/^DS-UPDATE: (advanced|already current|refused|failed)/);
     if (!m) return;
     const outcome: Outcome = m[1] === "already current" ? "already" : (m[1] as Outcome);
+    sideRecord({ state: outcome === "advanced" || outcome === "already" ? "done" : "failed", line: s });
     writeAtomic(join(stateRoot(), "loop", "host-update.json"), { at: Math.floor(Date.now() / 1000), outcome, line: s, branch, before, after: after || before });
   };
   // The squads of every project run `before` until their own update; mark that once, never over a marker.
@@ -61,13 +78,19 @@ async function update(_argv: string[]): Promise<number> {
   // A named refspec: a stale origin/<branch> must not count once the branch is gone from origin.
   const fetched = await git("fetch", "origin", "-q", `+refs/heads/${branch}:refs/remotes/origin/${branch}`);
   if (fetched.rc !== 0) { if (fetched.err) writeErr(fetched.err); say(`DS-UPDATE: refused — could not fetch ${branch} from origin; still on ${before}`); return 1; }
-  if ((await git("reset", "-q", "--hard", `refs/remotes/origin/${branch}`)).rc !== 0) {
-    say(`DS-UPDATE: failed — could not reset to origin/${branch}; HEAD is ${chomp((await git("rev-parse", "HEAD")).out)}, check the checkout, nothing restarted`);
+  // A side host takes main's exact commit, and only one its own branch's remote holds.
+  if (side && (await git("merge-base", "--is-ancestor", commit, `refs/remotes/origin/${branch}`)).rc !== 0) {
+    say(`DS-UPDATE: refused — ${commit} is not on origin/${branch}; still on ${before}`);
+    return 1;
+  }
+  const to = side ? commit : `refs/remotes/origin/${branch}`;
+  if ((await git("reset", "-q", "--hard", to)).rc !== 0) {
+    say(`DS-UPDATE: failed — could not reset to ${side ? commit : `origin/${branch}`}; HEAD is ${chomp((await git("rev-parse", "HEAD")).out)}, check the checkout, nothing restarted`);
     return 1;
   }
   after = chomp((await git("rev-parse", "HEAD")).out);
   // Before anything restarts: the old commit is what every project's squads still run.
-  if (before !== after) seedMarkers();
+  if (!side && before !== after) seedMarkers();
 
   const inRoot = (cmd: string[]) => inherit(cmd, { cwd: root });
   // Nothing moved and the install is healthy: reinstalling would only rewrite the loop's cron line and unit
@@ -117,7 +140,7 @@ async function update(_argv: string[]): Promise<number> {
       const withData = cron.some((l) => !l.startsWith("#") && l.includes(`${root}/bin/loop/loop.sh --ensure`) && l.includes(" ORCA_USER_DATA_PATH="));
       let rc = await inherit(["bin/loop/loop.sh", "--stop"], { env, cwd: root });
       if (rc === 0 && !withData) rc = await inherit(["bin/loop/loop.sh", "--ensure"], { env, cwd: root });
-      if (rc !== 0) { say(`DS-UPDATE: failed — advanced ${before} -> ${after}, but the loop did not restart; run bin/loop/loop.sh --ensure, then bin/commands/update-squads.sh`); return 1; }
+      if (rc !== 0) { say(`DS-UPDATE: failed — advanced ${before} -> ${after}, but the loop did not restart; run bin/loop/loop.sh --ensure${side ? "" : ", then bin/commands/update-squads.sh"}`); return 1; }
     }
   }
   say(`DS-UPDATE: advanced ${before} -> ${after}`);
