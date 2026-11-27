@@ -3,7 +3,8 @@
 //   noteLink(store, state)  the side process that holds the link calls it on every LinkClient state change
 //                           (`onState`): `up` clears the clock; anything else (connecting, down, refused) starts it
 //                           at the last time the link was heard up, unless it already runs
-//   noteHeard(store)        each side tick while this process holds the link up: moves heard_at on
+//   noteHeard(store, at)    each side tick while this process holds the link up (side.ts): heard_at = when main was
+//                           last heard, from the LinkClient's last frame, never the tick's own time
 //   linkDown(store)         when the link went down, or null while it is up (or never came up on this host)
 // The clock starts at the last time the side heard the link up, not when it noticed the loss, so it never starts
 // later than main's own (main's starts at the host's last pong, server.ts): the side fences first. An `up` written
@@ -23,9 +24,10 @@ export function noteLink(store: Store, state: LinkState, at = nowS(), pid = proc
     return;
   }
   if (!r) return;                    // never up on this host: nothing to fence
-  // The last time heard is between heard_at (moved on each tick while up) and `at` less the silence that calls a
-  // link down (a closed link is noticed sooner): the later of the two is still no later than main's own clock.
-  const since = downSince(r, pid) ?? Math.max(Number(r.heard_at ?? 0), at - Math.ceil(deadMs() / 1000));
+  // heard_at is no later than main's last frame (set from it, at most a tick old), and a silent link is called
+  // down no sooner than the silence after that frame: the earlier of the two never starts after main's own clock,
+  // which starts at the side's last pong, an answer to that frame.
+  const since = downSince(r, pid) ?? Math.min(Number(r.heard_at ?? at), at - Math.ceil(deadMs() / 1000));
   store.upsert("side_link", { id: 1 }, { state: "down", pid, down_since: since });
 }
 

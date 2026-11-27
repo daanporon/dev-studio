@@ -11,7 +11,7 @@ import { LinkClient, type LinkState } from "./client.ts";
 import { MirrorSync } from "./mirror.ts";
 import { startRelay } from "./relay.ts";
 import { RowSync } from "./replica.ts";
-import { noteLink } from "./side-state.ts";
+import { noteHeard, noteLink } from "./side-state.ts";
 import type { Store } from "../loop/core/store.ts";
 
 export type SideStatus = { state: LinkState; why: string; main: string; at: number; pid: number };
@@ -52,7 +52,12 @@ export function startSideLink(store: Store, root: string, log: (line: string) =>
   // A refusal or a lost first dial rejects; the client redials by itself, and onState has said why.
   client.start().catch((e) => say(`link: ${(e as Error).message}`));
   return {
-    tick: () => { void sync(); },
+    tick: () => {
+      // The down clock's heard_at: the last frame from main, never the tick's own time (side-state.ts).
+      const heard = client.lastHeard;
+      if (heard != null) try { noteHeard(store, Math.floor(heard / 1000)); } catch { /* the next tick tries again */ }
+      void sync();
+    },
     stop: () => { client.stop(); stopped = true; relay.stop(); },
   };
 }

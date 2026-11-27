@@ -155,16 +155,16 @@ describe("side link clock", () => {
       noteLink(store, "up", T, A);
       noteHeard(store, T + 100, A);
       expect(linkDown(store, A)).toBeNull();
-      // Noticed 30 s of silence after main was last heard at T+110: the clock starts no later than that.
+      // Main last heard at T+100, the silence noticed at T+140: the clock starts at T+100.
       noteLink(store, "down", T + 140, A);
-      expect(linkDown(store, A)).toBe(T + 110);
+      expect(linkDown(store, A)).toBe(T + 100);
       noteLink(store, "connecting", T + 141, A);
-      expect(linkDown(store, A)).toBe(T + 110);
+      expect(linkDown(store, A)).toBe(T + 100);
 
       // A new side process (another pid) keeps the clock while it dials.
       noteLink(store, "connecting", T + 600, B);
       noteLink(store, "refused", T + 700, B);
-      expect(linkDown(store, B)).toBe(T + 110);
+      expect(linkDown(store, B)).toBe(T + 100);
       noteLink(store, "up", T + 800, B);
       expect(linkDown(store, B)).toBeNull();
     } finally { store.close(); }
@@ -182,14 +182,23 @@ describe("side link clock", () => {
     } finally { store.close(); }
   });
 
-  test("the side clock never starts after main's (the host's last pong)", () => {
+  test("the side clock never starts after main's (the host's last pong), in the live order", () => {
     const dir = tmp(), store = sideStore(dir), pid = process.pid;
     try {
       noteLink(store, "up", T, pid);
-      noteHeard(store, T + 5, pid);                        // last side tick while up
-      const lastPong = T + 18;                             // main's unreachable clock starts here (server.ts)
-      noteLink(store, "down", lastPong + 30, pid);         // the side notices after DS_LINK_DEAD_MS of silence
+      // Main's last ping reaches the side at T+18 and the side's pong reaches main then too: main's unreachable
+      // clock starts at T+18 (server.ts). The side keeps ticking every 5 s through the silence while its client
+      // still says up (it calls the link down only after DS_LINK_DEAD_MS plus up to one ping), each tick writing
+      // the client's last frame, never its own time.
+      const lastFrame = T + 18, lastPong = lastFrame;
+      for (let t = T + 5; t <= lastFrame + 38; t += 5) noteHeard(store, Math.min(t, lastFrame), pid);
+      noteLink(store, "down", lastFrame + 38, pid);
       expect(linkDown(store)!).toBeLessThanOrEqual(lastPong);
+      // A down noticed sooner (main closed the socket) still starts no later than main's.
+      noteLink(store, "up", T + 100, pid);
+      noteHeard(store, T + 110, pid);
+      noteLink(store, "down", T + 112, pid);
+      expect(linkDown(store)!).toBeLessThanOrEqual(T + 110);
     } finally { store.close(); }
   });
 });
@@ -215,6 +224,13 @@ describe("the side link writes the clock", () => {
       link = startSideLink(sideS, sroot, () => {});
       await until("the link up in side_link", () => state() === "up");
       expect(linkDown(sideS)).toBeNull();
+      // A tick writes when main was last heard (its last frame), not the tick's time.
+      sideS.db.run("UPDATE side_link SET heard_at = 0");
+      const before = Math.floor(Date.now() / 1000);
+      link!.tick();
+      const heard = Number(sideS.get("side_link", { id: 1 })!.heard_at);
+      expect(heard).toBeGreaterThan(before - 5);
+      expect(heard).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
       await srv.stop();
       await until("the link down in side_link", () => state() === "down");
       expect(linkDown(sideS)).not.toBeNull();
@@ -242,10 +258,10 @@ describe("side fence", () => {
       loop.boot(T);
 
       noteLink(store, "up", T, pid);
-      await loop.tick(T + 10);                             // up: the tick moves heard_at on
+      await loop.tick(T + 10);                             // a tick while up leaves the clock: only main's frames move it
       noteLink(store, "down", T + 45, pid);
       const since = linkDown(store)!;
-      expect(since).toBe(T + 15);
+      expect(since).toBe(T);                              // main last heard when the link came up
       expect(graceS(store)).toBe(15 * 60);
 
       expect((await loop.tick(since + graceS(store) - 1)).acted.filter((a) => a.kind === "side.fence")).toEqual([]);
