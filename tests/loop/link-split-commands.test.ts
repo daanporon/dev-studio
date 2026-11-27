@@ -23,7 +23,8 @@ const DS = join(ROOT, "bin", "ds.ts");
 const saved: Record<string, string | undefined> = {};
 const ENV = { DS_LINK_PING_MS: "150", DS_LINK_DEAD_MS: "600", DS_LINK_BIND_ANY: undefined, DS_NOW: undefined, DS_LINK_RESEND_MS: undefined,
   DS_MEMBER: undefined, DS_GEN: undefined, DS_WT: undefined, DS_MAIN_URL: undefined, DS_BACKEND: undefined, DS_STATE_ROOT: undefined,
-  DS_LINK_FORWARDED: undefined, DS_LINK_WT: undefined, DS_LINK_FACTS: undefined };
+  DS_LINK_FORWARDED: undefined, DS_LINK_WT: undefined, DS_LINK_FACTS: undefined,
+  DS_ROOT: undefined };  // main's forwarded run must use this checkout's bin, not a role terminal's DS_ROOT
 beforeAll(() => { for (const [k, v] of Object.entries(ENV)) { saved[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
 afterAll(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
 
@@ -292,6 +293,14 @@ describe("the local half", () => {
     expect(checkFacts("watch-ts", ["changed"])).not.toBeNull();
     expect(checkFacts("msg", {})).not.toBeNull();
     expect(checkFacts("finish-unit-ts", { ...FACTS, junk: "x".repeat(20_000) })).toContain("too big");
+    // A picker's tool_use_id names a file in main's picker-done folder: a path in it is refused (u8b review).
+    expect(checkFacts("picker-hook-ts", { mode: "post", tid: "toolu_01abc", answer: "a" })).toBeNull();
+    expect(checkFacts("picker-hook-ts", { mode: "post", tid: "x/../../evil", answer: "a" })).toContain("tool_use_id");
+    expect(checkFacts("picker-hook-ts", { mode: "pre-async", ok: true, hook: { tool_use_id: "a/../b" } })).toContain("tool_use_id");
+    expect(checkFacts("picker-hook-ts", { mode: "pre-async", ok: true, hook: { tool_use_id: "toolu_1" } })).toBeNull();
+    const perm = { mode: "permission-async", tool: "Bash", agent_id: "", agent_type: "", cwd: "/w", tpath: "", shown: "", answerable: false };
+    expect(checkFacts("picker-hook-ts", { ...perm, found: "" })).toBeNull();
+    expect(checkFacts("picker-hook-ts", { ...perm, found: "../x" })).toContain("tool_use_id");
   });
 
   test("inside a forwarded call toplevel() is the member row's worktree id, and senderAt matches it exactly", () => {
@@ -390,7 +399,7 @@ describe("on a side host", () => {
     expect(pre).toMatchObject({ code: 0 });
     expect(existsSync(hook)).toBe(false);   // read and removed on the side; main never had its path
     const q = (JSON.parse(readFileSync(mainSt, "utf8")).waiting_on_you ?? []) as Row[];
-    expect(q).toEqual([expect.objectContaining({ id: "picker-12345678", source: "picker", card_wt: `s1::${w.dir}`, asker: "builder-u1" })]);
+    expect(q).toEqual([expect.objectContaining({ id: "picker-12345678", source: "picker", card_wt: `s1::${w.dir}`, asker: "builder-u1", transcript_path: "(none)" })]);
     const post = await onSide(side, w.dir, ["picker-hook-ts", "post", st, "builder-u1", `local::${w.dir}`], {},
       JSON.stringify({ tool_use_id: "toolu_abcdefgh12345678", tool_response: { answers: { "Which way?": "Left" } } }));
     expect(post).toMatchObject({ code: 0 });

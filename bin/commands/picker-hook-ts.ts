@@ -176,6 +176,8 @@ export async function run(argv: string[]): Promise<number> {
   };
 
   // On main, a side member's split call: what the side read stands in for the input file, stdin and transcript.
+  // Its transcript path names a file on the side host, so the entry gets "(none)": main never opens a path a side
+  // host chose, and the post-mode tombstone closes the picker instead.
   const facts = factsOf<PickerFacts>();
   if (process.env.DS_LINK_FORWARDED === "1" && facts?.mode !== MODE) { log(`${MODE}: ignored — a forwarded call without its facts`); return 0; }
 
@@ -271,7 +273,7 @@ export async function run(argv: string[]): Promise<number> {
     const rc = await askOperator(id, ["--title", promptTitle(ROLE, tool, agent), "--question", promptQuestion(shown, cwd),
       "--option", "Yes", "let it run this once", "--option", "No", "refuse it; the role is told no",
       "--recommend", "No", "--why", "a Claude safety check stopped here — no recommendation; read it before you answer",
-      "--picker", tid, tpath || "(none)", String(answerable), "--permission", tool, agent, shown, cwd]);
+      "--picker", tid, (!facts && tpath) || "(none)", String(answerable), "--permission", tool, agent, shown, cwd]);
     log(rc === 0 || rc === 3 ? `permission: queued ${id} (${tool}, tool_use_id ${found ? "found" : "not found"})` : `permission: ${id} NOT queued — ask-operator.sh exited ${rc}`);
     permissionAsked({ role: ROLE, tool, via: "hook", agent: agentId !== "", text: head(shown, 200) });
     return 0;
@@ -349,7 +351,7 @@ export async function run(argv: string[]): Promise<number> {
     if (nopts === 0) { log(`pre: ${id} ignored — the first question has no options`); return 0; }
     if (nopts === 1) opts.push("--option", "Other", "answer in your own words"); // ask-operator.sh needs 2+
     const rc = await askOperator(id, ["--title", title, "--question", question, ...opts,
-      "--recommend", "1", "--why", why, "--picker", tid, tpath, answerable]);
+      "--recommend", "1", "--why", why, "--picker", tid, facts ? "(none)" : tpath, answerable]);
     if (rc === 0) {
       const t2 = tomb(id);
       if (t2 !== null) { // the answer landed mid-enqueue: take it back down at once

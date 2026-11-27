@@ -50,6 +50,7 @@ export async function finishFacts(cwd?: string): Promise<FinishFacts> {
   return { branch, head, receipt, origin_head, ancestor, since, short };
 }
 
+const TOOL_ID = /^[A-Za-z0-9_-]{0,200}$/;
 const strOrNull = (v: unknown, max = 4096) => v === null || (typeof v === "string" && v.length <= max);
 
 const CHECKS: Record<string, (f: Facts) => string | null> = {
@@ -61,10 +62,19 @@ const CHECKS: Record<string, (f: Facts) => string | null> = {
   "watch-ts": (f) => (f.instr === null || f.instr === "changed" || f.instr === "unchanged" ? null : "instr is not changed, unchanged or null"),
   "picker-hook-ts": (f) => {
     const str = (k: string, max = 4096) => (typeof f[k] === "string" && (f[k] as string).length <= max ? null : `${k} is not a short string`);
-    if (f.mode === "post") return str("tid", 200) ?? str("answer", 8192);
-    if (f.mode === "pre-async") return typeof f.ok === "boolean" ? null : "ok is not a boolean";
+    // A tool_use_id names a file in main's picker-done folder: letters, digits, _ and - only.
+    const id = (v: unknown, k: string) => (typeof v === "string" && TOOL_ID.test(v) ? null : `${k} is not a tool_use_id`);
+    if (f.mode === "post") return id(f.tid, "tid") ?? str("answer", 8192);
+    if (f.mode === "pre-async") {
+      if (typeof f.ok !== "boolean") return "ok is not a boolean";
+      const h = f.hook;   // anything but an object is ignored there (no tool_use_id)
+      if (!f.ok || !h || typeof h !== "object" || Array.isArray(h)) return null;
+      const t = (h as Facts).tool_use_id;
+      return t === undefined || t === null ? null : id(t, "hook.tool_use_id");
+    }
     if (f.mode === "permission-async") {
-      for (const k of ["tool", "agent_id", "agent_type", "cwd", "tpath", "found", "shown"]) { const bad = str(k); if (bad) return bad; }
+      for (const k of ["tool", "agent_id", "agent_type", "cwd", "tpath", "shown"]) { const bad = str(k); if (bad) return bad; }
+      const bad = id(f.found, "found"); if (bad) return bad;
       return typeof f.answerable === "boolean" ? null : "answerable is not a boolean";
     }
     return "mode is not post, pre-async or permission-async";

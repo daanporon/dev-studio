@@ -2,9 +2,8 @@
 // (`ds expose --stop`) once. The reconciler (reconcilers/exposed.ts) groups the queued rows; here
 //   1. the rows of `ids` still queued (none: done, a replay or a skip got there first),
 //   2. claimed queued → running with stop_at, in one transaction (none claimed: done),
-//   3. cwd: the owner's worktree while it exists, else the project's state folder (`cwd_fallback`),
-//      never another member's worktree,
-//   4. the command in its own process group (tidy.ts runOnClose: TERM, wait, KILL on timeout) for
+//   3-4 (io/stop-run.ts stopHere): cwd: the owner's worktree while it exists, else the project's state folder
+//      (`cwd_fallback`), never another member's worktree; the command in its own process group (tidy.ts runOnClose: TERM, wait, KILL on timeout) for
 //      min(expose_stop_s, 100) s, output to <root>/<project>/loop/cleanup/expose-stop-<lowest id>.log,
 //   5. every claimed row settles done (exit 0), timeout or failed with its stop_result
 //      ({ids, code, ms, timed_out, cwd, cwd_fallback, tail}, the log's last 2000 characters redacted),
