@@ -7,7 +7,7 @@
 // (bin/lib/accounts-list.ts). It never writes loop.db.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { accountSkillsCheck, claudePlan } from "../lib/account-skills";
+import { accountSkillsCheck, claudePlan, skillsCell } from "../lib/account-skills";
 import { hostBackendPath, globJson, readIfs, run as runCmd, stateRoot, writeErr } from "../lib/shared";
 import { globNames } from "../lib/install";
 import { accountList } from "../lib/accounts-list";
@@ -151,8 +151,7 @@ export async function run(argv: string[]): Promise<number> {
     const sk = new Map<string, string>();
     for (const l of lines(stripNl(SKILLS))) {
       const f = l.split("\t");
-      if (f[1] === "ok") sk.set(f[0], "ok");
-      else if (f[1] === "broken" || f[1] === "warn") { const r = (f[2] ?? "").replace(/[\t\r]/g, " "); sk.set(f[0], `${f[1]}: ${r !== "" ? r : "?"}`); }
+      if (f[1] === "ok" || f[1] === "broken" || f[1] === "warn") sk.set(f[0], skillsCell(f[1], f[2]));
     }
     const usage = new Map<string, string>(), note = new Map<string, string>();
     for (const l of lines(USAGE)) {

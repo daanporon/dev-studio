@@ -119,7 +119,7 @@ describe("lists", () => {
       expect([u.table, pk]).toEqual([u.table, [...u.key]]);
       expect([u.table, s.columns(u.table).has("host")]).toEqual([u.table, true]);
     }
-    expect(UP_MIGRATION).toBe("0062-account-folders-host");
+    expect(UP_MIGRATION).toBe("0063-side-skills");
   });
 
   test("id helpers rewrite only their own form", () => {

@@ -189,6 +189,9 @@ export const FACTS = {
   // was pushed, or its push failed; the side fenced itself once its link had been down for the grace.
   side_pushed: obj({ branch: str, sha: str }),
   side_push_failed: obj({ branch: opt(str), error: str }),
+  // side-loop-host U21: a side host's install of the role skills its own logins lacked.
+  side_skills_installed: obj({ dirs: arr(str) }),
+  side_skills_failed: obj({ dirs: arr(str), error: str }),
   side_fenced: obj({ down_since: num, pushed: arr(str), push_failed: arr(str), closed: num, close_failed: arr(str) }),
   limit_cleared: ep,
   limit_expired: ep,

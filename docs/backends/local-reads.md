@@ -85,7 +85,7 @@ writes a rescued file each path must be relative with no `.`/`..` segment and no
 | `bin/loop/fulfil/account-move.ts`, `bin/lib/account-folder.ts` | `ds account move`: `cp -a` of an Orca-folder account into the accounts root (Orca's folder is left alone), and the copy's plugin `installPaths` that still point into Orca's folder. |
 | `bin/loop/observers/codex.ts` | `~/.codex/sessions/` (see Transcripts). |
 | `bin/loop/settings/skills.ts` | `$CLAUDE_CONFIG_DIR` (or `~/.claude`): `commands/`, user skills, `~/.claude.json`'s MCP servers; a project's own `.claude/skills/*/SKILL.md`. |
-| `bin/lib/account-skills.ts`, `bin/host/install-skills.sh` | Each Claude account's `plugins/installed_plugins.json`, `settings.json` and `skills/`. Install time, not the loop. |
+| `bin/lib/account-skills.ts`, `bin/host/install-skills.sh` | Each Claude account's `plugins/installed_plugins.json`, `settings.json` and `skills/`. At install time; on main the accounts refresh; on a side host also its state observer every `DS_LOOP_ACCOUNTS_S`, whose verdict goes up as `observed_account_folders.skills` (side-loop-host U21). |
 
 ## Disk
 

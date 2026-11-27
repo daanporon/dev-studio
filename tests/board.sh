@@ -1699,7 +1699,7 @@ acct idle Idle ds "$U7/idle" login-idle-4444 0 0 disabled
 acct busy Busy orca "$U7/busy" login-busy-5555 0 0 disabled
 acct old Removed ds "$U7/idle" - 0 0 active 5
 for f in orca:login-orca-1111 orca2:login-orca-1111 dsd:login-dsss-2222 idle:login-idle-4444 busy:login-busy-5555 lone:login-lone-6666 lone2:login-lone-6666; do
-  dbw "INSERT OR REPLACE INTO observed_account_folders VALUES ('$U7/${f%%:*}','claude','${f#*:}',1,1,'local')"; done
+  dbw "INSERT OR REPLACE INTO observed_account_folders VALUES ('$U7/${f%%:*}','claude','${f#*:}',1,1,'local',NULL)"; done
 render "$LBL" --json > "$U7/board.json"
 S7='[.accounts[] | select(.strip)]'
 jt "U7: strip rows and their tags" "$U7/board.json" "$S7 | map([.account, .tag]) == [[\"system\",\"system\"],[\"o1\",\"Orca + ds\"],[\"d1\",\"ds only\"],[\"gone\",\"ds only\"],[\"busy\",\"ds only\"]]" "$S7 | map([.account,.tag])"
