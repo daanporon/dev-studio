@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mount } from "./board-mount";
+import { TEXT_EXTS } from "../../bin/loop/chat/files.ts";
 
 const root = join(import.meta.dir, "../..");
 const now = Math.floor(Date.now() / 1000);
@@ -41,14 +42,15 @@ async function open(opts: { agent?: string; source?: string; turns?: any[]; send
   w.fetch = async (url: string, init?: any) => {
     const body = (b: any, status = 200) => ({ ok: status < 400, status, json: async () => b, text: async () => JSON.stringify(b) });
     if (String(url).startsWith("api/chat-file") && init?.method === "POST") {
-      uploads.push({ url: String(url), type: init.headers["Content-Type"], size: init.body.size });
+      uploads.push({ url: String(url), type: init.headers["Content-Type"], size: init.body.size, sent: init.body });
       if (refuse) return body({ error: refuse }, 415);
-      const id = HEX(++n) + ".png";
+      const name = new URL(String(url), "http://x/").searchParams.get("name");   // the server's D3 name, for a text file or PDF
+      const id = HEX(++n) + (name ? "-" + name : ".png");
       return body({ id, url: "api/chat-file?project=fixture&topic=sq&name=" + id, bytes: init.body.size });
     }
     if (String(url) === "api/chat" && init?.method === "POST") {
       const b = JSON.parse(init.body); posts.push(b);
-      if (gone) return body({ error: `image ${gone} is gone — attach it again` }, 409);
+      if (gone) return body({ error: `${gone.endsWith(".png") ? "image" : "file"} ${gone} is gone — attach it again` }, 409);
       return body({ ok: true, id: 7 }, 202);
     }
     return base(url, init);
@@ -95,11 +97,11 @@ test("the panel offers 📎, and attaching by picker, paste and drop shows four 
   const t = await open();
   try {
     const btn = t.doc.querySelector(".chat-attach");
-    expect(btn.getAttribute("aria-label")).toBe("Attach images");
+    expect(btn.getAttribute("aria-label")).toBe("Attach files");
     expect(btn.querySelector("svg").getAttribute("aria-hidden")).toBe("true");
     expect(btn.textContent).not.toContain("📎");
     expect(btn.getAttribute("title")).toContain("not checked for secrets");
-    expect(t.doc.querySelector('.chat-modal input[type="file"]').getAttribute("accept")).toBe("image/*");
+    expect(t.doc.querySelector('.chat-modal input[type="file"]').getAttribute("accept")).toBe(["image/*", ...TEXT_EXTS.map((e) => "." + e), ".pdf"].join(","));
     await t.pick(t.file("a.png"), t.file("b.png"));
     const ev = await t.paste(t.file("c.png"));
     expect(ev.defaultPrevented).toBe(true);
@@ -110,18 +112,22 @@ test("the panel offers 📎, and attaching by picker, paste and drop shows four 
     await t.pick(t.file("e.png"));
     expect(t.thumbs().length).toBe(4);
     expect(t.uploads.length).toBe(4);
-    expect(t.doc.querySelector(".qfoot").textContent).toContain("Up to 4 images");
+    expect(t.doc.querySelector(".qfoot").textContent).toContain("Up to 4 files");
   } finally { t.close(); }
 });
 
-test("a text paste is left alone; a non-image file dropped is ignored", async () => {
+test("a text paste is left alone; a file of another kind dropped is refused by name", async () => {
   const t = await open();
   try {
     const ev = await t.paste();
     expect(ev.defaultPrevented).toBe(false);
-    await t.drop(t.file("x.txt", "text/plain"));
+    await t.drop(t.file("a.zip", "application/zip"));
     expect(t.uploads.length).toBe(0);
     expect(t.thumbs().length).toBe(0);
+    expect(t.doc.querySelector(".qfoot").textContent).toContain("a.zip: only pictures, text files and PDFs");
+    const only = await t.paste(t.file("b.docx", ""));
+    expect(only.defaultPrevented).toBe(false);
+    expect(t.doc.querySelector(".qfoot").textContent).toContain("b.docx: only pictures, text files and PDFs");
   } finally { t.close(); }
 });
 
@@ -201,11 +207,11 @@ test("a send clears the image-limit note together with the thumbnails", async ()
   try {
     await t.pick(t.file("a.png"), t.file("b.png"), t.file("c.png"), t.file("d.png"));
     await t.pick(t.file("e.png"));
-    expect(t.doc.querySelector(".qfoot").textContent).toContain("Up to 4 images");
+    expect(t.doc.querySelector(".qfoot").textContent).toContain("Up to 4 files");
     await t.click(t.doc.querySelector(".qfoot .btn.pri"));
     await t.until(() => t.posts.length === 1);
     await t.until(() => t.thumbs().length === 0);
-    expect(t.doc.querySelector(".qfoot").textContent).not.toContain("Up to 4 images");
+    expect(t.doc.querySelector(".qfoot").textContent).not.toContain("Up to 4 files");
   } finally { t.close(); }
 }, 15000);
 
@@ -275,4 +281,78 @@ test("a Muse member, or a screen-tail chat, warns that it may not see images; a 
       expect(has).toBe(warn);
     } finally { t.close(); }
   }
+});
+
+test("a text file and a PDF go up as they are under their own names, and show as chips with name and size", async () => {
+  const t = await open();
+  try {
+    // The browser's own type is often empty or wrong for these: the extension decides.
+    await t.pick(t.file("notes.md", "", 2048), t.file("Report.PDF", "", 3 * 1024 * 1024), t.file("a.ts", "video/mp2t", 5), t.file("a.png"));
+    const byName = (n: string) => t.uploads.find((u) => new URL(u.url, "http://x/").searchParams.get("name") === n);
+    expect(byName("notes.md").type).toBe("text/plain");
+    expect(byName("notes.md").sent.name).toBe("notes.md");   // the file itself, not a redrawn blob
+    expect(byName("notes.md").size).toBe(2048);
+    expect(byName("Report.PDF").type).toBe("application/pdf");
+    expect(byName("a.ts").type).toBe("text/plain");
+    expect(t.uploads.filter((u) => u.type === "image/png").map((u) => u.url)).toEqual(["api/chat-file?project=fixture&topic=sq&wt=wt-b"]);
+    expect(t.canvases).toEqual([]);
+    const chips = [...t.doc.querySelectorAll(".chat-strip .chat-doc")];
+    expect(chips.map((c: any) => [c.querySelector(".chat-fname").textContent, c.querySelector(".chat-fsize").textContent]).sort())
+      .toEqual([["Report.PDF", "3 MB"], ["a.ts", "5 B"], ["notes.md", "2 KB"]]);
+    const link = (n: string) => [...t.doc.querySelectorAll(".chat-strip a.chat-file")].find((a: any) => a.textContent.includes(n)) as any;
+    expect(link("notes.md").getAttribute("target")).toBe("_blank");
+    expect(link("notes.md").getAttribute("download")).toBeNull();
+    expect(link("Report.PDF").getAttribute("download")).toBe("Report.PDF");
+    expect(t.doc.querySelector(".chat-pdfnote")).toBeNull();   // a Claude member reads PDFs
+    expect(t.doc.querySelectorAll(".chat-strip img").length).toBe(1);
+    const ids = JSON.parse(t.w.sessionStorage.getItem("b:chat-draft:fixture/sq/wt-b")).files.map((f: any) => f.id);
+    await t.click(t.doc.querySelector(".chat-send"));
+    expect(t.posts[0].files).toEqual(ids);
+    expect(t.thumbs().length).toBe(0);
+  } finally { t.close(); }
+});
+
+test("a PDF's chip warns on a Codex, Muse or screen-only member, never a text file's", async () => {
+  for (const opts of [{ agent: "codex" }, { agent: "muse" }, { source: "screen" }]) {
+    const t = await open(opts);
+    try {
+      await t.pick(t.file("notes.md", ""));
+      expect(t.doc.querySelector(".chat-pdfnote")).toBeNull();
+      await t.pick(t.file("report.pdf", ""));
+      const notes = [...t.doc.querySelectorAll(".chat-pdfnote")] as any[];
+      expect(notes.map((n) => n.textContent)).toEqual(["this member may not read PDFs"]);
+      expect(notes[0].closest(".chat-doc").textContent).toContain("report.pdf");
+    } finally { t.close(); }
+  }
+});
+
+test("a 409 for a gone file drops its chip and keeps the rest", async () => {
+  const t = await open();
+  try {
+    await t.pick(t.file("x.md", ""), t.file("a.png"));
+    t.gone(JSON.parse(t.w.sessionStorage.getItem("b:chat-draft:fixture/sq/wt-b")).files.find((f: any) => f.name === "x.md").id);
+    await t.click(t.doc.querySelector(".chat-send"));
+    expect(t.thumbs().length).toBe(1);
+    expect(t.doc.querySelector(".chat-strip .chat-doc")).toBeNull();
+    expect(t.doc.querySelector(".qfoot").textContent).toContain("is gone");
+  } finally { t.close(); }
+});
+
+test("turns and pending sends show their files as chips next to the pictures", async () => {
+  const doc1 = HEX(11) + "-notes.md", pdf = HEX(12) + "-report.pdf", pic = HEX(13) + ".png";
+  const url = (n: string) => "api/chat-file?project=fixture&topic=sq&name=" + n;
+  const t = await open({
+    turns: [{ role: "user", from: "operator", text: "read these", at: now - 60, files: [doc1, null], images: [pic] }],
+    sends: [{ id: 3, text: "and this", state: "queued", at: now, files: [{ name: pdf, kind: "pdf", url: url(pdf) }, { name: pic, kind: "image", url: url(pic) }] }],
+  });
+  try {
+    const bubbles = await t.until(() => { const b = [...t.doc.querySelectorAll(".chat-turn.op .bubble")]; return b.length === 2 && b; }) as any[];
+    const [turn, send] = bubbles;
+    expect([...turn.querySelectorAll(".chat-fname")].map((e: any) => e.textContent)).toEqual(["notes.md"]);
+    expect(turn.querySelector("a.chat-file").getAttribute("href")).toBe(url(doc1));
+    expect([...turn.querySelectorAll(".chat-imgchip")].map((e: any) => e.textContent)).toEqual(["file"]);
+    expect(turn.querySelectorAll("img.chat-img").length).toBe(1);
+    expect([...send.querySelectorAll(".chat-fname")].map((e: any) => e.textContent)).toEqual(["report.pdf"]);
+    expect([...send.querySelectorAll("img.chat-img")].map((e: any) => e.getAttribute("src"))).toEqual([url(pic)]);
+  } finally { t.close(); }
 });
