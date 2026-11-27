@@ -1112,6 +1112,14 @@ function resetsPending(db: Db): Map<string, ResetPending> {
 // issue #125 U9: the kinds the Add dialog offers (a login command and more than one login), Claude first.
 const addKinds = () => KINDS.filter((k) => k.multi && k.login).map((k) => ({ agent: k.agent }));
 
+// side-loop-host U20: the side hosts the Add dialog offers besides main, each accepted one with whether its link is
+// up (an add there needs it; the server refuses otherwise). Empty with no side host, and the dialog shows no choice.
+function addHosts(db: Db): { name: string; online: boolean }[] {
+  try {
+    return hasHosts(db) ? db.all("SELECT name FROM hosts WHERE status = 'accepted' ORDER BY name").map((h) => ({ name: String(h.name), online: hostLink(db.s, String(h.name)).state === "online" })) : [];
+  } catch { return []; }
+}
+
 // Every project's open `account-add` requests, and the ones that ended a short while ago (a failed one longer),
 // as their staged `result` says (fulfil/account-add.ts). The list is the host's. A pasted code is never in it.
 const ADD_FAILED_S = 3600;
@@ -1129,7 +1137,7 @@ function accountAdds(db: Db, now = NOW()) {
     try { queued = open && !res.state && !!q.project && paused(db.s, { project: String(q.project) }); } catch { /* unknown pause state: not queued */ }
     return [{
       id: Number(q.id), agent: String(p.agent ?? ""), name: String(p.name ?? ""), project: text(q.project), state, queued,
-      flow: findKind(String(p.agent))?.login?.flow ?? null,
+      flow: findKind(String(p.agent))?.login?.flow ?? null, host: text(p.host),
       url: open ? text(res.url) : null, device_code: open ? text(res.device_code) : null,
       why: open ? text(res.why) : null, line: open ? text(res.line) : null, text: text(res.text), error: text(res.error),
     }];
@@ -2330,7 +2338,7 @@ function fromDb(db: Db, label: string, topic: string, liveRoot = false) {
   accountUsers(db, accts, label, squads);
   stripRows(accts);
   const labels = label ? [label] : db.all("SELECT label FROM projects UNION SELECT project AS label FROM squads ORDER BY label").map((r) => String(r.label)).filter((l) => !(liveRoot && !label && isTestProject(l)));
-  return { ...board(db, label, labels, squads, accts, live), account_folders: folderOnly, account_adds: accountAdds(db), account_kinds: addKinds(), project_controls: !topic };
+  return { ...board(db, label, labels, squads, accts, live), account_folders: folderOnly, account_adds: accountAdds(db), account_kinds: addKinds(), account_hosts: addHosts(db), project_controls: !topic };
 }
 
 // The Studio's morning briefs (documents rows of <label>/briefings/<date>.md), newest first; only the

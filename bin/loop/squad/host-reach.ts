@@ -24,5 +24,14 @@ export function hostLink(store: Store, host: string): HostLink {
   return { state: "unreachable", since };
 }
 
+/** Why a login cannot be added on `host` now (side-loop-host U20: `ds account add --host`, the board's Add account),
+ *  or null: main (`local`) always can; a side host must be accepted and its link up. */
+export function addHostProblem(store: Store, host: string): string | null {
+  if (!onSide(host)) return null;
+  const r = store.get("hosts", { name: host });
+  if (!r || r.status !== "accepted") return `no accepted host '${host}'`;
+  return hostLink(store, host).state === "online" ? null : `host ${host} is not online: add it once its link is up`;
+}
+
 /** True for a side host whose link is not up: its members read unknown and nothing new goes there. */
 export const hostUnreachable = (store: Store, host: unknown): boolean => onSide(host) && hostLink(store, String(host)).state !== "online";

@@ -15,7 +15,7 @@ import { hostKeys } from "../lib/host-settings.ts";
 import { limitEnv } from "../loop/settings/limits.ts";
 import { ensureHostKey, hostKeyPath, signHello } from "./host-keys.ts";
 import { UP_MIGRATION } from "./replica.ts";
-import { deadMs, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
+import { deadMs, frameLog, LINK_VERSION, loadChannels, MAX_FRAME_BYTES, parseFrame, Peer, pingMs, REQUEST_TIMEOUT_MS, type Channel, type Frame } from "./protocol.ts";
 
 export type LinkState = "connecting" | "up" | "down" | "refused" | "stopped";
 
@@ -104,6 +104,8 @@ export type LinkClientOpts = {
   onState?: (s: LinkState, why?: string) => void;
   /** U15: when this host fenced itself while the link was down (side-state.ts fencedAt), sent with each hello. */
   fenced?: () => number | null;
+  /** Where the frame log goes with DS_LINK_LOG_FRAMES=1 (protocol.ts frameLog, redacted); default stdout. */
+  log?: (line: string) => void;
 };
 
 export class LinkClient {
@@ -204,7 +206,7 @@ export class LinkClient {
         welcomed = true;
         this.refusal = null;
         this.pause = 1000;
-        this.peer = new Peer((fr) => ws.send(JSON.stringify(fr)), this.channels!, { host: "main", end: "side", root: this.o.root }, "s");
+        this.peer = new Peer((fr) => ws.send(JSON.stringify(fr)), this.channels!, { host: "main", end: "side", root: this.o.root }, "s", frameLog(this.o.log ?? ((l) => console.log(l))));
         this.timer = setInterval(() => this.beat(ws), pingMs());
         this.set("up");
         return;
