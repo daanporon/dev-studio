@@ -13,7 +13,8 @@
 // host's own lines. The crit check is the brake: a Builder is held by it only while the host's `builder_host_brake`
 // is on (a side host's default is `on`, KTD16); a Tester or Researcher, moved because main is critical, never goes
 // to a host that is critical too. Whether the host has the project cloned does not matter: the start clones it
-// through a host job (U10). Candidates are tried in name order.
+// through a host job (U10). Candidates are tried in name order. Last (U19), the picker must give the start an account
+// with a usable login on that host (pick.ts loginsOn); a host with none is skipped with `no usable login: <why>`.
 //
 // A seat is any worker of any project on that host that is wished running or runs (the latest member row per
 // slot, not gone, in a live squad), plus each start this pick walk already placed there (the walk's temp `picks`
@@ -97,12 +98,13 @@ export function refusal(store: Store, host: string, role: string, now: number, e
 
 export type Placement = { host: string; skipped: string[] } | { host: null; skipped: string[] };
 
-/** The first side host, in name order, that takes this start; `skipped` names each one passed over and why. */
-export function placeSide(store: Store, role: string, now: number, member: number | null = null): Placement {
+/** The first side host, in name order, that takes this start; `skipped` names each one passed over and why. `fits`
+ *  (U19, the picker's) asks last whether the start gets an account with a usable login on the host: null = yes. */
+export function placeSide(store: Store, role: string, now: number, member: number | null = null, fits?: (host: string) => string | null): Placement {
   const skipped: string[] = [];
   for (const { name } of store.db.query("SELECT name FROM hosts WHERE status = 'accepted' ORDER BY name").all() as { name: string }[]) {
     if (!onSide(name)) continue;
-    const why = refusal(store, name, role, now, member);
+    const why = refusal(store, name, role, now, member) ?? fits?.(name) ?? null;
     if (!why) return { host: name, skipped };
     skipped.push(`${name} ${why}`);
   }
