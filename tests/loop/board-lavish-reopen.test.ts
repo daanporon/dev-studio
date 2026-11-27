@@ -120,3 +120,66 @@ test("the page view has the button, under a CSP that lets only its own script po
   expect(body).toContain(`data-key="${K.ended}">Open in Lavish</button>`);
   expect(body).toContain('sandbox="allow-scripts"');
 });
+
+// The served script, run against a stub page: its own fetch and fake timers, every answer `starting`.
+async function pageScript(hold = false) {
+  const script = (await (await fetch(`${board}/review/${K.ended}`)).text()).match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)![1]!;
+  const on: Record<string, (e?: any) => void> = {}, timers = new Map<number, () => void>(), held: (() => void)[] = [];
+  let ids = 0, requests = 0;
+  const button = { disabled: false, textContent: "Open in Lavish", dataset: { key: K.ended }, addEventListener: (n: string, f: () => void) => { on[n] = f; } };
+  const msg = { textContent: "", hidden: true };
+  new Function("document", "addEventListener", "fetch", "setTimeout", "clearTimeout", "location", script)(
+    { getElementById: (id: string) => (id === "open" ? button : msg) },
+    (n: string, f: (e: any) => void) => { on[n] = f; },
+    () => {
+      requests++;
+      const answer = { status: 202, text: async () => JSON.stringify({ starting: true }) };
+      return hold ? new Promise((done) => held.push(() => done(answer))) : Promise.resolve(answer);
+    },
+    (f: () => void) => { timers.set(++ids, f); return ids; },
+    (id: number) => { timers.delete(id); },
+    { assign: () => {} },
+  );
+  const settle = () => Bun.sleep(0);
+  return {
+    button, msg, timers, settle,
+    requests: () => requests,
+    click: async () => { on.click!(); await settle(); },
+    restore: () => on.pageshow!({ persisted: true }),
+    // Run every timer pending now, as one 3-second wait would.
+    tick: async () => { const due = [...timers.values()]; timers.clear(); due.forEach((f) => f()); await settle(); },
+    answer: async () => { held.splice(0).forEach((f) => f()); await settle(); },
+  };
+}
+
+test("the button retries while Lavish starts, then says it did not start", async () => {
+  const p = await pageScript();
+  await p.click();
+  expect([p.msg.textContent, p.button.disabled, p.timers.size]).toEqual(["Starting Lavish…", true, 1]);
+  for (let i = 0; i < 39; i++) await p.tick();
+  expect([p.requests(), p.timers.size]).toEqual([40, 0]);
+  expect([p.msg.textContent, p.button.disabled, p.button.textContent]).toEqual(["Lavish did not start; try again.", false, "Open in Lavish"]);
+});
+
+test("a back/forward restore during the wait, then a click, runs one retry loop", async () => {
+  const p = await pageScript();
+  await p.click();
+  p.restore();
+  expect([p.msg.textContent, p.button.disabled, p.timers.size]).toEqual(["", false, 0]);
+  await p.click();
+  for (let i = 0; i < 3; i++) {
+    expect(p.timers.size).toBe(1);
+    const before = p.requests();
+    await p.tick();
+    expect(p.requests() - before).toBe(1);
+  }
+});
+
+test("a request still in flight at a restore starts no second loop", async () => {
+  const p = await pageScript(true);
+  await p.click();
+  p.restore();
+  await p.click();
+  await p.answer();
+  expect(p.timers.size).toBe(1);
+});

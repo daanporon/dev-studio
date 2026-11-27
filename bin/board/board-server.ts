@@ -1472,24 +1472,28 @@ function reviewable(key: string, path?: string[]) {
 // The wrapper's "Open in Lavish" button. It writes only text (textContent), and retries while Lavish starts.
 const OPEN_SCRIPT = `
 const b = document.getElementById("open"), m = document.getElementById("msg");
-let tries = 0;
+let tries = 0, timer, loop = 0;
+// Ends any retry loop: its pending timer, and the answer to a request still in flight.
+const stop = () => { clearTimeout(timer); tries = 0; loop++; };
 const say = (t) => { m.textContent = t; m.hidden = !t; };
 const reset = () => { b.disabled = false; b.textContent = "Open in Lavish"; };
 async function go() {
+  const mine = loop;
   try {
     const r = await fetch("/api/lavish-reopen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: b.dataset.key }) });
     const t = await r.text();
+    if (mine !== loop) return;
     let j = {};
     try { j = JSON.parse(t); } catch { /* a plain-text refusal */ }
     if (r.status === 200 && j.url) { location.assign(j.url); return; }
-    if (j.starting && ++tries < 40) { say("Starting Lavish…"); setTimeout(go, 3000); return; }
+    if (j.starting && ++tries < 40) { say("Starting Lavish…"); timer = setTimeout(go, 3000); return; }
     say(j.starting ? "Lavish did not start; try again." : j.error || t || "failed: " + r.status);
-  } catch (e) { say("not sent: " + (e.message || e)); }
+  } catch (e) { if (mine !== loop) return; say("not sent: " + (e.message || e)); }
   reset();
 }
-b.addEventListener("click", () => { b.disabled = true; b.textContent = "Opening…"; tries = 0; say(""); go(); });
+b.addEventListener("click", () => { stop(); b.disabled = true; b.textContent = "Opening…"; say(""); go(); });
 // Back from the editor: a page the browser kept still shows "Opening…".
-addEventListener("pageshow", (e) => { if (e.persisted) { reset(); say(""); } });
+addEventListener("pageshow", (e) => { if (e.persisted) { stop(); reset(); say(""); } });
 `;
 
 // GET /review/<key> -> the page of one Lavish session in a plain view (lavish-legacy-document-opening U1): a one-line
