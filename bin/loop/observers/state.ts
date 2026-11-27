@@ -2,7 +2,8 @@
 // into observed_* rows, each file re-read only when its mtime or size moved (gate.ts).
 //
 //   host:     accounts.tsv -> observed_accounts (+ accounts), accounts-orca.tsv -> accounts (Orca's profiles),
-//             account-folders.tsv -> observed_account_folders (+ accounts.login_id), tokens.tsv -> observed_tokens,
+//             account-folders.tsv -> observed_account_folders (+ accounts.login_id), then account_folders (U18),
+//             tokens.tsv -> observed_tokens,
 //             Lavish state.json + start log -> observed_sessions
 //   project:  dispatcher.json -> projects, requests/<dir>/*.txt -> requests, alerts.json -> observed_alerts,
 //             loop/squad-spent.tsv -> observed_spend,
@@ -10,7 +11,8 @@
 //             picker mirrors (squads rows + picker-done/ + the transcript) -> observed_pickers,
 //             each member's newest transcript (path, mtime, size, last model, last effort, entrypoint) -> observed_transcripts,
 //             each Lead's watch beat (squads/<topic>.beat, its mtime) -> observed_markers
-// On a side host (role `side`) only the transcripts run: every other read is a `state/` file of main's own.
+// On a side host (role `side`) only the transcripts and the login folder scan run (observed_account_folders,
+// sent up the link: U18): every other read is a `state/` file of main's own.
 //
 // Never the squad JSON: the squads, members and units rows are the truth and the JSON is the loop's
 // own export, so re-reading it would roll back what was written since (U18's migration imports it
@@ -22,7 +24,8 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { confirm, Gate, replace, sig } from "../core/gate.ts";
-import { copyLoginIds, mergeOrcaImport, parseAccountFolders, parseOrcaImport } from "../capacity/accounts.ts";
+import { copyLoginIds, mergeOrcaImport, parseAccountFolders, parseOrcaImport, syncAccountFolders } from "../capacity/accounts.ts";
+import { scanFolders } from "../../lib/accounts-list.ts";
 import { accountRows, alertRows, dispatcherRows, doneRequests, isObj, mtime, num, readJson, requestFiles, requestRows, spendRows, tokenRows, tsv } from "../db/import-json.ts";
 import type { Observer, TickCtx } from "../core/plugins.ts";
 import { sideProjects } from "../core/side-plugins.ts";
@@ -36,6 +39,7 @@ export type StateOpts = {
   tokenDir?: string;     // where Claude keeps transcripts: <dir>/<mangled worktree path>/*.jsonl
   lavishDir?: string;    // lavish-axi's state.json
   lavishLog?: string;    // fulfil/lavish.ts's Lavish start log
+  scanFolders?: (env: Record<string, string | undefined>) => string[];  // a side host's login folder scan (U18)
 };
 
 function refreshAccounts(root: string, maxAge: number): void {
@@ -45,6 +49,9 @@ function refreshAccounts(root: string, maxAge: number): void {
 }
 
 const pathOf = (wt: string) => wtPath(wt) ?? wt;
+
+// This host's own scanned login folders: main's scan and a side host's both write `local` (U18).
+const LOCAL_FOLDERS: [string, Row][] = [["observed_account_folders", { host: "local" }]];
 
 // The last `n` bytes of a file.
 export function tailOf(p: string, n: number): string {
@@ -202,12 +209,26 @@ export function stateObserver(opts: StateOpts = {}): Observer {
       const imp = existsSync(o) ? parseOrcaImport(readFileSync(o, "utf8")) : null;
       if (imp) { mergeOrcaImport(store, imp, at); copyLoginIds(store); }
     }));
-    const d = join(store.root, "account-folders.tsv"), scope: [string, Row][] = [["observed_account_folders", {}]];
+    const d = join(store.root, "account-folders.tsv");
     store.tx(() => gate.run("account-folders.tsv", sig(d), () => {
       if (!existsSync(d)) return;
-      replace(store, parseAccountFolders(readFileSync(d, "utf8"), at), at, scope);
+      replace(store, parseAccountFolders(readFileSync(d, "utf8"), at), at, LOCAL_FOLDERS);
       copyLoginIds(store);
-    }, () => confirm(store, at, scope)));
+    }, () => confirm(store, at, LOCAL_FOLDERS)));
+    // Each login's folder per host, from the accounts rows and the folders side hosts sent up (U18).
+    syncAccountFolders(store, at);
+  }
+
+  // A side host's own login folders (U18): scanned here every DS_LOOP_ACCOUNTS_S, sent up the link as rows.
+  let scannedAt = -Infinity;
+  function sideFolders(store: Store, at: number) {
+    const maxAge = envInt("DS_LOOP_ACCOUNTS_S", 60);
+    if (at - scannedAt < maxAge) return;
+    scannedAt = at;
+    const lines = (opts.scanFolders ?? scanFolders)(process.env);
+    store.tx(() => gate.run("side-account-folders", lines.join("\n"),
+      () => replace(store, parseAccountFolders(lines.join("\n"), at), at, LOCAL_FOLDERS),
+      () => confirm(store, at, LOCAL_FOLDERS)));
   }
 
   // Lavish review pages: each belongs to the project whose member worktree holds its file, or whose
@@ -308,6 +329,7 @@ export function stateObserver(opts: StateOpts = {}): Observer {
     run(ctx: TickCtx) {
       const { store, now } = ctx;
       if (ctx.role === "side") {
+        sideFolders(store, now);
         for (const p of sideProjects(store)) transcripts(store, now, p);
         return;
       }

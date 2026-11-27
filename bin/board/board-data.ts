@@ -1147,7 +1147,7 @@ function accountList(db: Db) {
 // Each listed row's tag, folder, login and warnings (KTD12, KTD13), and the logged-in folders no listed row
 // has (`folder only`, one per login). A folder-only row is not an account: it goes in its own list.
 function accountPlaces(db: Db, list: { c: any; t: any }[]) {
-  const scanned = db.all("SELECT dir, agent, login_id FROM observed_account_folders WHERE logged_in = 1 ORDER BY dir") as { dir: string; agent: string; login_id: string | null }[];
+  const scanned = db.all("SELECT dir, agent, login_id FROM observed_account_folders WHERE host = 'local' AND logged_in = 1 ORDER BY dir") as { dir: string; agent: string; login_id: string | null }[];
   const loginOfDir = new Map(scanned.map((f) => [`${f.agent}\n${resolve(f.dir)}`, f.login_id]));
   const rows = list.map(({ c, t }) => {
     const r = { agent: String(c.agent), account: String(c.account), source: t?.source ?? null, orca_listed: !!t?.orca_listed, config_dir: t?.config_dir ?? null };

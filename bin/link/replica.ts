@@ -7,8 +7,8 @@
 // No table is in both lists (a test checks). Table and column names come from these lists and the local schema,
 // never from the wire: a wire row's other fields are ignored. Keys that are only unique on one machine are
 // rewritten at the boundary (drivers/contract.ts): a worktree id `local::<path>` goes up as `<host>::<path>` and
-// comes down the other way, a terminal handle goes up as `<host>:<handle>`, a transcript or rollout path as
-// `<host>::<path>`. Main's own observers write host `local` and scope their deletes to it (migration 0061).
+// comes down the other way, a terminal handle goes up as `<host>:<handle>`, a transcript, rollout or login folder
+// path as `<host>::<path>`. Main's own observers write host `local` and scope their deletes to it (migration 0061).
 // The side keeps what it last shipped in `link_shipped` (key → content hash), so a sync sends only changed rows and
 // the keys that went away; on a new link it ships everything and main drops that host's rows the batch lacks.
 // The `rows` channel (channels/rows.ts) answers on main; the side drives it with `RowSync.tick()`.
@@ -16,7 +16,7 @@ import type { Row, Store } from "../loop/core/store.ts";
 import { handleDown, handleUp, wtDown, wtUp } from "../loop/drivers/contract.ts";
 
 /** The newest migration that changed an up-table: the hello's `up_migration` (KTD15). */
-export const UP_MIGRATION = "0061-link-replica";
+export const UP_MIGRATION = "0062-account-folders-host";
 
 /** Down: main → side. `where` picks the host's rows on main. */
 export const DOWN: readonly string[] = ["projects", "squads", "members", "units", "worktrees", "config", "host_config"];
@@ -50,6 +50,8 @@ export const UP: readonly UpSpec[] = [
   { table: "observed_rollouts", key: ["path"], path: "path" },
   { table: "observed_chat", key: ["project", "wt"], wt: ["wt"] },
   { table: "observed_reviews", key: ["project", "squad", "slug"], unit: true },
+  // the side's own login folders (U18); main matches them to accounts by login id (capacity/accounts.ts)
+  { table: "observed_account_folders", key: ["dir"], path: "dir" },
 ];
 const UP_BY = new Map(UP.map((s) => [s.table, s]));
 
