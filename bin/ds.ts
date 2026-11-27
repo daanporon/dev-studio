@@ -105,9 +105,9 @@ const argv = process.argv.slice(2);
 // U8: a `split` command first reads what it needs from this worktree here and sends those facts along.
 const mainUrl = process.env.DS_MAIN_URL;
 if (mainUrl && !process.env.DS_LINK_FORWARDED && argv[0] && !["help", "--help", "-h"].includes(argv[0])) {
-  const { kindOf } = await import("./link/forward-table.ts");
+  const { kindFor } = await import("./link/forward-table.ts");
   const { parseMember } = await import("./loop/core/whoami.ts");
-  const kind = kindOf(parseMember(process.env.DS_MEMBER)?.role ?? "", argv[0]);
+  const kind = kindFor(parseMember(process.env.DS_MEMBER)?.role ?? "", argv);
   if (kind !== "local") {
     const { forwardDs } = await import("./link/relay.ts");
     const facts = kind === "split" ? await (await import("./link/split.ts")).gather(argv[0], argv.slice(1)) : undefined;

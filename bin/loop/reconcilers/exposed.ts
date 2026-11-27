@@ -19,8 +19,13 @@
 //     group already stopped after it was registered, is `skipped`; each other group is one `expose.stop`
 //     action (fulfil/expose-stop.ts), subject and episode `expose-stop:<lowest id>`,
 //   - raises one Studio alert per failed, timed-out or lost group, unless every entry ended `down` and none of its ports listens.
+// side-loop-host u8b, an owner on a side host: main cannot look at its folder, so `worktree-removed` comes from main's
+// `worktrees (host, path)` row (gone_at), never existsSync. Its group's action names the host (the fulfiller runs it
+// there as a host job); while the host is unreachable the group is held (no action), and once the host is gone or
+// fenced, or the owner was moved off it, its rows settle `lost` with the reason. Never run on main.
 import { existsSync } from "node:fs";
-import { endExposed, queueLateStops, settleStops, squadEnd, stopGroups, STOP_FAILED, type GoneWhy } from "../squad/exposed.ts";
+import { endExposed, ownerHost, queueLateStops, settleStops, sideStopGate, sideTreeGone, squadEnd, stopGroups, STOP_FAILED, type GoneWhy } from "../squad/exposed.ts";
+import { onSide } from "../squad/backend.ts";
 import { limitInt } from "../settings/limits.ts";
 import { wtPath } from "../observers/orca.ts";
 import { alertAction } from "./alerts.ts";
@@ -49,8 +54,8 @@ export function goneWhy(store: Store, e: Row, now: number, downMin: number): Gon
   const wt = String(e.owner_wt ?? "");
   if (e.scope === "member" && wt) {
     if (ownerGone(store, e)) return "owner-gone";
-    const p = pathOf(wt);
-    if (p && !existsSync(p)) return "worktree-removed";
+    const p = pathOf(wt), host = ownerHost(store, String(e.project), wt);
+    if (p && (onSide(host) ? sideTreeGone(store, host, p) : !existsSync(p))) return "worktree-removed";
   }
   // A re-expose (same row, new url or note) restarts the down timer: the old URL's down run does not count.
   if (e.status === "down" && e.down_since != null && now - Math.max(Number(e.down_since), Number(e.updated_at ?? 0)) >= downMin * 60) return "down";
@@ -115,7 +120,7 @@ function alerts(store: Store, project: string): Action[] {
     const group = rows.filter((x) => ids.includes(Number(x.id)));
     if (settledDown(store, project, group)) continue;
     const names = group.map((x) => `'${x.name}'`);
-    const how = r.stop_state === "lost" ? "was lost (the loop stopped while it ran; it is not run again)"
+    const how = r.stop_state === "lost" ? (res.why ? `was lost (${res.why}; it is not run again)` : "was lost (the loop stopped while it ran; it is not run again)")
       : r.stop_state === "timeout" ? `timed out after ${Math.round(Number(res.ms ?? 0) / 1000)} s`
       : `failed with exit code ${res.code ?? "?"}`;
     const text = `The stop command of exposed ${names.join(", ")} (${ownerName(r)} in squad ${r.squad}) ${how}: \`${redact(String(r.stop_cmd))}\`. `
@@ -149,11 +154,22 @@ const exposed: Reconciler = {
 
     const { run, skip } = stopGroups(store, project);
     for (const k of skip) settleStops(store, k.ids, "queued", "skipped", { ids: k.ids, skipped: k.why }, now);
-    const out: Action[] = run.map((g) => {
+    const out: Action[] = [];
+    for (const g of run) {
       const low = Math.min(...g.ids), cwd = g.owner_wt ? pathOf(g.owner_wt) : null;
-      return { project, squad: g.squad, subject: `expose-stop:${low}`, kind: "expose.stop", episode: `expose-stop:${low}`,
-        payload: { ids: g.ids, cmd: g.cmd, ...(cwd ? { cwd } : {}) } };
-    });
+      const host = ownerHost(store, project, g.owner_wt), side = onSide(host);
+      if (side) {
+        const gate = sideStopGate(store, project, g.owner_wt, host);
+        if ("hold" in gate) continue;
+        if ("lost" in gate) {
+          const ids = settleStops(store, g.ids, "queued", "lost", { ids: g.ids, why: gate.lost, host }, now);
+          if (ids.length) store.event("expose_stop", { project, squad: g.squad, payload: { ids, state: "lost", host, why: gate.lost } });
+          continue;
+        }
+      }
+      out.push({ project, squad: g.squad, subject: `expose-stop:${low}`, kind: "expose.stop", episode: `expose-stop:${low}`,
+        payload: { ids: g.ids, cmd: g.cmd, ...(cwd ? { cwd } : {}), ...(side ? { host } : {}) } });
+    }
     return [...out, ...alerts(store, project)];
   },
 };

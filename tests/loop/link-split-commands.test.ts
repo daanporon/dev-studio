@@ -1,18 +1,18 @@
 // link-split-commands.test.ts — side-loop-host U8 (issue #127, KTD6): the worker commands with a local half. On a
 // side host `bin/ds` gathers the worktree facts a split command needs (finish-unit-ts, watch-ts), main checks them
 // and runs the command with them and the member row's worktree id; expose, unexpose and the rest forward as rows;
-// the review, the contract adapter and the agent hooks stay on the side host. An expose --stop from a side host is
-// refused (its host job is u8b). The walk test reads the worker role files and fails on a command they call that
+// the review, the contract adapter and the agent hooks stay on the side host. u8b: an expose --stop from a side host
+// is accepted (its stop runs there as a host job, expose-stop.test.ts) and the picker hook is split by mode. The walk test reads the worker role files and fails on a command they call that
 // the forward table does not classify.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { open, type Row, type Store } from "../../bin/loop/core/store.ts";
 import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
-import { checkCall, EXIT, kindOf, TABLE, WORKER_ROLES } from "../../bin/link/forward-table.ts";
+import { checkCall, EXIT, kindFor, kindOf, TABLE, WORKER_ROLES } from "../../bin/link/forward-table.ts";
 import { checkFacts, finishFacts, gather, SPLIT_COMMANDS } from "../../bin/link/split.ts";
 import { mainUrlFor, startRelay, type Relay } from "../../bin/link/relay.ts";
 import { toplevel } from "../../bin/loop/squad/exposed.ts";
@@ -23,7 +23,8 @@ const DS = join(ROOT, "bin", "ds.ts");
 const saved: Record<string, string | undefined> = {};
 const ENV = { DS_LINK_PING_MS: "150", DS_LINK_DEAD_MS: "600", DS_LINK_BIND_ANY: undefined, DS_NOW: undefined, DS_LINK_RESEND_MS: undefined,
   DS_MEMBER: undefined, DS_GEN: undefined, DS_WT: undefined, DS_MAIN_URL: undefined, DS_BACKEND: undefined, DS_STATE_ROOT: undefined,
-  DS_LINK_FORWARDED: undefined, DS_LINK_WT: undefined, DS_LINK_FACTS: undefined };
+  DS_LINK_FORWARDED: undefined, DS_LINK_WT: undefined, DS_LINK_FACTS: undefined,
+  DS_ROOT: undefined };  // main's forwarded run must use this checkout's bin, not a role terminal's DS_ROOT
 beforeAll(() => { for (const [k, v] of Object.entries(ENV)) { saved[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
 afterAll(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
 
@@ -58,9 +59,7 @@ const NOT_CALLED: Record<string, string> = {
 };
 // The commands the worker's own agent runs without naming them in its role file: the hooks a role worktree is armed
 // with, the contract adapter its backend calls and the start-hook gate.
-const HOOKS = ["no-broad-kill-hook-ts", "rewake-hook-ts", "contract-backend", "hook-gate"];
-// Commands the table leaves out on purpose until their own unit lands.
-const PENDING: Record<string, string> = { "picker-hook-ts": "u8b-side-expose-stop-and-picker" };
+const HOOKS = ["no-broad-kill-hook-ts", "rewake-hook-ts", "contract-backend", "hook-gate", "picker-hook-ts"];
 
 /** The ds command a bin script execs (`"$ROOT/bin/ds" <cmd>`), or null when it does not go through bin/ds. */
 function dsCommandOf(script: string): string | null {
@@ -114,8 +113,13 @@ describe("the walk test", () => {
     expect(unclassified("builder", f)).toEqual(expect.arrayContaining(["ds brand-new-thing"]));
   });
 
-  test("a pending command is not in the table yet, and every split command has a facts check", () => {
-    for (const cmd of Object.keys(PENDING)) for (const role of WORKER_ROLES) expect(kindOf(role, cmd)).toBeNull();
+  test("every split command has a facts check; the picker hook's class follows its mode", () => {
+    for (const role of WORKER_ROLES) {
+      for (const m of ["pre", "permission"]) expect(kindFor(role, ["picker-hook-ts", m, "/s"])).toBe("local");
+      for (const m of ["post", "pre-async", "permission-async"]) expect(kindFor(role, ["picker-hook-ts", m, "/s"])).toBe("split");
+      expect(kindFor(role, ["picker-hook-ts", "nope"])).toBeNull();
+      expect(kindFor(role, ["msg", "inbox"])).toBe("forward");
+    }
     const split = new Set(WORKER_ROLES.flatMap((r) => Object.entries(TABLE[r]).filter(([, k]) => k === "split").map(([c]) => c)));
     expect([...split].sort()).toEqual([...SPLIT_COMMANDS].sort());
     expect(kindOf("builder", "finish-unit-ts")).toBe("split");
@@ -179,20 +183,37 @@ describe("main's checks of a split or newly forwarded call", () => {
     expect(call(s, ["watch-ts", "--worktree", "--requests", "realp"], facts)).toMatchObject({ ok: false });
   });
 
-  test("expose, unexpose and exposed stay in the member's squad; expose --stop is refused (u8b)", () => {
+  test("expose, unexpose and exposed stay in the member's squad; expose --stop is accepted (u8b: it runs on the side host)", () => {
     const s = store();
     expect(call(s, ["expose", "dev", "http://localhost:3000", "--note", "--squad", "--self"])).toMatchObject({ ok: true });
     expect(call(s, ["expose", "dev", "http://localhost:3000", "--squad"])).toMatchObject({ ok: true });
     expect(call(s, ["expose", "dev", "http://x", "--project", "realp", "--topic", "sq"])).toMatchObject({ ok: true });
     expect(call(s, ["expose", "dev", "http://x", "--project", "realp", "--topic", "other"])).toMatchObject({ ok: false });
-    const stop = call(s, ["expose", "dev", "http://x", "--stop", "kill 1"]);
-    expect(stop).toMatchObject({ ok: false, code: EXIT.refused });
-    expect(!stop.ok && stop.why).toContain("never on main");
-    expect(call(s, ["expose", "dev", "http://x", "--stop=kill 1"])).toMatchObject({ ok: false });
+    expect(call(s, ["expose", "dev", "http://x", "--stop", "make down"])).toMatchObject({ ok: true });
+    expect(call(s, ["expose", "dev", "http://x", "--stop=make down", "--topic", "other"])).toMatchObject({ ok: false });
     expect(call(s, ["unexpose", "dev", "--owner", "builder/u1"])).toMatchObject({ ok: true });
     expect(call(s, ["unexpose", "dev", "--topic", "other"])).toMatchObject({ ok: false });
     expect(call(s, ["exposed"])).toMatchObject({ ok: true, argv: ["exposed", "--project", "realp"] });
     expect(call(s, ["exposed", "--project", "otherp"])).toMatchObject({ ok: false });
+  });
+
+  test("the picker hook runs on main's state file as the member itself, with its worktree id and no input path (u8b)", () => {
+    const s = store(), st = "/s/realp/squads/sq.json", post = { mode: "post", tid: "toolu_1", answer: "Yes" };
+    const c = call(s, ["picker-hook-ts", "post", st, "builder-u1", "local::/w/b1"], post);
+    expect(c).toMatchObject({ ok: true, argv: ["picker-hook-ts", "post", join(s.root, "realp", "squads", "sq.json"), "builder-u1", "s1::/w/b1"] });
+    const pre = { mode: "pre-async", ok: true, hook: { tool_name: "AskUserQuestion" } };
+    expect(call(s, ["picker-hook-ts", "pre-async", st, "builder-u1", "x", "/tmp/ds-picker-pre.abc"], pre))
+      .toMatchObject({ ok: true, argv: ["picker-hook-ts", "pre-async", join(s.root, "realp", "squads", "sq.json"), "builder-u1", "s1::/w/b1"] });
+    const perm = { mode: "permission-async", tool: "Bash", agent_id: "", agent_type: "", cwd: "/w/b1", tpath: "", found: "", shown: "ls", answerable: false };
+    expect(call(s, ["picker-hook-ts", "permission-async", st, "builder-u1", "x", "/tmp/f"], perm)).toMatchObject({ ok: true });
+    for (const [argv, facts] of [
+      [["picker-hook-ts", "post", st, "tester", "x"], post],                         // another member
+      [["picker-hook-ts", "post", "/s/realp/squads/other.json", "builder-u1", "x"], post],
+      [["picker-hook-ts", "pre-async", st, "builder-u1", "x"], post],                // facts of another mode
+      [["picker-hook-ts", "post", st, "builder-u1", "x"], { ...post, tid: 7 }],
+      [["picker-hook-ts", "permission-async", st, "builder-u1", "x"], { ...perm, answerable: "yes" }],
+      [["picker-hook-ts", "pre", st, "builder-u1", "x"], undefined],                 // the detaching half stays on the side
+    ] as [string[], unknown][]) expect({ argv, r: call(s, argv, facts) }).toMatchObject({ argv, r: { ok: false } });
   });
 
   test("reload, the pause checkpoint, ship-mode and orch.sh only name the member itself", () => {
@@ -272,6 +293,14 @@ describe("the local half", () => {
     expect(checkFacts("watch-ts", ["changed"])).not.toBeNull();
     expect(checkFacts("msg", {})).not.toBeNull();
     expect(checkFacts("finish-unit-ts", { ...FACTS, junk: "x".repeat(20_000) })).toContain("too big");
+    // A picker's tool_use_id names a file in main's picker-done folder: a path in it is refused (u8b review).
+    expect(checkFacts("picker-hook-ts", { mode: "post", tid: "toolu_01abc", answer: "a" })).toBeNull();
+    expect(checkFacts("picker-hook-ts", { mode: "post", tid: "x/../../evil", answer: "a" })).toContain("tool_use_id");
+    expect(checkFacts("picker-hook-ts", { mode: "pre-async", ok: true, hook: { tool_use_id: "a/../b" } })).toContain("tool_use_id");
+    expect(checkFacts("picker-hook-ts", { mode: "pre-async", ok: true, hook: { tool_use_id: "toolu_1" } })).toBeNull();
+    const perm = { mode: "permission-async", tool: "Bash", agent_id: "", agent_type: "", cwd: "/w", tpath: "", shown: "", answerable: false };
+    expect(checkFacts("picker-hook-ts", { ...perm, found: "" })).toBeNull();
+    expect(checkFacts("picker-hook-ts", { ...perm, found: "../x" })).toContain("tool_use_id");
   });
 
   test("inside a forwarded call toplevel() is the member row's worktree id, and senderAt matches it exactly", () => {
@@ -315,11 +344,11 @@ async function sideUp(m: Main): Promise<{ root: string }> {
 }
 type Out = { code: number; stdout: string; stderr: string };
 /** `bin/ds argv` on the side host, in the Builder's worktree `cwd`, as builder-u1 (gen g1). */
-async function onSide(side: { root: string }, cwd: string, argv: string[], extra: Record<string, string> = {}): Promise<Out> {
+async function onSide(side: { root: string }, cwd: string, argv: string[], extra: Record<string, string> = {}, stdin?: string): Promise<Out> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(DS_|ORCA_)/.test(k) && k !== "CLAUDE_PROJECT_DIR") env[k] = v;
   Object.assign(env, { DS_MAIN_URL: mainUrlFor(side.root), DS_MEMBER: B1, DS_GEN: "g1", DS_STATE_ROOT: side.root, ...extra });
-  const p = Bun.spawn([process.execPath, DS, ...argv], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawn([process.execPath, DS, ...argv], { cwd, env, stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { code, stdout, stderr };
 }
@@ -342,7 +371,7 @@ describe("on a side host", () => {
     expect(all(m.store, "SELECT 1 FROM finishes").length).toBe(1);
   }, 30_000);
 
-  test("expose writes main's row owned by the side member; --stop is refused and writes none; unexpose ends it", async () => {
+  test("expose writes main's row owned by the side member, --stop included (u8b); unexpose ends it", async () => {
     const w = await worktree(false);
     const m = await mainUp(`s1::${w.dir}`), side = await sideUp(m);
     const e = await onSide(side, w.dir, ["expose", "dev", "http://localhost:3000", "--note", "preview"]);
@@ -350,10 +379,32 @@ describe("on a side host", () => {
     expect(all(m.store, "SELECT name, owner_wt, role, suffix FROM exposed WHERE gone_at IS NULL")).toEqual([
       { name: "dev", owner_wt: `s1::${w.dir}`, role: "builder", suffix: "u1" }]);
     const s = await onSide(side, w.dir, ["expose", "web", "http://localhost:4000", "--stop", "echo stop"]);
-    expect(s.code).toBe(EXIT.refused);
-    expect(all(m.store, "SELECT 1 FROM exposed WHERE name = 'web'")).toEqual([]);
+    expect(s).toMatchObject({ code: 0 });
+    expect(all(m.store, "SELECT owner_wt, stop_cmd FROM exposed WHERE name = 'web'")).toEqual([{ owner_wt: `s1::${w.dir}`, stop_cmd: "echo stop" }]);
     expect(await onSide(side, w.dir, ["unexpose", "dev"])).toMatchObject({ code: 0 });
+    expect(await onSide(side, w.dir, ["unexpose", "web"])).toMatchObject({ code: 0 });
     expect(all(m.store, "SELECT 1 FROM exposed WHERE gone_at IS NULL")).toEqual([]);
+  }, 30_000);
+
+  test("a side member's picker lands on main's board with its worktree id and clears on the answer (u8b)", async () => {
+    const w = await worktree(false);
+    const m = await mainUp(`s1::${w.dir}`), side = await sideUp(m);
+    const st = join(side.root, "realp", "squads", "sq.json"), mainSt = join(m.root, "realp", "squads", "sq.json");
+    // ask-operator only queues on a live squad's state file (one with a Run).
+    writeFileSync(mainSt, JSON.stringify({ ...JSON.parse(readFileSync(mainSt, "utf8")), run_id: "run_1" }));
+    const hook = join(side.root, "hook.json");
+    writeFileSync(hook, JSON.stringify({ tool_name: "AskUserQuestion", tool_use_id: "toolu_abcdefgh12345678", transcript_path: join(w.dir, "t.jsonl"),
+      tool_input: { questions: [{ header: "Pick", question: "Which way?", multiSelect: false, options: [{ label: "Left", description: "go left" }, { label: "Right", description: "go right" }] }] } }));
+    const pre = await onSide(side, w.dir, ["picker-hook-ts", "pre-async", st, "builder-u1", `local::${w.dir}`, hook]);
+    expect(pre).toMatchObject({ code: 0 });
+    expect(existsSync(hook)).toBe(false);   // read and removed on the side; main never had its path
+    const q = (JSON.parse(readFileSync(mainSt, "utf8")).waiting_on_you ?? []) as Row[];
+    expect(q).toEqual([expect.objectContaining({ id: "picker-12345678", source: "picker", card_wt: `s1::${w.dir}`, asker: "builder-u1", transcript_path: "(none)" })]);
+    const post = await onSide(side, w.dir, ["picker-hook-ts", "post", st, "builder-u1", `local::${w.dir}`], {},
+      JSON.stringify({ tool_use_id: "toolu_abcdefgh12345678", tool_response: { answers: { "Which way?": "Left" } } }));
+    expect(post).toMatchObject({ code: 0 });
+    const after = JSON.parse(readFileSync(mainSt, "utf8"));
+    expect(((after.waiting_on_you ?? []) as Row[]).filter((x) => x.id === "picker-12345678")).toEqual([]);
   }, 30_000);
 
   test("watch.sh --worktree reads main's rows for the member and the side's instructions state", async () => {

@@ -6,6 +6,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { ROOT, backendPath, chomp, readJson, run as runCmd, writeErr, writeOut } from "../lib/shared";
 import { prHealthLine } from "../lib/lib";
 import { squadContract } from "../lib/contract-roles.ts";
+import { linkWt } from "../link/split.ts";
 import { alt, interp, truthy } from "./watch-ts";
 import { LABEL_FORM, PLAIN_HEADING, PLAIN_LABELS, REVISION_LABELS, approvedCopyPath, planRevisions, plainSection } from "../lib/plan-plain";
 
@@ -257,8 +258,10 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  const cur = await runCmd([BACKEND, "current"]);
-  const wt = chomp(cur.out);
+  // side-loop-host u8b: a side member's picker hook runs this on main (picker-hook-ts, a split call), where the
+  // backend's `current` would name main's view of the side path: the card is the member row's `<host>::<path>` id.
+  const linked = linkWt();
+  const wt = linked ?? chomp((await runCmd([BACKEND, "current"])).out);
   // Only a BLOCKING question stops the squad; a non-blocking one (a follow-up to file) just queues.
   if (BLOCKING === "true") { const rc = await ss([STATE, "set-status", "waiting-on-you"]); if (rc !== 0) return rc; }
   let picker: Record<string, any> = {};
@@ -290,7 +293,8 @@ async function main(argv: string[]): Promise<number> {
   if (others.length) writeOut(`ALSO OPEN on this squad — if this question replaces one, resolve that one now (${SS} ${STATE} resolve-question <id>); next time re-ask under its id instead:\n${others.join("\n")}\n`);
 
   let rc = 0;
-  if (!wt || (await runCmd([BACKEND, "ping", wt, `NEEDS YOU: ${HEAD}`])).rc !== 0) {
+  // A side member's terminal has no card on main to note: the board entry is the whole signal.
+  if (!linked && (!wt || (await runCmd([BACKEND, "ping", wt, `NEEDS YOU: ${HEAD}`])).rc !== 0)) {
     writeErr(`ask-operator: on the board but NOT pinged (no card note on ${wt || "your worktree"}) — say so in your reply\n`);
     rc = 3;
   }
