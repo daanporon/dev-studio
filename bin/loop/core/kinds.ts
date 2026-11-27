@@ -25,7 +25,7 @@ export const RESTART_MODES = ["now", "idle"] as const;
 export const WISH_PAYLOADS = {
   squad: obj({ from: opt(str), id: opt(num), backend: opt(str), backend_host: opt(str), worktree_provider: opt(str) }),   // backend…: U9, chosen once at spawn
   member: obj({ why: opt(str), prompt: opt(str), agent: opt(str), model: opt(str), effort: opt(str), account: opt(str), ctx: opt(num),
-    request: opt(bool), unit: opt(str), spec: opt(str), pauseResume: opt(str) }),
+    request: opt(bool), unit: opt(str), spec: opt(str), pauseResume: opt(str), main_only: opt(bool) }),
   service: obj({ bind: opt(str), hosts: opt(str) }),
 } as const;
 export type WishPayload<S extends keyof typeof WISH_PAYLOADS> = Val<(typeof WISH_PAYLOADS)[S]>;
@@ -73,6 +73,8 @@ export const REQUESTS = {
   // side-loop-host U17 (fulfil/host.ts): the board's Hosts actions.
   "host-member": obj({ host: str, action: str, fingerprint: opt(str), by: opt(str), ...THROUGH }),
   "host-key": obj({ host: str, key: str, value: opt(str), by: opt(str), ...THROUGH }),
+  // side-loop-host U16 (fulfil/member-move.ts): the board's "Move to main" on one side member (`id`: its row).
+  "member-move": obj({ id: num, ...THROUGH }),
   merge: MERGE,
   "notify-squads": replay,
   override: obj({ model: opt(str), effort: opt(str), plan: opt(str), account: opt(str), clear: opt(bool), scope: opt(str), role: opt(str) }),
@@ -205,6 +207,8 @@ export const FACTS = {
   // `fenced` (link/server.ts): the host said on reconnect when it fenced itself.
   host_fenced: obj({ name: str, since: num, members: arr(str), units: arr(str) }),
   member_host_fenced: obj({ id: num, host: str, role: str, suffix: str, unit: opt(str) }),
+  member_moved: obj({ id: num, host: str, role: str, suffix: str, unit: opt(str) }),
+  host_drain_set: obj({ name: str, drain: num, by: str }),
   host_returned: obj({ name: str, fenced_at: num }),
   host_reported_fence: obj({ name: str, fenced_at: num }),
   limit_cleared: ep,

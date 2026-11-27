@@ -67,20 +67,24 @@ export async function lookups(store: Store, host: string, members: Row[]): Promi
 
 const iso = (at: number) => new Date(at * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-function keepLine(store: Store, m: Row, slug: string, host: string, attempt: number, l: Lookup, base: Lookup | null, at: number): void {
+function keepLine(store: Store, m: Row, slug: string, host: string, attempt: number, l: Lookup, base: Lookup | null, at: number, moved: boolean): void {
   // The unit's journal (`journal.sh <project> <squad> builder-<slug>`), which a fresh Builder on it reads first.
   const file = journalPath(store, { project: String(m.project), squad: String(m.squad), role: "builder", suffix: slug });
   mkdirSync(dirname(file), { recursive: true });
   const next = `${wtName({ ...(m as unknown as Member), suffix: String(m.suffix ?? "") })}-r${attempt}`;
-  const lost = `host ${host} was lost; this unit moved to attempt ${attempt} on branch ${next}`;
+  const how = moved ? `the operator moved this member from host ${host} to main` : `host ${host} was lost`;
+  const lost = `${how}; this unit moved to attempt ${attempt} on branch ${next}`;
   const what = l.branch && l.sha ? `${lost}, started from the old branch ${l.branch} at its last pushed commit ${l.sha}`
     : base?.branch && base.sha ? `${lost}, started from ${base.branch} at ${base.sha}: the old branch ${l.branch ?? "(none)"} was never pushed`
     : `${lost}, started from HEAD: the old branch ${l.branch ?? "(none)"} was never pushed`;
-  appendFileSync(file, `- ${iso(at)} [keep] ${what} — work after that push stayed on ${host}; this journal may be behind it\n`);
+  const tail = moved ? `its old worktree stays on ${host}` : `work after that push stayed on ${host}; this journal may be behind it`;
+  appendFileSync(file, `- ${iso(at)} [keep] ${what} — ${tail}\n`);
 }
 
-/** End member `m` of lost host `host`, move its unit on, and wish its slot running again (when it was wished running). */
-export function requeue(store: Store, host: string, m: Row, l: Lookup | undefined, at: number): Requeued {
+/** End member `m` of lost host `host`, move its unit on, and wish its slot running again (when it was wished running).
+ *  `moved` (U16, fulfil/member-move.ts): the operator moves it to main, its branch pushed and its terminals already
+ *  closed: the new row is wished `main_only`, no `fenced_at` is left for the host's return, and `retry_host` is empty. */
+export function requeue(store: Store, host: string, m: Row, l: Lookup | undefined, at: number, moved = false): Requeued {
   const project = String(m.project), squad = String(m.squad), role = String(m.role), suffix = String(m.suffix ?? "");
   const u = unitOf(store, m), slug = u ? String(u.slug) : null;
   let attempt: number | null = null, base: Lookup | null = null;
@@ -88,8 +92,10 @@ export function requeue(store: Store, host: string, m: Row, l: Lookup | undefine
   let old: Record<string, unknown> = {};
   try { old = JSON.parse(String(m.want_payload ?? "{}")) ?? {}; } catch { /* a torn payload: start plain */ }
   store.tx(() => {
-    store.want("member", String(m.id), "gone", { by: "loop", why: `host ${host} fenced` });
-    store.fact("member_host_fenced", [{ table: "members", key: { id: m.id }, set: { status: "gone", fenced_at: at, updated_at: at } }],
+    const why = moved ? `moved from host ${host} to main` : `host ${host} fenced`;
+    store.want("member", String(m.id), "gone", { by: "loop", why });
+    store.fact(moved ? "member_moved" : "member_host_fenced",
+      [{ table: "members", key: { id: m.id }, set: { status: "gone", ...(moved ? {} : { fenced_at: at }), updated_at: at } }],
       { project, squad, member: `${role}/${suffix}`, ...(slug ? { unit: slug } : {}), payload: { id: Number(m.id), host, role, suffix, unit: slug } });
     if (u && again) {
       attempt = Number(u.attempt ?? 1) + 1;
@@ -97,17 +103,17 @@ export function requeue(store: Store, host: string, m: Row, l: Lookup | undefine
       const pushed = l?.branch && l.sha ? l : u.retry_from && u.retry_sha ? { branch: String(u.retry_from), sha: String(u.retry_sha) } : null;
       base = pushed;
       store.db.run("UPDATE units SET attempt = ?, retry_from = ?, retry_sha = ?, retry_host = ?, retry_pr = COALESCE(pr, retry_pr) WHERE id = ?",
-        [attempt, pushed?.branch ?? null, pushed?.sha ?? null, host, u.id as number]);
+        [attempt, pushed?.branch ?? null, pushed?.sha ?? null, moved ? null : host, u.id as number]);
     }
     if (!again) return;
-    const payload = { why: "start", request: true, ...pick(old, ["prompt", "spec", "agent", "model", "effort", "account", "ctx"]), ...(slug ? { unit: slug } : {}) };
-    const wanted = store.want("member", `${project}/${squad}/${role}/${suffix}`, "running", { payload, by: "loop", why: `host ${host} fenced` }).row;
+    const payload = { why: "start", request: true, ...pick(old, ["prompt", "spec", "agent", "model", "effort", "account", "ctx"]), ...(slug ? { unit: slug } : {}), ...(moved ? { main_only: true } : {}) };
+    const wanted = store.want("member", `${project}/${squad}/${role}/${suffix}`, "running", { payload, by: "loop", why }).row;
     store.db.run("DELETE FROM picks WHERE member = ?", [wanted.id as number]);
     store.fact("member_requested", [{ table: "members", key: { id: wanted.id }, set: {
       phase: m.phase ?? null, ...(m.tier ? { tier: m.tier } : {}), status: "wanted", updated_at: at,
     } }], { project, squad, member: `${role}/${suffix}`, payload: { id: Number(wanted.id), role, suffix, ...(slug ? { unit: slug } : {}), by: "loop" } });
   });
-  if (u && again && attempt) keepLine(store, m, slug!, host, attempt, l ?? { branch: null, sha: null }, base, at);
+  if (u && again && attempt) keepLine(store, m, slug!, host, attempt, l ?? { branch: null, sha: null }, base, at, moved);
   return { id: Number(m.id), role, suffix, unit: slug, attempt, branch: l?.branch ?? null, sha: l?.sha ?? null };
 }
 

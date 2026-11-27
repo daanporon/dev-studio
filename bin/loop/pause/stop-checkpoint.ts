@@ -6,6 +6,7 @@
 //   fallback (moving back up, row `up`)   yes
 //   pin (the operator's model/account)    yes
 //   account (its account switched off)    yes (provider-billing-fallback U5)
+//   move (to main, side-loop-host U16)    yes (the act after it is `move`, not `stop`)
 //   rss (over restart_rss_gb)             yes
 //   restart mode now, hung, phase, limit  no — they go ahead as before
 //
@@ -28,13 +29,14 @@ import { ROOT, type Row, type Store } from "../core/store.ts";
 import type { Switch } from "../capacity/switches.ts";
 import { wake } from "./wake.ts";
 
-export type Owed = { why: "restart" | "rss" | "fallback" | "pin" | "account"; key: string };
-type StopFacts = { stopDue?: "now" | "idle" | null; stopWhy?: string; switchStop?: Switch | null };
+export type Owed = { why: "restart" | "rss" | "fallback" | "pin" | "account" | "move"; key: string };
+type StopFacts = { stopDue?: "now" | "idle" | null; stopWhy?: string; switchStop?: Switch | null; move?: number | null };
 
 // The stop this member owes a checkpoint for, in compare()'s order: an idle stop (restart, rss) wins
 // over a switch, a `now` stop has none. The key names the stop, not the tick: it stays the same until
 // the stop has acted (a fallback's rung pair may change between picks; its window marker does not).
 export function owed(store: Store, m: Row, f: StopFacts): Owed | null {
+  if (f.move) return { why: "move", key: `move:${f.move}` };
   if (f.stopDue === "now") return null;
   if (f.stopDue === "idle" && f.stopWhy === "restart") return { why: "restart", key: `restart:${Number(m.restart_at ?? 0)}` };
   if (f.stopDue === "idle" && f.stopWhy === "rss")
@@ -75,13 +77,18 @@ const WHY: Record<Owed["why"], string> = {
   fallback: "to move it back up to a better model",
   pin: "to move it onto the model or account the operator pinned",
   account: "to move it off an account the operator switched off",
+  move: "the operator moves it from its side host to main",
 };
 
 export function askText(store: Store, m: Row, why: Owed["why"], generation: string): string {
   const command = `DS_STATE_ROOT=${quote(store.root)} ${[`${ROOT}/bin/role/pause-checkpoint.sh`, String(m.project), String(m.squad), String(m.role), String(m.suffix || "-"), generation,
     "<progress; unfinished work; decisions; test results; branch and PR/CI reference; next step>"].map(quote).join(" ")} --commands-finished`;
+  // U16: a move starts the next Builder from the branch as pushed, so only commits go with it.
+  const commit = why === "move" && m.role === "builder"
+    ? "First commit your work (a WIP commit is fine): only commits move to main, and uncommitted files stop the move. " : "";
   return `dev-studio stop checkpoint: the loop will restart this session (${WHY[why]}), generation ${generation}, role ${m.role}${m.suffix ? `-${m.suffix}` : ""}. ` +
     "Finish the current step without starting another feature, review or repair cycle, and wait for the local commands you own to finish. " +
+    commit +
     `Write your checkpoint to ${journalPath(store, target(m))} with ONLY: ${command}. This is not worker_done. ` +
     "Then stop at your prompt: the loop restarts you once you are idle, and your next session reads this checkpoint in its journal briefing.";
 }

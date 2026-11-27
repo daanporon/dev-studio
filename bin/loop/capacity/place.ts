@@ -22,7 +22,9 @@
 // Moving: only a member with no worktree yet may be placed. One whose row names a side host stays there (pinned)
 // unless that host came from the loop's own earlier pick (picks.host = members.host): `ds request --host` (U10)
 // deletes the picks row, so an operator's or a test's host is never moved. A pinned side member is outside main's
-// max_builders (slot.ts) and is braked by its own host (pick.ts hostBrake).
+// max_builders (slot.ts) and is braked by its own host (pick.ts hostBrake). A draining host (`ds host drain`, U16)
+// takes no new placement, and a start pinned there with no worktree yet waits; a member with a worktree there restarts.
+// A member the operator moved to main (`main_only`) is never placed.
 import type { Row, Store } from "../core/store.ts";
 import { hostLine } from "../../lib/host-settings.ts";
 import { SIDE_DEFAULTS } from "../settings/host-settings.ts";
@@ -115,11 +117,16 @@ const loopPlaced = (store: Store, m: Row): boolean => {
   return !!p && onSide(p.host) && String(p.host) === String(m.host);
 };
 
+/** Wished `main_only`: the operator moved it to main (U16), so it is not placed on a side host again. */
+const mainOnly = (m: Row): boolean => {
+  try { return JSON.parse(String(m.want_payload ?? "{}"))?.main_only === true; } catch { return false; }
+};
+
 /** May this member's start be placed (on main or a side host)? A worker with no worktree yet that no forced host pins. */
 export function movable(store: Store, m: Row | null, role: string): boolean {
   if (!placedRole(m?.role ?? role)) return false;
   if (!m) return true;
-  if (m.wt) return false;
+  if (m.wt || mainOnly(m)) return false;
   return !onSide(m.host) || loopPlaced(store, m);
 }
 

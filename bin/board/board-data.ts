@@ -1025,9 +1025,21 @@ const memberRows = (db: Db) => db.memo("member_rows", () => {
 const memberRow = (db: Db, project: string, squad: string, m: any): Row | undefined =>
   (m.wt && memberRows(db).get(String(m.wt))) || memberRows(db).get(`${project}/${squad}/${m.role ?? ""}/${m.suffix ?? ""}`);
 // U17: `{host}` for a member that runs on a side host, nothing for one on main.
+// U16: `move` is its newest "Move to main" request while it waits ({pending}) or after it failed ({error}).
+const moveRows = (db: Db) => db.memo("member_moves", () => new Map<number, Row>(
+  db.all("SELECT json_extract(payload, '$.id') AS member_id, done_at, result FROM requests WHERE kind = 'member-move' ORDER BY id")
+    .map((r) => [Number(r.member_id), r])));
+function moveState(r: Row | undefined): { pending: true } | { error: string } | null {
+  if (!r) return null;
+  if (r.done_at == null) return { pending: true };
+  const res = parse(r.result);
+  return res?.ok === false ? { error: String(res.error ?? "it failed") } : null;
+}
 const sideChip = (db: Db, project: string, squad: string, m: any) => {
-  const host = memberRow(db, project, squad, m)?.host;
-  return onSide(host) ? { host: String(host) } : {};
+  const row = memberRow(db, project, squad, m), host = row?.host;
+  if (!onSide(host)) return {};
+  const move = moveState(moveRows(db).get(Number(row!.id)));
+  return { host: String(host), ...(move ? { move } : {}) };
 };
 function wishOf(db: Db, project: string, squad: string, m: any): { state: string | null; own: string | null; pending: Pending[] } | null {
   const r = memberRow(db, project, squad, m);

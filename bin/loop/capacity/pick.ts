@@ -138,7 +138,11 @@ function wholeRow(store: Store, project: string, key: string): number | null {
 // A member pinned to a side host (side-loop-host U11, KTD16) is braked by that host: its own brake (default on), its own sample.
 export function hostBrake(store: Store, project: string, who: Asker, now: number, role: string): string | null {
   const side = pinnedSide(store, who.member ?? null);
-  if (side) return newBuilderStart(store, project, who, now, role) ? sideBrake(store, side, now) : null;
+  if (side) {
+    // U16: a draining host takes no new member, of any role; one that already has its worktree there carries on.
+    if (!who.member?.wt && Number(store.get("hosts", { name: side })?.drain ?? 0)) return `${side} is draining`;
+    return newBuilderStart(store, project, who, now, role) ? sideBrake(store, side, now) : null;
+  }
   if (limit(store, project, "builder_host_brake") !== "on") return null;
   const crit = hostCrit(mainSample(store), (k) => wholeLimit(store, project, k), now);
   return crit && newBuilderStart(store, project, who, now, role) ? crit : null;

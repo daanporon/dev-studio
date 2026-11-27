@@ -3129,7 +3129,7 @@ function crewDot(s, m) {
   if (m.state === "gone") return bad("gone: no live session");
   if (m.limited) return amber("usage limit: moving to another account");
   if (p) return amber(pauseLabel(p.state) + (p.reason ? ": " + p.reason : ""));
-  if (m.stop_checkpoint) return amber("restart pending: " + (STOP_WHY[m.stop_checkpoint.why] || m.stop_checkpoint.why));
+  if (m.stop_checkpoint) return amber((m.stop_checkpoint.why === "move" ? "move pending: " : "restart pending: ") + (STOP_WHY[m.stop_checkpoint.why] || m.stop_checkpoint.why));
   if (m.state === "⚠ settled") return amber("dispatch settled: waiting on the Lead");
   if (m.terminals > 1) return amber(m.terminals + " live sessions in one worktree");
   if (m.state === "unplaced") return amber("no worktree yet");
@@ -3156,6 +3156,26 @@ function RestartMember({ s, m, toast }) {
     finally { setBusy(false); }
   };
   return html`<button class="btn sm" disabled=${busy || !!why} title=${why || "Restart this member: the loop stops it and starts it fresh"} onClick=${restart}>Restart</button>`;
+}
+
+// side-loop-host U16: a side host member's way back to main: checkpoint, push, close, start again on main.
+function MoveToMain({ s, m, toast }) {
+  const [busy, setBusy] = useState(false);
+  if (!m.host || !m.wt) return null;
+  const why = ["suspended", "on-hold", "closed", "gone"].includes(s.status) ? "squad is " + s.status
+    : m.pause && m.pause.state !== "active" ? "role is " + m.pause.state + ": use Resume role"
+    : m.move && m.move.pending ? "move already pending" : "";
+  const move = async () => {
+    if (!confirm("Move " + m.label + " from " + m.host + " to main? Once it is idle it writes a journal checkpoint, its commits are pushed, its session there closes and it starts again on main.")) return;
+    setBusy(true);
+    const say = (text) => { toast(text); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast(null), 6000); };
+    try {
+      const b = await post("api/member-move", { project: s.label, topic: s.topic, wt: m.wt });
+      say("move requested (request #" + b.id + ")");
+    } catch (e) { say("not sent: " + (e.message || e)); }
+    finally { setBusy(false); }
+  };
+  return html`<button class="btn sm" data-act="move-to-main" disabled=${busy || !!why} title=${why || "Start this member again on main, from its pushed commits"} onClick=${move}>Move to main</button>`;
 }
 
 // A crew row's actions behind one ⋯ button. The menu stays mounted (hidden) so a pending
@@ -3483,7 +3503,7 @@ function MemberActions({ s, m, toast, onWait, onChat, onView, onEvents }) {
       onClick=${(e) => { if (e.target.closest("button,a")) close(true); }}>
       ${links.map(({ e, href }) => html`<a key=${"l" + e.id + ":" + e.name} class="btn sm mlink-item" role="menuitem" href=${href} target="_blank" rel="noopener" title=${"Open " + e.name + " in a new tab"}>open ${e.name}</a>`)}${m.wt && onChat && html`<button class="btn sm chat-btn" title=${"Read " + m.label + "'s recent turns and type it one line"} onClick=${onChat}>chat</button>`}${m.wt && onView && html`<button class="btn sm" title=${"Messages sent to " + m.label + ", newest first (view only: nothing is marked read)"} onClick=${onView}>Inbox${m.unread + m.reply_due > 0 ? " " + (m.unread + m.reply_due) : ""}</button>`}${m.wt && onEvents && html`<button class="btn sm" data-ev="member-events" title=${"The event log, filtered to " + m.label} onClick=${onEvents}>Events</button>`}${m.override && (m.override.scope || "member") === "member"
         ? html`<button class="btn sm" disabled=${!m.wt} title="Change the pinned model, effort and account" onClick=${() => setPinning(true)}>change pin</button><button class="btn sm" title="Clear the override: the next pick is automatic again" onClick=${() => override(s, m, { clear: true }, toast)}>auto</button>`
-        : html`<button class="btn sm" disabled=${!m.wt} title="Pin a model and/or account for this member until its work is done" onClick=${() => setPinning(true)}>pin</button>`}<${RestartMember} s=${s} m=${m} toast=${toast} />${pausable && html`<${PauseControls} target=${{ scope: "member", project: s.label, topic: s.topic, ...(m.wt ? { wt: m.wt } : { role: m.role, suffix: m.suffix }) }} pause=${m.pause} label=${"role " + m.label + " in " + s.label + "/" + s.topic} toast=${toast} wait=${onWait} />`}
+        : html`<button class="btn sm" disabled=${!m.wt} title="Pin a model and/or account for this member until its work is done" onClick=${() => setPinning(true)}>pin</button>`}<${RestartMember} s=${s} m=${m} toast=${toast} /><${MoveToMain} s=${s} m=${m} toast=${toast} />${pausable && html`<${PauseControls} target=${{ scope: "member", project: s.label, topic: s.topic, ...(m.wt ? { wt: m.wt } : { role: m.role, suffix: m.suffix }) }} pause=${m.pause} label=${"role " + m.label + " in " + s.label + "/" + s.topic} toast=${toast} wait=${onWait} />`}
     </div>${pinning && html`<${PinForm} s=${s} m=${m} toast=${toast} onClose=${() => setPinning(false)} />`}</span>`;
 }
 
@@ -3542,10 +3562,10 @@ function PauseInfo({ pause, prerequisites }) {
   </div>`;
 }
 // U266: a planned restart waiting on its journal checkpoint, shown like a pausing member.
-const STOP_WHY = { restart: "restart asked for", rss: "memory over restart_rss_gb", fallback: "moving back up", pin: "moving to the pinned model/account", account: "moving off a switched-off account" };
+const STOP_WHY = { restart: "restart asked for", rss: "memory over restart_rss_gb", fallback: "moving back up", pin: "moving to the pinned model/account", account: "moving off a switched-off account", move: "moving to main" };
 function StopCheckpointInfo({ sc }) {
   if (!sc) return null;
-  return html`<div class="pause-note"><b>Restart pending</b> · ${STOP_WHY[sc.why] || sc.why} · ${sc.asked_at ? "awaiting journal checkpoint" : "asking for a journal checkpoint"}${sc.since ? " (since " + new Date(sc.since * 1000).toTimeString().slice(0, 5) + ")" : ""}
+  return html`<div class="pause-note"><b>${sc.why === "move" ? "Move to main pending" : "Restart pending"}</b> · ${STOP_WHY[sc.why] || sc.why} · ${sc.asked_at ? "awaiting journal checkpoint" : "asking for a journal checkpoint"}${sc.since ? " (since " + new Date(sc.since * 1000).toTimeString().slice(0, 5) + ")" : ""}
     <div>Generation: <span class="mono">${sc.generation}</span></div></div>`;
 }
 function prerequisiteKey(p) {
@@ -3689,6 +3709,7 @@ function Detail({ s, onPlan, planOpen, toast, setAsk, askKeys, prerequisites, fl
           <span class="ovr">${m.override && html`<span class="badge pin" title=${(m.override.scope && m.override.scope !== "member" ? "pinned for " + ovWhat(m.override) + " until cleared" : "until done") + ", set by " + (m.override.set_by || "?")}>⚑ ${[[m.override.model, m.override.effort].filter(Boolean).join(" "), m.override.account ? "@" + acctEmail(m.override.account) : m.override.plan].filter(Boolean).join(" · ")}${m.override.scope && m.override.scope !== "member" ? " · from " + m.override.scope : ""}</span>`}<${MemberActions} s=${s} m=${m} toast=${toast} onWait=${() => setWaitMember(m)} onChat=${() => setChatWith(m)} onView=${() => setMsgWith(m)} onEvents=${() => openEvents({ project: s.label, squad: s.topic, member: m.wt })} /></span>
           ${(m.pause && (m.pause.state !== "active" || m.pause.checkpoint)) && html`<span class="activity"><${PauseInfo} pause=${m.pause} prerequisites=${prerequisites} /></span>`}
           ${m.stop_checkpoint && html`<span class="activity"><${StopCheckpointInfo} sc=${m.stop_checkpoint} /></span>`}
+          ${m.move && !m.stop_checkpoint && html`<span class="activity"><div class="pause-note">${m.move.error ? html`<b>Move to main failed</b> · ${m.move.error}` : html`<b>Move to main pending</b> · waiting for it to be idle`}</div></span>`}
         </div>`; })}
         ${s.role_tokens && Object.values(s.role_tokens).some((v) => v) && html`<div class="tier" title="price-weighted tokens per role, 7 days">spent 7d · ${["lead", "thinker", "builders (all units)", "review", "other"].map((r) => r + " ≈" + fmtTok(s.role_tokens[r.split(" ")[0]])).join(" · ")}</div>`}</div>`}
       <${PastAnswers} s=${s} />
