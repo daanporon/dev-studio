@@ -126,3 +126,20 @@ test("the tile and summary name the worst host; a stale side host shows its age 
   expect(hosts[2].textContent).toBe("newbie no sample yet");
   expect(hosts[1].querySelector(".mtop, .ucard")).toBeNull();
 });
+
+test("each section is levelled by its own host's lines, never main's (U25's per-host machine keys)", () => {
+  const f = setup();
+  const line = (host: string, value: string) => f.s.upsert("host_config", { host, key: "machine_load_crit_pct" }, { value, set_at: NOW });
+  f.sample("mainbox", 12);                        // 120% of 10 cores: warn on the shipped lines (100 / 150)
+  f.host("alpha"); f.sample("alpha", 12);
+  expect(f.board().machine.sides[0].load.level).toBe("warn");
+  line("alpha", "110");
+  let m = f.board().machine;
+  expect([m.load.level, m.sides[0].load.level]).toEqual(["warn", "crit"]);
+  expect(m.worst).toMatchObject({ host: "alpha", level: "crit" });
+  f.s.db.query("DELETE FROM host_config WHERE host = 'alpha'").run();
+  line("local", "110");
+  m = f.board().machine;
+  expect([m.load.level, m.sides[0].load.level]).toEqual(["crit", "warn"]);
+  expect(m.worst).toMatchObject({ host: "main", level: "crit" });
+});

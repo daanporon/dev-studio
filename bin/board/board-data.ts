@@ -466,11 +466,11 @@ function debriefOnDb(db: Db, label: string): boolean {
   }
   return true;
 }
-function dsLimit(db: Db, label: string, key: string): number | null {
+function dsLimit(db: Db, label: string, key: string, host = SELF): number | null {
   const ev = process.env[LIMIT_ENV[key] ?? "DS_LIMIT_" + key.toUpperCase()];
-  if (ev && /^[0-9]+$/.test(ev)) return Number(ev);
-  if (isHostKey(key)) {   // U25, KTD16: a machine key is this host's (its override, else the default), never the project's
-    const v = db.memo(`host-limit:${key}`, () => hostLine(db.s.db, SELF, key).value?.split(/\s+/)[0] ?? "");
+  if (ev && /^[0-9]+$/.test(ev) && (host === SELF || !isHostKey(key))) return Number(ev);   // main's env says nothing about a side host's keys
+  if (isHostKey(key)) {   // U25, KTD16: a machine key is `host`'s (its override, else the default), never the project's
+    const v = db.memo(`host-limit:${host}\0${key}`, () => hostLine(db.s.db, host, key).value?.split(/\s+/)[0] ?? "");
     return /^[0-9]+$/.test(v) ? Number(v) : null;
   }
   for (const p of [label, ""]) {
@@ -1313,7 +1313,7 @@ function sideSample(db: Db, label: string, name: string, squads: any[], now: num
   return { ...hostSample(db, label, r!, squads, name, now), age_s: Math.max(0, now - at) };
 }
 function hostSample(db: Db, label: string, r: Record<string, any>, squads: any[], side: string | null, now: number) {
-  const line = (k: string) => dsLimit(db, label, k), level = levelOf(line);
+  const line = (k: string) => dsLimit(db, label, k, side ?? SELF), level = levelOf(line);
   const rd = (x: number | null, d = 0) => (x == null ? null : Math.round(x * 10 ** d) / 10 ** d);
   const { cores, load1, loadPct, memTotal, memAvail, memPct, swapTotal, swapPct, psi, lv } = machineLevels(r, line);
   const n = (x: any) => (x == null ? null : Number(x));
@@ -1475,7 +1475,7 @@ function machineView(db: Db, label: string, squads: any[], usedKb: number | null
     kernel_kb: kernel,
   };
   // Outside block: one other project's worktree or one host group at or past a threshold.
-  const ramT = dsLimit(db, label, "machine_outside_ram_pct"), cpuT = dsLimit(db, label, "machine_outside_cpu_pct");
+  const ramT = dsLimit(db, label, "machine_outside_ram_pct", side ?? SELF), cpuT = dsLimit(db, label, "machine_outside_cpu_pct", side ?? SELF);
   const outside: { label: string; ram_kb: number; rss_kb: number; cpu_pct: number | null; ram_pct: number | null; ram_hit: boolean; cpu_hit: boolean }[] = [];
   const consider = (lbl: string, x: { rss_kb: number; mem_kb: number | null; cpu_pct: number | null }) => {
     const ram_kb = ram(x), ram_pct = totalKb ? ram_kb / totalKb * 100 : null;
