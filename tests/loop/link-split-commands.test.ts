@@ -14,6 +14,7 @@ import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import { checkCall, EXIT, kindFor, kindOf, TABLE, WORKER_ROLES } from "../../bin/link/forward-table.ts";
 import { checkFacts, finishFacts, gather, SPLIT_COMMANDS } from "../../bin/link/split.ts";
+import { permissionFacts } from "../../bin/commands/picker-hook-ts.ts";
 import { mainUrlFor, startRelay, type Relay } from "../../bin/link/relay.ts";
 import { toplevel } from "../../bin/loop/squad/exposed.ts";
 import { senderAt, sendMessage } from "../../bin/loop/messages/messages.ts";
@@ -399,12 +400,30 @@ describe("on a side host", () => {
     expect(pre).toMatchObject({ code: 0 });
     expect(existsSync(hook)).toBe(false);   // read and removed on the side; main never had its path
     const q = (JSON.parse(readFileSync(mainSt, "utf8")).waiting_on_you ?? []) as Row[];
-    expect(q).toEqual([expect.objectContaining({ id: "picker-12345678", source: "picker", card_wt: `s1::${w.dir}`, asker: "builder-u1", transcript_path: "(none)" })]);
+    expect(q).toEqual([expect.objectContaining({ id: "picker-12345678", source: "picker", card_wt: `s1::${w.dir}`, asker: "builder-u1", transcript_path: "(none)",
+      picker_answerable: false })]);   // u8d: main has no transcript to tell whether it is still open
     const post = await onSide(side, w.dir, ["picker-hook-ts", "post", st, "builder-u1", `local::${w.dir}`], {},
       JSON.stringify({ tool_use_id: "toolu_abcdefgh12345678", tool_response: { answers: { "Which way?": "Left" } } }));
     expect(post).toMatchObject({ code: 0 });
     const after = JSON.parse(readFileSync(mainSt, "utf8"));
     expect(((after.waiting_on_you ?? []) as Row[]).filter((x) => x.id === "picker-12345678")).toEqual([]);
+  }, 30_000);
+
+  test("a side member's safety-check prompt is answered in its terminal only, though the side tied it to its tool call (u8d)", async () => {
+    const w = await worktree(false);
+    const m = await mainUp(`s1::${w.dir}`), side = await sideUp(m);
+    const st = join(side.root, "realp", "squads", "sq.json"), mainSt = join(m.root, "realp", "squads", "sq.json");
+    writeFileSync(mainSt, JSON.stringify({ ...JSON.parse(readFileSync(mainSt, "utf8")), run_id: "run_1" }));
+    const transcript = join(side.root, "t.jsonl"), hook = join(side.root, "hook.json"), input = { command: "rm -r build" };
+    writeFileSync(transcript, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_abcdefghperm0001", name: "Bash", input }] } }) + "\n");
+    writeFileSync(hook, JSON.stringify({ tool_name: "Bash", tool_input: input, transcript_path: transcript, cwd: w.dir }));
+    // What the side alone would have said: found and shown in full.
+    expect(await permissionFacts(hook)).toMatchObject({ found: "toolu_abcdefghperm0001", answerable: true });
+    const r = await onSide(side, w.dir, ["picker-hook-ts", "permission-async", st, "builder-u1", `local::${w.dir}`, hook]);
+    expect(r).toMatchObject({ code: 0 });
+    const q = (JSON.parse(readFileSync(mainSt, "utf8")).waiting_on_you ?? []) as Row[];
+    expect(q).toEqual([expect.objectContaining({ id: "picker-perm0001", picker_kind: "permission", shown: "rm -r build",
+      transcript_path: "(none)", picker_answerable: false })]);
   }, 30_000);
 
   test("watch.sh --worktree reads main's rows for the member and the side's instructions state", async () => {

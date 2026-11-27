@@ -177,7 +177,8 @@ export async function run(argv: string[]): Promise<number> {
 
   // On main, a side member's split call: what the side read stands in for the input file, stdin and transcript.
   // Its transcript path names a file on the side host, so the entry gets "(none)": main never opens a path a side
-  // host chose, and the post-mode tombstone closes the picker instead.
+  // host chose, and the post-mode tombstone closes the picker instead. Without a transcript the answer fulfiller
+  // cannot tell whether the prompt is still open, so such an entry is never answerable from the board (u8d).
   const facts = factsOf<PickerFacts>();
   if (process.env.DS_LINK_FORWARDED === "1" && facts?.mode !== MODE) { log(`${MODE}: ignored — a forwarded call without its facts`); return 0; }
 
@@ -273,7 +274,7 @@ export async function run(argv: string[]): Promise<number> {
     const rc = await askOperator(id, ["--title", promptTitle(ROLE, tool, agent), "--question", promptQuestion(shown, cwd),
       "--option", "Yes", "let it run this once", "--option", "No", "refuse it; the role is told no",
       "--recommend", "No", "--why", "a Claude safety check stopped here — no recommendation; read it before you answer",
-      "--picker", tid, (!facts && tpath) || "(none)", String(answerable), "--permission", tool, agent, shown, cwd]);
+      "--picker", tid, (!facts && tpath) || "(none)", String(!facts && answerable), "--permission", tool, agent, shown, cwd]);
     log(rc === 0 || rc === 3 ? `permission: queued ${id} (${tool}, tool_use_id ${found ? "found" : "not found"})` : `permission: ${id} NOT queued — ask-operator.sh exited ${rc}`);
     permissionAsked({ role: ROLE, tool, via: "hook", agent: agentId !== "", text: head(shown, 200) });
     return 0;
@@ -324,7 +325,7 @@ export async function run(argv: string[]): Promise<number> {
     await clearEarlier(st.v, "pre");
     const questions = () => dot(dot(h.v, "tool_input"), "questions");
     const first = () => { const v = questions(); if (v !== null && !Array.isArray(v)) throw new JqError("index"); return v === null ? null : v[0] ?? null; };
-    const answerable = q(() => length(questions()) === 1 && alt(dot(first(), "multiSelect"), false) === false, false) === true ? "true" : "false";
+    const answerable = !facts && q(() => length(questions()) === 1 && alt(dot(first(), "multiSelect"), false) === false, false) === true ? "true" : "false";
     let title = q(() => {
       const q0 = first(), hd = alt(dot(q0, "header"), ""), qq = alt(dot(q0, "question"), "");
       const t = hd === "" ? qq : typeof hd === "string" && typeof qq === "string" ? `${hd}: ${qq}` : (() => { throw new JqError("+"); })();
