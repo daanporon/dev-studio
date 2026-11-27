@@ -25,6 +25,10 @@
 //                                                                          this host's update to main's commit, started once
 //                                                                          per `run` outside the side loop; asked again until
 //                                                                          `done` or `failed` (lib/side-update-job.ts, U24)
+//   expose.stop      {project, squad, cmd, cwd?, low, timeout_s}
+//                                                   → {code, ms, timed_out, cwd, cwd_fallback, tail}
+//                                                                          the stop of an entry a member here owns, run here
+//                                                                          (io/stop-run.ts stopHere, u8b); main never runs it
 // The `*On(host, …)` functions are what main calls. For host `local` each runs the same code as before this unit
 // (createWorktree, removeWorktree, wtProbe, rescuePages, the same git calls); for any other host it sends the job down
 // that host's link (server.ts linkRequest, or `o.send` in tests) and checks the answer's shape before using it. Both
@@ -44,6 +48,8 @@ import { wtProbe } from "../loop/io/wt-probe.ts";
 import { canon, createWorktree, fetchBranch, git, lastLine, provider, removeWorktree, WorktreeError, type Gone, type Made, type RemoveOpts, type Spec } from "../loop/io/worktrees.ts";
 import { placeBody, planRescue, rescueDest, rescuePages, securable, sessionFiles, type Rescued } from "../loop/io/rescue.ts";
 import { writeLaunch } from "../loop/squad/launch-file.ts";
+import { STOP_S_MAX, stopHere, type StopRun } from "../loop/io/stop-run.ts";
+import { badStop } from "../loop/squad/exposed.ts";
 import { accountsRoot } from "../lib/account-dirs.ts";
 import { folderCheck, makeAccountFolder, type FolderCheck } from "../lib/account-folder.ts";
 import { findKind, type AccountKind, type Env } from "../lib/account-kinds/index.ts";
@@ -65,7 +71,8 @@ export type HostJob =
   | { job: "launch.write"; project: string; member: string; gen: string; line: string }
   | { job: "account.folder"; agent: string; name: string; request: number }
   | { job: "account.check"; agent: string; folder: string; after?: boolean }
-  | { job: "update"; commit: string; run: string };
+  | { job: "update"; commit: string; run: string }
+  | { job: "expose.stop"; project: string; squad: string; cmd: string; cwd?: string; low: number; timeout_s: number };
 export type JobName = HostJob["job"];
 
 export type Cloned = { path: string; cloned: boolean };
@@ -207,6 +214,16 @@ export function checkJob(v: unknown): HostJob {
     case "update":
       if (typeof v.commit !== "string" || !SHA.test(v.commit)) bad(`the commit is a full sha, not ${JSON.stringify(v.commit)}`);
       return { job: "update", commit: v.commit as string, run: name(v.run, "the run") };
+    case "expose.stop": {
+      // The command is the one `ds expose --stop` stored (squad/exposed.ts badStop): one line of at most STOP_MAX.
+      const why = typeof v.cmd !== "string" || !v.cmd.trim() ? "--stop is empty" : badStop(v.cmd);
+      if (why) bad(`a stop command: ${why}`);
+      if (!Number.isSafeInteger(v.low) || (v.low as number) <= 0) bad("the entry id is a positive integer");
+      const t = v.timeout_s;
+      if (typeof t !== "number" || !Number.isInteger(t) || t < 1 || t > STOP_S_MAX) bad(`a stop timeout is 1..${STOP_S_MAX} s, not ${JSON.stringify(t)}`);
+      return { job: "expose.stop", project: name(v.project, "the project"), squad: name(v.squad, "the squad"), cmd: v.cmd as string, low: v.low as number,
+        timeout_s: t as number, ...(v.cwd == null ? {} : { cwd: absPath(v.cwd, "the owner's worktree") }) };
+    }
     default:
       return bad(`unknown job '${String(v.job)}'`);
   }
@@ -233,6 +250,11 @@ function goneOf(v: unknown, host: string): Gone {
     return wrong(host, "worktree.remove", "not {removed, already, branch}");
   }
   return { removed: v.removed as boolean, already: v.already as boolean, branch: v.branch as Gone["branch"], ...(typeof v.why === "string" ? { why: v.why } : {}) };
+}
+function stopRunOf(v: unknown, host: string): StopRun {
+  if (!isObj(v) || !(v.code === null || typeof v.code === "number") || typeof v.ms !== "number" || typeof v.timed_out !== "boolean"
+    || typeof v.cwd !== "string" || typeof v.cwd_fallback !== "boolean" || typeof v.tail !== "string") return wrong(host, "expose.stop", "not {code, ms, timed_out, cwd, cwd_fallback, tail}");
+  return { code: v.code as number | null, ms: v.ms as number, timed_out: v.timed_out as boolean, cwd: v.cwd as string, cwd_fallback: v.cwd_fallback as boolean, tail: (v.tail as string).slice(-2000) };
 }
 function collectedOf(v: unknown, host: string): Collected {
   if (!isObj(v) || typeof v.listed !== "boolean" || typeof v.capped !== "number" || !Array.isArray(v.files) || !Array.isArray(v.kept)
@@ -344,6 +366,7 @@ export async function runHere(job: unknown, ctx: { root: string; store?: Store; 
     case "account.folder": return { folder: makeAccountFolder(loginKind(j.agent), j.name, j.request, ctx.env ?? process.env) };
     case "account.check": return checkHere(j, ctx.env ?? process.env);
     case "update": return sideUpdate(ctx.root, j, ctx.update);
+    case "expose.stop": return stopHere(ctx.root, j);
   }
 }
 
@@ -352,9 +375,10 @@ export async function runHere(job: unknown, ctx: { root: string; store?: Store; 
 const TIMEOUT: Record<JobName, number> = {
   "clone": 910_000, "worktree.add": 630_000, "worktree.remove": 180_000, "probe": 0, "rescue": 180_000,
   "ref.read": 45_000, "ref.set": 45_000, "push": 330_000, "launch.write": 45_000,
-  "account.folder": 45_000, "account.check": 45_000, "update": 45_000,
+  "account.folder": 45_000, "account.check": 45_000, "update": 45_000, "expose.stop": 0,
 };
-const timeoutOf = (j: HostJob) => (j.job === "probe" ? j.timeout_ms + 15_000 : TIMEOUT[j.job]);
+// A probe and a stop wait their own timeout plus a margin (a stop: runOnClose's TERM-to-KILL wait and the reply).
+const timeoutOf = (j: HostJob) => (j.job === "probe" ? j.timeout_ms + 15_000 : j.job === "expose.stop" ? j.timeout_s * 1000 + 30_000 : TIMEOUT[j.job]);
 
 /** Send one job to a side host and return its raw answer (checked by the caller). */
 async function sendJob(host: string, job: HostJob, o: JobOpts): Promise<unknown> {
@@ -381,6 +405,12 @@ function updateOf(v: unknown, host: string): SideUpdateAnswer {
 /** Ask side host `host` to update itself to main's `commit` (U24); asked again with the same `run` until it ends. */
 export async function updateOn(host: string, job: { commit: string; run: string }, o: JobOpts = {}): Promise<SideUpdateAnswer> {
   return updateOf(await sendJob(host, { job: "update", ...job }, o), host);
+}
+
+/** Run one group of expose stop commands on side host `host` (side-loop-host u8b): the stop of an entry a member
+ *  there owns runs there, never on main. Main runs its own members' stops in place (fulfil/expose-stop.ts). */
+export async function exposeStopOn(host: string, job: Omit<Extract<HostJob, { job: "expose.stop" }>, "job">, o: JobOpts = {}): Promise<StopRun> {
+  return stopRunOf(await sendJob(host, { job: "expose.stop", ...job }, o), host);
 }
 
 /** Clone a project on `host`. Local: `git clone` here, the same as a side host runs it. */

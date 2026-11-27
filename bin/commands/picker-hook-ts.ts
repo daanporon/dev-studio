@@ -4,6 +4,10 @@
 // returns a decision: it prints nothing, exits 0, and queues from a detached `permission-async`.
 // Same stdin, exit codes (always 0), picker-hook.log lines, tombstones and
 // squad-state.sh / ask-operator.sh calls as the shell body; `pre` starts the .sh again detached.
+// side-loop-host u8b, a member on a side host: `pre` and `permission` stay there (the detached start is local), and
+// `post`, `pre-async` and `permission-async` are split (link/split.ts): the side reads the hook input and the
+// transcript (postFacts, preFacts, permissionFacts) and main runs the rest with those facts, in its own state file,
+// with the member row's worktree id as WT (forward-table.ts checkCall).
 import { randomBytes } from "node:crypto";
 import { accessSync, appendFileSync, constants, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -12,6 +16,7 @@ import { mktemp } from "../lib/lib";
 import { findToolUse, head, promptQuestion, promptTitle, promptTranscript, shownText } from "../lib/permission-prompt.ts";
 import { checkable } from "../loop/chat/permission.ts";
 import { open as openStore } from "../loop/core/store.ts";
+import { factsOf } from "../link/split.ts";
 
 export const help = "picker-hook-ts <pre|post|permission|pre-async|permission-async> <state> <role> <wt> [input] — the picker-mirror hook (bin/hooks/picker-hook.sh)";
 
@@ -96,6 +101,55 @@ export function readUnitSep(text: string): [string, string][] {
   return out;
 }
 
+// --- the facts a side host reads for main (side-loop-host u8b) ----------------------------------------
+
+export type PostFacts = { mode: "post"; tid: string; answer: string };
+export type PreFacts = { mode: "pre-async"; ok: boolean; hook: unknown };
+export type PermissionFacts = { mode: "permission-async"; tool: string; agent_id: string; agent_type: string; cwd: string; tpath: string;
+  found: string; shown: string; answerable: boolean };
+export type PickerFacts = PostFacts | PreFacts | PermissionFacts;
+
+/** The PostToolUse input's tool_use_id and its answers, joined with "; " (both empty where jq would fail). */
+export function postFacts(input: string): PostFacts {
+  let j: any = null, ok = true;
+  try { j = JSON.parse(input); } catch { ok = false; }
+  let tid = "", answer = "";
+  try { if (ok) { const v = dot(j, "tool_use_id"); tid = alt(v, null) === null ? "" : raw(v); } } catch { tid = ""; }
+  try { if (ok) answer = join_(each(alt(dot(dot(j, "tool_response"), "answers"), {}), true).map((v) => (typeof v === "string" ? v : JSON.stringify(v))), "; "); }
+  catch { answer = ""; }
+  return { mode: "post", tid, answer };
+}
+
+/** The PreToolUse input as preAsync reads it, cut to the fields it uses. */
+export function preFacts(file: string): PreFacts {
+  const h = readJsonFile(file), v = h.v;
+  if (!h.ok || !v || typeof v !== "object" || Array.isArray(v)) return { mode: "pre-async", ok: h.ok, hook: v };
+  const ti = v.tool_input;
+  return { mode: "pre-async", ok: true, hook: { tool_use_id: v.tool_use_id, transcript_path: v.transcript_path, tool_name: v.tool_name,
+    tool_input: ti && typeof ti === "object" && !Array.isArray(ti) ? { questions: ti.questions } : ti } };
+}
+
+/** The PermissionRequest input and what the transcript says about it: the tool call's id (`found`, waiting up to 2 s
+ *  for it to land), the prompt's shown text and whether the board may answer it. */
+export async function permissionFacts(file: string): Promise<PermissionFacts> {
+  const h = readJsonFile(file).v;
+  const text = (k: string): string => (typeof h?.[k] === "string" ? h[k] : "");
+  const tool = text("tool_name"), agent_id = text("agent_id");
+  const base = { mode: "permission-async" as const, tool, agent_id, agent_type: agent_id ? text("agent_type") || "helper agent" : "", cwd: text("cwd") };
+  if (ignoredTool(tool)) return { ...base, tpath: "", found: "", shown: "", answerable: false };
+  const tpath = promptTranscript(text("transcript_path"), agent_id);
+  let found = tpath ? findToolUse(tpath, tool, h.tool_input) : "";
+  // The tool call may reach the transcript just after the prompt opens.
+  for (let i = 0; !found && tpath && i < 4; i++) { await Bun.sleep(500); found = findToolUse(tpath, tool, h.tool_input); }
+  const shown = shownText(tool, h.tool_input);
+  // Answerable from the board only when shown in full and tied to its tool call (D5); the answer fulfiller
+  // also reads the screen again before it presses anything (bin/loop/chat/permission.ts).
+  return { ...base, tpath, found, shown, answerable: found !== "" && checkable(tool, h.tool_input, shown) };
+}
+
+// These two are the picker pair's and the plan dialog's, not a safety check.
+const ignoredTool = (tool: string) => !tool || tool === "AskUserQuestion" || tool === "ExitPlanMode";
+
 export async function run(argv: string[]): Promise<number> {
   const [MODE = "", STATE = "", ROLE = "", WT = ""] = argv;
   const usage = () => { writeErr("picker-hook: usage: picker-hook.sh <pre|post|permission> <state> <role> <wt>\n"); return 0; };
@@ -121,18 +175,22 @@ export async function run(argv: string[]): Promise<number> {
     return true;
   };
 
+  // On main, a side member's split call: what the side read stands in for the input file, stdin and transcript.
+  // Its transcript path names a file on the side host, so the entry gets "(none)": main never opens a path a side
+  // host chose, and the post-mode tombstone closes the picker instead.
+  const facts = factsOf<PickerFacts>();
+  if (process.env.DS_LINK_FORWARDED === "1" && facts?.mode !== MODE) { log(`${MODE}: ignored — a forwarded call without its facts`); return 0; }
+
   if (MODE === "post") {
-    let input = "";
-    try { input = await Bun.stdin.text(); } catch { /* none */ }
-    let j: any = null, ok = true;
-    try { j = JSON.parse(input); } catch { ok = false; }
-    let tid = "";
-    try { if (ok) { const v = dot(j, "tool_use_id"); tid = alt(v, null) === null ? "" : raw(v); } } catch { tid = ""; }
+    let pf = facts as PostFacts | null;
+    if (!pf) {
+      let input = "";
+      try { input = await Bun.stdin.text(); } catch { /* none */ }
+      pf = postFacts(input);
+    }
+    const { tid, answer } = pf;
     if (!tid) return 0;
     const id = `picker-${last8(tid)}`;
-    let answer = "";
-    try { if (ok) answer = join_(each(alt(dot(dot(j, "tool_response"), "answers"), {}), true).map((v) => (typeof v === "string" ? v : JSON.stringify(v))), "; "); }
-    catch { answer = ""; }
     try { writeFileSync(join(TDONE, id), answer); } catch { /* the picker is done even if its entry never lands */ }
     if (await resolvePicker(id, answer)) log(`post: resolved ${id}`);
     return 0;
@@ -153,7 +211,10 @@ export async function run(argv: string[]): Promise<number> {
 
   // <mode>-async <input-file>: the detached half; stdout/stderr go to the log.
   const input = argv[4] ?? "";
-  try { return await (MODE === "pre-async" ? preAsync(input) : permissionAsync(input)); } finally { if (input) rmSync(input, { force: true }); }
+  try {
+    if (MODE === "pre-async") return await preAsync((facts as PreFacts | null) ?? preFacts(input));
+    return await permissionAsync((facts as PermissionFacts | null) ?? await permissionFacts(input));
+  } finally { if (input && !facts) rmSync(input, { force: true }); }
 
   // True when the prompt was answered before this run could queue it. Prunes tombstones past 2h first.
   async function answeredAlready(id: string, mode: string): Promise<boolean> {
@@ -200,31 +261,19 @@ export async function run(argv: string[]): Promise<number> {
     return rc;
   }
 
-  async function permissionAsync(file: string): Promise<number> {
-    const h = readJsonFile(file).v;
-    const text = (k: string): string => (typeof h?.[k] === "string" ? h[k] : "");
-    const tool = text("tool_name");
-    // These two are the picker pair's and the plan dialog's, not a safety check.
-    if (!tool || tool === "AskUserQuestion" || tool === "ExitPlanMode") { log(`permission: ignoring ${tool || "input without a tool_name"}`); return 0; }
+  async function permissionAsync(pf: PermissionFacts): Promise<number> {
+    const { tool, agent_id: agentId, agent_type: agent, cwd, tpath, found, shown, answerable } = pf;
+    if (ignoredTool(tool)) { log(`permission: ignoring ${tool || "input without a tool_name"}`); return 0; }
     const st = readJsonFile(STATE);
     if (!st.ok || !st.v) { log(`permission: ignored — state ${STATE} unreadable`); return 0; }
-    const agentId = text("agent_id"), agent = agentId ? text("agent_type") || "helper agent" : "";
-    const tpath = promptTranscript(text("transcript_path"), agentId);
-    let found = tpath ? findToolUse(tpath, tool, h.tool_input) : "";
-    // The tool call may reach the transcript just after the prompt opens.
-    for (let i = 0; !found && tpath && i < 4; i++) { await Bun.sleep(500); found = findToolUse(tpath, tool, h.tool_input); }
     const tid = found || `permission-${randomBytes(4).toString("hex")}`;
     const id = `picker-${last8(tid)}`;
     if (await answeredAlready(id, "permission")) return 0;
     await clearEarlier(st.v, "permission");
-    const shown = shownText(tool, h.tool_input);
-    // Answerable from the board only when shown in full and tied to its tool call (D5); the answer fulfiller
-    // also reads the screen again before it presses anything (bin/loop/chat/permission.ts).
-    const answerable = found !== "" && checkable(tool, h.tool_input, shown);
-    const rc = await askOperator(id, ["--title", promptTitle(ROLE, tool, agent), "--question", promptQuestion(shown, text("cwd")),
+    const rc = await askOperator(id, ["--title", promptTitle(ROLE, tool, agent), "--question", promptQuestion(shown, cwd),
       "--option", "Yes", "let it run this once", "--option", "No", "refuse it; the role is told no",
       "--recommend", "No", "--why", "a Claude safety check stopped here — no recommendation; read it before you answer",
-      "--picker", tid, tpath || "(none)", String(answerable), "--permission", tool, agent, shown, text("cwd")]);
+      "--picker", tid, (!facts && tpath) || "(none)", String(answerable), "--permission", tool, agent, shown, cwd]);
     log(rc === 0 || rc === 3 ? `permission: queued ${id} (${tool}, tool_use_id ${found ? "found" : "not found"})` : `permission: ${id} NOT queued — ask-operator.sh exited ${rc}`);
     permissionAsked({ role: ROLE, tool, via: "hook", agent: agentId !== "", text: head(shown, 200) });
     return 0;
@@ -240,8 +289,8 @@ export async function run(argv: string[]): Promise<number> {
     } catch (e) { log(`permission: event not written — ${(e as Error).message.split("\n")[0]}`); }
   }
 
-  async function preAsync(file: string): Promise<number> {
-    const h = readJsonFile(file);
+  async function preAsync(pf: PreFacts): Promise<number> {
+    const h = { ok: pf.ok, v: pf.hook as any };
     const q = (f: () => any, d: any) => { if (!h.ok) return d; try { return f(); } catch { return d; } };
     const tid = q(() => { const v = dot(h.v, "tool_use_id"); return alt(v, null) === null ? "" : raw(v); }, "");
     const tpath = q(() => { const v = dot(h.v, "transcript_path"); return alt(v, null) === null ? "" : raw(v); }, "");
@@ -302,7 +351,7 @@ export async function run(argv: string[]): Promise<number> {
     if (nopts === 0) { log(`pre: ${id} ignored — the first question has no options`); return 0; }
     if (nopts === 1) opts.push("--option", "Other", "answer in your own words"); // ask-operator.sh needs 2+
     const rc = await askOperator(id, ["--title", title, "--question", question, ...opts,
-      "--recommend", "1", "--why", why, "--picker", tid, tpath, answerable]);
+      "--recommend", "1", "--why", why, "--picker", tid, facts ? "(none)" : tpath, answerable]);
     if (rc === 0) {
       const t2 = tomb(id);
       if (t2 !== null) { // the answer landed mid-enqueue: take it back down at once

@@ -13,7 +13,7 @@ import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts"
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import {
-  addWorktreeOn, CHANNEL, checkJob, cloneOn, HostJobError, hostOfWt, probeOn, pushOn, readRefOn, removeWorktreeOn, rescueOn, rescueTarget, setRefOn, writeLaunchOn, type Send,
+  addWorktreeOn, CHANNEL, checkJob, cloneOn, exposeStopOn, HostJobError, hostOfWt, probeOn, pushOn, readRefOn, removeWorktreeOn, rescueOn, rescueTarget, setRefOn, writeLaunchOn, type Send,
 } from "../../bin/link/host-jobs.ts";
 import { createWorktree, git } from "../../bin/loop/io/worktrees.ts";
 import { wtProbe } from "../../bin/loop/io/wt-probe.ts";
@@ -165,6 +165,19 @@ describe("the same jobs on a side host over the link", () => {
     expect(hostOfWt(s, "realp", "local::/y")).toBe("local");
   });
 
+  test("an expose stop runs on the side host, in the owner's worktree, with its log in the side's state root (u8b)", async () => {
+    const m = await linked();
+    const r = await repo();
+    const got = await exposeStopOn("side-a", { project: "realp", squad: "sq", cmd: "echo stopped-here; pwd", cwd: r.repo, low: 7, timeout_s: 10 }, { send: m.send });
+    expect(got).toMatchObject({ code: 0, timed_out: false, cwd: r.repo, cwd_fallback: false });
+    expect(got.tail).toContain("stopped-here");
+    expect(existsSync(join(m.sroot, "realp", "loop", "cleanup", "expose-stop-7.log"))).toBe(true);
+    expect(existsSync(join(m.root, "realp", "loop", "cleanup", "expose-stop-7.log"))).toBe(false);
+    // The owner's worktree is gone there: the side's project folder, and the exit code comes back.
+    const gone = await exposeStopOn("side-a", { project: "realp", squad: "sq", cmd: "exit 3", cwd: join(r.dir, "nope"), low: 8, timeout_s: 10 }, { send: m.send });
+    expect(gone).toMatchObject({ code: 3, cwd: join(m.sroot, "realp"), cwd_fallback: true });
+  });
+
   test("a rescue uploads files up to the cap; the rest stay in the side host's rescue folder", async () => {
     const m = await linked();
     const r = await repo();
@@ -205,6 +218,11 @@ describe("checks", () => {
       { job: "probe", path: "/x", timeout_ms: 1000, secured: ["../out"] },
       { job: "launch.write", project: "../p", member: "m", gen: "g", line: "claude" },
       { job: "launch.write", project: "p", member: "m", gen: "g", line: "" },
+      { job: "expose.stop", project: "p", squad: "sq", cmd: "", low: 1, timeout_s: 10 },
+      { job: "expose.stop", project: "p", squad: "sq", cmd: "a\nb", low: 1, timeout_s: 10 },
+      { job: "expose.stop", project: "p", squad: "sq", cmd: "make down", low: 1, timeout_s: 101 },
+      { job: "expose.stop", project: "p", squad: "sq", cmd: "make down", low: 0, timeout_s: 10 },
+      { job: "expose.stop", project: "p", squad: "sq", cmd: "make down", cwd: "rel", low: 1, timeout_s: 10 },
       { job: "rm -rf" },
       null,
     ];
@@ -227,6 +245,7 @@ describe("checks", () => {
     const bad = await rescueOn(s, "side-a", "p", "sq", "b", "/x", { send: send({ listed: true, files: "no" }) });
     expect(bad.ok).toBe(false);
     expect(bad.why).toMatch(/malformed/);
+    await expect(exposeStopOn("side-a", { project: "p", squad: "sq", cmd: "x", low: 1, timeout_s: 5 }, { send: send({ code: 0 }) })).rejects.toThrow(/malformed/);
     await expect(writeLaunchOn("side-a", s.root, { project: "p", member: "m", gen: "g", line: "claude" }, { send: send({ text: "rm -rf /" }) })).rejects.toThrow(/malformed/);
   });
 

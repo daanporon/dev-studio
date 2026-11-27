@@ -5,7 +5,10 @@
 // would have read itself; nothing else of the worktree reaches main.
 //   finish-unit-ts  the branch, HEAD and the review receipt's state on this branch (finishFacts)
 //   watch-ts        whether the instructions changed since this worktree last read them (watch-ts instructionsSeen)
-import { readFileSync } from "node:fs";
+//   picker-hook-ts  (u8b) post: the answer from the hook's stdin; pre-async: the hook input file, cut to what it
+//                   uses; permission-async: the hook input and the transcript's tool call (picker-hook-ts *Facts).
+//                   The side's hook input file is read and removed here; main never sees its path.
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { run as runCmd } from "../lib/shared";
 
@@ -47,6 +50,7 @@ export async function finishFacts(cwd?: string): Promise<FinishFacts> {
   return { branch, head, receipt, origin_head, ancestor, since, short };
 }
 
+const TOOL_ID = /^[A-Za-z0-9_-]{0,200}$/;
 const strOrNull = (v: unknown, max = 4096) => v === null || (typeof v === "string" && v.length <= max);
 
 const CHECKS: Record<string, (f: Facts) => string | null> = {
@@ -56,6 +60,25 @@ const CHECKS: Record<string, (f: Facts) => string | null> = {
     return null;
   },
   "watch-ts": (f) => (f.instr === null || f.instr === "changed" || f.instr === "unchanged" ? null : "instr is not changed, unchanged or null"),
+  "picker-hook-ts": (f) => {
+    const str = (k: string, max = 4096) => (typeof f[k] === "string" && (f[k] as string).length <= max ? null : `${k} is not a short string`);
+    // A tool_use_id names a file in main's picker-done folder: letters, digits, _ and - only.
+    const id = (v: unknown, k: string) => (typeof v === "string" && TOOL_ID.test(v) ? null : `${k} is not a tool_use_id`);
+    if (f.mode === "post") return id(f.tid, "tid") ?? str("answer", 8192);
+    if (f.mode === "pre-async") {
+      if (typeof f.ok !== "boolean") return "ok is not a boolean";
+      const h = f.hook;   // anything but an object is ignored there (no tool_use_id)
+      if (!f.ok || !h || typeof h !== "object" || Array.isArray(h)) return null;
+      const t = (h as Facts).tool_use_id;
+      return t === undefined || t === null ? null : id(t, "hook.tool_use_id");
+    }
+    if (f.mode === "permission-async") {
+      for (const k of ["tool", "agent_id", "agent_type", "cwd", "tpath", "shown"]) { const bad = str(k); if (bad) return bad; }
+      const bad = id(f.found, "found"); if (bad) return bad;
+      return typeof f.answerable === "boolean" ? null : "answerable is not a boolean";
+    }
+    return "mode is not post, pre-async or permission-async";
+  },
 };
 
 /** The split commands: the ones with a local half. */
@@ -67,6 +90,15 @@ export async function gather(cmd: string, argv: string[]): Promise<Facts> {
   if (cmd === "watch-ts") {
     const { instructionsSeen } = await import("../commands/watch-ts.ts");
     return { instr: argv.includes("--poll") ? null : instructionsSeen() };
+  }
+  if (cmd === "picker-hook-ts") {
+    const h = await import("../commands/picker-hook-ts.ts");
+    const [mode, , , , file = ""] = argv;
+    if (mode === "post") { let input = ""; try { input = await Bun.stdin.text(); } catch { /* none */ } return h.postFacts(input); }
+    try {
+      if (mode === "pre-async") return h.preFacts(file);
+      if (mode === "permission-async") return await h.permissionFacts(file);
+    } finally { if (file && mode !== "post") rmSync(file, { force: true }); }
   }
   return {};
 }
