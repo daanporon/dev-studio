@@ -31,6 +31,7 @@ import { stopAll } from "./fulfil/board.ts";
 import { migrateLoopFiles, reconcile } from "./db/migrate-host.ts";
 import { loadAll, type Role } from "./core/plugins.ts";
 import { sideActuator } from "./core/side-plugins.ts";
+import type { SideLink } from "../link/side.ts";
 import { queuedWork } from "./messages/replay.ts";
 import { now, open, ROOT, stateRoot } from "./core/store.ts";
 import { RECONCILE } from "./db/reconcile-mark.ts";
@@ -88,7 +89,9 @@ writeFileSync(pidFile, `${process.pid}\n`);
 
 let stopping = false, busy = false;
 const store = open(root);
+let link: SideLink | null = null;
 function finish(code = 0): never {
+  link?.stop();
   try { if (readFileSync(pidFile, "utf8").trim() === String(process.pid)) rmSync(pidFile); } catch { /* gone already */ }
   store.close();
   closeSync(lock);
@@ -124,6 +127,8 @@ async function codeChanged(): Promise<boolean> {
 }
 const loop = new Loop(store, await loadAll(undefined, role), act, side ? { role } : { signals });
 loop.boot(undefined, bootRev ? bootRev.slice(0, 7) : null);
+// A side loop is this host's end of the link to main (none on a root that never joined one).
+if (side) link = (await import("../link/side.ts")).startSideLink(store, root);
 // Calls a crash cut short are settled with Orca before the first tick acts again.
 if (!side) await actuator.boot(store, now());
 if (process.env.DS_LOOP_HANG === "1") {
@@ -153,6 +158,7 @@ if (process.env.DS_LOOP_HANG === "1") {
     }
     if (await codeChanged()) finish(75);
     try { await loop.tick(); } catch (e) { store.event("tick_error", { payload: { error: (e as Error)?.message ?? String(e) } }); }
+    link?.tick();
     busy = false;
     if (stopping) break;
     // A tick that overran starts the next one at once, not a burst of catch-up ticks.

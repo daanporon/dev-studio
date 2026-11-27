@@ -20,6 +20,8 @@ import { existsSync, mkdirSync, realpathSync, renameSync, statSync, writeFileSyn
 import { join } from "node:path";
 import { ROOT, stateRoot, dsLabel, dsPrefix, hostBackendPath, chomp, readJson, run as sh, settingsAt, writeOut, writeErr } from "../lib/shared";
 import { inherit, isUrl } from "../lib/upkeep";
+import { ensureLoop, installHost } from "../lib/host-setup.ts";
+import { readSideConfig } from "../lib/loop-unit.ts";
 import { compactWindowOf, roleRow, writeRoleFile } from "../lib/lib";
 import { BACKEND_WANTED, MOVE, openSquads, START_WANTED, STUDIO_SQUAD, studioCandidates, studioMember, studioPrompt, wantStudioBackend, wantStudioStart } from "../loop/squad/studio.ts";
 import type { LiveTerminal } from "../loop/observers/orca.ts";
@@ -71,12 +73,6 @@ async function sameRepo(home: string, arg: string): Promise<boolean> {
     try { return realpathSync(arg.slice(5)) === realpathSync(path); } catch { return false; }
   }
   return true; // a name:/id: selector names the project by its label, not a repo
-}
-
-/** Run a step's command with its output shown; a test names a stand-in with `envName`. */
-async function step(envName: string, cmd: string[]): Promise<number> {
-  const given = process.env[envName];
-  return inherit(given ? ["bash", "-c", given] : cmd, { env: process.env });
 }
 
 /** How to reach the Studio once it runs, by its backend. */
@@ -135,16 +131,17 @@ export async function run(argv: string[]): Promise<number> {
     writeErr("up: NOTE — you're running this inside an Orca agent (a Studio is bound to its own project). `ds up` is a host bootstrap; prefer a plain host shell. Reconciling by label so it won't duplicate.\n");
   }
 
-  // 1. Install dev-studio on this host when its check fails (a fresh clone); the role skills only when asked.
-  const checkCmd = process.env.DS_UP_INSTALL_CHECK;
-  const checked = (await sh(checkCmd ? ["bash", "-c", checkCmd] : [DS(), "install-ts", "--check"])).rc;
-  if (checked !== 0 || skills) {
-    writeOut(checked !== 0 ? "up: dev-studio is not installed on this host — installing it\n" : "up: installing the role skills\n");
-    const rc = await step("DS_UP_INSTALL", [DS(), "install-ts", ...(skills ? ["--skills"] : [])]);
-    if (rc !== 0) { writeErr(`up: the install failed (exit ${rc}); fix what it says and re-run\n`); return rc; }
+  const joined = readSideConfig(stateRoot());
+  if (joined) {
+    writeErr(`up: refused — this is a side host (it joined ${joined.main} as ${joined.name}): \`ds up\` runs on main\n`);
+    return 2;
   }
+
+  // 1. Install dev-studio on this host when its check fails (a fresh clone); the role skills only when asked.
+  const installRc = await installHost("up", { skills });
+  if (installRc !== 0) return installRc;
   // 2. The loop: started unless it runs. A loop that does not come up is not fatal yet (step 4 decides).
-  const loopRc = await step("DS_UP_LOOP", [DS(), "loop-ts", "--ensure"]);
+  const loopRc = await ensureLoop();
   const loopUp = loopRc === 0;
   if (!loopUp) writeErr(`up: the loop did not start (loop --ensure exit ${loopRc}, see above)\n`);
 

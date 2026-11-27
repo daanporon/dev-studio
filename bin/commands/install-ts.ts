@@ -2,6 +2,8 @@
 // Preflight, the ~/.dev-studio and command links, the migration to the loop, its systemd unit and cron
 // watchdog, the optional role skills and the hook unwrap; --check reads only. Same flags, output and
 // writes as the shell version it replaced (tests/parity-install.sh compares the two).
+// On a side root (`ds join` wrote state/link/host.json) it installs a side host: no Orca needed, the unit
+// is ds-side-loop.service (the main one is removed), and `ds join` starts the loop once main accepted.
 import { mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { ROOT, stateRoot, writeErr, writeOut } from "../lib/shared";
@@ -9,6 +11,7 @@ import { accountSkillsCheck } from "../lib/account-skills";
 import { accountFolder, listAccounts } from "../lib/account-dirs.ts";
 import { claude } from "../lib/account-kinds/claude.ts";
 import { run as wrapHooksRun } from "./wrap-hooks-ts";
+import { MAIN_UNIT, SIDE_UNIT, loopUnit } from "../lib/loop-unit.ts";
 // A throw inside the port is a failed script (non-zero), as it was when wrap-hooks.sh was a child process.
 const wrapHooks = async (a: string[]): Promise<number> => { try { return await wrapHooksRun(a); } catch (e) { writeErr(`wrap-hooks: ${(e as Error).message}\n`); return 1; } };
 import {
@@ -81,7 +84,8 @@ export async function run(argv: string[]): Promise<number> {
   const HOME = env.HOME ?? "";
   const xdg = env.XDG_CONFIG_HOME || join(HOME, ".config");
   const BACKEND = env.BACKEND || join(ROOT, "bin", "backend", "orca.sh");
-  const LOOP_UNIT = join(xdg, "systemd", "user", "ds-loop.service");
+  const UNIT = loopUnit(join(ROOT, "state")), side = UNIT === SIDE_UNIT;
+  const LOOP_UNIT = join(xdg, "systemd", "user", UNIT);
   let check = false, skills = false, dest = "";
   for (const a of argv) {
     if (a === "--check") check = true;
@@ -140,10 +144,11 @@ export async function run(argv: string[]): Promise<number> {
   };
   // The loop runs on loopPath, so a tool only found in a dropped /nix/store folder is missing for it.
   const found = (t: string) => (nixDropped > 0 ? Bun.which(t, { PATH: loopPath }) : which(t)) ?? null;
+  if (side) delete fixes.orca;
   for (const t of Object.keys(fixes)) if (found(t) === null) { err(`install: '${t}' not found — ${fixes[t]}`); return 1; }
   out(`bun: ${Bun.version} (ok)`);
 
-  if ((await capture([BACKEND, "preflight"])).rc !== 0) { err("install: Orca runtime not reachable — start Orca on this host, then re-run"); return 1; }
+  if (!side && (await capture([BACKEND, "preflight"])).rc !== 0) { err("install: Orca runtime not reachable — start Orca on this host, then re-run"); return 1; }
   // The accounts are the table's; wrap-hooks.sh gets them through DS_WRAP_ACCOUNTS (it adds ~/.claude itself).
   const added = listAccounts(stateRoot(), "claude", env).filter((r) => r.account !== claude.systemId);
   const systemDir = claude.systemDir(env);
@@ -160,7 +165,7 @@ export async function run(argv: string[]): Promise<number> {
     orcaCfg = [...profiles(join(HOME, ".config", "orca", "profiles")), ...profiles(join(HOME, "Library", "Application Support", "orca", "profiles")),
       join(HOME, ".config", "orca", "orca-data.json")].find(isFile) ?? "";
   }
-  if (orcaCfg !== "" && isFile(orcaCfg)) {
+  if (!side && orcaCfg !== "" && isFile(orcaCfg)) {
     const text = readText(orcaCfg) ?? "";
     let depth = "";
     for (const m of text.match(/"nestedWorkerMaxDepth"[: ]*[0-9]*/g) ?? []) { const d = m.match(/[0-9]+/); if (d) { depth = d[0]; break; } }
@@ -231,17 +236,18 @@ export async function run(argv: string[]): Promise<number> {
     if (cliPin !== "") cliEnv = `Environment="DS_ORCA_CLI_BIN_DIR=${unitEscape(cliPin)}"`;
     if (orcaUserData === "") orcaEnv = orcaEnvWas;
     else if (orcaCustom) orcaEnv = `Environment="ORCA_USER_DATA_PATH=${unitEscape(orcaUserData)}"`;
-    let unit = stripNl(readFileSync(join(ROOT, "systemd", "ds-loop.service"), "utf8"));
+    let unit = stripNl(readFileSync(join(ROOT, "systemd", UNIT), "utf8"));
     unit = replaceAll(replaceAll(unit, "@BUN@", bunBin), "@ROOT@", ROOT);
     unit = replaceAll(replaceAll(unit, "@STATE_ROOT@", join(ROOT, "state")), "@PATH@", loopPath);
     const at = unit.indexOf("@ORCA_DATA_ENV@");
-    const before = at < 0 ? unit : unit.slice(0, at), after = at < 0 ? unit : unit.slice(at + "@ORCA_DATA_ENV@".length);
+    const before = unit.slice(0, at), after = unit.slice(at + "@ORCA_DATA_ENV@".length);
     const extra = [orcaEnv, cliEnv].filter((x) => x !== "").join("\n");
-    unit = extra !== "" ? before + extra + after : before + after.replace(/^\n/, "");
+    // The side unit names no Orca line at all.
+    if (at >= 0) unit = extra !== "" ? before + extra + after : before + after.replace(/^\n/, "");
     mkdirSync(dirname(LOOP_UNIT), { recursive: true });
     writeFileSync(LOOP_UNIT, unit + "\n");
     if ((await inherit(["systemctl", "--user", "daemon-reload"])) === 0
-      && (await inherit(["systemctl", "--user", "enable", "ds-loop.service"], { out: "ignore", err: "ignore" })) === 0) {
+      && (await inherit(["systemctl", "--user", "enable", UNIT], { out: "ignore", err: "ignore" })) === 0) {
       unitWorks = true;
       out(`loop: systemd unit installed and enabled (${LOOP_UNIT})`);
     } else {
@@ -249,6 +255,15 @@ export async function run(argv: string[]): Promise<number> {
     }
   } else {
     out("loop: no systemd user session — it runs as a process of its own.");
+  }
+  if (side) {
+    // A host that was installed as a main before it joined: its main unit would start a main loop at boot.
+    const was = join(xdg, "systemd", "user", MAIN_UNIT);
+    if (unitValue(was, "DS_STATE_ROOT") === join(ROOT, "state")) {
+      if (systemd) await inherit(["systemctl", "--user", "disable", "--now", MAIN_UNIT], { out: "ignore", err: "ignore" });
+      rmSync(was, { force: true });
+      out(`loop: removed ${was} (this is a side host)`);
+    }
   }
   if (crash("unit")) return 9;
   writeFileSync(LOOP_RECONCILE, "");
@@ -298,12 +313,12 @@ export async function run(argv: string[]): Promise<number> {
   // A failed start is not the install's failure: the watchdog line tries again every minute.
   if (systemd) {
     if (orcaEnv !== orcaEnvWas || cliEnv !== cliEnvWas || `Environment="PATH=${loopPath}"` !== pathEnvWas) {
-      if ((await inherit(["systemctl", "--user", "try-restart", "ds-loop.service"])) !== 0) {
-        out("⚠ loop: the data path or PATH changed but the restart failed; run systemctl --user restart ds-loop.service.");
+      if ((await inherit(["systemctl", "--user", "try-restart", UNIT])) !== 0) {
+        out(`⚠ loop: the data path or PATH changed but the restart failed; run systemctl --user restart ${UNIT}.`);
       }
     }
-    if ((await inherit(["systemctl", "--user", "start", "ds-loop.service"])) !== 0) {
-      out("⚠ loop: systemctl --user start ds-loop.service failed; the cron line tries again every minute.");
+    if (!side && (await inherit(["systemctl", "--user", "start", UNIT])) !== 0) {
+      out(`⚠ loop: systemctl --user start ${UNIT} failed; the cron line tries again every minute.`);
     }
   } else {
     out("loop: the cron line starts it within a minute.");
@@ -319,7 +334,7 @@ export async function run(argv: string[]): Promise<number> {
 
   out(`Done: ${n} command(s). /ds-board, /ds-start-squad, /ds-update now work in any worktree; git pull keeps them current.`);
   out("Muse: /ds-* also work in Muse via the 'ds' skill (bin/host/install-skills.sh --muse-only installs/refreshes it).");
-  out("Next: ~/.dev-studio/bin/ds up <git-url>  (in this shell)");
+  if (!side) out("Next: ~/.dev-studio/bin/ds up <git-url>  (in this shell)");
   return 0;
 }
 

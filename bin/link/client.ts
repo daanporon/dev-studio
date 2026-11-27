@@ -5,7 +5,10 @@
 // after DEAD_MS without hearing main, the same half minute main uses, so both ends notice a loss together. With
 // `reconnect` it dials again after a loss with a growing pause (1 s up to 30 s); a refusal (not accepted, removed,
 // a second link, a wrong version) is kept in `refusal` and also retried, since the operator may accept the host
-// later. `sendJoin` is the one-shot join request (U12's `ds join` calls it).
+// later. `sendJoin` is the one-shot join request (U12's `ds join` calls it). Main proves nothing to the side and
+// the link adds no encryption (KTD4), so every dial goes through `dialUrl`: plain ws only to loopback or a
+// tailnet address (DS_LINK_ANY_MAIN=1 lifts that, as DS_LINK_BIND_ANY does for the server's binds).
+import { lookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import { ROOT } from "../loop/core/store.ts";
 import { ensureHostKey, hostKeyPath, signHello } from "./host-keys.ts";
@@ -23,6 +26,33 @@ export function linkUrl(main: string): string {
   return url.toString();
 }
 
+/** Loopback, or a tailnet address (100.64.0.0/10, fd7a:115c:a1e0::/48). */
+export function privateAddress(ip: string): boolean {
+  const v4 = ip.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (v4) return v4[1] === "127" || (v4[1] === "100" && Number(v4[2]) >= 64 && Number(v4[2]) <= 127);
+  return ip === "::1" || ip.toLowerCase().startsWith("fd7a:115c:a1e0:");
+}
+
+export class DialRefused extends Error {}
+
+type Resolve = (host: string) => Promise<{ address: string; family: number }[]>;
+const resolveAll: Resolve = (host) => lookup(host, { all: true });
+
+/** The URL to open for `main`, resolved on every dial. wss is TLS's to vouch for. A ws URL comes back with the
+ *  checked address in place of the name, so the socket cannot resolve it to another one. */
+export async function dialUrl(main: string, resolve: Resolve = resolveAll): Promise<string> {
+  const url = new URL(linkUrl(main));
+  if (url.protocol === "wss:" || process.env.DS_LINK_ANY_MAIN === "1") return url.toString();
+  let found: Awaited<ReturnType<Resolve>> = [];
+  try { found = await resolve(url.hostname.replace(/^\[|\]$/g, "")); } catch { /* said below */ }
+  if (!found.length) throw new Error(`link: cannot reach ${main} (its name does not resolve)`);
+  const open = found.find((a) => !privateAddress(a.address));
+  if (open) throw new DialRefused(`link: refusing to dial ${main} over plain ws: it resolves to ${open.address}, not loopback or a tailnet address, and nothing would prove it is main. Use main's tailnet name or address, or an https url`);
+  const pick = found.find((a) => a.family === 4) ?? found[0];
+  url.hostname = pick.family === 6 ? `[${pick.address}]` : pick.address;
+  return url.toString();
+}
+
 /** The newest migration that changed an up-table (KTD15's `up_migration`, replica.ts). */
 export const newestMigration = (): string => UP_MIGRATION;
 
@@ -35,9 +65,10 @@ export function codeRev(): string {
 }
 
 /** One join request: resolves with main's answer ({ok, fingerprint} or {ok:false, why}); rejects when main is unreachable. */
-export function sendJoin(main: string, name: string, publicKey: string, timeoutMs = 10_000): Promise<{ ok: true; fingerprint: string; created: boolean } | { ok: false; why: string }> {
+export async function sendJoin(main: string, name: string, publicKey: string, timeoutMs = 10_000): Promise<{ ok: true; fingerprint: string; created: boolean } | { ok: false; why: string }> {
+  const url = await dialUrl(main);
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(linkUrl(main));
+    const ws = new WebSocket(url);
     const timer = setTimeout(() => { try { ws.close(); } catch { /* gone */ } reject(new Error(`link: no answer from ${main} within ${timeoutMs} ms`)); }, timeoutMs);
     let done = false;
     ws.onopen = () => ws.send(JSON.stringify({ t: "join", name, public_key: publicKey }));
@@ -124,14 +155,27 @@ export class LinkClient {
     if (this.state === "stopped") return;
     this.set("connecting");
     this.refusal = null;   // a refusal from an earlier dial must not label a later unreachable main
-    const ws = new WebSocket(linkUrl(this.o.main));
+    dialUrl(this.o.main).then(
+      (url) => { if (this.state !== "stopped") this.open(url); },
+      (e: Error) => { this.set(e instanceof DialRefused ? "refused" : "down", e.message); this.redial(); },
+    );
+  }
+
+  private redial(): void {
+    if (this.state === "stopped" || !this.o.reconnect) return;
+    this.retry = setTimeout(() => this.dial(), this.pause);
+    this.pause = Math.min(this.pause * 2, 30_000);
+  }
+
+  private open(url: string): void {
+    const ws = new WebSocket(url);
     this.ws = ws;
     let welcomed = false;
     ws.onopen = () => ws.send(JSON.stringify({ t: "hello", name: this.o.name }));
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
       const f = parseFrame(typeof ev.data === "string" ? ev.data : Buffer.from(ev.data as ArrayBuffer), MAX_FRAME_BYTES);
-      if ("bad" in f) { ws.close(1003, f.bad); return; }
+      if ("bad" in f) { ws.close(1003, String(f.bad)); return; }
       if (f.t === "refused") { this.refusal = String(f.why ?? "refused"); return; }
       if (welcomed) { this.peer?.onFrame(f).then((known) => { if (!known) ws.close(1003, `unexpected frame '${f.t}'`); }); return; }
       if (f.t === "challenge") {
@@ -156,10 +200,7 @@ export class LinkClient {
       if (this.state === "stopped") return;
       if (this.refusal && !welcomed) this.set("refused", this.refusal);
       else this.set("down", this.refusal ?? "link: closed");
-      if (this.o.reconnect) {
-        this.retry = setTimeout(() => this.dial(), this.pause);
-        this.pause = Math.min(this.pause * 2, 30_000);
-      }
+      this.redial();
     };
   }
 

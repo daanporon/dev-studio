@@ -1,0 +1,20 @@
+# ds-side-loop.service — a side host's loop (bin/loop/main.ts --role side) as a systemd user unit: it keeps
+# the link to main. `ds join` installs it through `ds install-ts`, which renders the @…@ fields into
+# ~/.config/systemd/user/ds-side-loop.service and enables it; the cron line `bin/loop/loop.sh --ensure`
+# starts it and restarts it when it stops ticking. The tmux or herdr servers are units of their own.
+[Unit]
+Description=dev-studio side loop (@ROOT@)
+ConditionPathExists=@ROOT@/bin/loop/main.ts
+
+[Service]
+Type=simple
+ExecStart=@BUN@ @ROOT@/bin/loop/main.ts --role side
+Environment="DS_STATE_ROOT=@STATE_ROOT@"
+Environment="PATH=@PATH@"
+# on-failure: a loop that moved to new code exits 75 and starts again; one that finds the lock taken exits 0.
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

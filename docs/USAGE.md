@@ -249,6 +249,35 @@ need Orca: the list, `ds account add` and the skills install (`bin/host/install-
 ([Accounts](#accounts)). To try two backends
 on one repo, follow [backends/side-by-side.md](backends/side-by-side.md).
 
+## Join a side host
+
+A side host is a second machine that runs agents for your main host. On it, clone dev-studio and run one command in a
+plain shell:
+
+```sh
+bin/ds join <main-host>[:<port>] [--name <name>] [--repo <git-url>]...
+```
+
+- **It needs** `bun`, `git`, `jq`, `claude` (logged in), `crontab`, `tmux` or herdr, and its own git and GitHub
+  credentials: `gh auth status` must pass. `--repo <git-url>` also runs `git push --dry-run` against that repo.
+  `join` names everything that is missing, exits non-zero and changes nothing. It checks credentials; it does not set
+  them up. A side host needs no Orca.
+- **It installs** what `ds up` installs, with the side loop's unit (`ds-side-loop.service`) in place of the main
+  loop's, and adds no project and no Studio.
+- **It asks main to accept it** and prints this host's key fingerprint. On main, run `bin/ds host list`, check that
+  the fingerprint matches, and run `bin/ds host accept <name>`. `join` waits for up to 15 minutes, then starts the
+  side loop and prints `join: connected`. The private key stays in `state/link/host.key` (mode 0600).
+- **The network.** `<main-host>` is main's tailnet name or address: the link itself adds no encryption and main
+  proves nothing about itself, so a plain connection only goes to loopback or a tailnet address (an `https://` url
+  uses TLS).
+- **`--name`** is the name main knows this host by (default: the machine's short name). `<port>` defaults to 7790.
+
+**If main cannot be reached:** a main with no side host yet does not run its link server. On main, run
+`bin/ds config set <project> limits.conf link_listen on` (`link_port` defaults to 7790), then run `ds join` again.
+
+Running `ds join` again is safe: an accepted host goes straight on to the connection. `ds up` is refused on a side
+host, and a host that already runs a main loop's project cannot join.
+
 ## Start a feature squad
 
 From the Studio terminal, describe the topic in plain words — `/ds-start-squad`
