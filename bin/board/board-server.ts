@@ -117,7 +117,8 @@ import { BACKEND_NAMES, LOCAL_HOST, squadBackendRule } from "../backend/registry
 import { studioBackend } from "../loop/squad/studio.ts";
 import { chatProblem } from "../loop/chat/limits.ts";
 import { isHidden } from "../loop/chat/permission.ts";
-import { CHAT_FILE_NAME, CHAT_FILES_MAX, START_FILES_MAX, START_TOPIC, chatFileDir } from "../loop/chat/files.ts";
+import { CHAT_FILE_MAX_ANY, CHAT_FILE_NAME, CHAT_FILES_MAX, KIND_EXTS, KIND_MAX, START_FILES_MAX, START_TOPIC, chatFileDir, chatFileExt,
+  chatFileGone, chatFileKind, chatFileShown, storedChatName, type ChatFileKind } from "../loop/chat/files.ts";
 import { isCat } from "./event-cats.ts";
 import { ticketUrlProblem } from "../loop/squad/plan-lines.ts";
 import { KEYS, KEYS_MAX, keyOk } from "../loop/chat/keys.ts";
@@ -310,11 +311,11 @@ function startFields(b: any): { error: string } | StartFields {
   }
   if (out.start === "auto") delete out.start;
   if (out.start && out.type === "testing") return { error: "a testing squad has no start" };
-  // chat-image-upload U4: names of images uploaded to `chat-files/_start/` (names only, never a path).
+  // chat-image-upload U4: names of files uploaded to `chat-files/_start/` (names only, never a path).
   const files = b.files ?? [];
   if (!Array.isArray(files) || files.length > START_FILES_MAX || new Set(files).size !== files.length
     || files.some((f) => typeof f !== "string" || !CHAT_FILE_NAME.test(f)))
-    return { error: `files: at most ${START_FILES_MAX} distinct image names from /api/chat-file` };
+    return { error: `files: at most ${START_FILES_MAX} distinct file names from /api/chat-file` };
   if (files.length) out.files = files;
   return out;
 }
@@ -334,7 +335,7 @@ async function request(req: Request) {
   if (isStart) {
     const f = startFields(pr.b);
     if ("error" in f) return json(400, { error: f.error });
-    for (const n of f.files ?? []) if (!chatFileAt(project, START_TOPIC, n)) return json(409, { error: `image ${n} is gone — attach it again` });
+    for (const n of f.files ?? []) if (!chatFileAt(project, START_TOPIC, n)) return json(409, { error: chatFileGone(n) });
     sf = f;
   }
   const line = `board: the operator asks you to run: ${a.cmd(project, topic, role, brief)}`;
@@ -471,10 +472,10 @@ async function chatPost(req: Request) {
   const files = pr.b.files ?? [];
   if (!Array.isArray(files) || files.length > CHAT_FILES_PER_SEND || new Set(files).size !== files.length
     || files.some((f) => typeof f !== "string" || !CHAT_FILE_NAME.test(f)))
-    return json(400, { error: `files: at most ${CHAT_FILES_PER_SEND} distinct image names from /api/chat-file` });
+    return json(400, { error: `files: at most ${CHAT_FILES_PER_SEND} distinct file names from /api/chat-file` });
   const text = raw.trim();
   if (!text && !files.length) return json(400, { error: "say something" });
-  for (const f of files as string[]) if (!chatFileAt(t.project, t.topic, f)) return json(409, { error: `image ${f} is gone — attach it again` });
+  for (const f of files as string[]) if (!chatFileAt(t.project, t.topic, f)) return json(409, { error: chatFileGone(f) });
   return write((s) => {
     const m = chatMember(s, t.project, t.topic, t.wt) ?? no(404, noMember(t));
     if (t.topic !== "_studio" && paused(s, m as { project: string })) no(409, "this member is paused or resuming; use Resume before chatting");
@@ -572,19 +573,29 @@ async function chatControl(req: Request, kind: "chat-cancel" | "chat-now" | "cha
   });
 }
 
-// ---- chat images (chat-image-upload U1) -------------------------------------------------------------
-// The shared contract with the loop (bin/loop/chat/files.ts, chat-image-upload U2): a project's images
+// ---- chat files (chat-image-upload U1; text files and PDFs: markdown-file-upload-support U1) ---------------
+// The shared contract with the loop (bin/loop/chat/files.ts, chat-image-upload U2): a project's files
 // live in `<state root>/<label>/chat-files/<topic>/`, each named by the first 16 hex characters of its
-// sha256 plus the extension of its sniffed type; a `chat` row names files only, never a path. These are
-// the folder and name rule are that module's (bin/loop/chat/files.ts), imported here.
+// sha256 (a text file or PDF also by its own cleaned name) plus its extension; a `chat` row names files
+// only, never a path. The folder, the name rule, the kinds and their caps are that module's, imported here.
 const chatFilesRoot = (project: string) => dirname(chatFileDir(stateRoot(), project, "x")); // `<state root>/<label>/chat-files`
-const CHAT_FILE_MAX = 5 * 1024 * 1024; // per stored file
 const CHAT_FILES_CAP = 500 * 1024 * 1024; // per project's chat-files/
 const CHAT_FILES_PER_SEND = CHAT_FILES_MAX;
 const CHAT_FILES_KEEP_D = 14; // chat_files_keep_d's default
 const CHAT_TMP = /^\..*\.tmp$/;
 const CHAT_TYPES: Record<string, "png" | "jpg" | "webp" | "gif"> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
 const CHAT_EXT_TYPE: Record<string, string> = { png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+// The Content-Type the board sends for a text file or a PDF; the file's own name (`&name=`) must then carry an
+// extension of that kind.
+const CHAT_NAMED_TYPES: Record<string, ChatFileKind> = { "text/plain": "text", "application/pdf": "pdf" };
+const KIND_WORD: Record<ChatFileKind, string> = { image: "an image", text: "a text file", pdf: "a PDF" };
+
+// Why the bytes are not a text file (UTF-8, no NUL) or a PDF (`%PDF-` first), or null when they are one.
+function checkNamed(kind: ChatFileKind, b: Uint8Array): string | null {
+  if (kind === "pdf") return [0x25, 0x50, 0x44, 0x46, 0x2d].every((v, i) => b[i] === v) ? null : "not a PDF (no %PDF- at the start)";
+  if (b.includes(0)) return "not a text file (it holds a NUL byte)";
+  try { new TextDecoder("utf-8", { fatal: true }).decode(b); return null; } catch { return "not a text file (not UTF-8)"; }
+}
 
 // The image type the first bytes say, or null: PNG, JPEG, GIF87a/89a, RIFF????WEBP. SVG is never one.
 function sniffImage(b: Uint8Array): "png" | "jpg" | "webp" | "gif" | null {
@@ -612,7 +623,7 @@ function chatDir(project: string, topic: string, make: boolean): string | null {
   if (make && !existsSync(join(stateRoot(), project))) mkdirSync(join(stateRoot(), project), { recursive: true, mode: 0o700 });
   return plainDir(top, make) && plainDir(dir, make) ? dir : null;
 }
-// The stored image's path when it is a plain file in the topic's plain folder, else null.
+// The stored file's path when it is a plain file in the topic's plain folder, else null.
 function chatFileAt(project: string, topic: string, name: string): string | null {
   if (!CHAT_FILE_NAME.test(name)) return null;
   try {
@@ -631,7 +642,7 @@ function chatKeepDays(project: string): number {
   } catch { return CHAT_FILES_KEEP_D; }
 }
 
-// The prune every upload runs first: over `<label>/chat-files/*/`, plain files only, an image older than
+// The prune every upload runs first: over `<label>/chat-files/*/`, plain files only, a stored file older than
 // chat_files_keep_d days and a temp file older than an hour go; any other file stays. Returns the bytes
 // left. An error never fails the upload: it is one stderr line, and the walk goes on.
 function chatPrune(project: string): number {
@@ -669,25 +680,39 @@ function startTarget(project: unknown, wt: boolean): { project: string; topic: s
   return { project, topic: START_TOPIC };
 }
 
-// POST /api/chat-file?project=&topic=&wt=, body = the image's bytes. The checks run in this order and the
-// body is read only after the header ones pass; a refused upload writes no file.
+// POST /api/chat-file?project=&topic=&wt=[&name=], body = the file's bytes. An image/* Content-Type is an
+// image (any name ignored); text/plain or application/pdf needs the file's own name, whose extension must be
+// of that kind. The checks run in this order and the body is read only after the header ones pass; a refused
+// upload writes no file.
 async function chatFilePost(req: Request, url: URL) {
   if (!sameOrigin(req)) return text(403, "forbidden origin\n");
-  const ext = CHAT_TYPES[(req.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase()];
-  if (!ext) return json(415, { error: "want image/png, image/jpeg, image/webp or image/gif" });
-  const q = url.searchParams, start = q.get("topic") === START_TOPIC;
+  const q = url.searchParams, ctype = (req.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+  const kind: ChatFileKind | undefined = CHAT_TYPES[ctype] ? "image" : CHAT_NAMED_TYPES[ctype];
+  if (!kind) return json(415, { error: "want image/png, image/jpeg, image/webp or image/gif, text/plain or application/pdf" });
+  let ext: string = CHAT_TYPES[ctype] ?? "", original = "";
+  if (kind !== "image") {
+    original = q.get("name") ?? "";
+    if (!original || original.length > 255) return json(400, { error: `name: ${KIND_WORD[kind]} needs its own file name (at most 255 characters)` });
+    const dot = original.lastIndexOf(".");
+    ext = dot >= 0 ? original.slice(dot + 1).toLowerCase() : "";
+    if (!KIND_EXTS[kind].includes(ext))
+      return json(415, { error: `${original} is not ${KIND_WORD[kind]}: want ${kind === "pdf" ? ".pdf" : `one of .${KIND_EXTS.text.join(" .")}`}` });
+  }
+  const start = q.get("topic") === START_TOPIC;
   const st = start ? startTarget(q.get("project"), q.has("wt")) : null;
   const ct = start ? null : chatTarget(q.get("project"), q.get("topic"), q.get("wt"));
   if (st && "error" in st) return json(st.status, { error: st.error });
   if (ct && "error" in ct) return json(ct.status, { error: ct.error });
   const chat = ct && !("error" in ct) ? ct : null, t = (chat ?? st) as { project: string; topic: string };
-  const tooBig = { error: `an image is at most ${CHAT_FILE_MAX / 1024 / 1024} MiB` };
-  if (Number(req.headers.get("Content-Length") || 0) > CHAT_FILE_MAX) return json(413, tooBig);
+  const max = KIND_MAX[kind], tooBig = { error: `${KIND_WORD[kind]} is at most ${max / 1024 / 1024} MiB` };
+  if (Number(req.headers.get("Content-Length") || 0) > max) return json(413, tooBig);
   let bytes: Uint8Array;
   try { bytes = new Uint8Array(await req.arrayBuffer()); } catch { return json(413, tooBig); }
-  if (bytes.length > CHAT_FILE_MAX) return json(413, tooBig);
-  if (!bytes.length) return json(400, { error: "empty body: send the image's bytes" });
-  if (sniffImage(bytes) !== ext) return json(415, { error: "not a png/jpeg/webp/gif" });
+  if (bytes.length > max) return json(413, tooBig);
+  if (!bytes.length) return json(400, { error: `empty body: send the ${kind === "image" ? "image" : "file"}'s bytes` });
+  if (kind === "image" && sniffImage(bytes) !== ext) return json(415, { error: "not a png/jpeg/webp/gif" });
+  const bad = kind === "image" ? null : checkNamed(kind, bytes);
+  if (bad) return json(415, { error: `${original}: ${bad}` });
   if (!existsSync(dbPath())) return json(503, NO_DB);
   // A chat's image needs its live member; a start's (no squad yet) a project the loop knows, as the start itself.
   let live = false;
@@ -697,26 +722,26 @@ async function chatFilePost(req: Request, url: URL) {
     finally { s.close(); }
   } catch (e) { return json(503, { error: `loop.db: ${e}` }); }
   if (!live) return chat ? json(404, { error: noMember(chat) }) : json(409, { error: `no project ${t.project} on this board` });
-  const name = `${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.${ext}`;
+  const name = storedChatName(createHash("sha256").update(bytes).digest("hex").slice(0, 16), ext, original);
   try {
     const left = chatPrune(t.project);
     const dir = chatDir(t.project, t.topic, true)!, p = join(dir, name);
     const st = lstatSync(p, { throwIfNoEntry: false });
     if (st?.isFile()) { const now = new Date(); utimesSync(p, now, now); }
     else {
-      if (left + bytes.length > CHAT_FILES_CAP) return json(507, { error: `this project's chat images are over ${CHAT_FILES_CAP / 1024 / 1024} MiB; wait for old ones to be pruned` });
+      if (left + bytes.length > CHAT_FILES_CAP) return json(507, { error: `this project's chat files are over ${CHAT_FILES_CAP / 1024 / 1024} MiB; wait for old ones to be pruned` });
       const tmp = join(dir, `.${name}.${process.pid}.tmp`);
       try { writeFileSync(tmp, bytes, { mode: 0o600, flag: "wx" }); renameSync(tmp, p); }
       catch (e) { try { unlinkSync(tmp); } catch { /* not written */ } throw e; }
     }
   } catch (e) {
-    return json(500, { error: e instanceof ChatFolder ? e.message : `storing the image: ${String(e).slice(-300)}` });
+    return json(500, { error: e instanceof ChatFolder ? e.message : `storing the file: ${String(e).slice(-300)}` });
   }
   const u = new URLSearchParams({ project: t.project, topic: t.topic, name });
   return json(200, { id: name, url: `api/chat-file?${u}`, bytes: bytes.length });
 }
 
-// GET /api/chat-file?project=&topic=&name=: one stored image, never a symlink or anything outside its folder.
+// GET /api/chat-file?project=&topic=&name=: one stored file, never a symlink or anything outside its folder.
 // No member check, so an ended member's old bubbles still show.
 function chatFileGet(url: URL) {
   const q = url.searchParams, project = q.get("project"), topic = q.get("topic"), name = q.get("name") ?? "";
@@ -724,18 +749,27 @@ function chatFileGet(url: URL) {
     return json(400, { error: "need project and topic" });
   // A start's images (`_start`) belong to the project, as the start does.
   if ((scope.project && scope.project !== project) || (scope.topic && topic !== START_TOPIC && scope.topic !== topic)) return json(403, { error: "target is outside this board's scope" });
-  if (!CHAT_FILE_NAME.test(name)) return json(400, { error: "bad image name" });
+  const kind = chatFileKind(name), ext = chatFileExt(name);
+  if (!kind || !ext) return json(400, { error: "bad file name" });
+  const gone = kind === "image" ? "image removed\n" : "file removed\n";
   const p = chatFileAt(project, topic, name);
-  if (!p) return text(404, "image removed\n");
+  if (!p) return text(404, gone);
+  // The type comes from the kind tables, never a MIME lookup, so an uploaded .html is plain text. A text file
+  // or PDF is sandboxed and never rendered as a page; a PDF downloads (Chrome's viewer does not run sandboxed).
+  const headers: Record<string, string> = kind === "image"
+    ? { "Content-Type": CHAT_EXT_TYPE[ext], "Content-Disposition": "inline", "Content-Security-Policy": "default-src 'none'; img-src 'self'" }
+    : kind === "text"
+      ? { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": "inline", "Content-Security-Policy": "default-src 'none'; sandbox" }
+      : { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${chatFileShown(name)}"`,
+        "Content-Security-Policy": "default-src 'none'; sandbox" };
   let fd = -1;
   try {
     fd = openSync(p, fsc.O_RDONLY | fsc.O_NOFOLLOW);
     const st = fstatSync(fd);
-    if (!st.isFile() || st.size > CHAT_FILE_MAX) return text(404, "image removed\n");
+    if (!st.isFile() || st.size > KIND_MAX[kind]) return text(404, gone);
     return new Response(readFileSync(fd), { status: 200, headers: {
-      "Content-Type": CHAT_EXT_TYPE[name.split(".")[1]], "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline",
-      "Content-Security-Policy": "default-src 'none'; img-src 'self'", "Cache-Control": "private, max-age=86400" } });
-  } catch { return text(404, "image removed\n"); }
+      ...headers, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400" } });
+  } catch { return text(404, gone); }
   finally { if (fd >= 0) closeSync(fd); }
 }
 
@@ -1660,7 +1694,7 @@ const POSTS: Record<string, (req: Request) => Promise<Response>> = {
 async function handle(req: Request) {
   if (!hosts.has(hostName(req.headers.get("Host")))) return text(403, "forbidden host\n");
   const url = new URL(req.url), path = url.pathname;
-  // Bun takes bodies up to an image's size (maxRequestBodySize) for the upload alone: any other request
+  // Bun takes bodies up to the largest chat file's size (maxRequestBodySize) for the upload alone: any other request
   // that says it is bigger than a JSON post may be is refused before routing.
   if (path === "/api/chat-file" && req.method === "POST") return chatFilePost(req, url);
   if (Number(req.headers.get("Content-Length") || 0) > MAX_BODY) return text(413, "too large\n");
@@ -1686,7 +1720,7 @@ async function handle(req: Request) {
 const bindTries = Math.max(1, Number(process.env.DS_BOARD_BIND_TRIES) || 30);
 for (const hostname of bindArg.split(/\s+/).filter(Boolean)) {
   for (let i = 0; ; i++) {
-    try { Bun.serve({ hostname, port, fetch: handle, maxRequestBodySize: CHAT_FILE_MAX + 64 * 1024, idleTimeout: 30 }); break; }
+    try { Bun.serve({ hostname, port, fetch: handle, maxRequestBodySize: CHAT_FILE_MAX_ANY + 64 * 1024, idleTimeout: 30 }); break; }
     catch (e) {
       if (i >= bindTries - 1) { console.error(`board (serve): could not bind ${hostname}:${port} — ${e}`); process.exit(1); }
       await Bun.sleep(200);

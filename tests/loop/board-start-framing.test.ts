@@ -51,8 +51,9 @@ async function rig() {
     return readFileSync(String(o.result), "utf8");
   };
   // chat-image-upload U4: an image for the Start squad dialog (topic _start, no member).
-  const upload = async (bytes: Uint8Array) => {
-    const r = await fetch(url + "/api/chat-file?project=p&topic=_start", { method: "POST", headers: { Origin: url, "Content-Type": "image/png" }, body: bytes });
+  // markdown-file-upload-support U1: a text file or PDF names its Content-Type and its own name.
+  const upload = async (bytes: Uint8Array, type = "image/png", name = "") => {
+    const r = await fetch(url + `/api/chat-file?project=p&topic=_start${name ? `&name=${encodeURIComponent(name)}` : ""}`, { method: "POST", headers: { Origin: url, "Content-Type": type }, body: bytes });
     return { status: r.status, body: await r.json() as any };
   };
   const wish = (topic: string) => store.db.query("SELECT want, want_payload FROM squads WHERE project = 'p' AND topic = ?").get(topic) as Row | null;
@@ -201,7 +202,7 @@ test("a start's images: nine, a bad name or a missing one is refused and files n
   const ok = { project: "p", action: "start", text: "do it" };
   const nine = Array.from({ length: 9 }, (_, i) => `${String(i).repeat(16)}.png`);
   const cases: [string, any, number, string][] = [
-    ["nine", { ...ok, files: nine }, 400, "files: at most 8 distinct image names"],
+    ["nine", { ...ok, files: nine }, 400, "files: at most 8 distinct file names"],
     ["bad name", { ...ok, files: ["../x.png"] }, 400, "files: at most 8"],
     ["twice", { ...ok, files: [a.body.id, a.body.id] }, 400, "files: at most 8"],
     ["not a list", { ...ok, files: "x" }, 400, "files: at most 8"],
@@ -219,6 +220,31 @@ test("a start's images: nine, a bad name or a missing one is refused and files n
   await f.fulfil(r.body.id);
   expect(readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8")).toBe("do it");
   expect(existsSync(join(f.root, "p", "framings", `board-start-${r.body.id}`))).toBe(false);
+});
+
+// markdown-file-upload-support U1 (D7): a text file or PDF is copied like an image and listed under its own section.
+const FILES = "\n## Attached files\n\nThe operator attached these files to the brief. Read each with your file-reading tool:\n";
+test("a start with a .md, a .pdf and a .png writes both sections; a gone .md fails a strict start with file", async () => {
+  const f = await rig();
+  const i = await f.upload(png("eight")), m = await f.upload(Buffer.from("# Spec\n"), "text/plain", "My Spec (v2).md");
+  const d = await f.upload(Buffer.from("%PDF-1.4 x"), "application/pdf", "report.pdf");
+  expect([i.status, m.status, d.status]).toEqual([200, 200, 200]);
+  const [ni, nm, nd] = [i.body.id as string, m.body.id as string, d.body.id as string];
+  expect(nm).toMatch(/^[0-9a-f]{16}-My-Spec-v2\.md$/);
+  const r = await f.post({ project: "p", action: "start", text: "read", files: [nm, ni, nd] });
+  expect(r.status).toBe(202);
+  await f.fulfil(r.body.id);
+  const dir = join(f.root, "p", "framings", `board-start-${r.body.id}`);
+  expect(readFileSync(join(f.root, "p", "framings", `board-start-${r.body.id}.md`), "utf8"))
+    .toBe(`read\n${SECTION}- ${join(dir, ni)}\n${FILES}- ${join(dir, nm)}\n- ${join(dir, nd)}\n`);
+  expect(readFileSync(join(dir, nm), "utf8")).toBe("# Spec\n");
+  const g = await f.post({ project: "p", action: "start", text: "again", files: [nm], slug: "gone-md" });
+  expect(g.status).toBe(202);
+  unlinkSync(join(f.root, "p", "chat-files", "_start", nm));
+  expect(await f.fulfil(g.body.id)).toEqual({ ok: false, error: `file ${nm} is gone — attach it again` });
+  expect(f.wish("gone-md")).toBeNull();
+  const late = await f.post({ project: "p", action: "start", text: "late", files: [nm] });
+  expect([late.status, late.body.error]).toEqual([409, `file ${nm} is gone — attach it again`]);
 });
 
 // orca-backend-alternatives U33: the project's backend is not a choice; another one is refused with U30's reason.
