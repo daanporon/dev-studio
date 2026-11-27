@@ -1461,11 +1461,6 @@ function pageGet(url: URL) {
 // HTML-escape one value printed into a page the server writes.
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-// GET /review/<key> -> the page of one Lavish session in a plain view (lavish-legacy-document-opening U1): a one-line
-// top bar (the page name, "review running" or "review ended") over an iframe of
-// GET /review/<key>/file/<name>, which serves the page and the files beside it (saved-pages.ts `serveReview`:
-// the session's folder and below, allowed types, no symlink, sandboxed like /page/). The session must belong to
-// a squad in this board's scope (board-data.ts `reviewTarget`) and its file must be there; anything else is 404.
 // The session `key` as /review/<key> may show it, with the file at `path` under its folder (default: the page
 // itself, which must be servable: of an allowed type, no symlinked folder), or null.
 function reviewable(key: string, path?: string[]) {
@@ -1497,6 +1492,11 @@ b.addEventListener("click", () => { b.disabled = true; b.textContent = "Openingâ
 addEventListener("pageshow", (e) => { if (e.persisted) { reset(); say(""); } });
 `;
 
+// GET /review/<key> -> the page of one Lavish session in a plain view (lavish-legacy-document-opening U1): a one-line
+// top bar (the page name, "review running" or "review ended") over an iframe of
+// GET /review/<key>/file/<name>, which serves the page and the files beside it (saved-pages.ts `serveReview`:
+// the session's folder and below, allowed types, no symlink, sandboxed like /page/). The session must belong to
+// a squad in this board's scope (board-data.ts `reviewTarget`) and its file must be there; anything else is 404.
 function reviewGet(url: URL) {
   let seg: string[];
   try { seg = url.pathname.slice("/review/".length).split("/").map(decodeURIComponent); } catch { return text(404, "not found\n"); }
