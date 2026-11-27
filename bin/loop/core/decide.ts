@@ -127,7 +127,7 @@ export function compare(f: Facts): Act {
 // for the spawn grace (DS_SWEEP_SPAWN_GRACE_MIN), then unknown: never a second start beside it.
 // U12: a squad off Orca has no dispatch, so its reality is the process walk alone (walkReality).
 export function reality(store: Store, m: Row, now: number): Reality {
-  if (onContract(store, String(m.project), String(m.squad))) return walkReality(store, m, now);
+  if (onContract(store, String(m.project), String(m.squad), m.host)) return walkReality(store, m, now);
   const w = m.wt ? store.get("observed_workers", { project: m.project, wt: m.wt }) : null, placed = lastStart(m);
   const unread = !w || w.gone_at != null || Number(w.account_at ?? 0) <= placed;
   // account-move-slow U2: the loop stopped it and a walk read since found no agent, while Orca's
@@ -169,7 +169,7 @@ function deadUnderOrca(store: Store, m: Row, w: Row, placed: number, now: number
 // U21c: when reality() reads (or will read) an Orca member's `running` presence as none by U21a's rule
 // (no loop stop since its last start, noAgentSince held for GONE_MIN): that time, else null.
 export function staleWorkingAt(store: Store, m: Row): number | null {
-  if (!m.wt || onContract(store, String(m.project), String(m.squad))) return null;
+  if (!m.wt || onContract(store, String(m.project), String(m.squad), m.host)) return null;
   const w = store.get("observed_workers", { project: m.project, wt: m.wt }), placed = lastStart(m);
   if (!w || w.gone_at != null || w.walk !== "none" || w.presence !== "running" || lastStopSent(store, m) > placed) return null;
   const since = noAgentSince(store, m, w, placed);

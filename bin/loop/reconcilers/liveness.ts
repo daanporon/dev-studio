@@ -420,7 +420,7 @@ export function longStepOpen(store: Store, project: string, wt: string, now: num
 // unread `messages` rows (UNREAD). null for a member on Orca, whose worker row's `unread` is Orca's count.
 export function rowsUnread(store: Store, project: string, wt: string): number | null {
   const m = store.db.query("SELECT squad, role, suffix FROM members WHERE project = ? AND wt = ? ORDER BY id DESC").get(project, wt) as Row | null;
-  if (!m || !onContract(store, project, String(m.squad))) return null;
+  if (!m || !onContract(store, project, String(m.squad), m.host)) return null;
   const r = store.db.query(`SELECT COUNT(*) AS n FROM messages m WHERE m.project = ? AND m.squad = ? AND m.to_role = ? AND m.to_suffix = ? AND ${UNREAD}`)
     .get(project, String(m.squad), String(m.role), String(m.suffix ?? "")) as { n: number };
   return r.n;

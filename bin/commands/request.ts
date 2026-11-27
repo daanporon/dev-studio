@@ -9,7 +9,7 @@ import { now, open, type Row, type Store } from "../loop/core/store.ts";
 import { parse, print, seconds, shape, waitFor } from "../loop/core/cli.ts";
 import { unknownRole } from "../loop/reconcilers/requests.ts";
 
-export const help = `<role> [--unit <slug>] [--suffix <s>] [--tier standard|hard] [--spec <text>] [--squad <project>/<topic>] [--by <who>] [--wait <s>] — start a role in the squad: a builder takes --unit (its suffix), other roles --suffix; the squad defaults to the one this worktree belongs to`;
+export const help = `<role> [--unit <slug>] [--suffix <s>] [--tier standard|hard] [--spec <text>] [--squad <project>/<topic>] [--by <who>] [--wait <s>] — start a role in the squad: a builder takes --unit (its suffix), other roles --suffix; the squad defaults to the one this worktree belongs to; --host <name> starts it on that side host`;
 
 // The squad whose member (or Lead) worktree holds the current directory.
 function here(s: Store): { project: string; topic: string } | null {
@@ -36,7 +36,7 @@ function out(s: Store, row: Row, changed: boolean) {
 
 export async function run(args: string[]): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) { console.log(`usage: ds request ${help}`); return 0; }
-  const { pos, opt } = parse(args, ["unit", "suffix", "tier", "spec", "squad", "by", "wait"]);
+  const { pos, opt } = parse(args, ["unit", "suffix", "tier", "spec", "squad", "by", "wait", "host"]);
   const [role] = pos;
   const usage = (why: string) => { console.error(`ds request: ${why}\nusage: ds request ${help}`); return 2; };
   if (!role || pos.length > 1) return usage("name one role");
@@ -62,6 +62,9 @@ export async function run(args: string[]): Promise<number> {
     if (!suffix) return usage(`a ${role} needs --suffix <s> (or --unit <slug>)`);
     if (!/^[A-Za-z0-9._-]+$/.test(suffix)) return usage(`bad suffix '${suffix}'`);
     const id = `${sq.project}/${sq.topic}/${role}/${suffix}`, by = opt.by ?? process.env.DS_WHO ?? "lead";
+    // side-loop-host U10: --host forces the side host the member runs on (tests, the operator); `local` is this host.
+    const host = opt.host === undefined || opt.host === "local" ? null : opt.host;
+    if (host !== null && !s.get("hosts", { name: host })) { console.error(`ds request: no host '${host}' (ds host list)`); return 1; }
 
     // A live member with this slot running, or wanted running and not yet settled: the request is
     // already in hand. One whose start failed (or ended otherwise) is wished again, as a new episode.
@@ -69,7 +72,9 @@ export async function run(args: string[]): Promise<number> {
       .get(sq.project, sq.topic, role, suffix) as Row | null;
     let row: Row, changed = false;
     if (live && (live.status === "running" || (live.want === "running" && live.want_result == null))) row = live;
-    else {
+    else if (opt.host !== undefined && live?.wt && String(live.host ?? "local") !== (host ?? "local")) {
+      console.error(`ds request: ${role}/${suffix} has a worktree on ${live.host ?? "local"}; --host ${opt.host} can't move it`); return 1;
+    } else {
       const payload: Row = { why: "start", request: true, ...(unit && role === "builder" ? { unit } : {}), ...(opt.spec ? { spec: opt.spec } : {}) };
       row = s.tx(() => {
         const wanted = s.want("member", id, "running", { payload, by, rearm: true }).row;
@@ -77,7 +82,7 @@ export async function run(args: string[]): Promise<number> {
         // No doc yet: squadDoc exports members with one, and a wt-less member in the squad doc would
         // round-trip onto every other wt-less member. The fulfiller writes it with the worktree.
         s.fact("member_requested", [{ table: "members", key: { id: wanted.id }, set: {
-          phase: "build", ...(opt.tier ? { tier: opt.tier } : {}), status: "wanted", updated_at: now(),
+          phase: "build", ...(opt.tier ? { tier: opt.tier } : {}), ...(opt.host !== undefined ? { host } : {}), status: "wanted", updated_at: now(),
         } }], { project: sq!.project, squad: sq!.topic, member: `${role}/${suffix}`, payload: { id: wanted.id, role, suffix, unit: unit ?? null, tier: opt.tier ?? null, by } });
         return s.wish("member", Number(wanted.id))!;
       });

@@ -24,15 +24,14 @@ import { effective } from "../pause/pause.ts";
 import { isCancel } from "../core/decide.ts";
 import { view } from "../squad/member-state.ts";
 import { closeBusy } from "../squad/close-busy.ts";
-import { wtProbe } from "../io/wt-probe.ts";
 import { actionBlock } from "../pause/pause.ts";
 import { closeTidy } from "../io/tidy.ts";
 import { removalHold } from "../squad/exposed.ts";
-import { rescuePages } from "../io/rescue.ts";
+import { probeOn, rescueOn } from "../../link/host-jobs.ts";
 import type { Row, Store } from "../core/store.ts";
 import type { Action } from "../core/plugins.ts";
 import { payloadOf, type ActionPayload } from "../core/kinds.ts";
-import { onContract } from "../squad/backend.ts";
+import { hostOf, onContract, onSide } from "../squad/backend.ts";
 import { byContract, contractCloseTerminals, contractRemoveTree } from "../squad/removal.ts";
 import { worktreeAt } from "../io/worktrees.ts";
 import { errOf } from "../io/orca.ts";
@@ -100,18 +99,22 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   // Release its settled dispatch (close-role.sh always did): a member archived while its
   // agent was already gone goes straight here and would otherwise keep its long-poll slot.
   const runId = String(store.get("squads", { project: r.project, topic: r.squad })?.run_id ?? "");
-  if (runId && wt) await x.act.orca.run("worker-release", [runId, wt], { env: x.act.childActivity(x.store, a) });
+  if (runId && wt && !onSide(r.host)) await x.act.orca.run("worker-release", [runId, wt], { env: x.act.childActivity(x.store, a) });
   const tree = store.get("observed_worktrees", { project: r.project, wt });
   const path = String(tree?.path ?? (wt.includes("::") ? wt.split("::").at(-1) : "") ?? "");
+  // side-loop-host U10: a side member's tree is on its host: the rescue, the probe and the removal run there as host
+  // jobs (bin/link/host-jobs.ts), and nothing here reads or stops anything at that path on main.
+  const host = hostOf(r), side = onSide(host), sideTree = side && path ? store.get("worktrees", { host, path }) : null;
   // U11c: a squad on a contract backend has no Orca worktree row: its provider's row names the branch.
-  const contract = byContract(store, { project: String(r.project), squad: String(r.squad) });
-  const branch = String(tree?.branch ?? (contract && path ? worktreeAt(store, path)?.branch : "") ?? "");
+  const contract = byContract(store, { project: String(r.project), squad: String(r.squad), wt });
+  const branch = String(tree?.branch ?? (contract && path ? (side ? sideTree : worktreeAt(store, path))?.branch : "") ?? "");
   const w = { project: String(r.project), squad: String(r.squad), wt, path };
-  if (!path || !existsSync(path)) { finish("archived: worktree already gone"); return { done: true, result: "removed: already gone" }; }
+  const gone = !path || (side ? sideTree?.gone_at != null : !existsSync(path));
+  if (gone) { finish("archived: worktree already gone"); return { done: true, result: "removed: already gone" }; }
   // U3: copy its pages and notes out first, whatever the probe says next; a replay copies nothing twice.
   // orca-worktree-cleanup U1: run once more before the second probe; `pass` 2's event says so.
   const rescue = async (pass: number): Promise<Result | Set<string>> => {
-    const saved = await rescuePages(store, String(r.project), String(r.squad), r.suffix ? `${r.role}-${r.suffix}` : String(r.role), path);
+    const saved = await rescueOn(store, host, String(r.project), String(r.squad), r.suffix ? `${r.role}-${r.suffix}` : String(r.role), path, x.act.hostJobs());
     if (saved.count + saved.same > 0) extra = { rescued: saved.dest };
     if (saved.count > 0) store.event("pages_rescued", { project: String(r.project), squad: String(r.squad), member: wt,
       payload: { wt, path, dest: saved.dest, count: saved.count, bytes: saved.bytes, same: saved.same, capped: saved.capped, listed: saved.listed, files: saved.files.slice(0, 20), ...(pass > 1 ? { pass } : {}) } });
@@ -127,7 +130,8 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
   // A dirty or unpushed tree is kept as a leftover, untouched; `tidied` says the close-time tidy ran.
   type Clean = { dirty: number; unpushed: number; secured: number; files: string[] };
   const check = async (tidied: boolean, secured: Set<string>): Promise<Result | Clean> => {
-    const probe = await wtProbe(path, 60_000, { secured });
+    let probe;
+    try { probe = await probeOn(host, path, 60_000, { secured }, x.act.hostJobs()); } catch (e) { probe = { code: 1, out: "", err: (e as Error).message }; }
     if (probe.code !== 0) {
       recordLeftover(store, r, wt, path, branch || "unknown", "unknown (probe failed)", [], 0, 0, extra);
       finish("leftover kept (probe failed)");
@@ -156,7 +160,7 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
     if (c.code !== 0) return { retry: errOf(c, "terminal.close") };
   } else await x.act.orca.run("terminal-close-worktree", [`id:${wt}`], { env: x.act.childActivity(x.store, a) });
   // U1 (KTD10): the project's cleanup_on_close, then stop what is still running in the tree, then probe again.
-  const tidy = await closeTidy.before(a, x, path);
+  const tidy = side ? null : await closeTidy.before(a, x, path);
   const secured2 = await rescue(2);
   if (!(secured2 instanceof Set)) return secured2;
   const again = await check(true, secured2);
@@ -172,7 +176,7 @@ async function remove(a: Action, x: Exec, r: Row): Promise<Result> {
     finish("leftover kept (worktree-rm refused)");
     return { done: true, result: "left: rm-refused" };
   }
-  await closeTidy.after(a, x, path, tidy);
+  if (tidy) await closeTidy.after(a, x, path, tidy);
   finish("archived: worktree removed");
   return { done: true, result: "removed: clean, pushed" };
 }
@@ -204,7 +208,7 @@ const close: Fulfiller = {
   ready(a, x) {
     if (payloadOf<"member.close">(a)?.phase !== "stop") return true;
     const r = rowOf(x, a), m = r ? memberOf(x.store, { id: Number(r.id) }) : null;
-    return !!m && (onContract(x.store, m.project, m.squad) || !!x.store.get("coordinators", { project: m.project, squad: m.squad })?.handle);
+    return !!m && (onContract(x.store, m.project, m.squad, m.host) || !!x.store.get("coordinators", { project: m.project, squad: m.squad })?.handle);
   },
 
   async exec(a, x): Promise<Result> {
@@ -216,9 +220,9 @@ const close: Fulfiller = {
     if (!m?.wt) return { dropped: "no worktree" };
     const keep = String(store.get("coordinators", { project: m.project, squad: m.squad })?.handle ?? "");
     // U11: a squad on a contract backend has no coordinator: its stop closes the member's terminals.
-    if (!keep && !onContract(store, m.project, m.squad)) return { wait: "no coordinator pane" };
+    if (!keep && !onContract(store, m.project, m.squad, m.host)) return { wait: "no coordinator pane" };
     const run = String(store.get("squads", { project: m.project, topic: m.squad })?.run_id ?? "");
-    const makeSeat = (op: string) => x.act.seat(store, m.project, m.squad, `close:${a.episode}:${op}`, m.wt, at);
+    const makeSeat = (op: string) => x.act.seat(store, m.project, m.squad, `close:${a.episode}:${op}`, m.wt, at, null, undefined, m.host);
     const res = await x.act.driver(makeSeat("worker-stop"), m.agent).stop(makeSeat, m, run, keep);
     if (!res.ok) return { retry: res.error ?? "stop failed" };
     const why = payloadOf<"member.close">(a)?.why ?? view(store, r) ?? "stopped";

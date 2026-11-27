@@ -928,7 +928,10 @@ const depList = (u: any) => (Array.isArray(u.deps ?? []) ? (u.deps ?? []) : [u.d
 // is not restarted on, and a stale read keeps the agent state.
 /** `backendOk`: the Orca observer's rows are current. `contractOk`: the projects whose contract observer rows are
  *  current (U58), so a member off Orca with no row of its own reads as gone there, else unknown. */
-type Live = { ws: Record<string, string>; backendOk: boolean; loopDown: boolean; contractOk?: Set<string> };
+type Live = { ws: Record<string, string>; backendOk: boolean; loopDown: boolean; contractOk?: Set<string>; hosts?: Set<string> };
+// side-loop-host U10: a worktree id the contract observers own: `local::<path>` here, `<host>::<path>` on a linked side
+// host (its rows come up the link with the side's contract observer's doc), so Orca's freshness says nothing about it.
+const contractWt = (live: Live, w: string): boolean => w.startsWith("local::") || [...(live.hosts ?? [])].some((h) => w.startsWith(`${h}::`));
 /** observed_workers rows the contract observer wrote (bin/loop/observers/contract.ts), not Orca's. */
 const CONTRACT_ROW = "COALESCE(json_valid(doc) AND json_extract(doc, '$.backend') = 'contract', 0)";
 
@@ -1815,7 +1818,7 @@ function squad(db: Db, label: string, topic: string, st: any, live: Live, toks: 
   // A worker the Orca observer marked gone (or never saw) is GONE — unless its rows are stale
   // (unknown), or the squad is suspended (its worktrees were removed on purpose).
   const wst = (w: unknown) => status === "suspended" ? "suspended"
-    : live.ws[String(w ?? "")] || ((String(w ?? "").startsWith("local::") ? live.contractOk?.has(label) : live.backendOk) ? "gone" : "unknown");
+    : live.ws[String(w ?? "")] || ((contractWt(live, String(w ?? "")) ? live.contractOk?.has(label) : live.backendOk) ? "gone" : "unknown");
   const wts = arr(st.worktrees).map(String);
   const activeWts = wts.filter((w) => !paused(db.s, { project: label, squad: topic, member: w }));
   const working = activeWts.filter((w) => live.ws[w] === "working").length;
@@ -2244,6 +2247,7 @@ function fromDb(db: Db, label: string, topic: string, liveRoot = false) {
   live.backendOk = orcaAt > 0 && NOW() - orcaAt <= loop.stale_after_s;
   live.contractOk = new Set(db.all(`SELECT project, MAX(observed_at) AS at FROM observed_workers WHERE ${CONTRACT_ROW} GROUP BY project`)
     .filter((r) => NOW() - Number(r.at ?? 0) <= loop.stale_after_s).map((r) => String(r.project)));
+  try { live.hosts = new Set(db.all("SELECT name FROM hosts WHERE name != 'local'").map((r) => String(r.name))); } catch { /* a db before migration 0060 */ }
   for (const r of db.all(`SELECT wt, state, gone_at FROM observed_workers ${label ? "WHERE project = ?" : ""} ORDER BY rowid`, ...(label ? [label] : []))) {
     live.ws[String(r.wt)] = r.gone_at != null ? "gone" : String(r.state ?? "idle");
   }

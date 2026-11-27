@@ -143,7 +143,7 @@ const member: Fulfiller = {
       if (!r || view(x.store, r) !== "running") return true;
       // U200: a stop whose calls went out finishes once the agent reads gone; the presence and
       // reason checks below would drop it the moment the stop worked.
-      if (x.act?.openCall(x.store, stopKey(a, stopOp(x.store, String(r.project), String(r.squad))))) return false;
+      if (x.act?.openCall(x.store, stopKey(a, stopOp(x.store, String(r.project), String(r.squad), r.host)))) return false;
       // A retried stop re-reads reality: the decider re-emits it if it is still owed, so a
       // stale one drops instead of stopping an agent that no longer matches the reason.
       const w = r.wt ? x.store.get("observed_workers", { project: r.project, wt: r.wt }) : null;
@@ -174,9 +174,9 @@ const member: Fulfiller = {
       const id = (a.payload as { id: number }).id, row = x.store.get("members", { id }), m = memberOf(x.store, { id });
       if (!row || !m) return true;
       if (lock(x.store, row, ["action:member"])) return false;
-      if (x.act.openCall(x.store, stopKey(a, stopOp(x.store, m.project, m.squad)))) return true;   // U200: its calls went out; only the gone-check is left
+      if (x.act.openCall(x.store, stopKey(a, stopOp(x.store, m.project, m.squad, m.host)))) return true;   // U200: its calls went out; only the gone-check is left
       // U11: a squad on a contract backend has no coordinator pane: its stop closes the member's terminals.
-      if (!onContract(x.store, m.project, m.squad) && !x.store.get("coordinators", { project: m.project, squad: m.squad })?.handle) return false;
+      if (!onContract(x.store, m.project, m.squad, m.host) && !x.store.get("coordinators", { project: m.project, squad: m.squad })?.handle) return false;
       // A switch stop re-proves its row (the pick still lands elsewhere, the pin still differs):
       // the decider re-emits it while it holds, so a stale one waits instead of stopping for nothing.
       const why = (a.payload as { why?: string }).why;
@@ -210,11 +210,11 @@ const member: Fulfiller = {
       const { store, now: at } = x, id = (a.payload as { id: number }).id;
       const row = store.get("members", { id }), m = memberOf(store, { id });
       if (!row || !m || view(store, row) !== "running") return { dropped: "no longer wished running" };
-      const contract = onContract(store, m.project, m.squad), op = stopOp(store, m.project, m.squad);
+      const contract = onContract(store, m.project, m.squad, m.host), op = stopOp(store, m.project, m.squad, m.host);
       const keep = String(store.get("coordinators", { project: m.project, squad: m.squad })?.handle ?? "");
       if (!keep && !contract) return { wait: "no coordinator pane" };
       const run = String(store.get("squads", { project: m.project, topic: m.squad })?.run_id ?? "");
-      const makeSeat = (op: string) => x.act.seat(store, m.project, m.squad, stopKey(a, op), m.wt, at);
+      const makeSeat = (op: string) => x.act.seat(store, m.project, m.squad, stopKey(a, op), m.wt, at, null, undefined, m.host);
       const r = await x.act.driver(makeSeat(op), m.agent).stop(makeSeat, m, run, keep);
       if (!r.ok) return { retry: r.error ?? "stop failed" };  // presence stays as observed
       const sentAt = Number((store.db.query("SELECT at FROM orca_calls WHERE key = ? ORDER BY id DESC LIMIT 1").get(stopKey(a, op)) as Row | null)?.at ?? 0);
@@ -281,7 +281,7 @@ const member: Fulfiller = {
     const fromHandoff = handoff(m, { why: placementWhy, model: p.model, account: p.account ?? null, ctx: why === "limit" ? ctxOf(store, m, w) : null, run: (store.get("squads", { project: m.project, topic: m.squad })?.run_id as string) ?? null, prompt });
     const h = { ...fromHandoff, model: p.model, account: p.account, ...(sent ? { launch: sent.launch, context: sent.prompt } : {}) };
     const agent = p.agent ?? m.agent ?? "claude", effort = p.effort ?? m.effort;
-    const seat = x.act.seat(store, m.project, m.squad, key, m.wt, at, memberLabel(m)), driver = x.act.driver(seat, agent);
+    const seat = x.act.seat(store, m.project, m.squad, key, m.wt, at, memberLabel(m), undefined, m.host), driver = x.act.driver(seat, agent);
 
     if (h.launch === "tell") {
       const r = await driver.poke(m, h.context);
@@ -301,8 +301,8 @@ const member: Fulfiller = {
           // U21c: Orca still shows the old agent working while U21a's rule reads it gone: a fresh walk of
           // the worktree that finds no agent lets the guard close its terminals instead of refusing.
           const mrow = store.get("members", { id });
-          const gone = mrow && !onContract(store, m.project, m.squad) ? await oldGoneEnv(store, x.act.orca, mrow, at) : undefined;
-          const used = gone ? x.act.seat(store, m.project, m.squad, key, m.wt, at, memberLabel(m), gone) : seat;
+          const gone = mrow && !onContract(store, m.project, m.squad, m.host) ? await oldGoneEnv(store, x.act.orca, mrow, at) : undefined;
+          const used = gone ? x.act.seat(store, m.project, m.squad, key, m.wt, at, memberLabel(m), gone, m.host) : seat;
           const d = gone ? x.act.driver(used, agent) : driver;
           const r = h.launch === "continue" ? await d.resume(moved) : await d.start(moved, h.model, h.account, h.context);
           if (!r.ok && actionBlock(store, a)) return { wait: "activity changed during start" };

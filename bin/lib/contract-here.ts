@@ -52,6 +52,20 @@ export function projectContracts(root: string, project: string): string[] {
   return merged(squads, studioContract(root, project));
 }
 
+/** side-loop-host U10: the names of the linked side hosts (hosts table, migration 0060); none when loop.db can't say. */
+export function sideHostNames(root: string): string[] {
+  return db(root, (d) => (d.query("SELECT name FROM hosts WHERE name NOT IN ('', 'local') ORDER BY name").all() as { name: string }[]).map((r) => r.name)) ?? [];
+}
+
+/** side-loop-host U10: the side hosts a project's live members run on, each with the backend its terminals run on
+ *  there (the squad's; tmux for a squad on Orca or orca-lite, as squad/backend.ts sideBackend). */
+export function projectSideHosts(root: string, project: string): { host: string; backend: string }[] {
+  return db(root, (d) => (d.query(`SELECT DISTINCT m.host AS host, CASE WHEN COALESCE(s.backend, 'orca') IN ('orca', 'orca-lite') THEN 'tmux' ELSE s.backend END AS backend
+      FROM members m LEFT JOIN squads s ON s.project = m.project AND s.topic = m.squad
+     WHERE m.project = ? AND COALESCE(m.host, 'local') NOT IN ('', 'local') AND COALESCE(m.status, '') != 'gone' AND COALESCE(s.status, '') NOT IN ('closed', 'gone')
+     ORDER BY host, backend`).all(project) as { host: string; backend: string }[])) ?? [];
+}
+
 /** The backend a project runs on when no part of it is on Orca (U58): its Studio runs off Orca and none of its
  *  open squads is on Orca. null when the project uses Orca, or when loop.db can't say (read as Orca, as today). */
 export function projectOffOrca(root: string, project: string): string | null {

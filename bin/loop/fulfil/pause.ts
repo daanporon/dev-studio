@@ -35,7 +35,7 @@ function observed(ctx: TickCtx, m: Row): Snapshot {
   if (!worker || (worker.observed_at !== now && worker.gone_at !== now)) throw new Error("worker observations missing or stale");
   const facts = doc(worker);
   if (facts.terminals_seen_at !== now) throw new Error("terminal observations missing or stale");
-  const contract = onContract(store, String(m.project), String(m.squad));
+  const contract = onContract(store, String(m.project), String(m.squad), m.host);
   if (!contract && worker.dispatch_seen_at !== now) throw new Error("dispatch observations missing or stale");
   const rows = store.db.query("SELECT * FROM observed_terminals WHERE project = ? AND wt = ? AND gone_at IS NULL").all(String(m.project), String(m.wt)) as Row[];
   if (rows.some((r) => r.observed_at !== now || typeof doc(r).agent !== "boolean")) throw new Error("terminal identity observations missing or stale");

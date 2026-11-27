@@ -15,10 +15,12 @@ import { orcaLite } from "../backend/orca-lite.ts";
 import { projectHerdr } from "../backend/herdr.ts";
 import { remoteBackend } from "../backend/remote.ts";
 import { isBackend, LOCAL_HOST } from "../backend/registry.ts";
-import { projectContracts } from "./contract-here.ts";
+import { projectContracts, projectSideHosts } from "./contract-here.ts";
 
 export const LOCAL = "local::";   // as bin/loop/drivers/contract.ts, without its imports
 export const isLocalWt = (wt: string | null | undefined): boolean => !!wt && wt.startsWith(LOCAL);
+/** side-loop-host U10: a member id on a side host, `<host>::<path>` with `host` one of `hosts`. */
+export const isSideWt = (wt: string | null | undefined, hosts: Iterable<string>): boolean => !!wt && [...hosts].some((h) => wt.startsWith(`${h}::`));
 
 /** The contract backend `name` of a project, as the loop makes it (core/actuator.ts contracted,
  *  squad/contracts.ts): tmux, herdr, and orca-lite on the adapter with the loop's facts file (U16a),
@@ -34,24 +36,28 @@ export const makeBackend = (root: string): MakeBackend => (name, project, host =
   return null;
 };
 
-export { contractHere, contractProjects, projectContracts, projectOffOrca, squadContract } from "./contract-here.ts";
+export { contractHere, contractProjects, projectContracts, projectOffOrca, projectSideHosts, sideHostNames, squadContract } from "./contract-here.ts";
 
-export type LiveTerm = { wt: string; id: string; backend: string; label: string; created_at: number };
+export type LiveTerm = { wt: string; id: string; backend: string; label: string; created_at: number; host?: string };
 export type Live = { terms: LiveTerm[]; blind: string[] };   // blind: why a backend could not be read
 
 /** The live terminals of a project's contract squads, each as the member worktree it runs in. A backend
  *  with no adapter, or a list that fails, is named in `blind`: liveness there is unknown, not "none". */
-export async function contractLive(root: string, project: string, o: { make?: MakeBackend; backends?: string[] } = {}): Promise<Live> {
+export async function contractLive(root: string, project: string, o: { make?: MakeBackend; backends?: string[]; sides?: { host: string; backend: string }[] } = {}): Promise<Live> {
   const make = o.make ?? makeBackend(root), out: Live = { terms: [], blind: [] };
-  for (const name of o.backends ?? projectContracts(root, project)) {
-    const b = make(name, project);
-    if (!b) { out.blind.push(`${name}: no adapter`); continue; }
+  const read = async (name: string, host?: string) => {
+    const who = host ? `${name}@${host}` : name, b = make(name, project, host);
+    if (!b) { out.blind.push(`${who}: no adapter`); return; }
     try {
       const l = await b.call("terminal.list", {});
-      if (!l.ok) { out.blind.push(`${name}: ${l.error.message}`); continue; }
-      for (const t of l.terminals) out.terms.push({ wt: LOCAL + t.cwd, id: t.id, backend: name, label: t.label, created_at: t.created_at });
-    } catch (e) { out.blind.push(`${name}: ${(e as Error).message}`); }
-  }
+      if (!l.ok) { out.blind.push(`${who}: ${l.error.message}`); return; }
+      for (const t of l.terminals) out.terms.push({ wt: host ? `${host}::${t.cwd}` : LOCAL + t.cwd, id: t.id, backend: name, label: t.label, created_at: t.created_at, ...(host ? { host } : {}) });
+    } catch (e) { out.blind.push(`${who}: ${(e as Error).message}`); }
+  };
+  // side-loop-host U10: a member on a side host runs in a terminal there, read over the link (bin/backend/remote.ts);
+  // its folder is that host's, so it reads as `<host>::<path>`, the member's id on main.
+  for (const { host, backend } of o.sides ?? (o.backends ? [] : projectSideHosts(root, project))) await read(backend, host);
+  for (const name of o.backends ?? projectContracts(root, project)) await read(name);
   return out;
 }
 
@@ -65,11 +71,11 @@ export async function contractStates(root: string, project: string, o: { make?: 
   for (const t of live.terms) { const n = newest.get(t.wt); if (!n || t.created_at > n.created_at) newest.set(t.wt, t); }
   const lines: string[] = [];
   for (const t of newest.values()) {
-    const b = make(t.backend, project)!;
+    const b = make(t.backend, project, t.host)!;
     const st = await b.call("agent.state", { id: t.id }).catch(() => null);
     const lo = await b.call("terminal.last_output", { id: t.id }).catch(() => null);
     const since = (lo?.ok && lo.at) || t.created_at;
-    lines.push(`${t.wt}\t${st?.ok ? st.state : "unknown"}\t${basename(t.wt.slice(LOCAL.length))}\t${since * 1000}\t`);
+    lines.push(`${t.wt}\t${st?.ok ? st.state : "unknown"}\t${basename(t.wt.slice(t.wt.indexOf("::") + 2))}\t${since * 1000}\t`);
   }
   return { lines, blind: live.blind };
 }

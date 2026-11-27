@@ -4,7 +4,13 @@
 // envelope with `handle()`, so a request outside its op's type is answered `bad_request` here too. The answer goes
 // back as is; main checks it (`checked()`). The backend and project are names (they become paths under the side
 // state root), checked before anything is made; a backend this host has no adapter for is refused.
+// side-loop-host U10: a terminal made here is a side member's, so its env gets DS_MAIN_URL (the side relay's socket
+// under this host's state root, relay.ts mainUrlFor: its `bin/ds` calls go up the link) whatever main sent, and its
+// folder (a member start: DS_MEMBER set) is marked trusted for this host's own default login (claude stops at the folder-trust prompt otherwise).
+import { isAbsolute } from "node:path";
 import { handle, type Backend } from "../../backend/contract.ts";
+import { markTrusted, systemJsonDir } from "../../loop/drivers/claude-launch.ts";
+import { mainUrlFor } from "../relay.ts";
 import { CONTRACT_CHANNEL } from "../../backend/remote.ts";
 import { makeContract } from "../../loop/squad/contracts.ts";
 import type { Channel } from "../protocol.ts";
@@ -14,6 +20,16 @@ const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 
 /** Makes this host's backend `name` of `project` under its state root `root`; null when it has none. */
 export type MakeHere = (root: string, name: string, project: string) => Backend | null;
+
+/** A `terminal.create` envelope with DS_MAIN_URL set to this host's relay and its folder trusted; any other as is. */
+export function sideCreate(envelope: Record<string, unknown>, root: string, env: Record<string, string | undefined> = process.env): Record<string, unknown> {
+  const req = envelope.req;
+  if (envelope.op !== "terminal.create" || !isObj(req)) return envelope;
+  const cwd = req.cwd, given = isObj(req.env) ? req.env : {};
+  // Only a member's start (main sets DS_MEMBER) is an agent's folder to trust.
+  if (given.DS_MEMBER && typeof cwd === "string" && isAbsolute(cwd)) { try { markTrusted(systemJsonDir(env), cwd); } catch { /* the launch shows the prompt */ } }
+  return { ...envelope, req: { ...req, env: { ...given, DS_MAIN_URL: mainUrlFor(root) } } };
+}
 
 /** The `contract` channel over `make` (a test's fake), else the side's real adapters, each made once. */
 export function contractChannel(make?: MakeHere): Channel {
@@ -35,7 +51,7 @@ export function contractChannel(make?: MakeHere): Channel {
         b = made;
         kept.set(k, b);
       }
-      return handle(b, envelope);
+      return handle(b, sideCreate(envelope, ctx.root));
     },
   };
 }

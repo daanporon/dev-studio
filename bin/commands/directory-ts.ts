@@ -2,7 +2,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { stateRoot, dsLabel, dsPrefix, chomp, readJson, globJson, backend as realBackend, hostBackendPath, run as runCmd, type Ran, writeOut as realOut, writeErr as realErr } from "../lib/shared";
-import { contractHere, contractLive, isLocalWt, projectOffOrca, type Live } from "../lib/contract-roles.ts";
+import { contractHere, contractLive, isLocalWt, isSideWt, projectOffOrca, sideHostNames, type Live } from "../lib/contract-roles.ts";
 
 export const help = `list [--project <label>] [--from <squad>] [--json] | reach|check <squad> <role[-suffix]> [--project <label>] — the phone book (directory.sh)`;
 
@@ -52,7 +52,7 @@ function hasWt(doc: any, wt: string): boolean {
 /** `noCurrent` (U58): this process has no worktree of its own to ask Orca about in project `label` (a host shell in
  *  a project with no part on Orca), so `current` is not called. */
 export type DirIo = { stateRoot: string; backend: (args: string[]) => Promise<Ran>; out: (s: string) => void; err: (s: string) => void;
-  contract?: (label: string) => Promise<Live>; noCurrent?: (label: string) => boolean };
+  contract?: (label: string) => Promise<Live>; noCurrent?: (label: string) => boolean; sideHosts?: () => string[] };
 
 // `current` is this process's own worktree, through its squad's adapter (a `local::` path off Orca); the
 // Orca reads are the host's, so a squad off Orca still sees which Orca squads of its project are live.
@@ -81,7 +81,9 @@ export async function runWith(io: DirIo, argv: string[]): Promise<number> {
   if (!["list", "reach", "check"].includes(OP)) return usage();
 
   // An Orca read is about a member Orca runs: a `local::` member is the contract's when it is read (U11b).
-  const onOrca = (wt: string) => !(io.contract && isLocalWt(wt));
+  // side-loop-host U10: so is a member on a side host (`<host>::<path>`), read over the link, whatever its squad runs on.
+  const sides = io.contract ? (io.sideHosts ?? (() => sideHostNames(STATE_ROOT)))() : [];
+  const onOrca = (wt: string) => !(io.contract && (isLocalWt(wt) || isSideWt(wt, sides)));
   // list --project: the backend reads start at once, beside `current`; none for a project all off Orca.
   const pre = new Map<string, Promise<Ran>>();
   let termsP: Promise<Ran> | null = null;

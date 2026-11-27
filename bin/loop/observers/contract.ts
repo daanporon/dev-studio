@@ -28,7 +28,7 @@ import { localPath } from "../drivers/contract.ts";
 import { promptDraft, workingOnScreen } from "../squad/member-ready.ts";
 import { limitInt } from "../settings/limits.ts";
 import { mainAgents, subAgents, liveModel, shellAdapter, type LiveAccount, type SubAgent, type Walk } from "./orca.ts";
-import { studioContract } from "../squad/backend.ts";
+import { sideBackend, studioContract } from "../squad/backend.ts";
 import { adoptStudio, contractCandidates, STUDIO_SQUAD, studioAgent, studioMember } from "../squad/studio.ts";
 
 export type ContractObserverOpts = {
@@ -95,13 +95,16 @@ export function contractObserver(opts: ContractObserverOpts = {}): Observer {
     name: "contract",
     async run(ctx: TickCtx) {
       const { store, project, now } = ctx;
-      const squads = store.db.query(`SELECT topic, backend FROM squads WHERE project = ? AND COALESCE(backend, 'orca') != 'orca'
+      // side-loop-host U10: a side host runs every member it holds on its own backend (tmux for a squad on Orca),
+      // so there it reads each squad, as sideBackend names it.
+      const side = ctx.role === "side";
+      const squads = store.db.query(`SELECT topic, backend FROM squads WHERE project = ? AND ${side ? "1" : "COALESCE(backend, 'orca') != 'orca'"}
           AND COALESCE(status, '') NOT IN ('closed', 'gone') ORDER BY topic`).all(project) as Row[];
-      const groups: Group[] = squads.map((sq) => ({ topic: String(sq.topic), backend: String(sq.backend), members: (store.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND wt LIKE 'local::%' AND COALESCE(host, '') NOT IN (SELECT name FROM hosts)
+      const groups: Group[] = squads.map((sq) => ({ topic: String(sq.topic), backend: side ? sideBackend(store, project, String(sq.topic)) : String(sq.backend), members: (store.db.query(`SELECT * FROM members WHERE project = ? AND squad = ? AND wt LIKE 'local::%' AND COALESCE(host, '') NOT IN (SELECT name FROM hosts)
             AND COALESCE(status, '') != 'gone' ORDER BY id`).all(project, String(sq.topic)) as Row[]).filter((m) => localPath(String(m.wt))) }));
       // U51: a Studio off Orca, read whether or not the project has a squad off Orca.
       // A side host runs no Studio: its copy of the projects row names main's.
-      const studio = ctx.role === "side" ? null : studioGroup(store, project);
+      const studio = side ? null : studioGroup(store, project);
       if (studio) groups.push(studio);
       if (!groups.some((g) => g.members.length)) return;
       const procs = await host(ctx.tick, now);
