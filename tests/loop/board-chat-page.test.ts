@@ -455,6 +455,10 @@ test("U19: Chat never shows a key row; idle has no Stop; working has a round ■
   await fnIn(stop)();
   expect(p.posts).toEqual([["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]]);
   expect(p.h.states).toContain("pressed Esc");
+  // The note is not a failure: it is not drawn in the error class.
+  const line = nodes(p.render()).find((n) => n.values.includes("pressed Esc"));
+  expect(line.strings).toContain('class="info"');
+  expect(line.strings).not.toContain("err");
 });
 
 test("U19: a menu on the member's screen opens the docked card; folded it is one line with no key row; tapping the line opens it", () => {

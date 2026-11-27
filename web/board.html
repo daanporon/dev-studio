@@ -296,7 +296,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-stop{background:var(--red-bg);border:2px solid var(--red);color:var(--red)} .chat-send{font-size:16px}
 .chat-row :is(.chat-attach,.chat-scrtog){background:transparent;border:0;border-radius:50%;color:var(--mut)} .chat-row :is(.chat-attach,.chat-scrtog):is(:hover,:focus-visible){color:var(--fg);background:transparent;border:0} .chat-row :is(.chat-attach,.chat-scrtog):focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 :is(.chat-attach,.chat-scrtog) svg{width:16px;height:16px;display:block}
-.chat-dock{flex:0 1 auto;min-height:44px;display:flex;flex-direction:column;margin:0 12px 8px;border:1px solid var(--amber);border-radius:10px;background:var(--amber-bg)} .chat-dock.open{max-height:60%}
+.chat-dock{flex:0 1 auto;min-height:44px;display:flex;flex-direction:column;margin:0 12px 8px;overflow:hidden;border:1px solid var(--amber);border-radius:10px;background:var(--amber-bg)} .chat-dock.open{max-height:60%}
 .mbox.chat.dock-full>.chat-wrap{flex:0 0 0px;height:0;min-height:0;overflow:hidden;visibility:hidden} .chat-dock.full{flex:1 1 0}
 .mbox .chat-dline{display:flex;align-items:center;gap:8px;width:100%;text-align:left;white-space:normal;font:12px var(--mono);color:var(--amber);background:transparent;border:0} .chat-dline .chat-dtext{flex:1;min-width:0;overflow-wrap:anywhere}
 .chat-dhd{flex:none;display:flex;align-items:center;gap:6px;padding:4px 6px 4px 10px;font:12px var(--mono);color:var(--amber)} .chat-dhd .sp{flex:1} .chat-dhd>.chat-dtext{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -320,7 +320,7 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .chat-swlabel{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .chat-new{display:inline-block;flex:none;width:8px;height:8px;margin-left:6px;border-radius:50%;background:var(--blue)} .chat-lead{flex:none;white-space:nowrap} .chat-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .mhd .chat-sub{flex:0 1000 auto} .mhd .chat-sw{position:relative;display:inline-block;vertical-align:middle;flex:0 1 auto;min-width:0;max-width:60%} .mbox .chat-swbtn{min-width:0} .chat-swbtn>.msg-badge,.chat-swbtn>.chat-ask{flex:none}
 .chat-swbtn{display:inline-flex;align-items:center;max-width:100%;min-height:44px;padding:0 8px;font:600 13px var(--mono)} .chat-menu{position:absolute;z-index:60;top:100%;left:0;display:flex;flex-direction:column;gap:2px;min-width:220px;max-width:calc(100vw - 24px);padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4)} .chat-mi{display:flex;align-items:center;min-height:44px;text-align:left;border-color:transparent;background:transparent} .chat-mi[aria-checked="true"]{border-color:var(--line);background:var(--panel)}
 @media (max-width:600px){.chat-modal{padding:0} .mbox.chat{width:100%;height:100%;max-height:none;border:0;border-radius:0} .chat-copy{padding:8px 10px;min-height:32px} .chat-cbtn{padding:8px 12px;min-height:32px} .chat-dock.open{max-height:50%} .chat-dhd .btn{min-height:44px} .chat-qnav .btn{min-height:44px;min-width:44px} .mbox.chat>.mhd{position:relative} .mbox.chat>.mhd .chat-sw{position:static} .mbox.chat .chat-menu{left:12px;right:12px;min-width:0;max-width:none}}
-.qfoot .err{font-size:12px;color:var(--red)} .qfoot .ok{font-size:12px;color:var(--green)}
+.qfoot .err{font-size:12px;color:var(--red)} .qfoot .ok{font-size:12px;color:var(--green)} .qfoot .info{font-size:12px;color:var(--mut)}
 /* Phone: every popup is a full-screen sheet (the box fills the viewport; only its body scrolls; header, tabs and footer stay put) and no input is under 16px, so a tap never zooms the page. */
 @media (max-width:600px){
 .modal{padding:0;align-items:stretch}
@@ -332,6 +332,8 @@ html{scrollbar-gutter:stable} html:has(.modal){overflow:hidden;overscroll-behavi
 .mclose{flex:none;min-width:44px;min-height:44px;margin-left:auto;font-size:16px}
 .mbox>.md,.mbox>.qbody,.mbox>.msg-list,.mbox>.chat-wrap,.mbox>.set-body{flex:1 1 auto;min-height:0;overflow:auto}
 .mbox>.chat-wrap{overflow:visible}
+/* The log takes what the question card leaves: a basis of its whole conversation would shrink the card to its min-height, which covers its header. */
+.mbox.chat>.chat-wrap{flex:1 1 0} .chat-dock.open,.chat-dock.full{min-height:54px}
 .mbox>.mhd[style*="border-top"],.mbox>.qfoot{flex:none;flex-wrap:wrap;gap:8px;padding:10px 12px max(10px,env(safe-area-inset-bottom))}
 .mbox>.mhd[style*="border-top"]>.btn,.mbox>.qfoot>.btn{min-height:44px}
 .mbox>.mhd[style*="border-top"]>.btn.pri,.mbox>.qfoot>.btn.pri{flex:1 1 100%;order:99}
@@ -2996,7 +2998,7 @@ const qLine = !qItems.length ? "" : qItems[0].menu
             <button class="btn pri chat-round chat-send" aria-label="Send" title=${busy === shown.wt ? "Sending…" : uploading ? "Uploading…" : "Send"} disabled=${busy === shown.wt || uploading || (!chatText(text) && !files.length)} onClick=${send}>${busy === shown.wt || uploading ? "…" : "↑"}</button>
           </div>
         </div>
-        ${err && html`<span class="err">${err}</span>`}${note && html`<span class="err">${note}</span>`}
+        ${err && html`<span class="err">${err}</span>`}${note && html`<span class="info">${note}</span>`}
       </div>
     </div></div>`;
 }
