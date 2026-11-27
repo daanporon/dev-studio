@@ -282,6 +282,21 @@ cadences, or none yet) shows the age of its last one and no numbers. The Machine
 level and names it; `main` wins a tie, and a stale side host never counts. The text board's `MACHINE` line is main's.
 With no side host the panel and the tile show main alone, with no section headings.
 
+**Hosts on the board.**
+
+- **A join request** is a Needs-you card with the host's name and key fingerprint. Check it matches what `ds join`
+  printed on that host, then press **Accept** (2 seats) or **Reject**. If the host asks again with another key before
+  you answer, the answer is refused.
+- **A member on a side host** carries a chip with the host's name in its squad's crew list. One on main has none.
+- **Settings → Hosts** has a row for main and for each accepted side host: online state, seats used and free, load,
+  last seen, the brake (with the line it hit while it holds starts) and "behind" when the host runs other code. It also
+  shows the join command in full, and the `link_listen` hint while main's link server is not running.
+- **Open a row** to see that host's machine keys, each with its source: `default`, `override` or `env on that host`.
+  **Save** sets an override and **Reset** drops it, as `ds host set|rm` do. Main places work by its own override or
+  default, so a key the side host sets in its environment shows both values. Keys that hold file paths or globs are
+  set only with `ds host set`. Main's seats are each project's `max_builders`, on the Limits tab.
+- **Remove** on a side host's row asks first, then deletes the host's key, as `ds host remove` does.
+
 **If main cannot be reached:** a main with no side host yet does not run its link server. On main, run
 `bin/ds config set <project> limits.conf link_listen on` (`link_port` defaults to 7790), then run `ds join` again.
 

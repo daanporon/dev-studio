@@ -37,7 +37,7 @@ export const PLACED_ROLES = ["builder", "tester", "researcher"] as const;
 export const placedRole = (role: unknown): boolean => (PLACED_ROLES as readonly string[]).includes(String(role));
 
 /** A host key's value for side host `host`: its override, else the repo default (main never sees a side host's env). */
-const sideValue = (store: Store, host: string, key: string): string | null => {
+export const sideValue = (store: Store, host: string, key: string): string | null => {
   const l = hostLine(store.db, host, key);
   return l.source === "default" && SIDE_DEFAULTS[key] ? SIDE_DEFAULTS[key] : l.value?.split(/\s+/)[0] ?? null;
 };
