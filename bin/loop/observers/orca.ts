@@ -24,7 +24,7 @@ import { backendOp, backendPath, inProcess } from "../io/orca.ts";
 import { redact } from "../core/redact.ts";
 import { adoptStudio, STUDIO_SQUAD, studioAgent } from "../squad/studio.ts";
 import { loopProjects } from "../settings/projects.ts";
-import { offOrca, studioContract } from "../squad/backend.ts";
+import { offOrca, studioContract, wtHost } from "../squad/backend.ts";
 import { KEYS_STALE_S } from "../chat/keys.ts";
 
 export type PsAgent = { state?: string; stateStartedAt?: number; lastAssistantMessage?: string };
@@ -370,12 +370,13 @@ export function orcaObserver(adapter: OrcaAdapter = shellAdapter()): Observer {
 
       // U12: squads on Orca and the Studio only. A member of a squad off Orca, and any folder such a
       // squad's worktrees row owns, is the contract observer's (observers/contract.ts): never read,
-      // never marked gone here.
+      // never marked gone here. side-loop-host U10: nor a member on a side host (`<host>::<path>`), whatever
+      // its squad runs on: offOrca counts it, and an id naming a linked host is dropped below.
       const off = offOrca(store, project);
       const offPath = (w: PsWorktree) => { const p = pathOf(w); return !!p && off.paths.has(p.replace(/\/+$/, "")); };
       const ids = knownWts(store, project, ps.filter((w) => !offPath(w)));
       for (const d of dir) if (d.wt) ids.add(d.wt);
-      for (const wt of ids) if (off.wts.has(wt) || wt.startsWith("local::") || off.paths.has(String(wtPath(wt) ?? "").replace(/\/+$/, ""))) ids.delete(wt);
+      for (const wt of ids) if (off.wts.has(wt) || wt.startsWith("local::") || wtHost(store, wt) !== "local" || off.paths.has(String(wtPath(wt) ?? "").replace(/\/+$/, ""))) ids.delete(wt);
       const byWt = new Map(dir.map((d) => [d.wt, d]));
       const mine = ps.filter((w) => ids.has(w.worktreeId) && !w.isArchived);
       const mail = new Map<string, number>();

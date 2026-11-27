@@ -47,7 +47,7 @@ export function view(store: Store, m: Row): View {
     if (u && (u.status === "cancelled" || u.status === "merged" || mergedUnit(store, u))) return "archived";
   } else if (e === "running" && !STANDING.has(String(m.role)) && m.wt) {
     // U12: off Orca there is no dispatch; a finish row of the member's generation ends the one-shot.
-    if (onContract(store, String(m.project), String(m.squad))) return finishOf(store, m) ? "stopped" : e;
+    if (onContract(store, String(m.project), String(m.squad), m.host)) return finishOf(store, m) ? "stopped" : e;
     const w = store.get("observed_workers", { project: m.project, wt: m.wt });
     if (w?.dispatch === "completed") return "stopped";
   }

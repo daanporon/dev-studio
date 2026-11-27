@@ -44,8 +44,8 @@ import { startedOn, wtName, type ContractSeat, type Driver, type Member, type Se
 import { contract as contractDriver, localPath } from "../drivers/contract.ts";
 import { claudeSettings } from "../drivers/claude-launch.ts";
 import type { Backend, Terminal } from "../../backend/contract.ts";
-import { contracts, sharedContracts, type Contracted, type Resolve } from "../squad/contracts.ts";
-import { createWorktree } from "../io/worktrees.ts";
+import { contracts, sharedContracts, type Contracted, type MakeRemote, type Resolve } from "../squad/contracts.ts";
+import { createWorktree, git } from "../io/worktrees.ts";
 import { allSkills, deniedMcpServers, disabledPlugins, isProjectSkill, mcpLevels, pluginLevels, projectRules, shippedRules, skillOverrides } from "../settings/skills.ts";
 import { errOf, inDoubt, shell, spawn, type Orca, type Out } from "../io/orca.ts";
 import { DIRS, load, type Action, type Actuator, type Reconciler, type TickCtx } from "./plugins.ts";
@@ -63,9 +63,10 @@ import { envInt } from "./tick.ts";
 import { loopStopping } from "./stopping.ts";
 import { carded, classify, clear, causeOf, fingerprint, lapse, launchRetryAt, LAUNCH_TRIES, refuse, REFUSAL_KIND, standing } from "../io/refusals.ts";
 import { keepStartFailed } from "../squad/start-failed.ts";
-import { studioContract, studioSeat } from "../squad/backend.ts";
+import { onSide, sideBackend, studioContract, studioSeat, wtHost } from "../squad/backend.ts";
+import { addWorktreeOn, cloneOn, writeLaunchOn, type JobOpts, type Send } from "../../link/host-jobs.ts";
 import { STUDIO_SQUAD } from "../squad/studio.ts";
-import { removeLaunch, writeLaunch } from "../squad/launch-file.ts";
+import { removeLaunch } from "../squad/launch-file.ts";
 import { redact, redactPayload } from "./redact.ts";
 
 export type Result =
@@ -167,11 +168,16 @@ export class LoopActuator implements Actuator {
   private unrelayed = new Map<string, string>();           // squad -> why its last relay failed
 
   constructor(private opts: { orca?: Orca; pick?: Picker; fulfillers?: Fulfiller[]; slots?: number; bgSlots?: number; bgTimeoutMs?: number;
-    backends?: (name: string, project: string, store: Store) => Contracted } = {}) {
+    backends?: (name: string, project: string, store: Store) => Contracted;
+    // side-loop-host U10: a test's adapter for a backend on a side host, and its host-job sender (link/host-jobs.ts).
+    remote?: MakeRemote; jobs?: Send } = {}) {
     this.orca = opts.orca ?? shell();
     this.pick = opts.pick ?? ladderPick;
-    this.contracts = opts.backends || opts.orca ? contracts(opts.backends, this.orca) : sharedContracts;
+    this.contracts = opts.backends || opts.orca || opts.remote ? contracts(opts.backends, this.orca, opts.remote) : sharedContracts;
   }
+
+  /** How a host job is sent (link/host-jobs.ts JobOpts): over the link, or a test's sender. */
+  hostJobs(): JobOpts { return this.opts.jobs ? { send: this.opts.jobs } : {}; }
 
   private fulfillers(): Promise<Map<string, Fulfiller>> {
     this.registry ??= (async () => {
@@ -535,10 +541,18 @@ export class LoopActuator implements Actuator {
   // mutating call), and `key` for the write-ahead row. `ident` is the member's DS_MEMBER for a start
   // (fulfil/member.ts): a Claude start then carries its identity, and `gen()` is its generation. `env` goes on
   // every call of an Orca seat (U21c: squad/old-gone.ts's flag on a start).
-  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null, env?: Record<string, string>): Seat {
+  // side-loop-host U10: `host` names the side host a member runs on (members.host), for a first start that has no
+  // worktree id yet; otherwise a `<host>::<path>` member id names it. A seat on a side host is always a contract
+  // seat there (sideBackend: the squad's backend, tmux for one on Orca), whatever its squad runs on here.
+  seat(store: Store, project: string, squad: string | null, key: string, member: string | null, at: number, ident: string | null = null, env?: Record<string, string>, host?: string | null): Seat {
     let gen: string | null = null;
     const row = squad ? store.db.query("SELECT project, topic, run_id, repo, lead_wt, backend, worktree_provider FROM squads WHERE project = ? AND topic = ?").get(project, squad) as (Squad & { backend?: string; worktree_provider?: string }) | null : null;
     const studio_wt = (store.get("projects", { label: project })?.studio_wt as string | null | undefined) ?? null;
+    const on = onSide(host) ? String(host) : wtHost(store, member);
+    if (onSide(on) && squad) {
+      const { backend: _b, worktree_provider: _p, ...sq } = row ?? { project, topic: squad, run_id: null, repo: null, lead_wt: null };
+      return this.contractSeat(store, { ...sq, studio_wt }, sideBackend(store, project, squad), String(row?.worktree_provider ?? "git"), key, member, at, ident, (g) => { gen = g; }, () => gen, squad, on);
+    }
     if (row && squad && (row.backend ?? "orca") !== "orca") {
       const { backend: _b, worktree_provider: _p, ...sq } = row;
       return this.contractSeat(store, { ...sq, studio_wt }, String(row.backend), String(row.worktree_provider ?? "git"), key, member, at, ident, (g) => { gen = g; }, () => gen);
@@ -725,33 +739,51 @@ export class LoopActuator implements Actuator {
   // actuator's Orca runner; a test passes its fake through `backends`).
   private contracted(store: Store, name: string, project: string, host?: string): Contracted { return this.contracts(store, name, project, host); }
 
+  // side-loop-host U10: a member's worktree on side host `host`. The host clones the project first when it has no
+  // clone (a host job: an existing clone of the same origin is adopted), then its provider makes the worktree from
+  // that clone's HEAD; main records `worktrees (host, <side path>)` (link/host-jobs.ts addWorktreeOn). Nothing nests
+  // it under a parent: the Lead's and Studio's folders are main's paths.
+  private async sideWorktree(store: Store, host: string, provider: string, repo: string, m: Member, project: string, squad: string, at: number): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+    const o = await git(["-C", repo, "remote", "get-url", "origin"]);
+    const url = o.code === 0 ? o.out.trim() : "";
+    if (!url) return { ok: false, error: `worktree ${wtName(m)} on ${host}: ${repo} has no origin to clone` };
+    try {
+      const clone = await cloneOn(host, { project, url }, { root: store.root, ...this.hostJobs() });
+      const { row } = await addWorktreeOn(store, host, provider, { repo: clone.path, name: wtName(m), branch: wtName(m), base: "HEAD", parent: null, project, squad, role: m.role }, this.hostJobs(), at);
+      return { ok: true, path: String(row.path) };
+    } catch (e) { return { ok: false, error: `worktree ${wtName(m)} on ${host}: ${(e as Error).message}` }; }
+  }
+
   // U11: the seat of a squad on a contract backend. Its Orca ops refuse: such a squad has no Run,
   // sender pane or coordinator, and nothing it does reaches Orca.
   private contractSeat(store: Store, squad: Squad, name: string, provider: string, key: string, member: string | null, at: number,
-    ident: string | null, setGen: (g: string) => void, gen: () => string | null, asked: string | null = squad.topic): Seat {
+    ident: string | null, setGen: (g: string) => void, gen: () => string | null, asked: string | null = squad.topic, host = "local"): Seat {
     // `asked`: the squad the action named; a Studio's (U50) is null or `_studio`, as its Orca seat has it.
     const project = squad.project, topic = asked, target = { project, squad: topic, member };
+    const side = onSide(host);
     const who = squad.topic === STUDIO_SQUAD ? "the Studio" : `squad ${squad.topic}`;
-    const noOrca = (op: string): Promise<Out> => Promise.resolve({ code: 2, out: "", err: `${who} is on backend ${name}: no Orca op (${op})` });
-    const c = (): Contracted => this.contracted(store, name, project);
+    const noOrca = (op: string): Promise<Out> => Promise.resolve({ code: 2, out: "", err: `${who} is on backend ${name}${side ? ` on host ${host}` : ""}: no Orca op (${op})` });
+    const c = (): Contracted => this.contracted(store, name, project, side ? host : undefined);
     const blocked = (): string | null => { const b = this.block(store, target); return b ? `activity: ${b}` : null; };
+    const sender = side ? `contract:${name}@${host}` : `contract:${name}`;
     const contract: ContractSeat = {
-      backend: name, provider,
+      backend: name, provider, ...(side ? { host } : {}),
       get caps() { return c().caps; },
       start: (req, meta) => {
         const b = blocked();
         if (b) return Promise.resolve({ ok: false, error: b, busy: true });
         return this.contractStart(store, c().backend, { ...req, env: { ...req.env, DS_BACKEND: name, DS_WT: req.cwd, ...(ident ? { DS_MEMBER: ident } : {}) } }, meta,
-          { key, project, squad: topic, member, at, sender: `contract:${name}` }, setGen, req.cwd, squad.topic !== STUDIO_SQUAD);
+          { key, project, squad: topic, member, at, sender }, setGen, req.cwd, squad.topic !== STUDIO_SQUAD, host);
       },
       close: (cwd, id) => {
         const b = blocked();
-        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender: `contract:${name}` }, id, cwd);
+        return b ? Promise.resolve({ ok: false, error: b }) : this.contractClose(store, c().backend, cwd, { key, project, squad: topic, member, at, sender }, id, cwd);
       },
       ask: (op, req) => c().backend.call(op, req),
       worktree: async (m) => {
         const repo = String(squad.repo ?? store.get("projects", { label: project })?.home_repo ?? "").replace(/^path:/, "");
         if (!repo) return { ok: false, error: `${who} has no repo` };
+        if (side) return this.sideWorktree(store, host, provider, repo, m, project, squad.topic, at);
         // Only a worktree on this host's paths nests one: a Studio on Orca (`<repo id>::<path>`) is not its parent.
         const parent = localPath(m.role === "lead" ? squad.studio_wt : squad.lead_wt);
         try {
@@ -796,7 +828,7 @@ export class LoopActuator implements Actuator {
   // in the Studio's folder stays. The launch line is typed once:
   // the row notes `typed` before the send, and a replay that finds it set never types again. A thrown
   // call leaves the row unsettled and out of the member lock (`absent`), so the replay keeps the id.
-  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string, sweep = true): ReturnType<ContractSeat["start"]> {
+  private async contractStart(store: Store, b: Backend, req: Parameters<ContractSeat["start"]>[0], meta: StartMeta, o: CallAt, setGen: (g: string) => void, who: string, sweep = true, host = "local"): ReturnType<ContractSeat["start"]> {
     const last = this.lastCall(store, o);
     if (last?.op === "terminal.create" && last.state === "completed") {
       setGen(String(last.retry_id));
@@ -830,8 +862,9 @@ export class LoopActuator implements Actuator {
         progress = { terminal: t, typed: true };
         store.db.run("UPDATE orca_calls SET result = ? WHERE retry_id = ?", [JSON.stringify(progress), retry]);
         // U20a: the full line goes to a file; the terminal gets a short one that fits a shell with no prompt yet.
+        // side-loop-host U10: on a side host the file is written there, under its own state root (a host job).
         let text: string;
-        try { text = writeLaunch(store.root, o.project, who, retry, m0.line); }
+        try { text = await writeLaunchOn(host, store.root, { project: o.project, member: who, gen: retry, line: m0.line }, this.hostJobs()); }
         catch (e) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: `launch file: ${(e as Error).message}` }), o.at); return { ok: false, error: `launch file: ${(e as Error).message}` }; }
         const s = await b.call("terminal.send", { id: t.id, text, submit: true });
         if (!s.ok) { this.settleCall(store, retry, "failed", JSON.stringify({ terminal: t, error: s.error.message }), o.at); return { ok: false, error: `terminal.send: ${s.error.message}` }; }
@@ -892,7 +925,7 @@ export function memberOf(store: Store, ref: { wt?: string | null; id?: number | 
   if (!r) return null;
   const s = (k: string) => (r[k] == null ? null : String(r[k]));
   return { id: Number(r.id), project: String(r.project), squad: String(r.squad), wt: s("wt"), role: String(r.role), suffix: String(r.suffix ?? ""),
-    agent: s("agent"), model: s("model"), effort: s("effort"), account: s("account"), phase: s("phase"), limited_until: r.limited_until == null ? null : Number(r.limited_until) };
+    agent: s("agent"), model: s("model"), effort: s("effort"), account: s("account"), phase: s("phase"), limited_until: r.limited_until == null ? null : Number(r.limited_until), host: s("host") };
 }
 
 // memberOf by worktree, else a bare member of the action's squad (a Lead or Thinker poked by wt).

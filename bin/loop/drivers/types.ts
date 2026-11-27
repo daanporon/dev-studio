@@ -14,6 +14,7 @@ export type Member = {
   id: number; project: string; squad: string; wt: string | null; role: string; suffix: string;
   agent: string | null; model: string | null; effort: string | null; account: string | null;
   phase?: string | null; limited_until?: number | null;
+  host?: string | null;   // side-loop-host U10: the host its worktree and terminal are on (members.host; null or `local` is main)
 };
 export type Squad = { project: string; topic: string; run_id: string | null; repo: string | null; lead_wt: string | null; studio_wt?: string | null };
 export type Seat = {
@@ -30,6 +31,9 @@ export type Seat = {
 export type StartMeta = { launch: "fresh" | "continue"; prompt: string; agent: string; model: string; effort: string | null; account: string | null; line: string };
 export type ContractSeat = {
   backend: string; caps: Capabilities; provider: string;
+  // side-loop-host U10: the host its terminals and worktrees are on; `local` (or unset) is this host. On a side host
+  // the member's id is `<host>::<path>` and its folders are that host's own paths.
+  host?: string;
   // terminal.create, then the launch line typed in it. The call's retry id is its DS_GEN: a replay
   // first looks for a terminal of that generation (terminal.list) and makes none when it finds one.
   start(req: Omit<Request<"terminal.create">, "env"> & { env?: Record<string, string> }, meta: StartMeta): Promise<{ ok: true; terminal: Terminal } | { ok: false; error: string; busy?: boolean }>;

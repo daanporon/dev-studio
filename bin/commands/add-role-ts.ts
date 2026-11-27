@@ -4,19 +4,21 @@ import { join } from "node:path";
 import { dsLabel, stateRoot, writeErr } from "../lib/shared";
 import { dsExec } from "../lib/operator";
 
-export const help = `<project> <topic> <role> <suffix> [--spec <text>] — write a member wish for one extra worker (add-role.sh)`;
+export const help = `<project> <topic> <role> <suffix> [--spec <text>] [--host <name>] — write a member wish for one extra worker (add-role.sh)`;
 
-const USAGE = "usage: add-role.sh <project> <topic> <role> <suffix> [--spec <text>]\n";
+const USAGE = "usage: add-role.sh <project> <topic> <role> <suffix> [--spec <text>] [--host <name>]\n";
 
 export async function run(argv: string[]): Promise<number> {
   if (argv.length < 4) { writeErr(USAGE); return 2; }
   const [project, topic, role, suffix] = argv;
-  let spec = "";
+  let spec = "", host = "";
   const rest = argv.slice(4);
   for (let i = 0; i < rest.length;) {
     const a = rest[i];
     if (a === "--spec") { if (i + 1 >= rest.length) { writeErr("add-role.sh: $2: unbound variable\n"); return 1; } spec = rest[i + 1]; i += 2; }
-    else if (["--agent", "--model", "--effort", "--account", "--host", "--for", "--unit", "--owns"].includes(a)) {
+    // side-loop-host U10: --host forces the side host the worker runs on (tests, the operator); the loop places the rest.
+    else if (a === "--host") { if (i + 1 >= rest.length) { writeErr(USAGE); return 2; } host = rest[i + 1]; i += 2; }
+    else if (["--agent", "--model", "--effort", "--account", "--for", "--unit", "--owns"].includes(a)) {
       writeErr(`add-role: ${a} is ignored; the loop places workers\n`); i += 2;
     } else { writeErr(USAGE); return 2; }
   }
@@ -30,5 +32,6 @@ export async function run(argv: string[]): Promise<number> {
   if (!existsSync(state)) { writeErr(`add-role: no squad '${topic}' for project '${label}' (expected ${state})\n`); return 1; }
   const args = role === "builder" ? ["builder", "--unit", suffix] : [role, "--suffix", suffix];
   if (spec !== "") args.push("--spec", spec);
+  if (host !== "") args.push("--host", host);
   return dsExec(["request", ...args, "--squad", `${label}/${topic}`]);
 }

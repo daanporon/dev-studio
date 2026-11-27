@@ -13,7 +13,7 @@ import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts"
 import { LinkClient } from "../../bin/link/client.ts";
 import { startLinkServer, type LinkServer } from "../../bin/link/server.ts";
 import {
-  addWorktreeOn, CHANNEL, checkJob, cloneOn, HostJobError, hostOfWt, probeOn, pushOn, readRefOn, removeWorktreeOn, rescueOn, rescueTarget, setRefOn, type Send,
+  addWorktreeOn, CHANNEL, checkJob, cloneOn, HostJobError, hostOfWt, probeOn, pushOn, readRefOn, removeWorktreeOn, rescueOn, rescueTarget, setRefOn, writeLaunchOn, type Send,
 } from "../../bin/link/host-jobs.ts";
 import { createWorktree, git } from "../../bin/loop/io/worktrees.ts";
 import { wtProbe } from "../../bin/loop/io/wt-probe.ts";
@@ -203,6 +203,8 @@ describe("checks", () => {
       { job: "worktree.add", provider: "git", spec: { repo: "/r", name: "a/b", branch: "b", base: "main" } },
       { job: "worktree.add", provider: "git", spec: { repo: "/r", name: "a", branch: "b", base: "main", host: "other" } },
       { job: "probe", path: "/x", timeout_ms: 1000, secured: ["../out"] },
+      { job: "launch.write", project: "../p", member: "m", gen: "g", line: "claude" },
+      { job: "launch.write", project: "p", member: "m", gen: "g", line: "" },
       { job: "rm -rf" },
       null,
     ];
@@ -225,6 +227,7 @@ describe("checks", () => {
     const bad = await rescueOn(s, "side-a", "p", "sq", "b", "/x", { send: send({ listed: true, files: "no" }) });
     expect(bad.ok).toBe(false);
     expect(bad.why).toMatch(/malformed/);
+    await expect(writeLaunchOn("side-a", s.root, { project: "p", member: "m", gen: "g", line: "claude" }, { send: send({ text: "rm -rf /" }) })).rejects.toThrow(/malformed/);
   });
 
   test("a rescued path that leaves the member's folder is refused and nothing is written", async () => {
