@@ -9,11 +9,16 @@
 // host (localhost, 127.0.0.0/8, ::1) or 0.0.0.0 is also tried on this host's tailnet IP: answering there is
 // `remote`, answering only on loopback `host-only`. Any other host is `remote` when it answers.
 // Ending an entry that stays down is the reconciler's (reconcilers/exposed.ts).
+// side-loop-host u9b: an entry whose owner is on a side host (ownerHost) is never connected to: its loopback URL is
+// that host's, so main would read it down, and probing it would let that host's worker scan ports from main. It is
+// left out before the batch limit and any observed_exposed row it has is dropped, so it never ends `down`.
 import { createConnection } from "node:net";
 import type { Observer } from "../core/plugins.ts";
 import type { Row } from "../core/store.ts";
 import { tailnetIp } from "../io/tailnet.ts";
 import { envInt } from "../core/tick.ts";
+import { ownerHost } from "../squad/exposed.ts";
+import { onSide } from "../squad/backend.ts";
 
 export const BATCH = 16;
 export const TIMEOUT_MS = 1000;
@@ -73,8 +78,12 @@ export function exposedObserver(opts: { tailnet?: () => string; connect?: Connec
     scope: "host",
     every: envInt("DS_LOOP_EXPOSED_S", 60),
     async run({ store, now }) {
-      const rows = store.db.query(`SELECT e.id, e.url, o.status, o.down_since FROM exposed e LEFT JOIN observed_exposed o ON o.exposed_id = e.id
-        WHERE e.gone_at IS NULL ORDER BY o.probed_at IS NOT NULL, o.probed_at, e.id LIMIT ?`).all(batch) as Row[];
+      const open = store.db.query(`SELECT e.id, e.url, e.project, e.owner_wt, o.exposed_id AS seen, o.status, o.down_since FROM exposed e LEFT JOIN observed_exposed o ON o.exposed_id = e.id
+        WHERE e.gone_at IS NULL ORDER BY o.probed_at IS NOT NULL, o.probed_at, e.id`).all() as Row[];
+      const side = new Set(open.filter((r) => onSide(ownerHost(store, String(r.project), r.owner_wt))));
+      const stale = [...side].filter((r) => r.seen != null);
+      if (stale.length) store.tx(() => stale.forEach((r) => store.db.run("DELETE FROM observed_exposed WHERE exposed_id = ?", [Number(r.id)])));
+      const rows = open.filter((r) => !side.has(r)).slice(0, batch);
       if (!rows.length) return;
       const got = await Promise.all(rows.map((r) => probe(String(r.url), o)));
       store.tx(() => rows.forEach((r, i) => {

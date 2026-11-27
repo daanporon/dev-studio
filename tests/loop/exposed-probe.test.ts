@@ -100,6 +100,25 @@ test("30 entries against a black-hole address: one run stays under 1.5 s and pro
   expect(second).toEqual([...ids.slice(0, 2), ...ids.slice(16)]);
 });
 
+// side-loop-host u9b: a side owner's entry is on another host. Main must not connect for it, whatever URL it names.
+test("a side owner's entry is never connected to, loses an old probe row, and takes no batch slot", async () => {
+  const s = store();
+  const member = (wt: string, host: string) => s.upsert("members", { project: "p", squad: "t", role: "builder", suffix: wt }, { wt, host, observed_at: 1, updated_at: 1 });
+  member("box::/w/a", "box");
+  member("repo::/w/b", "local");
+  s.upsert("hosts", { name: "other" }, { status: "accepted", public_key: "k", requested_at: 1 });
+  const side = entry(s, "http://localhost:3000", { owner_wt: "box::/w/a" });
+  const noMember = entry(s, "http://10.0.0.5:22", { owner_wt: "other::/w/c" });   // known by its host-prefixed id alone
+  const local = entry(s, "http://dev-local.example.test:80", { owner_wt: "repo::/w/b" });
+  s.upsert("observed_exposed", { exposed_id: side }, { status: "down", reach: "down", probed_at: 1, down_since: 1 });
+  const seen: string[] = [];
+  await exposedObserver({ tailnet: () => "", batch: 1, connect: async (h, p) => { seen.push(`${h}:${p}`); return true; } }).run(ctx(s, 1000));
+  expect(seen).toEqual(["dev-local.example.test:80"]);
+  expect(obs(s, side)).toBeNull();
+  expect(obs(s, noMember)).toBeNull();
+  expect(obs(s, local)).toMatchObject({ status: "up", probed_at: 1000 });
+});
+
 test("loopback hosts and URL parsing", async () => {
   expect(loopbackHosts("localhost")).toEqual(["127.0.0.1", "::1"]);
   expect(loopbackHosts("0.0.0.0")).toEqual(["127.0.0.1"]);

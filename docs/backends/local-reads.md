@@ -95,7 +95,7 @@ writes a rescued file each path must be relative with no `.`/`..` segment and no
 |---|---|
 | `bin/loop/observers/disk-usage.ts`, `bin/loop/io/du.ts` | `docker system df --format json` and `du -sk` over each `disk_watch_paths` entry. |
 | `bin/loop/observers/cleanup.ts` | The Claude temp root, `cleanup_tmp_globs` and `cleanup_trim_globs` matches, folder sizes through `io/du.ts`. |
-| `bin/loop/observers/exposed.ts` | A TCP connect to each `ds expose` URL (a probe from the loop's host, so a port only open on the agents' host reads `host-only` or `down`). |
+| `bin/loop/observers/exposed.ts` | A TCP connect to each `ds expose` URL (a probe from the loop's host, so a port only open on the agents' host reads `host-only` or `down`). Entries a side host owns are skipped (no connect, no `observed_exposed` row) until the side host has its own probe. |
 
 ## `state/`: the loop's own files (loop host)
 
