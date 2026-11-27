@@ -161,3 +161,17 @@ test("Start takes a text file raw, refuses another kind by name, and a 409 for a
     expect(u.thumbs().length).toBe(1);
   } finally { u.close(); }
 });
+
+test("Start refuses an oversize text file or PDF by name and limit with no upload; a fitting one beside it uploads", async () => {
+  const t = await open();
+  try {
+    const sized = (name: string, size: number) => new t.w.File([new Uint8Array(size)], name, { type: "" });
+    const MIB = 1024 * 1024;
+    await t.pick(sized("big.pdf", 11 * MIB), sized("big.txt", 2 * MIB), sized("fits.pdf", 9 * MIB));
+    expect(t.uploads.map((u) => u.url.split("&name=")[1])).toEqual(["fits.pdf"]);
+    expect(t.doc.querySelectorAll(".start-imgs .chat-doc").length).toBe(1);
+    const text = t.doc.querySelector(".start-imgs").textContent;
+    expect(text).toContain("big.pdf: a PDF is at most 10 MiB");
+    expect(text).toContain("big.txt: a text file is at most 1 MiB");
+  } finally { t.close(); }
+});

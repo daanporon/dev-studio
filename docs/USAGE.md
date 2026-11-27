@@ -647,7 +647,8 @@ A text file or PDF goes up as it is and shows as a chip with its name and size (
 letters, digits, `.`, `_` and `-`). Clicking it opens a text file in a new tab and downloads a PDF; the
 same chip sits in your bubble (its size only in the browser tab that uploaded it). Any other file (an
 archive, an office file) is refused in the panel by name:
-`<name>: only pictures, text files and PDFs`. Send works with attachments and no text; the typed line then
+`<name>: only pictures, text files and PDFs`. A text file or PDF over its limit is not uploaded, here or in the
+Start dialog: `<name>: a PDF is at most 10 MiB` (or `a text file is at most 1 MiB`). Send works with attachments and no text; the typed line then
 ends with the stored paths, which the member opens with its file-reading tool. Attachments are kept 14 days
 (an older picture says `image removed`; an older file's link answers that it is gone) and are not checked
 for secrets. A Codex or Muse member or a screen-only chat shows `this member may not read PDFs` on a PDF's

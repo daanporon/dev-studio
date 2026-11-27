@@ -2619,19 +2619,22 @@ async function shrinkImage(file) {
 const TEXT_FILE_EXTS = "md markdown txt log csv tsv json jsonl yaml yml toml ini conf xml html htm css js mjs cjs ts tsx jsx py rb go rs java kt c h cpp hpp sh bash zsh sql diff patch".split(" ");
 const FILE_ACCEPT = ["image/*", ...TEXT_FILE_EXTS.map((e) => "." + e), ".pdf"].join(",");
 const docKind = (name) => { const m = /\.([^.]+)$/.exec(String(name || "")), e = m ? m[1].toLowerCase() : ""; return e === "pdf" ? "pdf" : TEXT_FILE_EXTS.includes(e) ? "text" : null; };
-// Picked, dropped or pasted files by what the board does with each: `ok` is [{f, kind}], `bad` the rest.
+// The largest text file and PDF, as KIND_MAX in files.ts (the same test holds them equal). A picture has none here: it is shrunk first.
+const FILE_MAX = { text: 1024 * 1024, pdf: 10 * 1024 * 1024 };
+const limitNote = (kind) => (FILE_MAX[kind] ? (kind === "pdf" ? "a PDF" : "a text file") + " is at most " + FILE_MAX[kind] / 1048576 + " MiB" : "");
+// Picked, dropped or pasted files by what the board does with each: `ok` is [{f, kind}], `big` those over their kind's cap, `bad` the rest.
 function sortFiles(list) {
-  const all = Array.from(list || []).filter(Boolean), pics = imageFiles(all), ok = [], bad = [];
-  for (const f of all) { const kind = pics.includes(f) ? "image" : docKind(f.name); if (kind) ok.push({ f, kind }); else bad.push(f); }
-  return { ok, bad };
+  const all = Array.from(list || []).filter(Boolean), pics = imageFiles(all), ok = [], big = [], bad = [];
+  for (const f of all) { const kind = pics.includes(f) ? "image" : docKind(f.name); if (!kind) bad.push(f); else (f.size > FILE_MAX[kind] ? big : ok).push({ f, kind }); }
+  return { ok, big, bad };
 }
-const refusedNote = (bad) => (bad.length ? bad.map((f) => f.name || "this file").join(", ") + ": only pictures, text files and PDFs" : "");
+const refusedNotes = (bad, big) => [...(bad.length ? [bad.map((f) => f.name || "this file").join(", ") + ": only pictures, text files and PDFs"] : []), ...big.map(({ f, kind }) => f.name + ": " + limitNote(kind))];
 const pastedFiles = (d) => (d && d.files && d.files.length ? Array.from(d.files) : Array.from((d && d.items) || []).filter((x) => x.kind === "file").map((x) => x.getAsFile()));
 // POST the bytes to `url`; resolves {id, url, bytes}, rejects with the server's own refusal text.
-async function uploadImage(blob, url, type = blob.type) {
+async function uploadImage(blob, url, type = blob.type, kind = "image") {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": type }, body: blob });
   const b = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(b.error || (r.status === 413 ? "the file is too large" : "HTTP " + r.status)); e.status = r.status; throw e; }
+  if (!r.ok) { const e = new Error(b.error || (r.status === 413 ? limitNote(kind) || "the file is too large" : "HTTP " + r.status)); e.status = r.status; throw e; }
   return b;
 }
 // The name the operator sees for a stored name: its stem and extension, or all of it when it has no stem (files.ts chatFileShown).
@@ -2642,7 +2645,7 @@ const fileSize = (n) => (n < 1024 ? n + " B" : n < 1024 * 1024 ? Math.round(n / 
 // Uploads one sorted file and resolves its attached entry {id, url, name}, plus `bytes` for a text file or a PDF.
 async function uploadAttachment({ f, kind }, url) {
   if (kind === "image") { const r = await uploadImage(await shrinkImage(f), url); return { id: r.id, url: r.url, name: f.name || "image" }; }
-  const r = await uploadImage(f, url + "&name=" + encodeURIComponent(f.name), kind === "pdf" ? "application/pdf" : "text/plain");
+  const r = await uploadImage(f, url + "&name=" + encodeURIComponent(f.name), kind === "pdf" ? "application/pdf" : "text/plain", kind);
   fileSizes.set(r.url, r.bytes);
   return { id: r.id, url: r.url, name: fileShown(r.id), bytes: r.bytes };
 }
@@ -2870,9 +2873,9 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
   // Attach files for the member shown now: each is uploaded at once (a picture shrunk if needed); a fifth is refused, and
   // so is any other kind, by name.
   const attach = (list) => {
-    const at = shown.wt, { ok, bad } = sortFiles(list), upUrl = "api/chat-file?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(at);
-    if (!ok.length && !bad.length) return;
-    const notes = bad.length ? [refusedNote(bad)] : [];
+    const at = shown.wt, { ok, big, bad } = sortFiles(list), upUrl = "api/chat-file?project=" + encodeURIComponent(project) + "&topic=" + encodeURIComponent(topic) + "&wt=" + encodeURIComponent(at);
+    if (!ok.length && !big.length && !bad.length) return;
+    const notes = refusedNotes(bad, big);
     for (const item of ok) {
       if (heldOf(at).length + (slots.current[at] || 0) >= CHAT_IMAGES) { notes.push("Up to " + CHAT_IMAGES + " files per message — remove one first."); break; }
       const k = ++seq.current;
@@ -2892,7 +2895,8 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
   const dropFile = (id) => { putHeld(shown.wt, heldOf(shown.wt).filter((x) => x.id !== id)); setNote(""); };
   const onPaste = (e) => {
     const got = pastedFiles(e.clipboardData);
-    if (sortFiles(got).ok.length) e.preventDefault();   // a text paste is left alone, also one that carries a refused file
+    const s = sortFiles(got);
+    if (s.ok.length || s.big.length) e.preventDefault();   // a text paste is left alone, also one that carries a refused file
     attach(got);
   };
   const dragHas = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files");
@@ -3417,9 +3421,9 @@ function StartSquad({ project, projects, toast, onClose }) {
   const uploading = ups.some((u) => u.state === "up");
   const putHeld = (arr) => { held.current = arr; setFiles(arr); };
   const attach = (list) => {
-    const { ok, bad } = sortFiles(list), g = gen.current, upUrl = "api/chat-file?project=" + encodeURIComponent(proj) + "&topic=_start";
-    if (!ok.length && !bad.length) return;
-    const notes = bad.length ? [refusedNote(bad)] : [];
+    const { ok, big, bad } = sortFiles(list), g = gen.current, upUrl = "api/chat-file?project=" + encodeURIComponent(proj) + "&topic=_start";
+    if (!ok.length && !big.length && !bad.length) return;
+    const notes = refusedNotes(bad, big);
     for (const item of ok) {
       if (held.current.length + slots.current >= START_IMAGES) { notes.push("Up to " + START_IMAGES + " files per squad — remove one first."); break; }
       const k = ++seq.current;
@@ -3445,7 +3449,8 @@ function StartSquad({ project, projects, toast, onClose }) {
   const dropFile = (id) => { putHeld(held.current.filter((x) => x.id !== id)); setNote(""); };
   const onPaste = (e) => {
     const got = pastedFiles(e.clipboardData);
-    if (sortFiles(got).ok.length) e.preventDefault();   // a text paste is left alone, also one that carries a refused file
+    const s = sortFiles(got);
+    if (s.ok.length || s.big.length) e.preventDefault();   // a text paste is left alone, also one that carries a refused file
     attach(got);
   };
   const dragHas = (e) => Array.from((e.dataTransfer && e.dataTransfer.types) || []).includes("Files");
