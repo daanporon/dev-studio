@@ -185,6 +185,11 @@ export const FACTS = {
   host_link_down: obj({ name: str, why: opt(str) }),
   host_link_closed: obj({ name: str, why: opt(str) }),
   host_link_refused: obj({ name: str, addr: opt(str), why: opt(str) }),
+  // side-loop-host U14 (core/side-actuator.ts), written on a side host: a Builder branch that was ahead of its remote
+  // was pushed, or its push failed; the side fenced itself once its link had been down for the grace.
+  side_pushed: obj({ branch: str, sha: str }),
+  side_push_failed: obj({ branch: opt(str), error: str }),
+  side_fenced: obj({ down_since: num, pushed: arr(str), push_failed: arr(str), closed: num, close_failed: arr(str) }),
   limit_cleared: ep,
   limit_expired: ep,
   limit_wait: ep,

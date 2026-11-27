@@ -10,7 +10,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Store } from "./store.ts";
 import type { Timer } from "./timers.ts";
-import { SIDE_PLUGINS } from "./side-plugins.ts";
+import { SIDE_ONLY, SIDE_PLUGINS } from "./side-plugins.ts";
 
 export const DIRS = {
   observers: join(import.meta.dir, "..", "observers"),
@@ -58,10 +58,11 @@ export type Actuator = { act(action: Action, ctx: TickCtx): unknown; seats?(ctx:
   takeDeferred?(): Map<string, number> };   // U249: background actions turned down this tick, by kind   // ms per `actuator:<kind>` since the last call (U239)
 
 // The plugins in `dir`, by filename. A module exports its plugin as default (or as named exports). With
-// `only` (file names without `.ts`) no other file is imported, and a name with no file is an error.
-export async function load<T extends { name: string }>(dir: string, only?: readonly string[]): Promise<T[]> {
+// `only` (file names without `.ts`) no other file is imported, and a name with no file is an error; a file named in
+// `except` is never imported (a main loop leaves out the side-only plugins, side-plugins.ts SIDE_ONLY).
+export async function load<T extends { name: string }>(dir: string, only?: readonly string[], except: readonly string[] = []): Promise<T[]> {
   let files: string[] = [];
-  try { files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort(); } catch { if (!only?.length) return []; }
+  try { files = readdirSync(dir).filter((f) => f.endsWith(".ts") && !except.includes(f.slice(0, -3))).sort(); } catch { if (!only?.length) return []; }
   if (only) {
     const missing = only.filter((n) => !files.includes(`${n}.ts`));
     if (missing.length) throw new Error(`loop: ${dir} has no plugin file for ${missing.join(", ")}`);
@@ -87,9 +88,9 @@ export async function loadAll(dirs = DIRS, role: Role = "main"): Promise<Plugins
     };
   }
   return {
-    observers: await load<Observer>(dirs.observers),
+    observers: await load<Observer>(dirs.observers, undefined, SIDE_ONLY.observers),
     // The decider first (U152): it compares wishes with what the observers just saw, before any
     // reconciler or fulfiller acts on the tick.
-    reconcilers: [(await import("./decide.ts")).default as Reconciler, ...await load<Reconciler>(dirs.reconcilers), ...await load<Reconciler>(dirs.fulfil)],
+    reconcilers: [(await import("./decide.ts")).default as Reconciler, ...await load<Reconciler>(dirs.reconcilers, undefined, SIDE_ONLY.reconcilers), ...await load<Reconciler>(dirs.fulfil, undefined, SIDE_ONLY.fulfil)],
   };
 }

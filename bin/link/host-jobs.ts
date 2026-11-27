@@ -283,8 +283,9 @@ const refRead = async (path: string, ref: string): Promise<RefRead> =>
   ({ ...(await spawn(["git", "-C", path, "rev-parse", ref], {}, 30_000)), missing: !existsSync(path) });
 const refSet = (path: string, ref: string, sha: string, noDeref: boolean): Promise<Out> =>
   spawn(["git", "-C", path, "update-ref", ...(noDeref ? ["--no-deref"] : []), ref, sha], {}, 30_000);
-const pushHere = (path: string, branch: string, remote = "origin"): Promise<Out> =>
-  git(["-C", path, "push", "--porcelain", remote, `refs/heads/${branch}:refs/heads/${branch}`], 300_000);
+/** `git push` of one branch to the same name, never forced; also the side loop's own push (side-loop-host U14). */
+export const pushHere = (path: string, branch: string, remote = "origin", timeoutMs = 300_000): Promise<Out> =>
+  git(["-C", path, "push", "--porcelain", remote, `refs/heads/${branch}:refs/heads/${branch}`], timeoutMs);
 
 /** Run a checked job on this host: what the side's `host-jobs` channel answers. `root` is this host's state root. */
 export async function runHere(job: unknown, ctx: { root: string; store?: Store }): Promise<unknown> {

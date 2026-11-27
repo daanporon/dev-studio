@@ -30,7 +30,7 @@ import { exportForRollback } from "./db/export-json.ts";
 import { stopAll } from "./fulfil/board.ts";
 import { migrateLoopFiles, reconcile } from "./db/migrate-host.ts";
 import { loadAll, type Role } from "./core/plugins.ts";
-import { sideActuator } from "./core/side-plugins.ts";
+import { sideActuator } from "./core/side-actuator.ts";
 import type { SideLink } from "../link/side.ts";
 import { queuedWork } from "./messages/replay.ts";
 import { now, open, ROOT, stateRoot } from "./core/store.ts";
