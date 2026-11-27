@@ -20,6 +20,7 @@ import { stateObserver } from "../../bin/loop/observers/state.ts";
 import { chatObserver } from "../../bin/loop/observers/chat.ts";
 import { reviewsObserver } from "../../bin/loop/observers/reviews.ts";
 import { codexObserver } from "../../bin/loop/observers/codex.ts";
+import worktreesObserver from "../../bin/loop/observers/worktrees.ts";
 import { liveModel } from "../../bin/loop/observers/orca.ts";
 import { pathFor } from "../../bin/loop/chat/codex.ts";
 
@@ -278,6 +279,24 @@ describe("main's observers leave uploaded rows alone", () => {
     expect(uploaded()).toEqual(before);
     // and main's own rows still move: its procs scan saw no process, so its own procs row is gone
     expect(all(main, "SELECT wt FROM observed_procs WHERE host = 'local'")).toEqual([]);
+  });
+
+  test("main's worktrees sync leaves an uploaded side worktree on its host: no local row, from the upload or the side member", async () => {
+    const mainRoot = temp(), main = store(mainRoot);
+    seedMain(main);
+    const { side, sync } = await linked(main, mainRoot, "s1");
+    seedSide(side);
+    put(side, "observed_worktrees", { project: "realp", wt: "local::/w/b", path: "/w/b", branch: "b-test" });
+    await sync.tick();
+    expect(all(main, "SELECT wt FROM observed_worktrees WHERE host = 's1' ORDER BY wt")).toEqual([{ wt: "s1::/w/a" }, { wt: "s1::/w/b" }]);
+    // main's own Orca worktree, so the sync has something to record
+    put(main, "observed_worktrees", { project: "realp", wt: "repo::/w/main", path: "/w/main" });
+    const rows = () => all(main, "SELECT * FROM worktrees ORDER BY host, path");
+    const before = rows();
+    worktreesObserver.run({ store: main, now: 2000 } as never);
+    const after = rows();
+    expect(after.filter((w) => w.host !== "local" || w.path !== "/w/main")).toEqual(before);
+    expect(after.filter((w) => w.path === "/w/main").map((w) => w.host)).toEqual(["local"]);
   });
 
   test("main's Codex readers look rollouts up among its own, never a side host's with the same cwd", async () => {
