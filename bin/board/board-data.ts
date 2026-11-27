@@ -610,15 +610,26 @@ function questionDoc(db: Db, label: string, topic: string, x: any, units: any[] 
 // events name stand in). A page whose file is gone gets `saved`, the path under the state root of the copy the
 // rescue made when its worktree closed (served by GET /page/<saved>); a saved page no session stands for is
 // listed too, with `key` null. Nothing is listed twice.
-function lavish(db: Db, st: any, label: string, topic: string) {
+function lavishScope(db: Db, st: any, label: string, topic: string) {
   const rescued = db.all("SELECT payload FROM events WHERE kind = 'pages_rescued' AND project = ? AND squad = ? ORDER BY id", label, topic)
     .map((e) => parse(e.payload) ?? {}).filter((p) => typeof p.path === "string" && typeof p.dest === "string");
   const wts = [...arr(st?.worktrees).map(String).map((w) => w.includes("::") ? w.slice(w.lastIndexOf("::") + 2) : w), ...rescued.map((p) => String(p.path))].filter(Boolean);
   const homes = [`${db.s.root}/${label}/pages/${topic}/`, `${db.s.root}/${label}/squads/${topic}-board/`];
+  // The folder that puts `file` in the squad's scope (a worktree, or a pages folder without its trailing `/`), or null.
+  const home = (file: string): { root: string; worktree: boolean } | null => {
+    const w = wts.find((x) => file.startsWith(x + "/"));
+    if (w) return { root: w, worktree: true };
+    const h = homes.find((x) => file.startsWith(x));
+    return h ? { root: h.slice(0, -1), worktree: false } : null;
+  };
+  return { rescued, home };
+}
+function lavish(db: Db, st: any, label: string, topic: string) {
+  const { rescued, home } = lavishScope(db, st, label, topic);
   const sessionFile = new Map<any, string>();
   const taken = new Set<string>(); // absolute files and page families a listed entry stands for
   const out = db.all("SELECT file, url, status, doc FROM observed_sessions WHERE COALESCE(status, '') != 'log' ORDER BY file")
-    .filter((s) => wts.some((w) => String(s.file).startsWith(w + "/")) || homes.some((h) => String(s.file).startsWith(h)))
+    .filter((s) => home(String(s.file)) != null)
     .map((s) => {
       const d = parse(s.doc) ?? {}, f = String(s.file);
       const e: any = { key: d.key ?? null, name: basename(f), dir: basename(f.slice(0, f.lastIndexOf("/"))), mtime: Number(d.mtime) || 0, url: s.url ?? null, status: s.status ?? null };
@@ -3692,6 +3703,41 @@ export function lavishUrl(key: string, root = stateRoot()): string | null {
   return withDb((db) => {
     const r = db.all("SELECT url, doc FROM observed_sessions WHERE url IS NOT NULL ORDER BY rowid").find((x) => parse(x.doc)?.key === key);
     return r ? String(r.url) : null;
+  }, root);
+}
+
+// The Lavish session of `key` for GET /review/<key> (lavish-legacy-document-opening U1): its file and status, the
+// squad whose Review pages list it (lavish()'s rule; live squads first, then archived ones) inside the board's scope
+// `want`, and the folder that put it in that squad's scope (`worktree`: a worktree, else a pages folder). Null when
+// the key is unknown or no squad in scope lists it.
+export type ReviewTarget = { file: string; name: string; status: string | null; label: string; topic: string; root: string; worktree: boolean };
+export function reviewTarget(key: string, want: { project: string; topic: string }, root = stateRoot()): ReviewTarget | null {
+  if (!/^[0-9a-f]{16}$/.test(key)) return null;
+  return withDb((db) => {
+    const row = db.all("SELECT file, status, doc FROM observed_sessions WHERE COALESCE(status, '') != 'log' ORDER BY rowid").find((x) => parse(x.doc)?.key === key);
+    if (!row) return null;
+    const file = String(row.file);
+    const inScope = (l: string, t: string) => (!want.project || want.project === l) && (!want.topic || want.topic === t);
+    const squads: { l: string; t: string; st: any }[] = [];
+    for (const r of db.all("SELECT project, topic FROM squads WHERE COALESCE(status, '') != 'closed' AND doc IS NOT NULL ORDER BY project, topic")) {
+      const l = String(r.project), t = String(r.topic);
+      if (!inScope(l, t)) continue;
+      let st: any = null;
+      try { st = squadDoc(db.s, l, t); } catch { /* a doc that won't parse: its pages folders still count */ }
+      squads.push({ l, t, st });
+    }
+    const labels = want.project ? [want.project] : db.all("SELECT label FROM projects ORDER BY label").map((r) => String(r.label));
+    for (const l of labels) {
+      for (const a of archivedDocs(db, l)) {
+        const t = String(a.st?.topic ?? "");
+        if (t && inScope(l, t)) squads.push({ l, t, st: null });
+      }
+    }
+    for (const { l, t, st } of squads) {
+      const h = lavishScope(db, st, l, t).home(file);
+      if (h) return { file, name: basename(file), status: row.status == null ? null : String(row.status), label: l, topic: t, ...h };
+    }
+    return null;
   }, root);
 }
 

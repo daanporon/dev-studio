@@ -6,7 +6,7 @@
 // set by board.sh); any other Host gets 403, so a web page can't read the board via DNS rebinding.
 // The server only talks to loop.db: it never runs a command and never reads a state or conf file
 // (the page file is the one file read; the one folder it writes and serves is a project's chat images,
-// `<state root>/<label>/chat-files/<topic>/`). Reads open loop.db read-only per request; a write is one
+// `<state root>/<label>/chat-files/<topic>/`; review pages are read through saved-pages.ts). Reads open loop.db read-only per request; a write is one
 // wish or `requests` row the loop fulfils on its next tick, answered 202 with the row's id — the
 // page then learns the outcome from the event log (GET /api/stream).
 //
@@ -34,6 +34,10 @@
 //                              nosniff, a no-script CSP, cached a day (the name is a content hash); no member check
 //   GET /healthz               {ok, pid, port}: the loop's ping (the loop runs this server, U16)
 //   GET /page/<label>/pages/<topic>/<path>   one saved copy of a review page (sandboxed, read-only; saved-pages.ts)
+//   GET /review/<key>          one Lavish session's page in a plain view: its name and "review running" or
+//                              "review ended" over an iframe of GET /review/<key>/file/<path>, which serves the
+//                              page and the files beside it (the session's folder and below; saved-pages.ts
+//                              `serveReview`, sandboxed and read-only); 404 unless a squad in scope lists it and its file is there
 //   GET /lavish/<key>          302 to that Lavish review page; when Lavish is down, a `lavish`
 //                              request and a page that reloads until it is up
 // Writes (POST, JSON, same-origin), each a `requests` row unless said otherwise:
@@ -101,7 +105,7 @@ import { addHostProblem, hostUnreachable } from "../loop/squad/host-reach.ts";
 import { createHash } from "node:crypto";
 import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, FILE_ONLY_LIMITS, hostsJson, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
+import { briefingJson, buildBoard, chatJson, feedbackJson, chatMember, messagesJson, dsLabel, eventsAfter, eventsLists, eventsPage, lavishUrl, reviewTarget, FILE_ONLY_LIMITS, hostsJson, limitsJson, questionsPage, rolesJson } from "./board-data.ts";
 import { isHostKey } from "../lib/host-settings.ts";
 import { knownHost } from "../loop/settings/host-settings.ts";
 import { isTestProject } from "../loop/settings/projects.ts";
@@ -121,7 +125,7 @@ import { moveProblem } from "../loop/capacity/accounts.ts";
 import { nameProblem } from "../lib/account-folder.ts";
 import { dropLoginCode, loginCodeProblem } from "../lib/account-login-code.ts";
 import { lavishUp } from "../loop/io/lavish-up.ts";
-import { servePage } from "./saved-pages.ts";
+import { servePage, serveReview } from "./saved-pages.ts";
 import { answer as answerQuestion, pressRefused } from "../loop/messages/questions.ts";
 import { dbPath, open, openReadOnly, stateRoot, type Row, type Store } from "../loop/core/store.ts";
 import { checkExportText, exportTransfer, IMPORT_FILES, planImport, readGet, SettingsError, type ImportSource } from "../loop/settings/settings.ts";
@@ -1450,6 +1454,47 @@ function pageGet(url: URL) {
     "Content-Security-Policy": "sandbox allow-scripts", "Cache-Control": "no-store" } });
 }
 
+// HTML-escape one value printed into a page the server writes.
+const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+// GET /review/<key> -> the page of one Lavish session in a plain view (lavish-legacy-document-opening U1): a one-line
+// top bar (the page name, "review running" or "review ended") over an iframe of
+// GET /review/<key>/file/<name>, which serves the page and the files beside it (saved-pages.ts `serveReview`:
+// the session's folder and below, allowed types, no symlink, sandboxed like /page/). The session must belong to
+// a squad in this board's scope (board-data.ts `reviewTarget`) and its file must be there; anything else is 404.
+function reviewGet(url: URL) {
+  let seg: string[];
+  try { seg = url.pathname.slice("/review/".length).split("/").map(decodeURIComponent); } catch { return text(404, "not found\n"); }
+  const [key, sub, ...rest] = seg;
+  const t = reviewTarget(key ?? "", scope);
+  // The page itself must be servable for the wrapper too (there, of an allowed type, no symlinked folder).
+  const f = t ? serveReview(t.file, t.root, t.worktree, sub === "file" ? rest : [t.name]) : null;
+  if (!t || !f) return text(404, "not found\n");
+  if (sub === "file") {
+    return new Response(f.bytes, { status: 200, headers: { "Content-Type": f.type, "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "sandbox allow-scripts", "Cache-Control": "no-store" } });
+  }
+  if (sub !== undefined) return text(404, "not found\n");
+  const name = esc(t.name), state = t.status === "ended" ? "review ended" : "review running";
+  const src = esc(`/review/${encodeURIComponent(key)}/file/${encodeURIComponent(t.name)}`);
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>${name}</title>
+<style>
+html, body { margin: 0; height: 100%; }
+body { display: flex; flex-direction: column; font: 15px system-ui, sans-serif; background: #fff; color: #111; }
+header { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-bottom: 1px solid #ddd; box-sizing: border-box; }
+.name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.state { flex: none; color: #555; font-size: 13px; }
+iframe { flex: 1; min-height: 0; width: 100%; border: 0; display: block; }
+@media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } header { border-color: #333; } .state { color: #aaa; } }
+</style></head><body>
+<header><span class="name" title="${name}">${name}</span><span class="state">${esc(state)}</span></header>
+<iframe src="${src}" title="${name}" sandbox="allow-scripts"></iframe>
+</body></html>
+`, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'", "Cache-Control": "no-store" } });
+}
+
 // GET /lavish/<key> -> 302 to that Lavish review page; when Lavish is down, one `lavish` request.
 async function lavish(key: string) {
   if (!/^[0-9a-f]{16}$/.test(key)) return text(404, "not found\n");
@@ -1530,6 +1575,7 @@ async function get(req: Request, url: URL) {
   if (path === "/healthz") return json(200, { ok: true, pid: process.pid, port });
   if (path.startsWith("/lavish/")) return lavish(path.slice(8));
   if (path.startsWith("/page/")) return pageGet(url);
+  if (path.startsWith("/review/")) return reviewGet(url);
   return text(404, "not found\n");
 }
 // --- end of read routes ---------------------------------------------------------------------------

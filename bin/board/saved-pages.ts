@@ -4,7 +4,8 @@
 // the worktree>` (bin/loop/io/rescue.ts). board-data.ts `lavish()` asks this module for the saved copy of a
 // session whose file is gone and for the pages in that folder no session stands for; board-server.ts serves
 // them through `GET /page/<label>/pages/<topic>/<path>` (`servePage`). Both stay inside
-// `<state root>/<label>/pages/<topic>/`: a canonical path under it, no symlink, no `..`.
+// `<state root>/<label>/pages/<topic>/`: a canonical path under it, no symlink, no `..`. `serveReview` serves a
+// live session's page and the files beside it the same way for `GET /review/<key>` (lavish-legacy-document-opening U1).
 import { closeSync, constants as fsc, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 
@@ -83,12 +84,38 @@ const PAGE_MAX = 20 * 1024 * 1024;
  * split and decoded. Null when it is not a plain file of an allowed type inside the squad's pages folder.
  */
 export function servePage(root: string, label: string, topic: string, rest: string[]): { bytes: Uint8Array; type: string } | null {
+  try { return readUnder(realpathSync(pagesDir(root, label, topic)), rest); } catch { return null; }
+}
+
+/**
+ * One file of a Lavish session's page for `GET /review/<key>/file/<path>` (lavish-legacy-document-opening U1):
+ * `rest` (split and decoded) under the folder holding the session's `file`. `scopeRoot` is the worktree or pages
+ * folder that put the session in its squad's scope (board-data.ts `reviewTarget`), and the session's folder must
+ * sit inside it with no symlink between the two. A session at a worktree's root serves its own file alone; below
+ * the folder, a segment starting with `.` or named `node_modules` is refused. Null when refused.
+ */
+export function serveReview(file: string, scopeRoot: string, worktree: boolean, rest: string[]): { bytes: Uint8Array; type: string } | null {
+  const own = rest.length === 1 && rest[0] === basename(file);
+  if (!own && rest.some((s) => s.startsWith(".") || s === "node_modules")) return null;
+  try {
+    const dir = dirname(file);
+    if (!inside(scopeRoot, dir)) return null;
+    const scope = realpathSync(scopeRoot), base = realpathSync(dir);
+    // Outside the scope root (a `..` in the stored path), or a symlink between it and the session's folder.
+    if (!inside(scope, base) || base !== join(scope, relative(scopeRoot, dir))) return null;
+    if (worktree && base === scope && !own) return null;
+    return readUnder(base, rest);
+  } catch { return null; }
+}
+
+/** `rest` under the canonical folder `base`: a plain file of an allowed type, no symlink, no `..`, at most PAGE_MAX. */
+function readUnder(base: string, rest: string[]): { bytes: Uint8Array; type: string } | null {
   if (!rest.length || rest.some((s) => !s || s === "." || s === ".." || /[\0\\/]/.test(s))) return null;
   const type = TYPES[(rest[rest.length - 1].split(".").pop() ?? "").toLowerCase()];
   if (!type) return null;
   let fd = -1;
   try {
-    const base = realpathSync(pagesDir(root, label, topic)), target = join(base, ...rest);
+    const target = join(base, ...rest);
     if (!inside(base, target) || realpathSync(target) !== target) return null; // outside, or a symlink anywhere on the way
     fd = openSync(target, fsc.O_RDONLY | fsc.O_NOFOLLOW);
     const st = fstatSync(fd);
