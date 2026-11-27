@@ -43,9 +43,13 @@ const PURE = ["msg", "send-role-ts", "journal-ts", "notes-ts", "finish", "expose
 const WRAPPERS = ["journal", "notes", "send-role", "help"] as const;
 const ON_SIDE = ["stop-mine", "contract-backend", "hook-gate", "no-broad-kill-hook-ts", "rewake-hook-ts"] as const;
 const ROW: Record<string, Kind> = Object.fromEntries([...PURE.map((c) => [c, "forward"]), ...[...WRAPPERS, ...ON_SIDE].map((c) => [c, "local"]),
-  ["watch-ts", "split"]]);
+  ["watch-ts", "split"], ["picker-hook-ts", "split"]]);
 // Only a Builder ends a unit with a PR and reviews it (roles/builder.md); a Tester or Researcher finishes with `ds finish`.
 const BUILDER: Record<string, Kind> = { "finish-unit-ts": "split", "review-unit-ts": "local" };
+// u8b: the picker hook (bin/hooks/picker-hook.sh) is split by mode, see kindFor.
+/** picker-hook-ts modes that stay on the side host: they only start the detached `-async` half there. */
+export const PICKER_LOCAL = ["pre", "permission"];
+export const PICKER_SPLIT = ["post", "pre-async", "permission-async"];
 export const TABLE: Record<(typeof WORKER_ROLES)[number], Record<string, Kind>> = { builder: { ...ROW, ...BUILDER }, tester: { ...ROW }, researcher: { ...ROW } };
 
 /** The orch.sh ops a side host forwards: the ones written as loop.db rows (orch-ts ROW_OPS), never a backend verb. */
@@ -54,6 +58,13 @@ export const ORCH_OPS = ["send", "send-worker", "reply", "ask"] as const;
 /** The class of `cmd` for a member of `role`; null when it is not listed (refused). */
 export function kindOf(role: string, cmd: string): Kind | null {
   return (TABLE as Record<string, Record<string, Kind>>)[role]?.[cmd] ?? null;
+}
+
+/** The class of a whole call: kindOf, but the picker hook's class depends on its mode (null: an unknown mode). */
+export function kindFor(role: string, argv: string[]): Kind | null {
+  const k = kindOf(role, argv[0] ?? "");
+  if (argv[0] !== "picker-hook-ts" || k === null) return k;
+  return PICKER_LOCAL.includes(argv[1] ?? "") ? "local" : PICKER_SPLIT.includes(argv[1] ?? "") ? "split" : null;
 }
 
 // The options each forwarded command takes a value for, so a value (a message body) is never read as a flag.
@@ -111,7 +122,7 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
   const [cmd, ...args] = call.argv;
   if (!cmd) return refuse("no command");
   const role = String(m.role);
-  const kind = kindOf(role, cmd);
+  const kind = kindFor(role, call.argv);
   if (kind === null) return refuse(`'ds ${cmd}' is not a command a ${role} may run from a side host`);
   if (kind === "local") return refuse(`'ds ${cmd}' runs on the side host, not on main`);
   const bad = kind === "split" ? checkFacts(cmd, call.facts) : null;
@@ -170,6 +181,15 @@ export function checkCall(s: Store, host: string, call: Call): Checked {
     if (unit === undefined || !ownUnit(s, m, role, unit)) return refuse(`finish-unit from a side host is only for this member's own unit, not '${unit ?? ""}'`);
     argv = [...argv];
     argv[posAt[0]] = join(s.root, project, "squads", `${squad}.json`);
+  } else if (cmd === "picker-hook-ts") {
+    // <mode> <state> <role> <wt> [input]: main's state file, the member itself, its worktree id; the side's input
+    // file path is dropped (its content came as facts).
+    const [mode, state, r] = pos;
+    const tail = String(state ?? "").split("/").slice(-3);
+    if (tail[0] !== project || tail[1] !== "squads" || tail[2] !== `${squad}.json`) return refuse(`the picker hook from a side host takes ${project}/squads/${squad}.json`);
+    if (r !== me) return refuse(`the picker hook from a side host is only for ${me}`);
+    if ((call.facts as Row | undefined)?.mode !== mode) return refuse("the picker hook's facts are for another mode");
+    argv = [cmd, mode, join(s.root, project, "squads", `${squad}.json`), me, String(m.wt ?? "")];
   }
   const env: Record<string, string> = { DS_MEMBER: call.member, DS_GEN: String(m.gen) };
   const wt = wtPath(m.wt);

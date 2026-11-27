@@ -5,7 +5,10 @@
 // would have read itself; nothing else of the worktree reaches main.
 //   finish-unit-ts  the branch, HEAD and the review receipt's state on this branch (finishFacts)
 //   watch-ts        whether the instructions changed since this worktree last read them (watch-ts instructionsSeen)
-import { readFileSync } from "node:fs";
+//   picker-hook-ts  (u8b) post: the answer from the hook's stdin; pre-async: the hook input file, cut to what it
+//                   uses; permission-async: the hook input and the transcript's tool call (picker-hook-ts *Facts).
+//                   The side's hook input file is read and removed here; main never sees its path.
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { run as runCmd } from "../lib/shared";
 
@@ -56,6 +59,16 @@ const CHECKS: Record<string, (f: Facts) => string | null> = {
     return null;
   },
   "watch-ts": (f) => (f.instr === null || f.instr === "changed" || f.instr === "unchanged" ? null : "instr is not changed, unchanged or null"),
+  "picker-hook-ts": (f) => {
+    const str = (k: string, max = 4096) => (typeof f[k] === "string" && (f[k] as string).length <= max ? null : `${k} is not a short string`);
+    if (f.mode === "post") return str("tid", 200) ?? str("answer", 8192);
+    if (f.mode === "pre-async") return typeof f.ok === "boolean" ? null : "ok is not a boolean";
+    if (f.mode === "permission-async") {
+      for (const k of ["tool", "agent_id", "agent_type", "cwd", "tpath", "found", "shown"]) { const bad = str(k); if (bad) return bad; }
+      return typeof f.answerable === "boolean" ? null : "answerable is not a boolean";
+    }
+    return "mode is not post, pre-async or permission-async";
+  },
 };
 
 /** The split commands: the ones with a local half. */
@@ -67,6 +80,15 @@ export async function gather(cmd: string, argv: string[]): Promise<Facts> {
   if (cmd === "watch-ts") {
     const { instructionsSeen } = await import("../commands/watch-ts.ts");
     return { instr: argv.includes("--poll") ? null : instructionsSeen() };
+  }
+  if (cmd === "picker-hook-ts") {
+    const h = await import("../commands/picker-hook-ts.ts");
+    const [mode, , , , file = ""] = argv;
+    if (mode === "post") { let input = ""; try { input = await Bun.stdin.text(); } catch { /* none */ } return h.postFacts(input); }
+    try {
+      if (mode === "pre-async") return h.preFacts(file);
+      if (mode === "permission-async") return await h.permissionFacts(file);
+    } finally { if (file && mode !== "post") rmSync(file, { force: true }); }
   }
   return {};
 }
