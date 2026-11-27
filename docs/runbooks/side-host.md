@@ -52,20 +52,19 @@ picker chose. A worker there runs on its squad's backend, or on tmux when the sq
 
 ## Drain
 
-Draining stops new starts on a host and lets what runs there finish. There is no `ds host drain` command yet
-(unit u16 of the side-loop-host plan builds it, with "Move to main" for one member). Until then, set the
-host's seats to 0:
+Draining stops new starts on a host. The members it already runs carry on, finish and may restart there.
 
 ```sh
-bin/ds host set <name> seats 0
+bin/ds host drain <name>           # `ds host list` then shows `draining`
+bin/ds host undrain <name>         # it takes new starts again
 ```
 
-Running members keep working and report to main as before; no new start is placed there. The host is empty
-when no member in any squad's crew list on the board carries its name. To use it again, set the seats back:
-
-```sh
-bin/ds host set <name> seats 2
-```
+The host is empty when no member in any squad's crew list on the board carries its name. To empty it sooner,
+open a member's ⋯ menu in that list and press **Move to main**. Once the member is idle it writes a journal
+checkpoint (a Builder commits its work first), then the loop pushes the Builder's branch, closes the member there
+and starts it again on main when main has room. A Builder's unit goes to its next attempt, on `<branch>-r2` and
+so on, from the pushed commit. Only commits move: with uncommitted files the move is refused, the member carries
+on and its row says why. The old worktree stays on the side host.
 
 ## Remove
 

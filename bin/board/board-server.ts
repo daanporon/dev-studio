@@ -45,6 +45,7 @@
 //                 else the Lead; a picker by keystroke). A Studio alert (topic _studio): `dismiss`,
 //                 even with an empty answer (one click); agent questions still need one.
 //   /api/restart  {project, topic, wt, role?}  a `restart_at` wish (mode now, by the board; U153)
+//   /api/member-move {project, topic, wt}   move one side host member to main (a `member-move` request, U16)
 //   /api/pause, /api/resume {scope, project, topic?, wt?, role?, suffix?, prerequisites?}
 //                 shared activity state, answered 200; the loop owns checkpoint/close/start
 //   /api/poke     {project, topic}  `poke`: a wake-up line typed into a quiet Lead's terminal
@@ -95,6 +96,8 @@
 //                 (project NULL, by board) when `confirm` is the label (409: it is not, a removal is already
 //                 open, or something blocks it). A board of one project takes only its own, a topic board none (403)
 // Everything else is 404, so no state file is ever reachable.
+import { openMove, unmovable } from "../loop/squad/move.ts";
+import { hostUnreachable } from "../loop/squad/host-reach.ts";
 import { createHash } from "node:crypto";
 import { closeSync, constants as fsc, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -384,6 +387,27 @@ async function restart(req: Request) {
     if (Number(m.restart_at ?? 0) > Number(m.placed_at ?? 0)) no(409, "already requested — waiting for the loop");
     const w = s.wishOnce(String(m.id), "restart", { by: "board", mode: "now", why: "board restart" });
     return { id: w.row.id } as Row;
+  });
+}
+
+// side-loop-host U16: "Move to main" on one member of a side host files one `member-move` request; the loop asks the
+// member's journal checkpoint once it is idle, pushes its branch, closes it there and starts it again on main.
+async function memberMove(req: Request) {
+  const pr = await readPost(req);
+  if ("r" in pr) return pr.r;
+  const { project, topic, wt } = pr.b;
+  if (!NAME.test(project ?? "") || !NAME.test(topic ?? "") || typeof wt !== "string" || !wt || wt.length > 1000)
+    return json(400, { error: "need project, topic and a member worktree" });
+  return write((s) => {
+    const st = String(squadRow(s, project, topic).status ?? "running");
+    if (["suspended", "on-hold", "closed", "gone"].includes(st)) no(409, `this squad is ${st}`);
+    const m = one(s, "SELECT * FROM members WHERE project = ? AND squad = ? AND wt = ? ORDER BY id DESC", project, topic, wt) ?? no(409, "no such member");
+    const why = unmovable(s, m);
+    if (why) no(409, why);
+    if (paused(s, m as { project: string })) no(409, "this member is paused or resuming; use Resume before moving it");
+    if (hostUnreachable(s, m.host)) no(409, `host ${m.host} is unreachable: its fence moves its members`);
+    if (openMove(s, Number(m.id)) != null) no(409, "already requested — waiting for the loop");
+    return board(s, "member-move", { id: Number(m.id) }, { project, squad: topic, member: wt });
   });
 }
 
@@ -1504,7 +1528,7 @@ async function get(req: Request, url: URL) {
 
 const POSTS: Record<string, (req: Request) => Promise<Response>> = {
   "/api/pause": (r) => activity(r, false), "/api/resume": (r) => activity(r, true),
-  "/api/restart": restart, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account-move": accountMovePost, "/api/host": hostPost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
+  "/api/restart": restart, "/api/member-move": memberMove, "/api/answer": answer, "/api/poke": poke, "/api/request": request, "/api/override": overridePost, "/api/account-move": accountMovePost, "/api/host": hostPost, "/api/account": accountPost, "/api/account-reset": accountResetPost, "/api/account-add": accountAddPost, "/api/account-login-code": accountLoginCodePost, "/api/leftover-remove": leftoverRemovePost, "/api/unit": unitPost, "/api/plan": planPost,
   "/api/settings-import/preview": settingsImportPreview,
 };
 

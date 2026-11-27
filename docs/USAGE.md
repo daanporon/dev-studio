@@ -297,6 +297,15 @@ With no side host the panel and the tile show main alone, with no section headin
   set only with `ds host set`. Main's seats are each project's `max_builders`, on the Limits tab.
 - **Remove** on a side host's row asks first, then deletes the host's key, as `ds host remove` does.
 
+**Drain a side host:** `bin/ds host drain <name>` stops new starts there. The members it already runs carry on, finish
+and may restart there. `bin/ds host undrain <name>` lets it take new starts again. `ds host list` shows `draining`.
+
+**Move one member to main:** open the member's ⋯ menu in the squad's crew list and press **Move to main**. Once the
+member is idle, it writes a journal checkpoint; a Builder commits its work first. The loop then pushes the Builder's
+branch from the side host, closes the member there and starts it again on main when main has room (a Builder's unit
+goes to its next attempt, on `<branch>-r2` and so on, from the pushed commit). Only commits move: with uncommitted
+files the move is refused, the member carries on and its row says why. The old worktree stays on the side host.
+
 **If main cannot be reached:** a main with no side host yet does not run its link server. On main, run
 `bin/ds config set <project> limits.conf link_listen on` (`link_port` defaults to 7790), then run `ds join` again.
 

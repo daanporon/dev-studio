@@ -248,6 +248,18 @@ export function listHosts(s: Store, opts: { all?: boolean } = {}, at = now()): R
 }
 
 /** One line per host for `ds host list`. */
+/** `ds host drain|undrain` (side-loop-host U16): while draining, an accepted host takes no new member (place.ts,
+ *  pick.ts hostBrake); the members with a worktree there run on and may restart. */
+export function setDrain(store: Store, name: string, drain: boolean, o: { by: string }): Result<{ host: Row }> {
+  return store.tx((): Result<{ host: Row }> => {
+    const h = store.get("hosts", { name });
+    if (!h || h.status !== "accepted") return { ok: false, why: `no accepted host '${name}'` };
+    if (!!Number(h.drain ?? 0) !== drain)
+      store.fact("host_drain_set", [{ table: "hosts", key: { name }, set: { drain: drain ? 1 : 0 } }], { payload: { name, drain: drain ? 1 : 0, by: o.by } });
+    return { ok: true, host: store.get("hosts", { name })! };
+  });
+}
+
 export function hostLine(r: Row, at = now()): string {
   const parts = [String(r.name).padEnd(16), String(r.status).padEnd(8)];
   if (r.fingerprint) parts.push(String(r.fingerprint));

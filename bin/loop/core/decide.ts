@@ -28,6 +28,8 @@
 // The start is one act kind (`member`) on subject `member:<id>`, its episode the stable start key
 // (member-state.ts startEpisode); fulfil/member.ts carries it out. The first tick a project's walk
 // succeeds, its wishes are seeded from reality first (seed.ts).
+import { onSide } from "../squad/backend.ts";
+import { openMove } from "../squad/move.ts";
 import { existsSync } from "node:fs";
 import { reconcile } from "../capacity/picks.ts";
 import { graceS } from "../capacity/slot.ts";
@@ -78,9 +80,10 @@ export type Facts = {
   clearCmd?: "/clear" | "/new" | null;  // U156: the agent's clear command (null: no signal, e.g. Muse)
   checkpoint?: string | null;  // U266: the why of an owed stop still waiting on its journal checkpoint (stop-checkpoint.ts)
   hostDown?: boolean;          // side-loop-host U13: its side host's link is down (squad/host-reach.ts): unknown, but no card
+  move?: number | null;        // side-loop-host U16: the open `member-move` request of a side member (squad/move.ts)
 };
 export type Act = { act: "start" } | { act: "stop"; why: string } | { act: "checkpoint"; why: string } | { act: "tell"; why: "limit" | "credits-ok" | "login-ok" } | { act: "card"; why: "unknown" | "rebroke" }
-  | { act: "reload" } | { act: "clear" } | { act: "close"; phase: "stop" | "remove"; why: string } | null;
+  | { act: "reload" } | { act: "clear" } | { act: "move" } | { act: "close"; phase: "stop" | "remove"; why: string } | null;
 
 export function compare(f: Facts): Act {
   if (f.lock || f.hold) return null;
@@ -100,6 +103,10 @@ export function compare(f: Facts): Act {
     return null;
   }
   if (f.view !== "running" || f.resume === false) return null;
+  // U16: "Move to main" waits for an idle agent, asks its checkpoint, then moves it (fulfil/member-move.ts). It takes
+  // no room, and a member with no agent moves at once instead of starting where it is.
+  if (f.move && f.reality === "none") return { act: "move" };
+  if (f.move && f.reality === "running" && f.idleOK) return f.checkpoint === "move" ? { act: "checkpoint", why: "move" } : { act: "move" };
   // U13: a member on an unreachable side host reads unknown; the host's grace and fence (U15) decide, not a card.
   if (f.reality === "unknown") return !f.hostDown && f.unknownS >= f.recheckS ? { act: "card", why: "unknown" } : null;
   if (f.reality === "starting") return null;
@@ -364,6 +371,7 @@ function look(store: Store, m: Row, now: number): Seen {
   const tree = m.wt ? store.get("observed_worktrees", { project: m.project, wt: m.wt }) : null;
   const why = effective(store, m).why;
   const wtPath = tree?.path ? String(tree.path) : m.wt && String(m.wt).includes("::") ? String(m.wt).split("::").at(-1)! : "";
+  const move = onSide(m.host) ? openMove(store, Number(m.id)) : null;
   return { m, resume: resuming ? resume : null, f: {
     view: view(store, m), lock: lock(store, m), reality: r, hostDown: hostUnreachable(store, m.host), hold: why === "archive-debrief", switchStuck: limitStuck(store, m, now),
     closeOK: ["stopped", "gone"].includes(String(m.want ?? "")) || why === "squad" || !closeBusy(store, m),
@@ -375,7 +383,7 @@ function look(store: Store, m: Row, now: number): Seen {
     switchDue: m.want_result == null && (!ACTED.includes(w.why as string | undefined) || pinsOther(m, w)),
     givenUp: String(m.want_result ?? "").startsWith("failed"), capped: crashCapped(store, m), rebroke: rebroke(store, m, now),
     switchStop: sw.stop, tellLimit: sw.tell, tellOk: sw.ok,
-    ...stops, checkpoint: pendingWhy(store, m, { ...stops, switchStop: sw.stop }),
+    ...stops, move, checkpoint: pendingWhy(store, m, { ...stops, move, switchStop: sw.stop }),
     ...clearFacts(store, m, now),
   } };
 }
@@ -384,7 +392,8 @@ function look(store: Store, m: Row, now: number): Seen {
 // `moves` (U180): those whose act would be the fallback stop, whose pick must land above their rung.
 export type Wanting = { eligible: Row[]; moves: Map<number, Switch> };
 function wanting(seen: Seen[]): Wanting {
-  const acts = seen.map((s) => ({ s, a: compare({ ...s.f, room: true }) })).filter(({ a }) => a?.act === "start" || a?.act === "stop" || a?.act === "checkpoint");
+  const acts = seen.map((s) => ({ s, a: compare({ ...s.f, room: true }) }))
+    .filter(({ a }) => a?.act === "start" || a?.act === "stop" || (a?.act === "checkpoint" && a.why !== "move"));
   return { eligible: acts.map(({ s }) => s.m),
     moves: new Map(acts.filter(({ a }) => a?.act !== "start" && a?.why === "fallback").map(({ s }) => [Number(s.m.id), s.f.switchStop!])) };
 }
@@ -481,7 +490,12 @@ function decideNow(ctx: TickCtx): Action[] {
       // One step of the checkpoint; once it settled (proved or timed out) the stop goes this tick.
       const step = askCheckpoint(ctx, s.m, owed(store, s.m, s.f)!);
       if (!step.settled) { out.push(...step.actions); continue; }
-      act = { act: "stop", why: act.why };
+      act = act.why === "move" ? { act: "move" } : { act: "stop", why: act.why };
+    }
+    if (act.act === "move") {
+      out.push({ project: String(s.m.project), squad: String(s.m.squad), member: (s.m.wt as string | null) ?? null, subject: `member:${s.m.id}`, kind: "member-move",
+        episode: `move:${s.f.move}`, payload: { id: Number(s.m.id), request: Number(s.f.move) } });
+      continue;
     }
     if (act.act === "card") { out.push(card(s.m, act.why, s.f, store, now)); continue; }
     if (act.act === "tell") {
