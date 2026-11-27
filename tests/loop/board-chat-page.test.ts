@@ -38,20 +38,21 @@ const goneUrls = new Set<string>();   // stored chat images the fetch stub answe
 function panel(reply: any = { agent: "claude", source: "transcript", turns: [], updated_at: 1, sends: [] }, postGate?: Promise<void>) {
   const h = hooks(), posts: any[] = [], fetches: string[] = [], timers: any[] = [], cleared: any[] = [], listeners = new Map<string, any>();
   let closed = 0;
-  const answers: any[] = [], sentQ = new Map<string, string>(), askingKey = (k: string, since: string) => (k && since ? k + "@" + since : k);
+  const loop: { result: any } = { result: { ok: true } };   // what the loop does with a filed request
+  const answers: any[] = [], sentQ = new Map<string, string>(), pressedQ = new Set<string>(), askingKey = (k: string, since: string) => (k && since ? k + "@" + since : k);
   const marks = new Map<string, any>(), lstoreStub = { get: (k: string, d: any) => marks.has(k) ? marks.get(k) : d, set: (k: string, v: any) => { marks.set(k, v); } };
   const drafts = new Map<string, any>(), storeStub = { get: (k: string, d: any) => drafts.has(k) ? JSON.parse(drafts.get(k)) : d, set: (k: string, v: any) => { drafts.set(k, JSON.stringify(v)); }, del: (k: string) => { drafts.delete(k); } };
   const fetchStub = async (url: string) => { fetches.push(url); return { ok: !goneUrls.has(url), status: goneUrls.has(url) ? 404 : 200, json: async () => reply }; };
   const doc = { addEventListener: (k: string, f: any) => listeners.set(k, f), removeEventListener: (k: string, f: any) => { if (listeners.get(k) === f) listeners.delete(k); } };
-  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store", "sendAnswer", "sentQ", "askingKey",
+  const make = new Function("useState", "useEffect", "useRef", "html", "mdToHtml", "post", "fetch", "setInterval", "clearInterval", "document", "lstore", "store", "sendAnswer", "sentQ", "askingKey", "pressedQ", "awaitDone",
     `${cut("urlTail")} ${cut("linkedQ")} ${cut("QMd")} ${cut("QOptions")} ${cut("ShownText")} ${cut("PermWhy")} ${lineOf("const promptWhere = ")} const docLabel = () => "Open doc"; ${chatSrc} return { QOptions, PermWhy, ChatPanel, ChatCtl, ChatFailCtl, chatCount, chatSendLine, chatTone, chatTools, chatRows, CHAT_MAX, chatSeenKey, chatDraftKey };`);
   const mod = make(h.useState, h.useEffect, h.useRef, html, mdToHtml, async (...a: any[]) => { posts.push(a); if (postGate) await postGate; return { ok: true, id: 7 }; }, fetchStub,
     (f: any, ms: number) => { timers.push({ f, ms }); return timers.length; }, (t: any) => cleared.push(t), doc, lstoreStub, storeStub,
-    async (...a: any[]) => { answers.push(a); sentQ.set(askingKey(a[0] + "/" + a[1] + "/" + a[2], a[4]), "12:00"); }, sentQ, askingKey);
+    async (...a: any[]) => { answers.push(a); sentQ.set(askingKey(a[0] + "/" + a[1] + "/" + a[2], a[4]), "12:00"); }, sentQ, askingKey, pressedQ, async () => { await Bun.sleep(0); return loop.result; });   // after the reload the press starts
   let seen = 0;
   const props: any = { project: "p", topic: "one", wt: "/w/b 1", label: "builder-x", onClose: () => { closed++; }, onSeen: () => { seen++; } };
   const render = () => { h.reset(); return mod.ChatPanel(props); };
-  return { h, mod, drafts, answers, sentQ, marks, props, seen: () => seen, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
+  return { h, mod, loop, drafts, answers, sentQ, pressedQ, marks, props, seen: () => seen, posts, fetches, timers, cleared, listeners, render, closed: () => closed, setData: (d: any) => { h.states[0] = d; } };
 }
 
 // The class of a rendered row (`class="…"` written out, or `class=${…}` as the second value after key).
@@ -954,6 +955,62 @@ test("U2: a screen menu with no board question has one button per option that po
   expect(dockOf(p.render())).toBe("folded");
   await fnIn(btnWith(questionView(root), "Esc · leave the menu"))();
   expect(p.posts.at(-1)).toEqual(["api/keys", { project: "p", topic: "one", wt: "/w/b 1", keys: ["Escape"] }]);
+});
+
+describe("an answered permission question leaves the chat card", () => {
+  const menu = { tail: menuTail, menu: 3, prompt: ["Do you want to proceed?"], options: ["Yes", "No", "Other"], at: T, age_s: 1 };
+  const perm = (over: any = {}) => bq("picker-p1", { source: "picker", picker_kind: "permission", since: "2026-11-26T10:00:00Z", ...over });
+  const open = async (questions: any[], gate?: Promise<void>) => {
+    const p = panel(undefined, gate);
+    p.render();
+    p.setData({ ...idle, questions, screen: menu });
+    return { p, view: questionView(p.render()) };
+  };
+  const option = (view: any) => fnIn(nodes(view).find((n) => n.strings.startsWith("<button key=") && n.strings.includes("chat-qopt")))();
+  const esc = (view: any) => fnIn(btnWith(view, "Esc · leave the menu"))();
+  const reload = (p: any, questions: any[]) => { p.setData({ ...idle, questions, screen: { tail: "> ", menu: 0, at: T, age_s: 1 } }); return p.render(); };
+
+  // Answerable or not: both are the same prompt on the member's screen.
+  for (const answerable of [true, false]) for (const [name, press] of [["option 1", option], ["Esc", esc]] as const)
+    test(`a ${name} press on the screen menu drops the ${answerable ? "answerable" : "terminal-only"} question`, async () => {
+      const { p, view } = await open([perm({ answerable })]);
+      await press(view);
+      expect(dockOf(reload(p, [perm({ answerable })]))).toBe(null);
+    });
+
+  test("a refused press keeps the question", async () => {
+    const gate = Promise.reject(new Error("409 refused")); gate.catch(() => {});
+    const { p, view } = await open([perm()], gate);
+    await option(view);
+    expect(p.pressedQ.size).toBe(0);
+    expect(flat(questionView(reload(p, [perm()])))).toContain("Title picker-p1");
+  });
+
+  // api/keys answers once the press is filed; the loop can still fail it, or not get to it.
+  for (const [name, result, why] of [["fails the filed press", { ok: false, error: "the member is gone" }, "not pressed: the member is gone"],
+    ["sends no result in time", null, "not pressed: no answer from the loop"]] as const)
+    test(`the question comes back when the loop ${name}`, async () => {
+      const { p, view } = await open([perm()]);
+      p.loop.result = result;
+      await option(view);
+      await Bun.sleep(5);
+      expect(p.pressedQ.size).toBe(0);
+      const root = reload(p, [perm()]);
+      expect(flat(questionView(root))).toContain("Title picker-p1");
+      expect(flat(root)).toContain(why);
+      expect(flat(root)).not.toContain("pressed 1");
+    });
+
+  test("a newer asking, another picker and a board question still show", async () => {
+    const other = [bq("q1"), bq("picker-ask", { source: "picker" })];
+    const { p, view } = await open([perm(), ...other]);
+    await option(view);
+    expect([...p.pressedQ]).toEqual(["p/one/picker-p1@2026-11-26T10:00:00Z"]);
+    reload(p, [perm(), ...other]);
+    expect(flat(p.render())).not.toContain("Title picker-p1");
+    expect(flat(p.render())).toContain("Title q1");
+    expect(flat(questionView(reload(p, [perm({ since: "2026-11-26T10:05:00Z" })])))).toContain("Title picker-p1");
+  });
 });
 
 test("U2: a member with an open question carries a ? in the switcher and tabs", () => {

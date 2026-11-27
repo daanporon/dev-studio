@@ -2301,6 +2301,9 @@ function UpdateBanner({ data, toast }) {
 // asked: a question asked again under the same id is a new asking and starts unmarked. A key is kept until its
 // item leaves the board data (`pruneSent`), so a re-render or the other copy of the form doesn't offer Send again.
 const sentQ = new Map();
+// Permission askings answered by a key press on the chat's screen menu. Apart from `sentQ`: no loop check follows a
+// key press, so the card hides at once, and `pruneSent` keeps the mark while the asking is listed, terminal-only or not.
+const pressedQ = new Set();
 const askingKey = (k, since) => (k && since ? k + "@" + since : k);
 // Done rows whose close request was accepted: "<label>/<topic>" (`closeKey`); the row is hidden at once and the
 // mark goes when the row leaves the data.
@@ -2311,11 +2314,13 @@ const pruneSent = (data) => { // drop the marks of askings no longer on the boar
   const live = new Set([...(data.needs_you || []).filter((n) => !(n.source === "picker" && n.picker_kind === "permission" && n.picker_answerable !== true)).map(akey),
     ...(data.loop_notes || []).map((n) => n.project + "/_studio/" + n.id)]);
   for (const k of [...sentQ.keys()]) if (!live.has(k)) sentQ.delete(k);
+  const listed = new Set((data.needs_you || []).map(akey));
+  for (const k of [...pressedQ]) if (!listed.has(k)) pressedQ.delete(k);
   const rows = new Set((data.needs_you || []).filter((n) => n.kind === "done").map(closeKey));
   for (const k of [...closingQ]) if (!rows.has(k)) closingQ.delete(k);
 };
 // A Needs-you item the operator already acted on is hidden at once (before the loop has acted and the next refresh).
-const cardGone = (n) => (n.id && sentQ.has(akey(n)) && !(n.source === "picker" && n.picker_kind === "permission")) || (n.kind === "done" && closingQ.has(closeKey(n)));
+const cardGone = (n) => (n.id && sentQ.has(akey(n)) && !(n.source === "picker" && n.picker_kind === "permission")) || (n.id && pressedQ.has(akey(n))) || (n.kind === "done" && closingQ.has(closeKey(n)));
 // The one list of a Needs-you item's actions, read by its card, by the window the card opens and by the question
 // window: [{key, label, cls, opens?, card?, confirm?}] in the order shown. `opens` actions only open a window (a card
 // shows them, the window it opened does not); `card: false` is for the question window only. Running one is
@@ -2886,11 +2891,23 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
     }
   };
   // One press of the key strip for the member shown (api/keys); a refusal shows why, nothing is retried.
-  const press = async (keys, name) => {
+  // `answers`: the askings a press that works has answered (a press on the dock's screen menu).
+  const press = async (keys, name, answers = []) => {
     const to = shown.wt;
     if (pressing === to) return;
     setPressing(to); setErr(""); setNote("");
-    try { await post("api/keys", { project, topic, wt: to, keys }); if (cur.current === to) { setNote("pressed " + name); load(); } }
+    try {
+      const filed = await post("api/keys", { project, topic, wt: to, keys });
+      answers.forEach((k) => pressedQ.add(k));
+      if (cur.current === to) { setNote("pressed " + name); load(); }
+      // The loop types the key after the post, and can still fail: an asking stays hidden only once it has. Not awaited.
+      if (answers.length) awaitDone(filed.id).then((r) => {
+        if (r && r.ok !== false) return;
+        answers.forEach((k) => pressedQ.delete(k));
+        if (cur.current === to) { setNote(""); setErr("not pressed: " + (r ? r.error || "the loop refused it" : "no answer from the loop")); }
+        bump((x) => x + 1);
+      });
+    }
     catch (e) { if (cur.current === to) setErr("not pressed: " + String(e.message || e)); }
     finally { setPressing((v) => (v === to ? "" : v)); }
   };
@@ -2900,7 +2917,7 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
   const askOf = (q) => askingKey(project + "/" + topic + "/" + q.id, q.since);
   const qItems = [...(scr && scr.menu > 0 ? [{ menu: true, key: "menu:" + (scr.prompt || []).join("|"), prompt: scr.prompt || [],
       options: scr.options && scr.options.length ? scr.options : chatDigits(scr.menu).map(([d]) => "Option " + d) }] : []),
-    ...((data && data.questions) || []).filter((q) => q.id && !sentQ.has(askOf(q))).map((q) => ({ ...q, key: "q:" + q.id + "@" + q.since }))];
+    ...((data && data.questions) || []).filter((q) => q.id && !sentQ.has(askOf(q)) && !pressedQ.has(askOf(q))).map((q) => ({ ...q, key: "q:" + q.id + "@" + q.since }))];
   const blockKey = (qItems.find((x) => x.menu || x.blocking) || {}).key || "";
   // It opens by itself once per new blocking item; a pick of the operator's holds until the next one.
   // Opened for a question: it shows, blocking or not, until a blocking item that was not there at the opening arrives.
@@ -2922,7 +2939,11 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
     try { await sendAnswer(project, topic, q.id, answer, q.since); if (cur.current === to) { foldQ(); bump((x) => x + 1); load(); } }
     catch (e) { if (cur.current === to) setErr("not sent: " + String(e.message || e)); }
   };
-  const pressOpt = async (i) => { await press([String(i + 1)], String(i + 1)); foldQ(); };
+  // A safety-check prompt is also the menu on the screen: answering the menu answers its question, which the loop
+  // clears only later, so the card must not open again on it.
+  const menuAsks = () => ((data && data.questions) || []).filter((q) => q.id && q.source === "picker" && q.picker_kind === "permission").map(askOf);
+  const pressMenu = async (keys, name) => { await press(keys, name, menuAsks()); foldQ(); };
+  const pressOpt = (i) => pressMenu([String(i + 1)], String(i + 1));
   const turns = (data && data.turns) || [], sends = (data && data.sends) || [], rows = chatRows(turns, sends);
   const left = CHAT_MAX - chatCount(text);
   // The members to show: the live crew in the Crew box's order; the shown member always has a tab (first when it is not in `crew`).
@@ -2974,7 +2995,7 @@ const qLine = !qItems.length ? "" : qItems[0].menu
           <div class="chat-q chat-dbody" key=${qCur.key} data-chat-question>
           ${qCur.menu ? html`<div class="chat-qprompt">${qCur.prompt.join("\n") || shown.label + "'s screen shows a menu"}</div>
             ${qCur.options.map((o, i) => html`<button key=${i} type="button" class="btn chat-qopt" disabled=${pressing === shown.wt} onClick=${() => pressOpt(i)}>${i + 1}. ${o}</button>`)}
-            <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => press(["Escape"], "Esc").then(foldQ)}>Esc · leave the menu</button>`
+            <button type="button" class="chat-qesc" disabled=${pressing === shown.wt} onClick=${() => pressMenu(["Escape"], "Esc")}>Esc · leave the menu</button>`
           : html`<h3>${linkedQ(qCur.title, qCur.repo_slug)}</h3>${qCur.doc && onPlan && html`<div><button type="button" class="btn sm" data-ev="open-doc" onClick=${() => onPlan(qCur.doc)}>${docLabel(qCur)}</button></div>`}
             ${qCur.shown ? html`<${ShownText} n=${qCur} />${qCur.picker_kind === "permission" && !qCur.answerable && html`<${PermWhy} n=${qCur} who=${qCur.asker || shown.label} cls="chat-qprompt" />`}` : qCur.question && qCur.question !== qCur.title && html`<${QMd} cls="chat-qprompt" text=${qCur.question} slug=${qCur.repo_slug} />`}
             ${qCur.answerable

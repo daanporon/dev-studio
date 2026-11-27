@@ -24,7 +24,7 @@ function rig() {
     return o + t + (k < v.length ? str(v[k]) : "");
   }, "");
   const make = new Function("useState", "useRef", "useEffect", "html", "sendAnswer", "sqName", "fmtAge", "linkedQ", "docLabel", "copy", "QPr", "ActBtn", "ChatPanel", "hhmmss", "post", "mdPlain", "QMd",
-    `${qoptions}\n${sentSrc}\n${keysSrc}\nconst sendAnswer2 = async (label, topic, id, answer, since) => { sentQ.set(askingKey(label + "/" + topic + "/" + id, since), "10:00"); };\n${overlay.replace("sendAnswer(", "sendAnswer2(")}\nreturn { AskOverlay, sentQ, pruneSent, akey };`);
+    `${qoptions}\n${sentSrc}\n${keysSrc}\nconst sendAnswer2 = async (label, topic, id, answer, since) => { sentQ.set(askingKey(label + "/" + topic + "/" + id, since), "10:00"); };\n${overlay.replace("sendAnswer(", "sendAnswer2(")}\n${cut("const cardGone = (n) =>", "\n")}return { AskOverlay, sentQ, pressedQ, pruneSent, cardGone, akey };`);
   const api = make(useState, useRef, () => {}, html, null, () => "sq", () => "1m", (t: string) => t, () => "doc", () => {}, null, null, null, (d: Date) => d.toISOString().slice(11, 19), null, (t: string) => t, null);
   const q = (id: string, since: string | null, label = "p", squad = "one") => ({ squad, label, kind: "question", id, since, title: id, titled: true, text: id, options: [], choices: [], age_min: 1 });
   const render = (items: any[], atKey: string) => { at = 0; fns.length = 0;
@@ -85,6 +85,17 @@ test("pruneSent drops a refused safety-check press's mark: the card is live agai
   expect(api.sentQ.size).toBe(1);
   api.pruneSent({ needs_you: [perm(false)] });        // refused: listed again, answered in the terminal
   expect(api.sentQ.size).toBe(0);
+});
+
+test("a permission card answered by a key press in the chat is hidden while listed, even a terminal-only one", () => {
+  const { api, q } = rig();
+  const perm = (since: string) => ({ ...q("picker-p1", since), source: "picker", picker_kind: "permission", picker_answerable: false });
+  api.pressedQ.add(api.akey(perm(A1)));
+  api.pruneSent({ needs_you: [perm(A1)] });
+  expect(api.cardGone(perm(A1))).toBe(true);
+  expect(api.cardGone(perm(A2))).toBe(false);   // asked again
+  api.pruneSent({ needs_you: [] });
+  expect(api.pressedQ.size).toBe(0);
 });
 
 test("pruneSent keeps a Studio note's mark while the note is listed", () => {
