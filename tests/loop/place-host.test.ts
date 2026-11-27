@@ -13,6 +13,7 @@ import { accountRows } from "../../bin/loop/db/import-json.ts";
 import { pick, type Picked, type PickReq, type Waiting } from "../../bin/loop/capacity/pick.ts";
 import { reconcile } from "../../bin/loop/capacity/picks.ts";
 import { placeSide, refusal } from "../../bin/loop/capacity/place.ts";
+import { run as request } from "../../bin/commands/request.ts";
 import { LINK_VERSION } from "../../bin/link/protocol.ts";
 import { UP_MIGRATION } from "../../bin/link/replica.ts";
 import type { TickCtx } from "../../bin/loop/core/plugins.ts";
@@ -118,6 +119,61 @@ describe("U11: placement picks a side host", () => {
     s.db.run("UPDATE hosts SET drain = 1 WHERE name = 'alpha'");
     expect(reconcile(ctx(s)).has(id)).toBe(false);
     expect(String(s.get("picks", { member: id })!.reason)).toMatch(/^WAIT slot: .*alpha draining/s);
+  });
+
+  // U11b: the failed start of a Builder, asked for again with `ds request`.
+  async function failedThenAgain(s: Store, id: number, extra: string[] = []): Promise<void> {
+    const suffix = String(s.get("members", { id })!.suffix);
+    s.db.run("UPDATE members SET status = 'failed', want_result = 'failed: no terminal' WHERE id = ?", [id]);
+    s.upsert("units", { project: "fx", squad: "demo", slug: suffix }, { status: "planned", observed_at: T, updated_at: T });
+    process.env.DS_STATE_ROOT = s.root;
+    const log = console.log;
+    console.log = () => {};
+    try { expect(await request(["builder", "--unit", suffix, "--squad", "fx/demo", ...extra])).toBe(0); } finally { console.log = log; }
+  }
+
+  test("asked again after a failed start, a host placement chose is picked again", async () => {
+    const s = fixture();
+    sample(s, "local");
+    side(s, "alpha");
+    side(s, "beta");
+    live(s);
+    const id = asks(s);
+    reconcile(ctx(s));
+    expect(hostCol(s, id)).toBe("alpha");
+    await failedThenAgain(s, id);
+    expect(hostCol(s, id)).toBeNull();
+    s.db.run("UPDATE hosts SET drain = 1 WHERE name = 'alpha'");
+    expect(reconcile(ctx(s)).has(id)).toBe(true);
+    expect(hostCol(s, id)).toBe("beta");
+  });
+
+  test("asked again after a failed start, a host forced with --host stays, also after a tick", async () => {
+    const s = fixture();
+    sample(s, "local");
+    side(s, "alpha");
+    side(s, "beta");
+    live(s);
+    const id = asks(s, { host: "alpha" });
+    reconcile(ctx(s));
+    await failedThenAgain(s, id);
+    s.db.run("UPDATE hosts SET drain = 1 WHERE name = 'alpha'");
+    reconcile(ctx(s));
+    expect(hostCol(s, id)).toBe("alpha");
+  });
+
+  test("--host on the new request pins the host, even the one placement had chosen", async () => {
+    const s = fixture();
+    sample(s, "local");
+    side(s, "alpha");
+    side(s, "beta");
+    live(s);
+    const id = asks(s);
+    reconcile(ctx(s));
+    await failedThenAgain(s, id, ["--host", "alpha"]);
+    s.db.run("UPDATE hosts SET drain = 1 WHERE name = 'alpha'");
+    reconcile(ctx(s));
+    expect(hostCol(s, id)).toBe("alpha");
   });
 
   test("main with room: a placed Builder starts on main and its row names no host", () => {
