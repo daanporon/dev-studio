@@ -68,6 +68,7 @@ import { hostKeys, hostLine, hostOverride, isHostKey, SELF } from "../lib/host-s
 import { hostSample as placeSample, hostSeats, seatsUsed, sideBrake, sideValue } from "../loop/capacity/place.ts";
 import { SIDE_DEFAULTS } from "../loop/settings/host-settings.ts";
 import { hostLink } from "../loop/squad/host-reach.ts";
+import { stuckHosts } from "../loop/squad/side-update.ts";
 import { onSide } from "../loop/squad/backend.ts";
 import { linkWish } from "../loop/fulfil/link.ts";
 import { tailnetIp } from "../loop/io/tailnet.ts";
@@ -2455,6 +2456,19 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     options: [], choices: [], when: null, acts_on_answer: false, age_min: Math.max(0, Math.floor((NOW() - Number(h.requested_at)) / 60)), place: "needs",
     host: String(h.name), fingerprint: String(h.fingerprint),
   })) : [];
+  // side-loop-host U24: a host still behind 10 minutes after its update job is a Needs-you card with the update log's
+  // last lines and Update; it goes once the host reports main's commit.
+  const behindCards: any[] = db && labels.length && hasHosts(db) ? stuckHosts(db.s).map(({ host, rev, target, request, step }) => {
+    const log = String(step.log ?? "").split("\n").slice(-10).join("\n").replace(/```/g, "~~~");
+    return {
+      repo_slug: null, pr: null, act: null, project: labels[0], id: `host-update-${host}-${request}.${step.attempt}`, from: null, card: "host-update", reason: null, squad: null, unit: null, suggestion: null,
+      title: `Host ${host} is behind main`,
+      text: [`Host ${host} still runs ${rev || "an unknown commit"}, main runs ${target.slice(0, 12)}: its update ${step.state === "failed" ? "failed" : "has not finished"} 10 minutes after the job.`,
+        step.error ?? step.line ?? "", log ? "Last lines of its update log:\n```\n" + log + "\n```" : "It sent no update log."].filter(Boolean).join("\n\n"),
+      why: "Update sends the host the job again. Its seats still take new work unless its link or tables differ from main's.",
+      options: [], choices: [], when: null, acts_on_answer: false, age_min: ageMin(step.stuck_at), place: "needs", host,
+    };
+  }) : [];
   const allAlerts = (db ? labels.flatMap((l) => db.all("SELECT doc FROM observed_alerts WHERE project = ? ORDER BY rowid", l).map((r) => {
     const x = parse(r.doc) ?? {};
     const text = String(x.question ?? x.text ?? "");
@@ -2477,7 +2491,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
       age_min: ageMin(x.since),
       place: placeAlert({ ...x, text }, NOW(), db ? dsLimit(db, l, "needs_grace_min") : null, db ? dsLimit(db, l, "refusal_needs_min") : null),
     };
-  })) : []).concat(githubCards, hostCards).filter((a) => a.id).sort((a, b) => (b.age_min ?? 0) - (a.age_min ?? 0));
+  })) : []).concat(githubCards, hostCards, behindCards).filter((a) => a.id).sort((a, b) => (b.age_min ?? 0) - (a.age_min ?? 0));
   // U1: only the asks are Needs-you. The rest are loop notes (newest first), also on their squad's row;
   // a card still in its grace period is held back until it has lasted.
   const studioAlerts = allAlerts.filter((a) => a.place === "needs");
@@ -2550,7 +2564,7 @@ function board(db: Db | null, label: string, labels: string[], squads: any[], ac
     // The inbox: every question and proposed fix from squads that aren't on hold: blocking first,
     // then approvals, then questions, oldest first; each carries the command to copy.
     needs_you: [...studioAlerts.map((a) => ({
-      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, ...(a.card === "host-join" ? { host: (a as any).host, fingerprint: (a as any).fingerprint } : {}), id: a.id, from: a.from, text: a.text, title: a.title, titled: true, chat_wt: a.chat_wt, chat_label: a.chat_label,
+      squad: "_studio", label: a.project, kind: "studio", card_squad: a.squad, repo_slug: a.repo_slug, pr: a.pr, act: a.act, card: a.card, reason: a.reason, debrief: a.debrief ?? null, about: a.squad ? [a.squad, a.unit].filter(Boolean).join(" ") : null, ...(a.card === "host-join" || a.card === "host-update" ? { host: (a as any).host, fingerprint: (a as any).fingerprint } : {}), id: a.id, from: a.from, text: a.text, title: a.title, titled: true, chat_wt: a.chat_wt, chat_label: a.chat_label,
       choices: a.choices, when: a.when, acts_on_answer: a.acts_on_answer, suggestion: a.suggestion, why: a.why, options: a.options, age_min: a.age_min, command: null,
     })), ...active.flatMap((s) => [
       ...s.questions.map((q: any) => ({
@@ -2830,7 +2844,7 @@ export function renderText(b: Board): string {
   }
   for (const a of b.studio_alerts) {
     const ag = a.age_min == null || a.age_min < 0 ? "?" : a.age_min >= 60 ? `${Math.floor(a.age_min / 60)}h` : `${a.age_min}m`;
-    o.push(`studio: ${(a.debrief ? a.text.split("\n")[0] : a.text).replace(/[\t\n]/g, " ")} (${ag}) — then ${a.card === "host-join" ? "accept or reject it" : "dismiss it"} on the web board${a.suggestion ? ` ("${a.suggestion}")` : ""}`);
+    o.push(`studio: ${(a.debrief ? a.text.split("\n")[0] : a.text).replace(/[\t\n]/g, " ")} (${ag}) — then ${a.card === "host-join" ? "accept or reject it" : a.card === "host-update" ? "press Update" : "dismiss it"} on the web board${a.suggestion ? ` ("${a.suggestion}")` : ""}`);
   }
   if (b.studio_alerts.length) o.push(RULE);
   for (const st of b.studio) {
@@ -3064,7 +3078,7 @@ export function hostsJson(project: string, root = stateRoot()) {
     const mine = codeRev();
     const s = seats(db.s, project, now), total = s.limit == null ? null : s.limit + s.light, used = s.used.normal + s.used.light;
     const view = brakeView(db.s, now, project, [project]), on = !!view.projects[0]?.on;
-    const main = { name: SELF, main: true, online: true, last_seen_s: null, fingerprint: null, drain: false, fenced: false, behind: null,
+    const main = { name: SELF, main: true, online: true, last_seen_s: null, fingerprint: null, drain: false, fenced: false, behind: null, commit: mine || null, main_commit: mine || null,
       seats: { used, total, free: total == null ? null : Math.max(0, total - used) }, load: loadOf(hostRow(db, "observed_machine", null)),
       brake: { on, hit: on ? critLine(view.hit) : null }, keys: hostKeyRows(db, SELF, {}) };
     const rows = hasHosts(db) ? db.all("SELECT * FROM hosts WHERE status = 'accepted' ORDER BY name") : [];
@@ -3078,7 +3092,7 @@ export function hostsJson(project: string, root = stateRoot()) {
       let reported: Record<string, string> = {};
       try { reported = JSON.parse(String(h.env ?? "{}")); } catch { /* not ours to fail on */ }
       return { name, main: false, online: link.state === "online", last_seen_s: ago(h.last_seen_at), fingerprint: String(h.fingerprint ?? ""),
-        drain: !!Number(h.drain ?? 0), fenced: h.fenced_at != null, behind,
+        drain: !!Number(h.drain ?? 0), fenced: h.fenced_at != null, behind, commit: rev || null, main_commit: mine || null,
         seats: { used, total, free: Math.max(0, total - used) }, load: loadOf(placeSample(db.s, name)),
         brake: { on: sideValue(db.s, name, "builder_host_brake") === "on", hit: sideBrake(db.s, name, now) }, keys: hostKeyRows(db, name, reported) };
     });

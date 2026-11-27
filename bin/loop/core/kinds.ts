@@ -73,6 +73,7 @@ export const REQUESTS = {
   // side-loop-host U17 (fulfil/host.ts): the board's Hosts actions.
   "host-member": obj({ host: str, action: str, fingerprint: opt(str), by: opt(str), ...THROUGH }),
   "host-key": obj({ host: str, key: str, value: opt(str), by: opt(str), ...THROUGH }),
+  "host-update": obj({ host: str, action: opt(str), by: opt(str), ...THROUGH }),
   // side-loop-host U16 (fulfil/member-move.ts): the board's "Move to main" on one side member (`id`: its row).
   "member-move": obj({ id: num, ...THROUGH }),
   merge: MERGE,

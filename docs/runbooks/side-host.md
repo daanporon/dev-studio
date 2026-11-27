@@ -121,6 +121,17 @@ themselves, and main's extra 60 s is what keeps it from starting a new worker wh
 If you override it with `DS_LIMIT_HOST_GRACE_MIN`, give both loops the same value. A side grace longer than
 main's means two workers can run the same unit at once until the link returns.
 
+## Updating
+
+A side host follows main. When an update of main ends (`ds update <project>`), each online side host is sent
+the commit main is on: it resets its checkout to that commit, reinstalls and restarts its side loop. A host
+that was away gets it when its link is back. A host still behind 10 minutes after that raises a Needs-you card
+with the end of its update log; **Update** on the card sends it again.
+
+On the side host, the run's record is `state/link/update.json` and its output `state/link/update.log`. The
+side host's branch on `origin` must hold main's commit. A host whose code is older than this cannot take the
+job: run `bin/host/update-host.sh` on it once. `/ds-update` in a Studio does not reach side hosts.
+
 ## Checking on a host
 
 ```sh
