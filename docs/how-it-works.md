@@ -149,6 +149,13 @@ account with room, tells the Lead when a unit's prerequisites finish, and marks 
 its PR merges. A watchdog (`bin/loop/loop.sh --ensure`, once a minute) brings it back if it
 dies, and the board shows a banner while it is down.
 
+**A second machine.** A side host runs worker seats (Builders, Testers, Researchers) when main is full
+or braking. It runs its own loop, which dials main over a link, works on its own disk and sends what it
+observes back, so `loop.db`, the board and every decision stay on main. When main loses a side host for
+longer than its grace, it starts that host's units again elsewhere, from what had been pushed, and refuses
+late calls from the old workers. Joining, draining and removing one, and what losing one costs:
+[`runbooks/side-host.md`](runbooks/side-host.md).
+
 How one tick works, what `loop.db` holds and how to find out why something is stuck are in
 [`loop.md`](loop.md). The wake rules are in [`../conventions/wake.md`](../conventions/wake.md).
 
