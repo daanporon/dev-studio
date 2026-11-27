@@ -44,6 +44,7 @@ export const KEPT: Record<string, string> = {
   health: "the loop process's own health",
   hosts: "host-wide list of side hosts and their public keys (side-loop-host U1)",
   link_shipped: "a side host's record of the observed rows it last sent main over the link (side-loop-host U6)",
+  host_config: "per-host overrides of the machine keys, by host not project (side-loop-host U25)",
   side_link: "a side host's own clock of its link to main (side-loop-host U14)",
   observed_accounts: "host-wide account usage",
   observed_account_folders: "login folders each host's scan found",

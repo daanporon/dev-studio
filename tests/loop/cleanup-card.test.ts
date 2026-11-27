@@ -94,7 +94,7 @@ describe("Host tidy card", () => {
   test("investigate-disk-cleanup U1: a glob's cache folder reads ≥ its inode until the measuring pass, then its du size", async () => {
     const { s, ob, act, loop, pass } = world(["p"]);
     const dir = tmp(), cache = join(dir, "zzcache-a");
-    s.upsert("config", { project: "p", file: "limits.conf", key: "cleanup_tmp_globs" }, { value: `${dir}/zzcache-*`, observed_at: 1 });
+    s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', 'cleanup_tmp_globs', ?, 1)", [`${dir}/zzcache-*`]);
     mkdirSync(cache);
     for (let i = 0; i < 20; i++) { mkdirSync(join(cache, `s${i}`)); for (let j = 0; j < 50; j++) writeFileSync(join(cache, `s${i}`, `f${j}`), "x"); }
     aged(cache, AT - 72 * H);

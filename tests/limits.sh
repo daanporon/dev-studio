@@ -131,18 +131,22 @@ for bad in 0 -1 three -; do
 done
 "$L" set proj max_light_builders 0 >/dev/null
 eq "max_light_builders back to off" "$(ds_limit proj max_light_builders)" 0
-# --- U153: restart_rss_gb: - (off) or a positive number of GB -----------------------------------
+# --- U153: restart_rss_gb: - (off) or a positive number of GB; a host key (U25): ds host set, not limits set -----
+H() { "$ROOT/bin/ds" --state "$DS_STATE_ROOT" host "$@"; }
 eq "restart_rss_gb default" "$(ds_limit proj restart_rss_gb)" -
-"$L" set proj restart_rss_gb 6 >/dev/null
-eq "restart_rss_gb override" "$(ds_limit proj restart_rss_gb)" 6
-"$L" set proj restart_rss_gb 0.5 >/dev/null
+if "$L" set proj restart_rss_gb 6 >/dev/null 2>&1; then fail=$((fail+1)); echo "  FAIL: limits set took a host key" >&2; else pass=$((pass+1)); fi
+H set local restart_rss_gb 6 >/dev/null
+eq "restart_rss_gb host override" "$(ds_limit proj restart_rss_gb)" 6
+eq "restart_rss_gb is the host's for every project" "$(ds_limit other restart_rss_gb)" 6
+has "limits show names the host source" "$("$L" show proj | grep '^restart_rss_gb ')" "host"
+H set local restart_rss_gb 0.5 >/dev/null
 eq "restart_rss_gb fractional" "$(ds_limit proj restart_rss_gb)" 0.5
 for bad in 0 -1 six 1.2.3; do
-  if "$L" set proj restart_rss_gb "$bad" >/dev/null 2>&1; then fail=$((fail+1)); echo "  FAIL: restart_rss_gb '$bad' accepted" >&2; else pass=$((pass+1)); fi
+  if H set local restart_rss_gb "$bad" >/dev/null 2>&1; then fail=$((fail+1)); echo "  FAIL: restart_rss_gb '$bad' accepted" >&2; else pass=$((pass+1)); fi
 done
-"$L" set proj restart_rss_gb - >/dev/null
+H set local restart_rss_gb - >/dev/null
 eq "restart_rss_gb back to off" "$(ds_limit proj restart_rss_gb)" -
-"$L" rm proj restart_rss_gb >/dev/null
+H rm local restart_rss_gb >/dev/null
 "$L" rm proj max_builders >/dev/null
 eq "skip lenses default" "$(ds_limit proj review_skip_lenses)" -
 "$L" set proj review_skip_lenses security,learnings,performance >/dev/null

@@ -12,6 +12,7 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { now, type Row, type Store } from "../loop/core/store.ts";
+import { acceptDefaults, dropHost } from "../loop/settings/host-settings.ts";
 
 export const LOCAL_HOST = "local";
 /** What to do on main when a first join cannot reach it: `ds host list`, `ds join` and the board's join row say it. */
@@ -204,6 +205,7 @@ export function accept(s: Store, name: string, opts: { seats?: number; by?: stri
     if (row.status !== "pending") return { ok: false as const, why: `host ${name} is ${row.status}, not pending` };
     const by = opts.by ?? "ds";
     s.db.run("UPDATE hosts SET status = 'accepted', seats = ?, accepted_at = ?, accepted_by = ? WHERE name = ?", [seats, at, by, name]);
+    acceptDefaults(s, name, seats, `accept by ${by}`, at);   // U25, KTD16: its seats and its brake on, as host overrides
     s.fact("host_accepted", [], { payload: { name, fingerprint: String(row.fingerprint), seats, by } });
     return { ok: true as const, host: s.get("hosts", { name })! };
   });
@@ -216,6 +218,7 @@ function drop(s: Store, verb: "reject" | "remove", name: string, by: string, at:
     if (!row || row.status === "removed") return { ok: false as const, why: `no host ${name}` };
     if (verb === "reject" && row.status !== "pending") return { ok: false as const, why: `host ${name} is ${row.status}: remove it instead` };
     s.db.run("UPDATE hosts SET status = 'removed', public_key = NULL, removed_at = ?, removed_by = ? WHERE name = ?", [at, by, name]);
+    dropHost(s, name, `${verb} by ${by}`, at);   // U25: a rejoin starts from the side defaults again
     s.fact(verb === "reject" ? "host_rejected" : "host_removed", [], { payload: { name, fingerprint: String(row.fingerprint), was: String(row.status), by } });
     return { ok: true as const, host: s.get("hosts", { name })! };
   });

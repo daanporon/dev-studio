@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join, posix } from "node:path";
 import type { Store } from "../core/store.ts";
 import { ROOT, stateRoot } from "../core/store.ts";
+import { hostLine, isHostKey, SELF } from "../../lib/host-settings.ts";
 
 // the old shell lib ds_limit_env: the env var that overrides a limits.conf key.
 const ENV_NAMES: Record<string, string> = { context_warn: "DS_RESUME_MAX_CTX", limit_pct: "DS_SWEEP_LIMIT_PCT",
@@ -15,7 +16,9 @@ export function limitEnv(key: string): string { return ENV_NAMES[key] ?? `DS_LIM
 
 // The whole value of a key (KTD11): same env, project and default order as `limit()`, but not cut at
 // the first word. `-` or empty means unset (null).
+// A `[host]` key (U25, KTD16) never reads a project row: env, this host's override, the default (host-settings.ts).
 export function limitLine(store: Store, project: string, key: string): string | null {
+  if (isHostKey(key)) { const v = hostLine(store.db, SELF, key, limitEnv(key)).value; return !v || v === "-" ? null : v; }
   const ev = process.env[limitEnv(key)]?.trim();
   if (ev) return ev === "-" ? null : ev;
   for (const p of project ? [project, ""] : [""]) {
@@ -27,6 +30,7 @@ export function limitLine(store: Store, project: string, key: string): string | 
 }
 
 export function limit(store: Store, project: string, key: string): string | null {
+  if (isHostKey(key)) return hostLine(store.db, SELF, key, limitEnv(key)).value?.split(/\s+/)[0] || null;
   const ev = process.env[limitEnv(key)];
   if (ev) return ev;
   for (const p of project ? [project, ""] : [""]) {

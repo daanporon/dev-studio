@@ -4036,7 +4036,7 @@ function HiddenEdits({ n, errors, noun, onShowAll }) {
 // only when non-zero overridden / unsaved / error. Env rows are never "unsaved" (the same filter as Save's dirtyKeys).
 function limitGroupSummary(name, rows, draft, msg, matched) {
   const n = rows.length, k = rows.filter((l) => l.source === "override").length;
-  const j = rows.filter((l) => l.source !== "env" && !l.fileOnly && draft[l.key] !== undefined && draft[l.key] !== l.value).length;
+  const j = rows.filter((l) => l.source !== "env" && !l.fileOnly && !l.host && draft[l.key] !== undefined && draft[l.key] !== l.value).length;
   const e = rows.some((l) => msg[l.key]);
   const size = matched === undefined ? n + " setting" + (n === 1 ? "" : "s") : matched + " of " + n + " match";
   return name + " · " + size + (k ? " · " + k + " overridden" : "") + (j ? " · " + j + " unsaved" : "") + (e ? " · error" : "");
@@ -4089,7 +4089,7 @@ function LimitsPane({ project, toast, query = "", onShowAll }) {
     } catch (e) { setMsg((m) => ({ ...m, [key]: String(e.message || e) })); }
   };
   // One Save for every edited value; failures stay on their rows, the rest clear. Enter still saves one row.
-  const dirtyKeys = rows ? rows.filter((l) => l.source !== "env" && draft[l.key] !== undefined && draft[l.key] !== l.value) : [];
+  const dirtyKeys = rows ? rows.filter((l) => l.source !== "env" && !l.host && draft[l.key] !== undefined && draft[l.key] !== l.value) : [];
   const saveAll = async () => {
     let ok = 0; const failed = [], filed = [];
     for (const l of dirtyKeys) {
@@ -4127,6 +4127,8 @@ function LimitsPane({ project, toast, query = "", onShowAll }) {
         return html`<tr key=${l.key}>
           <td><code>${l.key}</code></td>
           <td>${env ? l.value
+            : l.host
+              ? html`<code>${l.value || "-"}</code><div class="set-note">per host (main): <code>ds host set local ${l.key} …</code>${l.nowPerHost ? html` · this project's ${l.nowPerHost} is now per host, unread` : ""}</div>`
             : l.fileOnly
               ? html`<code>${l.value || "-"}</code><div class="set-note">${l.key === "feedback_repo" ? html`${l.hint}; an override, set with <code>ds config set</code> or the env` : "set with ds config export / import --project " + project}</div>`
             : l.allowed

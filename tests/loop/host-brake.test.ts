@@ -44,10 +44,13 @@ function fixture(): Store {
 
 const at = { observed_at: T, updated_at: T };
 // A calm host: 24 cores at load 6, half the memory used, no swap in use, no pressure.
-const CALM: Row = { host: "h", cores: 24, load1: 6, load5: 6, load15: 6, mem_total_kb: 64_000_000, mem_avail_kb: 32_000_000, swap_total_kb: 8_000_000, swap_free_kb: 8_000_000,
+const CALM: Row = { host: "local", cores: 24, load1: 6, load5: 6, load15: 6, mem_total_kb: 64_000_000, mem_avail_kb: 32_000_000, swap_total_kb: 8_000_000, swap_free_kb: 8_000_000,
   psi_cpu_some: 1, psi_mem_some: 0, psi_mem_full: 0, psi_io_some: 0, psi_io_full: 0, disks: "[]", groups: "[]", observed_at: T };
-const sample = (s: Store, set: Row = {}) => s.upsert("observed_machine", { host: "h" }, { ...CALM, ...set });
-const brake = (s: Store, value = "on", project = "fx") => s.upsert("config", { project, file: "limits.conf", key: "builder_host_brake" }, { value, observed_at: T });
+const sample = (s: Store, set: Row = {}) => s.upsert("observed_machine", { host: "local" }, { ...CALM, ...set });
+// builder_host_brake and the machine lines are host keys (U25): main's own override, never a project row.
+const hostSet = (s: Store, key: string, value: string) =>
+  s.db.run("INSERT OR REPLACE INTO host_config (host, key, value, set_at) VALUES ('local', ?, ?, ?)", [key, value, T]);
+const brake = (s: Store, value = "on") => hostSet(s, "builder_host_brake", value);
 let n = 0;
 function member(s: Store, set: Row): number {
   const row: Row = { project: "fx", squad: "demo", role: "builder", suffix: `u${++n}`, ...at, ...set };
@@ -129,15 +132,19 @@ describe("U4: the Builder host brake", () => {
     }
   });
 
-  test("the lines are the project's: an override moves them, a project row turns the brake on for that project only", () => {
+  test("the lines are the host's: its override moves them, the env var wins, a project row is never read", () => {
     const s = fixture();
     brake(s);
     sample(s, { psi_cpu_some: 31 });
-    s.upsert("config", { project: "fx", file: "limits.conf", key: "machine_psi_crit" }, { value: "50", observed_at: T });
+    hostSet(s, "machine_psi_crit", "50");
+    s.upsert("config", { project: "fx", file: "limits.conf", key: "machine_psi_crit" }, { value: "20", observed_at: T });   // now per host, unread
     starts(builder(s, { member: asks(s) }));
     process.env.DS_LIMIT_MACHINE_PSI_CRIT = "30";                      // the env var wins, as on the board
     expect(waits(builder(s, { member: asks(s) })).reason).toBe("WAIT host: psi cpu 31 ≥ crit 30");
     delete process.env.DS_LIMIT_MACHINE_PSI_CRIT;
+    brake(s, "off");
+    s.upsert("config", { project: "fy", file: "limits.conf", key: "builder_host_brake" }, { value: "on", observed_at: T });   // unread too
+    hostSet(s, "machine_psi_crit", "30");
     starts(builder(s, { project: "fy", member: asks(s, { project: "fy" }) }));
     process.env.DS_LIMIT_BUILDER_HOST_BRAKE = "on";                     // DS_LIMIT_<KEY> turns it on everywhere
     expect(waits(builder(s, { project: "fy", member: asks(s, { project: "fy" }) })).why).toBe("host");
@@ -197,25 +204,26 @@ describe("board-shows-host-brake U1: the crossed line as data, and the brake as 
     expect(brakeView(s, T)).toMatchObject({ sample: "stale", age_s: 200, hit: null });
   });
 
-  test("brakeView: one host hit, every project listed with its setting, and nothing written", () => {
+  test("brakeView: one host hit, every project listed with the host's setting, and nothing written", () => {
     const s = fixture();
-    brake(s, "on", "fx");
-    brake(s, "off", "fy");
+    brake(s);
+    s.upsert("config", { project: "fy", file: "limits.conf", key: "builder_host_brake" }, { value: "off", observed_at: T });   // unread
     sample(s, { load1: 36.72 });                                      // 153% of 24 cores
     const count = () => (s.db.query("SELECT (SELECT COUNT(*) FROM events) + (SELECT COUNT(*) FROM picks) AS n").get() as { n: number }).n;
     const before = count();
     const v = brakeView(s, T);
     expect(v).toEqual({ setting: "builder_host_brake", sample: "fresh", age_s: 0,
       hit: { metric: "load", value: 153, crit: 150, key: "machine_load_crit_pct", unit: "%" },
-      projects: [{ project: "fx", on: true }, { project: "fy", on: false }] });
+      projects: [{ project: "fx", on: true }, { project: "fy", on: true }] });
     expect(count()).toBe(before);
-    // It agrees with the brake itself: fx's next Builder waits on that line, fy's starts.
+    // It agrees with the brake itself: both projects' next Builder waits on that line.
     expect(waits(builder(s, { member: asks(s) })).reason).toBe("WAIT host: load 153% ≥ crit 150%");
-    starts(builder(s, { project: "fy", member: asks(s, { project: "fy" }) }));
-    // A project's own line is read when the board asks for that project.
+    expect(waits(builder(s, { project: "fy", member: asks(s, { project: "fy" }) })).why).toBe("host");
+    // A project's own line is not read; the host's override is, whichever project asks.
     s.upsert("config", { project: "fy", file: "limits.conf", key: "machine_load_crit_pct" }, { value: "200", observed_at: T });
-    expect(brakeView(s, T, "fy").hit).toBeNull();
-    expect(brakeView(s, T, "fx").hit?.crit).toBe(150);
+    expect(brakeView(s, T, "fy").hit?.crit).toBe(150);
+    hostSet(s, "machine_load_crit_pct", "200");
+    expect(brakeView(s, T, "fx").hit).toBeNull();
   });
 });
 

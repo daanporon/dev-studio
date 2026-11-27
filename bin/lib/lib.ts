@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { ROOT, stateRoot, backend, chomp, run, settingsAt, writeErr, writeOut } from "./shared.ts";
 import { readRoster } from "../loop/settings/settings.ts";
 import { filerIdentity, whoAmI } from "../loop/core/whoami.ts";
-import { ownText } from "./settings-rows.ts";
+import { ownHostLine, ownText } from "./settings-rows.ts";
+import { isHostKey } from "./host-settings.ts";
 
 // the old shell lib ds_limit_env (the historical names); bin/loop/settings/limits.ts ENV_NAMES is the same list.
 const LIMIT_ENV: Record<string, string> = { context_warn: "DS_RESUME_MAX_CTX", limit_pct: "DS_SWEEP_LIMIT_PCT",
@@ -34,6 +35,7 @@ export function textWord(text: string, key: string): string | null {
 /** ds_limit <label> <key>: the env var, else the project's override (its limits.conf rows, settings-rows.ts), else
  *  conventions/limits.conf; "" when unset. */
 export function dsLimit(label: string, key: string): string {
+  if (isHostKey(key)) return ownHostLine(key, LIMIT_ENV[key] ?? `DS_LIMIT_${key.toUpperCase()}`).value?.split(/\s+/)[0] ?? "";   // U25
   const env = process.env[LIMIT_ENV[key] ?? `DS_LIMIT_${key.toUpperCase()}`];
   if (env) return env;
   return textWord(ownText(label, "limits.conf"), key) || confWord(join(ROOT, "conventions", "limits.conf"), key) || "";
