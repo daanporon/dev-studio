@@ -104,7 +104,8 @@ describe("the decider on an unreachable host", () => {
 
 const fulfillers = await load<Fulfiller & Reconciler>(DIRS.fulfil);
 const reconcilers = await load<Reconciler>(DIRS.reconcilers);
-const system: Picker = async () => ({ agent: "claude", model: "opus", effort: null, account: "system" });
+// U19: acct-a, the account with a login on the side host (rig).
+const picker: Picker = async () => ({ agent: "claude", model: "opus", effort: null, account: "acct-a" });
 
 // A squad on tmux on main with one accepted side host whose link is up (last seen, no clock), as in member-on-host.test.ts.
 async function rig() {
@@ -125,6 +126,9 @@ async function rig() {
   for (const [role, value] of [["lead", "claude sonnet always"], ["builder", "claude opus ondemand"]] as const)
     s.upsert("config", { project: "fx", file: "roles.conf", key: role }, { value, observed_at: T });
   s.db.run("INSERT INTO hosts (name, status, public_key, fingerprint, seats, requested_at, accepted_at, last_seen_at) VALUES (?, 'accepted', 'a2V5', 'aaaa', 2, ?, ?, ?)", [HOST, T, T, T]);
+  // U19: acct-a has a login on the side host (its own ~/.claude); the launch reads account_folders from this state root.
+  process.env.DS_STATE_ROOT = state;
+  s.db.run("INSERT INTO account_folders (agent, account, host, dir, observed_at) VALUES ('claude', 'acct-a', ?, '/side/home/.claude', ?)", [HOST, T]);
   const orca = new FakeOrca();
   let at = T;
   const local = fakeContract({}, { name: "tmux", now: () => at }), side = fakeContract({}, { name: "tmux", now: () => at });
@@ -139,7 +143,7 @@ async function rig() {
     if (body.job === "launch.write") return runHere(body, { root: join(d, "side-state") });
     throw new Error(`no fake for ${body.job}`);
   };
-  const act = new LoopActuator({ orca, pick: system, fulfillers: fulfillers.filter((f) => f.kinds), jobs: send,
+  const act = new LoopActuator({ orca, pick: picker, fulfillers: fulfillers.filter((f) => f.kinds), jobs: send,
     backends: () => ({ backend: local, caps: local.caps }), remote: () => side });
   const loop = new Loop(s, { observers: [], reconcilers: [decider, ...reconcilers, ...fulfillers] }, act, { projects: () => ["fx"] });
   loop.boot(T);
@@ -161,7 +165,7 @@ async function rig() {
 type Rig = Awaited<ReturnType<typeof rig>>;
 const member = (s: Store, id: number) => s.db.query("SELECT * FROM members WHERE id = ?").get(id) as Row;
 function builder(r: Rig, suffix: string): number {
-  r.s.db.run("INSERT INTO members (project, squad, role, suffix, agent, model, account, host, observed_at, updated_at) VALUES ('fx', ?, 'builder', ?, 'claude', 'opus', 'system', ?, ?, ?)",
+  r.s.db.run("INSERT INTO members (project, squad, role, suffix, agent, model, account, host, observed_at, updated_at) VALUES ('fx', ?, 'builder', ?, 'claude', 'opus', 'acct-a', ?, ?, ?)",
     [r.sq, suffix, HOST, T, T]);
   const id = Number((r.s.db.query("SELECT id FROM members WHERE squad = ? AND suffix = ?").get(r.sq, suffix) as Row).id);
   r.s.want("member", String(id), "running", { payload: { prompt: `build ${suffix}` } });

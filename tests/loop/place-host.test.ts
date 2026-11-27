@@ -58,6 +58,9 @@ function side(s: Store, name: string, set: Row = {}, seats = 2): void {
   s.db.run(`INSERT INTO hosts (${ks.join(", ")}) VALUES (${ks.map(() => "?").join(", ")})`, ks.map((k) => row[k] as string | number | null));
   hostSet(s, name, "seats", String(seats));
   sample(s, name);
+  // U19: each account has a login there (pick-per-host.test.ts covers a host without one).
+  for (const a of ["acct-a", "acct-b", "acct-c"])
+    s.db.run("INSERT INTO account_folders (agent, account, host, dir, observed_at) VALUES ('claude', ?, ?, ?, ?)", [a, name, `/home/u/.dev-studio-accounts/claude/${a}`, T]);
 }
 let n = 0;
 function member(s: Store, set: Row): number {
