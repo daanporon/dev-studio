@@ -76,8 +76,8 @@ function seedMain(s: Store): void {
 
 // The side's observers' rows: its own two worktrees, plus rows about worktrees that are not its own.
 function seedSide(s: Store, handle = "%3"): void {
-  put(s, "observed_machine", { host: "sidebox", cores: 8, load1: 1.5 });
-  put(s, "observed_host_procs", { host: "sidebox", procs: 40, rss_kb: 5000 });
+  put(s, "observed_machine", { host: "local", cores: 8, load1: 1.5 });
+  put(s, "observed_host_procs", { host: "local", procs: 40, rss_kb: 5000 });
   put(s, "observed_procs", { project: "realp", wt: "local::/w/a", procs: 7, rss_kb: 700 }, { project: "realp", wt: "local::/w/b", procs: 3, rss_kb: 300 },
     { project: "realp", wt: "local::/w/lead", procs: 1, rss_kb: 1 }, { project: "realp", wt: "abc123::/w/a", procs: 1, rss_kb: 1 },
     { project: "otherp", wt: "local::/w/a", procs: 1, rss_kb: 1 });

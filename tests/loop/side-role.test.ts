@@ -4,7 +4,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DIRS, load, loadAll } from "../../bin/loop/core/plugins.ts";
 import { makeSideActuator } from "../../bin/loop/core/side-actuator.ts";
@@ -84,7 +84,7 @@ describe("a side tick", () => {
       expect(report.actions).toEqual([]);
       expect(report.exported).toEqual([]);
       // Keyed by this machine's own name; the link rewrites it to the host's name on the way up.
-      expect(store.db.query("SELECT host FROM observed_machine").all()).toEqual([{ host: hostname() }]);
+      expect(store.db.query("SELECT host FROM observed_machine").all()).toEqual([{ host: "local" }]);
       expect(store.db.query("SELECT project, wt, host, last_model FROM observed_transcripts").all())
         .toEqual([{ project: "realp", wt: `local::${wt}`, host: "local", last_model: "claude-x" }]);
       // Main's state files and snapshots: none read into rows, none written.
@@ -130,7 +130,7 @@ describe("main.ts --role side", () => {
     }
     expect(await p.exited).toBe(0);
     expect(read<{ tick_no: number }>("SELECT tick_no FROM health WHERE id = 1")!.tick_no).toBeGreaterThanOrEqual(2);
-    expect(read<{ host: string }>("SELECT host FROM observed_machine")).toEqual({ host: hostname() });
+    expect(read<{ host: string }>("SELECT host FROM observed_machine")).toEqual({ host: "local" });
     expect(read<{ payload: string }>("SELECT payload FROM events WHERE kind IN ('plugin_error', 'tick_error', 'action')")).toBeNull();
     const modules = JSON.parse(readFileSync(out, "utf8")) as string[];
     expect(modules).toContain(join(ROOT, "bin", "loop", "observers", "machine.ts"));

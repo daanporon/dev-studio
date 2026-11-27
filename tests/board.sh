@@ -1576,7 +1576,7 @@ rm -f "$CRA"
 
 # disk-pressure U3: an open disk spell shows a Needs-you card (title, first consumer) and one DISK line on the text board.
 DNOW="$(date +%s)"
-dbw "INSERT INTO observed_machine (host, disks, observed_at) VALUES ('dh', '[{\"path\":\"/\",\"total_kb\":1048576000,\"free_kb\":157286400}]', $DNOW)"
+dbw "INSERT INTO observed_machine (host, disks, observed_at) VALUES ('local', '[{\"path\":\"/\",\"total_kb\":1048576000,\"free_kb\":157286400}]', $DNOW)"
 dbw "INSERT INTO episodes (project, subject, kind, state, started_at, episode_key, source, observed_at) VALUES ('$LBL', 'disk-pressure./', 'disk-pressure', 'low', $DNOW, '$DNOW', 'loop', $DNOW)"
 dbw "INSERT INTO observed_disk_usage (key, label, size_kb, reclaimable_kb, read_at, observed_at) VALUES ('docker:build-cache', 'Docker build cache', 524288000, 503316480, $DNOW, $DNOW)"
 dbw "INSERT INTO observed_disk_usage (key, label, size_kb, read_at, observed_at) VALUES ('du:/srv/cache', '/srv/cache', 1048576, $DNOW, $DNOW)"

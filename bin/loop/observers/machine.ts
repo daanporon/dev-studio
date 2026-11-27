@@ -1,11 +1,11 @@
 // machine.ts — the host machine observer (board machine panel U1): load, memory, swap, PSI, disks
-// and process-name groups from /proc and statfs into one observed_machine row. Host scope, every
+// and process-name groups from /proc and statfs into one observed_machine row (host 'local', like every observed
+// row of this host; main files a side host's row under its name, bin/link/replica.ts). Host scope, every
 // DS_LOOP_MACHINE_S (30 s). A missing /proc file leaves its columns NULL; no /proc/loadavg, no row.
 // CPU % of a group is the tick delta of its processes between two samples kept in memory (KTD4):
 // the first sample after a loop start stores NULL. cpu_busy_pct is the whole machine's busy CPU from the
 // /proc/stat aggregate line (delta between two samples), not a sum of processes (machine-top-ram-clarity U6).
 import { statfsSync, statSync } from "node:fs";
-import { hostname } from "node:os";
 import type { Observer } from "../core/plugins.ts";
 import { cpuDeltas, cpuPct, procKey, readText, scanOnce } from "../io/proc.ts";
 import { envInt } from "../core/tick.ts";
@@ -93,7 +93,7 @@ export function machineObserver(proc = "/proc"): Observer {
       const busyPct = cpuBusyPct(prevCpu, jf, nCores);
       prevCpu = jf;
       const wts = (store.db.query("SELECT DISTINCT path FROM observed_worktrees WHERE gone_at IS NULL AND path IS NOT NULL").all() as { path: string }[]).map((r) => r.path);
-      store.tx(() => store.upsert("observed_machine", { host: hostname() }, {
+      store.tx(() => store.upsert("observed_machine", { host: "local" }, {
         cores: nCores, cpu_busy_pct: busyPct, load1: num(l[0]), load5: num(l[1]), load15: num(l[2]),
         mem_total_kb: mem.MemTotal ?? null, mem_avail_kb: mem.MemAvailable ?? null,
         swap_total_kb: mem.SwapTotal ?? null, swap_free_kb: mem.SwapFree ?? null,
