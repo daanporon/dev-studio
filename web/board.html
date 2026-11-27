@@ -2896,7 +2896,18 @@ function ChatPanel({ project, topic, wt, label, qid, onClose, onSeen, onPlan, pl
     const to = shown.wt;
     if (pressing === to) return;
     setPressing(to); setErr(""); setNote("");
-    try { await post("api/keys", { project, topic, wt: to, keys }); answers.forEach((k) => pressedQ.add(k)); if (cur.current === to) { setNote("pressed " + name); load(); } }
+    try {
+      const filed = await post("api/keys", { project, topic, wt: to, keys });
+      answers.forEach((k) => pressedQ.add(k));
+      if (cur.current === to) { setNote("pressed " + name); load(); }
+      // The loop types the key after the post, and can still fail: an asking stays hidden only once it has. Not awaited.
+      if (answers.length) awaitDone(filed.id).then((r) => {
+        if (r && r.ok !== false) return;
+        answers.forEach((k) => pressedQ.delete(k));
+        if (cur.current === to) { setNote(""); setErr("not pressed: " + (r ? r.error || "the loop refused it" : "no answer from the loop")); }
+        bump((x) => x + 1);
+      });
+    }
     catch (e) { if (cur.current === to) setErr("not pressed: " + String(e.message || e)); }
     finally { setPressing((v) => (v === to ? "" : v)); }
   };
