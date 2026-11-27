@@ -11,6 +11,7 @@ import { LinkClient, type LinkState } from "./client.ts";
 import { MirrorSync } from "./mirror.ts";
 import { startRelay } from "./relay.ts";
 import { RowSync } from "./replica.ts";
+import { noteLink } from "./side-state.ts";
 import type { Store } from "../loop/core/store.ts";
 
 export type SideStatus = { state: LinkState; why: string; main: string; at: number; pid: number };
@@ -41,6 +42,7 @@ export function startSideLink(store: Store, root: string, log: (line: string) =>
     main: cfg.main, root, name: cfg.name, reconnect: true,
     onState: (state, why) => {
       if (state === "connecting") return;   // the last answer stands while it redials
+      try { noteLink(store, state); } catch (e) { say(`link: the down clock was not written: ${(e as Error).message}`); }   // U14 side-fence
       writeDoc(sideStatusPath(root), { state, why: why ?? "", main: cfg.main, at: Math.floor(Date.now() / 1000), pid: process.pid } satisfies SideStatus);
       if (state === "up") { rows.linkUp(); say(`link: connected to ${cfg.main} as ${cfg.name}`); void sync(); }
       else if (state !== "stopped") say(`link: ${why ?? state}`);

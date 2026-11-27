@@ -7,7 +7,11 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Answer, Backend, Op, Request } from "../../bin/backend/contract.ts";
+import { accept, ensureHostKey, requestJoin } from "../../bin/link/host-keys.ts";
+import { startLinkServer } from "../../bin/link/server.ts";
+import { startSideLink } from "../../bin/link/side.ts";
 import { fencedAt, linkDown, noteHeard, noteLink } from "../../bin/link/side-state.ts";
+import { writeSideConfig } from "../../bin/lib/loop-unit.ts";
 import { makeSideActuator, SIDE_PUSH_RETRY_S } from "../../bin/loop/core/side-actuator.ts";
 import { open, type Store } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
@@ -19,7 +23,7 @@ const T = 1_800_000_000;
 const tmps: string[] = [];
 const tmp = () => { const d = realpathSync(mkdtempSync(join(tmpdir(), "ds-side-fence-"))); tmps.push(d); return d; };
 const saved: Record<string, string | undefined> = {};
-const pinned = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "DS_LIMIT_HOST_GRACE_MIN", "DS_LINK_DEAD_MS", "DS_SIDE_FENCE_PUSH_MS"];
+const pinned = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "DS_LIMIT_HOST_GRACE_MIN", "DS_LINK_DEAD_MS", "DS_LINK_PING_MS", "DS_SIDE_FENCE_PUSH_MS", "DS_LIMIT_LINK_LISTEN"];
 beforeAll(() => {
   for (const k of pinned) saved[k] = process.env[k];
   const g = join(tmp(), "gitconfig");
@@ -188,6 +192,39 @@ describe("side link clock", () => {
       expect(linkDown(store)!).toBeLessThanOrEqual(lastPong);
     } finally { store.close(); }
   });
+});
+
+describe("the side link writes the clock", () => {
+  test("startSideLink records up, then down when main goes away", async () => {
+    process.env.DS_LINK_PING_MS = "150"; process.env.DS_LINK_DEAD_MS = "600";
+    const mroot = join(tmp(), "main"), sroot = join(tmp(), "side");
+    mkdirSync(mroot); mkdirSync(sroot);
+    const main = open(mroot), sideS = open(sroot);
+    const srv = await startLinkServer({ root: mroot, store: main, binds: "127.0.0.1", port: 0 });
+    let link: ReturnType<typeof startSideLink> = null;
+    const until = async (what: string, ok: () => boolean) => {
+      for (let t = 0; t < 5000; t += 25) { if (ok()) return; await Bun.sleep(25); }
+      throw new Error(`timed out waiting for ${what}`);
+    };
+    const state = () => (sideS.get("side_link", { id: 1 })?.state as string | undefined) ?? null;
+    try {
+      const k = ensureHostKey(sroot);
+      expect(requestJoin(main, { name: "side-a", public_key: k.publicKey }).ok).toBe(true);
+      expect(accept(main, "side-a").ok).toBe(true);
+      writeSideConfig(sroot, { main: `ws://127.0.0.1:${srv.port}`, name: "side-a" });
+      link = startSideLink(sideS, sroot, () => {});
+      await until("the link up in side_link", () => state() === "up");
+      expect(linkDown(sideS)).toBeNull();
+      await srv.stop();
+      await until("the link down in side_link", () => state() === "down");
+      expect(linkDown(sideS)).not.toBeNull();
+    } finally {
+      link?.stop();
+      await srv.stop().catch(() => {});
+      main.close(); sideS.close();
+      delete process.env.DS_LINK_PING_MS; delete process.env.DS_LINK_DEAD_MS;
+    }
+  }, 30_000);
 });
 
 describe("side fence", () => {
