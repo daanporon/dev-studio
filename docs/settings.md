@@ -135,7 +135,25 @@ settings copy main sends it.
 `ds limits set` refuses a host key and names `ds host set`. `ds limits show` and
 the board's Settings show main's value with source `env`, `host` or `default`.
 `ds host accept` gives a new side host `seats` (its `--seats`, default 2) and
-`builder_host_brake on`; main's brake default stays `off`. Migration 0064 set
+`builder_host_brake on`; main's brake default stays `off`. Main's brake reads only
+main's machine sample and a side host's brake only its own; `max_builders` counts only
+Builders on main (side-loop-host U11).
+
+Placement (side-loop-host U11, `bin/loop/capacity/place.ts`): the loop's own pick
+starts a Builder, Tester or Researcher on main first. A Builder that main holds (its
+`max_builders` slot or main's brake), or a Tester or Researcher while main's sample
+crosses a `machine_*_crit` line, goes to the first side host in name order that is
+online, not draining or fenced, on main's link version and newest migration, has a
+seat free under its own `seats`, and has a fresh sample of its own that hits no crit
+line (for a Builder: while that host's brake is on). The host need not have the project
+cloned: the start clones it. The choice is written to `members.host` before the start,
+and the pick's reason names the host and main's wait. With no host free the Builder
+waits on main and the reason lists each host passed over; a Tester or Researcher starts
+on main. A Lead, Thinker or Studio never leaves main, a shell start (`ds pick`,
+`add-role.sh`) is not placed, and a member with a worktree, or one sent with
+`ds request --host`, stays where it is.
+
+Migration 0064 set
 main's brake `on` when any project had it on, `host_tidy apply` when any project had
 it, each cleanup glob key to the union of the projects' lists, and
 `cleanup_tmp_age_h` to the longest project value when it beats the default.
