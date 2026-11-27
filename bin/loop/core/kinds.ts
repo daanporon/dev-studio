@@ -132,6 +132,10 @@ const ONLY_ACTIONS = {
   link_restart: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   link_stop: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
   link_giveup: obj({ id: opt(num), counted: opt(bool), why: opt(str) }),
+  // side-loop-host U15 (reconcilers/host-fence.ts, fulfil/host-fence.ts): main fences a lost host and requeues its
+  // members; a fenced host back online has the terminals of its moved members closed before it is used again.
+  "host.fence": obj({ host: str, since: opt(num), members: arr(num) }),
+  "host.return": obj({ host: str, members: arr(num) }),
 } as const satisfies Record<string, ObjShape<any>>;
 export const ACTIONS = { ...REQUESTS, ...ONLY_ACTIONS } as const;
 export type ActionKind = keyof typeof ACTIONS;
@@ -193,6 +197,13 @@ export const FACTS = {
   side_skills_installed: obj({ dirs: arr(str) }),
   side_skills_failed: obj({ dirs: arr(str), error: str }),
   side_fenced: obj({ down_since: num, pushed: arr(str), push_failed: arr(str), closed: num, close_failed: arr(str) }),
+  // side-loop-host U15 (fulfil/host-fence.ts), on main: a lost host fenced (its members requeued, each unit as
+  // `<slug>#<attempt> <old branch>@<sha>`), one member ended there, the host back with its stale terminals closed;
+  // `fenced` (link/server.ts): the host said on reconnect when it fenced itself.
+  host_fenced: obj({ name: str, since: num, members: arr(str), units: arr(str) }),
+  member_host_fenced: obj({ id: num, host: str, role: str, suffix: str, unit: opt(str) }),
+  host_returned: obj({ name: str, fenced_at: num }),
+  host_reported_fence: obj({ name: str, fenced_at: num }),
   limit_cleared: ep,
   limit_expired: ep,
   limit_wait: ep,

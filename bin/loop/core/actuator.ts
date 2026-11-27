@@ -40,7 +40,7 @@ import { actionBlock, actionTargets, actionVersion, deferredMail, paused, versio
 import { outside, sender } from "../messages/coordinator.ts";
 import { driverModule } from "../drivers/index.ts";
 import { startIdentity } from "./whoami.ts";
-import { startedOn, wtName, type ContractSeat, type Driver, type Member, type Seat, type Squad, type StartMeta } from "../drivers/types.ts";
+import { startedOn, type ContractSeat, type Driver, type Member, type Seat, type Squad, type StartMeta } from "../drivers/types.ts";
 import { contract as contractDriver, localPath } from "../drivers/contract.ts";
 import { claudeSettings } from "../drivers/claude-launch.ts";
 import type { Backend, Terminal } from "../../backend/contract.ts";
@@ -67,6 +67,7 @@ import { onSide, sideBackend, studioContract, studioSeat, wtHost } from "../squa
 import { addWorktreeOn, cloneOn, writeLaunchOn, type JobOpts, type Send } from "../../link/host-jobs.ts";
 import { STUDIO_SQUAD } from "../squad/studio.ts";
 import { removeLaunch } from "../squad/launch-file.ts";
+import { startSpec } from "../squad/host-requeue.ts";
 import { redact, redactPayload } from "./redact.ts";
 
 export type Result =
@@ -746,12 +747,13 @@ export class LoopActuator implements Actuator {
   private async sideWorktree(store: Store, host: string, provider: string, repo: string, m: Member, project: string, squad: string, at: number): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
     const o = await git(["-C", repo, "remote", "get-url", "origin"]);
     const url = o.code === 0 ? o.out.trim() : "";
-    if (!url) return { ok: false, error: `worktree ${wtName(m)} on ${host}: ${repo} has no origin to clone` };
+    const ws = startSpec(store, m);   // U15: a requeued Builder's `-r<attempt>` branch
+    if (!url) return { ok: false, error: `worktree ${ws.name} on ${host}: ${repo} has no origin to clone` };
     try {
       const clone = await cloneOn(host, { project, url }, { root: store.root, ...this.hostJobs() });
-      const { row } = await addWorktreeOn(store, host, provider, { repo: clone.path, name: wtName(m), branch: wtName(m), base: "HEAD", parent: null, project, squad, role: m.role }, this.hostJobs(), at);
+      const { row } = await addWorktreeOn(store, host, provider, { repo: clone.path, ...ws, parent: null, project, squad, role: m.role }, this.hostJobs(), at);
       return { ok: true, path: String(row.path) };
-    } catch (e) { return { ok: false, error: `worktree ${wtName(m)} on ${host}: ${(e as Error).message}` }; }
+    } catch (e) { return { ok: false, error: `worktree ${ws.name} on ${host}: ${(e as Error).message}` }; }
   }
 
   // U11: the seat of a squad on a contract backend. Its Orca ops refuse: such a squad has no Run,
@@ -786,10 +788,11 @@ export class LoopActuator implements Actuator {
         if (side) return this.sideWorktree(store, host, provider, repo, m, project, squad.topic, at);
         // Only a worktree on this host's paths nests one: a Studio on Orca (`<repo id>::<path>`) is not its parent.
         const parent = localPath(m.role === "lead" ? squad.studio_wt : squad.lead_wt);
+        const ws = startSpec(store, m);
         try {
-          const { row } = await createWorktree(store, provider, { repo, name: wtName(m), branch: wtName(m), base: "HEAD", parent, project, squad: squad.topic, role: m.role }, at);
+          const { row } = await createWorktree(store, provider, { repo, ...ws, parent, project, squad: squad.topic, role: m.role }, at);
           return { ok: true, path: String(row.path) };
-        } catch (e) { return { ok: false, error: `worktree ${wtName(m)}: ${(e as Error).message}` }; }
+        } catch (e) { return { ok: false, error: `worktree ${ws.name}: ${(e as Error).message}` }; }
       },
       settings: (role, path) => {
         const shipped = shippedRules(), mine = projectRules(store.db as unknown as Parameters<typeof projectRules>[0], project), skills = allSkills(false, path);
