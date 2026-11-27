@@ -2810,7 +2810,7 @@ export function renderText(b: Board): string {
   }
   for (const a of b.studio_alerts) {
     const ag = a.age_min == null || a.age_min < 0 ? "?" : a.age_min >= 60 ? `${Math.floor(a.age_min / 60)}h` : `${a.age_min}m`;
-    o.push(`studio: ${(a.debrief ? a.text.split("\n")[0] : a.text).replace(/[\t\n]/g, " ")} (${ag}) — then dismiss it on the web board${a.suggestion ? ` ("${a.suggestion}")` : ""}`);
+    o.push(`studio: ${(a.debrief ? a.text.split("\n")[0] : a.text).replace(/[\t\n]/g, " ")} (${ag}) — then ${a.card === "host-join" ? "accept or reject it" : "dismiss it"} on the web board${a.suggestion ? ` ("${a.suggestion}")` : ""}`);
   }
   if (b.studio_alerts.length) o.push(RULE);
   for (const st of b.studio) {

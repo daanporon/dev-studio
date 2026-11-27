@@ -3103,7 +3103,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           onClick=${() => setChat({ project: n.label, topic: n.card_squad || n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead", qid: n.id })}>Chat with ${n.chat_label || "the Lead"}</button>`}
         <span class="sp"></span>
         ${st.err && html`<span class="err">not sent: ${st.err}</span>`}
-        ${sent && !checking && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
+        ${sent && !checking && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.card === "host-join" ? "✓ answer sent " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
         <button class="btn qsec" disabled=${i === 0} onClick=${() => go(-1)}>←</button><button class="btn qsec" disabled=${i === items.length - 1} onClick=${() => go(1)}>→</button>
         ${n.card === "host-join" ? acts.map((a) => html`<button key=${a.key} class=${a.cls.replace(" sm", "")} disabled=${!!sent} onClick=${() => { onClose(); onAction(n, a); }}>${a.label}</button>`)
         : n.id ? (termOnly ? null

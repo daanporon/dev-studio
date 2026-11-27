@@ -57,7 +57,8 @@ export async function dialUrl(main: string, resolve: Resolve = resolveAll): Prom
 
 /** This host's own environment values of the `[host]` keys, by key: main shows them as this host's `env` source. */
 export function hostEnv(): Record<string, string> {
-  return Object.fromEntries(hostKeys().flatMap((k) => { const v = process.env[limitEnv(k)]?.trim(); return v ? [[k, v]] : []; }));
+  let room = 3000; // the hello is a pre-auth frame: main refuses one over JOIN_MAX_BYTES, and the host could not link
+  return Object.fromEntries(hostKeys().flatMap((k) => { const v = process.env[limitEnv(k)]?.trim(); return v && v.length <= 500 && (room -= Buffer.byteLength(JSON.stringify([k, v]))) >= 0 ? [[k, v]] : []; }));
 }
 
 /** The newest migration that changed an up-table (KTD15's `up_migration`, replica.ts). */
