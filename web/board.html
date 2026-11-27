@@ -4131,12 +4131,12 @@ function ImportPane({ project, toast, onBack, onApplied }) {
   </div>`;
 }
 
-// The Settings search: every word of the query appears somewhere in the texts; `_` and `-` read as spaces.
-// A query with no words matches everything.
+// The Settings search: every space-separated word of the query appears in one of the texts; `_` and `-` read as
+// spaces, so "ce-plan" is the phrase "ce plan". A query with no words matches everything.
 function settingWords(text) { return String(text ?? "").toLowerCase().replace(/[_-]/g, " "); }
 function settingMatch(query, ...texts) {
-  const hay = texts.map(settingWords).join(" ");
-  return settingWords(query).split(/\s+/).every((w) => hay.includes(w));
+  const hay = texts.map(settingWords);
+  return query.split(/\s+/).filter(Boolean).map(settingWords).every((w) => hay.some((t) => t.includes(w)));
 }
 
 // While searching, a shown group or role is open; a hand fold lasts until the next keystroke, apart from the

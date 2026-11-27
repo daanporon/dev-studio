@@ -40,3 +40,10 @@ test("the search matches every word in any text, with _ and - read as spaces", (
   for (const q of ["auto compact", "auto-compact", "Review", "opus", "ds auto", "review opus", "", "  "]) expect([q, match(q, ...texts)]).toEqual([q, true]);
   for (const q of ["review sonnet", "zzz"]) expect([q, match(q, ...texts)]).toEqual([q, false]);
 });
+test("a word joined by - or _ matches as one phrase inside one text", () => {
+  expect(match("ce-plan", "ce-brainstorm", "write a plan")).toBe(false);
+  expect(match("ce-plan", "ce-plan")).toBe(true);
+  expect(match("ce-plan", "the source", "plan it")).toBe(false);
+  for (const q of ["auto_compact", "auto-compact"]) expect(match(q, "auto_compact_builder")).toBe(true);
+  expect(match("compact-auto", "auto_compact_builder")).toBe(false);
+});
