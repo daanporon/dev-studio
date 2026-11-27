@@ -36,7 +36,7 @@ git init -q --bare -b main "$ORIGIN"
 git init -q -b main "$SEED"
 mkdir -p "$SEED/bin/host"; cp "$ROOT/bin/host/update-host.sh" "$SEED/bin/host/update-host.sh"
 # U191: the port runs in TypeScript behind the one-line wrapper: the fixture carries ds and the files the command loads.
-mkdir -p "$SEED/bin/lib" "$SEED/bin/commands" "$SEED/bin/loop/settings" "$SEED/bin/loop/core"; cp "$ROOT/bin/loop/settings/projects.ts" "$SEED/bin/loop/settings/"; cp "$ROOT/bin/loop/core/whoami.ts" "$ROOT/bin/loop/core/code-watch.ts" "$SEED/bin/loop/core/"; cp "$ROOT/bin/ds" "$ROOT/bin/ds.ts" "$SEED/bin/"; cp "$ROOT/bin/lib/shared.ts" "$ROOT/bin/lib/contract-here.ts" "$ROOT/bin/lib/upkeep.ts" "$SEED/bin/lib/"; cp "$ROOT/bin/commands/update-host-ts.ts" "$SEED/bin/commands/"
+mkdir -p "$SEED/bin/lib" "$SEED/bin/commands" "$SEED/bin/loop/settings" "$SEED/bin/loop/core"; cp "$ROOT/bin/loop/settings/projects.ts" "$SEED/bin/loop/settings/"; cp "$ROOT/bin/loop/core/whoami.ts" "$ROOT/bin/loop/core/code-watch.ts" "$SEED/bin/loop/core/"; cp "$ROOT/bin/ds" "$ROOT/bin/ds.ts" "$SEED/bin/"; cp "$ROOT/bin/lib/shared.ts" "$ROOT/bin/lib/contract-here.ts" "$ROOT/bin/lib/upkeep.ts" "$SEED/bin/lib/"; cp "$ROOT/bin/commands/update-host-ts.ts" "$SEED/bin/commands/"; cp "$ROOT/bin/lib/side-update-record.ts" "$SEED/bin/lib/"
 fake "$SEED/bin/host/install.sh" <<'F'
 #!/usr/bin/env bash
 echo "install${*:+ $*}" >> "$CALLS"
@@ -306,6 +306,37 @@ H="$TMP/h15c"; host "$H" main; push_to main >/dev/null
 FAKE_INSTALL_FAIL=1 update "$H"
 check "failed: outcome" failed "$(j "$OF" .outcome)"
 [ -z "$(find "$DS_STATE_ROOT/loop" -name "*.tmp")" ] && good || bad "tmp file left"
+
+echo "16. --side goes to the named commit, not the branch head, restarts the loop, seeds no marker and records the run"
+H="$TMP/h16"; host "$H" main; O="$(head_of "$H")"; C1="$(push_to main)"; C2="$(push_to main)"
+REC="$DS_STATE_ROOT/link/update.json"; mkdir -p "$DS_STATE_ROOT/link"
+record(){ printf '{"commit":"%s","run":"7.1","state":"running","started_at":1}\n' "$1" > "$REC"; }
+side(){ : > "$CALLS"; ln -sfn "$1" "$TMP/link"; RC=0; OUT="$(PATH="$CLI_PATH" "$TMP/link/bin/host/update-host.sh" --side "$2" 2>&1)" || RC=$?; }
+record "$C1"; rm -f "$DS_STATE_ROOT/pa/squads-rev.json"
+side "$H" "$C1"
+check "side: rc" 0 "$RC"
+check "side: HEAD is the commit" "$C1" "$(head_of "$H")"
+check "side: install and restart" "install,skills --muse-only,skills --check,stop,ensure," "$(calls)"
+check "side: record state" "done" "$(j "$REC" .state)"
+has "side: record line" "DS-UPDATE: advanced $O -> $C1" "$(j "$REC" .line)"
+check "side: record has the run's pid" number "$(bun -e "console.log(typeof JSON.parse(require('fs').readFileSync('$REC','utf8')).pid)")"
+[ ! -e "$DS_STATE_ROOT/pa/squads-rev.json" ] && good || bad "side seeded a project marker"
+echo "16b. --side refuses a commit that is not on origin/<branch>, and records the failure"
+git -C "$SEED" checkout -q -b elsewhere; git -C "$SEED" commit -q --allow-empty -m off; X="$(git -C "$SEED" rev-parse HEAD)"
+git -C "$SEED" push -q origin elsewhere; git -C "$SEED" checkout -q main
+record "$X"; side "$H" "$X"
+check "side refused: rc" 1 "$RC"
+check "side refused: HEAD" "$C1" "$(head_of "$H")"
+check "side refused: no install" "" "$(calls)"
+check "side refused: record state" failed "$(j "$REC" .state)"
+has "side refused: record line" "is not on origin/main" "$(j "$REC" .line)"
+echo "16c. a record for another commit is left alone, and anything but a full commit is a usage error"
+record "$X"; side "$H" "$C2"
+check "other record: HEAD" "$C2" "$(head_of "$H")"
+check "other record: untouched" running "$(j "$REC" .state)"
+side "$H" main
+check "usage: rc" 2 "$RC"
+check "usage: nothing ran" "" "$(calls)"
 
 echo "update-host: $pass passed, $fail failed"
 [ "$fail" = 0 ]

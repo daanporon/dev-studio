@@ -111,7 +111,7 @@ const startSlots = () => envInt("DS_LOOP_START_SLOTS", 4);
 // U239: these kinds run in the background like a start: the tick claims, the call runs on its own and
 // its result settles the episode. Their own slots; one at a time per subject and per member worktree;
 // a call that has not ended after DS_LOOP_BG_TIMEOUT_S (120) settles as a retry and frees its subject.
-export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "update-branch", "finish-unit", "studio-move", "expose.stop", "feedback.draft", "squad-start"]);
+export const BACKGROUND_KINDS = new Set(["poke", "chat", "send-role", "send-peer", "member.close", "worktree.remove", "rebind", "unbind", "merge", "update-branch", "finish-unit", "studio-move", "expose.stop", "feedback.draft", "squad-start", "side.update"]);
 const bgSlots = () => envInt("DS_LOOP_BG_SLOTS", 6);
 // A kind whose call runs longer than the default gets its own limit (the drafter's headless call ends
 // itself at DS_FEEDBACK_DRAFT_S; this is that plus a minute, so the loop never frees its subject first).

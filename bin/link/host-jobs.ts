@@ -21,6 +21,10 @@
 //                                                                          that folder's login: credentials there, its login id,
 //                                                                          the login command's exit; `after` runs the kind's
 //                                                                          afterLogin once the credentials are there (U20)
+//   update           {commit, run}                  → {state, rev, line, log}
+//                                                                          this host's update to main's commit, started once
+//                                                                          per `run` outside the side loop; asked again until
+//                                                                          `done` or `failed` (lib/side-update-job.ts, U24)
 // The `*On(host, …)` functions are what main calls. For host `local` each runs the same code as before this unit
 // (createWorktree, removeWorktree, wtProbe, rescuePages, the same git calls); for any other host it sends the job down
 // that host's link (server.ts linkRequest, or `o.send` in tests) and checks the answer's shape before using it. Both
@@ -45,6 +49,7 @@ import { folderCheck, makeAccountFolder, type FolderCheck } from "../lib/account
 import { findKind, type AccountKind, type Env } from "../lib/account-kinds/index.ts";
 import { LOCAL_HOST } from "./host-keys.ts";
 import { linkRequest } from "./server.ts";
+import { sideUpdate, type SideUpdateAnswer, type SideUpdateDeps } from "../lib/side-update-job.ts";
 
 export const CHANNEL = "host-jobs";
 
@@ -59,7 +64,8 @@ export type HostJob =
   | { job: "push"; path: string; branch: string; remote?: string }
   | { job: "launch.write"; project: string; member: string; gen: string; line: string }
   | { job: "account.folder"; agent: string; name: string; request: number }
-  | { job: "account.check"; agent: string; folder: string; after?: boolean };
+  | { job: "account.check"; agent: string; folder: string; after?: boolean }
+  | { job: "update"; commit: string; run: string };
 export type JobName = HostJob["job"];
 
 export type Cloned = { path: string; cloned: boolean };
@@ -198,6 +204,9 @@ export function checkJob(v: unknown): HostJob {
     }
     case "account.check":
       return { job: "account.check", agent: name(v.agent, "the agent"), folder: absPath(v.folder, "the login folder"), ...(v.after ? { after: true } : {}) };
+    case "update":
+      if (typeof v.commit !== "string" || !SHA.test(v.commit)) bad(`the commit is a full sha, not ${JSON.stringify(v.commit)}`);
+      return { job: "update", commit: v.commit as string, run: name(v.run, "the run") };
     default:
       return bad(`unknown job '${String(v.job)}'`);
   }
@@ -320,7 +329,7 @@ function checkHere(j: Extract<HostJob, { job: "account.check" }>, env: Env): Fol
   return folderCheck(kind, j.folder, !!j.after, env);
 }
 
-export async function runHere(job: unknown, ctx: { root: string; store?: Store; env?: Env }): Promise<unknown> {
+export async function runHere(job: unknown, ctx: { root: string; store?: Store; env?: Env; update?: SideUpdateDeps }): Promise<unknown> {
   const j = checkJob(job);
   switch (j.job) {
     case "clone": return cloneHere(j);
@@ -334,6 +343,7 @@ export async function runHere(job: unknown, ctx: { root: string; store?: Store; 
     case "launch.write": return { text: writeLaunch(ctx.root, j.project, j.member, j.gen, j.line) };
     case "account.folder": return { folder: makeAccountFolder(loginKind(j.agent), j.name, j.request, ctx.env ?? process.env) };
     case "account.check": return checkHere(j, ctx.env ?? process.env);
+    case "update": return sideUpdate(ctx.root, j, ctx.update);
   }
 }
 
@@ -342,7 +352,7 @@ export async function runHere(job: unknown, ctx: { root: string; store?: Store; 
 const TIMEOUT: Record<JobName, number> = {
   "clone": 910_000, "worktree.add": 630_000, "worktree.remove": 180_000, "probe": 0, "rescue": 180_000,
   "ref.read": 45_000, "ref.set": 45_000, "push": 330_000, "launch.write": 45_000,
-  "account.folder": 45_000, "account.check": 45_000,
+  "account.folder": 45_000, "account.check": 45_000, "update": 45_000,
 };
 const timeoutOf = (j: HostJob) => (j.job === "probe" ? j.timeout_ms + 15_000 : TIMEOUT[j.job]);
 
@@ -360,6 +370,17 @@ async function sendJob(host: string, job: HostJob, o: JobOpts): Promise<unknown>
 export function hostOfWt(store: Store, project: string | null | undefined, wt: string): string {
   const r = store.db.query("SELECT host FROM members WHERE project = ? AND wt = ? ORDER BY id DESC LIMIT 1").get(project ?? "", wt) as { host: string | null } | null;
   return r?.host || LOCAL_HOST;
+}
+
+function updateOf(v: unknown, host: string): SideUpdateAnswer {
+  if (!isObj(v) || !["running", "done", "failed"].includes(String(v.state)) || typeof v.rev !== "string" || !(v.rev === "" || SHA.test(v.rev))
+    || typeof v.line !== "string" || typeof v.log !== "string") return wrong(host, "update", "not {state, rev, line, log}");
+  return { state: v.state as SideUpdateAnswer["state"], rev: v.rev as string, line: v.line as string, log: v.log as string };
+}
+
+/** Ask side host `host` to update itself to main's `commit` (U24); asked again with the same `run` until it ends. */
+export async function updateOn(host: string, job: { commit: string; run: string }, o: JobOpts = {}): Promise<SideUpdateAnswer> {
+  return updateOf(await sendJob(host, { job: "update", ...job }, o), host);
 }
 
 /** Clone a project on `host`. Local: `git clone` here, the same as a side host runs it. */

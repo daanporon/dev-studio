@@ -5,6 +5,7 @@ import { join } from "node:path";
 export type UpdateState = "pulling" | "refreshing" | "done" | "failed";
 export type UpdateFile = {
   id: number; project: string; pid: number; state: UpdateState; started_at: number; at: number; log: string;
+  target?: string;
   line?: string; outcome?: string; warnings?: string[]; host_rc?: number;
   squads_line?: string; need?: string; classes?: string[]; squads_rc?: number; error?: string;
 };

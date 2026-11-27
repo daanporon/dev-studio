@@ -4,7 +4,8 @@
 // unit, else setsid), because update-host stops and restarts the loop that started it. Every step is written
 // to <state root>/loop/update/<id>.json (tmp file + rename) and the scripts' output to <id>.log, so the loop
 // that comes back after the restart finishes the request from the file. DS_UPDATE_HOST_SH and
-// DS_UPDATE_SQUADS_SH name other scripts (the tests' fakes).
+// DS_UPDATE_SQUADS_SH name other scripts (the tests' fakes). `target` in the file is the commit the checkout
+// is on once update-host ran: what every side host is then updated to (side-loop-host U24).
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ROOT, stateRoot, writeErr } from "../lib/shared";
@@ -76,7 +77,8 @@ export async function run(argv: string[]): Promise<number> {
     return 1;
   }
 
-  put({ state: "refreshing" });
+  const head = Bun.spawnSync(["git", "-C", ROOT, "rev-parse", "HEAD"], { stdout: "pipe", stderr: "ignore", timeout: 10_000 });
+  put({ state: "refreshing", ...(head.exitCode === 0 ? { target: head.stdout.toString().trim() } : {}) });
   const squads = await step([process.env.DS_UPDATE_SQUADS_SH || join(ROOT, "bin", "commands", "update-squads.sh"), project, "--auto"], log);
   const sq = parseSquads(squads.text);
   if (squads.rc !== 0) {

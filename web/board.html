@@ -2334,6 +2334,7 @@ function cardActions(n, data) {
     return out;
   }
   if (n.card === "host-join") return [{ key: "host-accept", label: "Accept", cls: "btn sm pri" }, { key: "host-reject", label: "Reject", cls: "btn sm" }];
+  if (n.card === "host-update") return [{ key: "host-update", label: "Update", cls: "btn sm pri" }];   // side-loop-host U24
   if (n.squad === "_studio") {
     if (n.card_squad) out.push({ key: "show", label: "Show squad", cls: "btn sm" });
     if (n.act) out.push({ key: "act", label: n.act.label, cls: "btn" + (n.act.action === "close" ? " red" : ""), act: n.act });
@@ -3053,7 +3054,7 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
       }
       if (e.key === "ArrowRight") go(1); else if (e.key === "ArrowLeft") go(-1);
       else if (/^[1-9]$/.test(e.key) && n && !termOnly && !checking && n.choices[+e.key - 1]) set(n.choices[+e.key - 1].label);
-      else if (e.key === "Enter" && n && !termOnly && n.id && n.card !== "host-join" && !sentQ.has(akey(n))) { if (studioCard && n.choices.length === 0) send(markAct ? markAct.answer : ""); else if (val.trim() || one !== null) send(); }
+      else if (e.key === "Enter" && n && !termOnly && n.id && !/^host-/.test(n.card || "") && !sentQ.has(akey(n))) { if (studioCard && n.choices.length === 0) send(markAct ? markAct.answer : ""); else if (val.trim() || one !== null) send(); }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   });
@@ -3106,9 +3107,9 @@ function AskOverlay({ items, at, setAt, onClose, onShow, toast, onPlan, planOpen
           onClick=${() => setChat({ project: n.label, topic: n.card_squad || n.squad, wt: n.chat_wt, label: n.chat_label || "the Lead", qid: n.id })}>Chat with ${n.chat_label || "the Lead"}</button>`}
         <span class="sp"></span>
         ${st.err && html`<span class="err">not sent: ${st.err}</span>`}
-        ${sent && !checking && html`<span class="ok">${markAct ? "✓ marked read " + sent : n.card === "host-join" ? "✓ answer sent " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
+        ${sent && !checking && html`<span class="ok">${markAct ? "✓ marked read " + sent : /^host-/.test(n.card || "") ? "✓ answer sent " + sent : n.squad === "_studio" ? "✓ dismissed " + sent : isPicker ? "✓ pressed " + sent + " — waiting for the picker to record it" : "✓ sent " + sent + " — waiting for the agent to apply it"}</span>`}
         <button class="btn qsec" disabled=${i === 0} onClick=${() => go(-1)}>←</button><button class="btn qsec" disabled=${i === items.length - 1} onClick=${() => go(1)}>→</button>
-        ${n.card === "host-join" ? acts.map((a) => html`<button key=${a.key} class=${a.cls.replace(" sm", "")} disabled=${!!sent} onClick=${() => { onClose(); onAction(n, a); }}>${a.label}</button>`)
+        ${/^host-/.test(n.card || "") ? acts.map((a) => html`<button key=${a.key} class=${a.cls.replace(" sm", "")} disabled=${!!sent} onClick=${() => { onClose(); onAction(n, a); }}>${a.label}</button>`)
         : n.id ? (termOnly ? null
             : studioCard && n.choices.length > 0
               ? html`<button class="btn" disabled=${st.busy || !!sent} onClick=${() => send("")}>Dismiss</button>
@@ -3972,6 +3973,7 @@ function Settings({ project, projects, accounts, folderOnly, adds, kinds, hosts,
 const hostAge = (s) => s == null ? "never" : (s < 60 ? s + "s" : fmtAge(Math.floor(s / 60))) + " ago";
 const hostFacts = (h) => [
   h.main ? "main" : h.online ? "online" : "offline",
+  h.commit && ("commit " + h.commit + (h.main || !h.main_commit ? "" : " (main " + h.main_commit + ")")),
   "seats " + h.seats.used + " used, " + (h.seats.total == null ? "no limit" : h.seats.free + " free of " + h.seats.total),
   h.load ? "load " + h.load.load1 + (h.load.pct == null ? "" : " (" + h.load.pct + "% of " + h.load.cores + " cores)") + (h.load.state === "stale" ? ", stale" : "") : "load unknown",
   h.main ? null : "last seen " + hostAge(h.last_seen_s),
@@ -4740,10 +4742,11 @@ function App() {
       return qbump((v) => v + 1);
     }
     if (cardGone(n)) return;
-    if (k === "host-accept" || k === "host-reject") {   // side-loop-host U17: the fingerprint shown goes with the answer
+    if (/^host-/.test(k)) {   // side-loop-host U17, U24: a join's answer carries the fingerprint shown; update retries
       const verb = k.slice(5);
       sentQ.set(akey(n), hhmmss(new Date()).slice(0, 5)); setPlan(null); qbump((v) => v + 1);
-      if (!(await hostWrite({ host: n.host, action: verb, fingerprint: n.fingerprint }, "host " + n.host + (verb === "accept" ? " accepted" : " rejected"), say))) sentQ.delete(akey(n));
+      const said = verb === "accept" ? " accepted" : verb === "reject" ? " rejected" : ": update asked again";
+      if (!(await hostWrite({ host: n.host, action: verb, fingerprint: n.fingerprint }, "host " + n.host + said, say))) sentQ.delete(akey(n));
       return qbump((v) => v + 1);
     }
     if (k === "read") openBriefs();
