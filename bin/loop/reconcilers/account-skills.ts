@@ -11,6 +11,8 @@
 //     pattern of compaction.ts's Studio alert).
 //   - `warn:` never alerts; the board shows it on the account.
 //   - skills NULL (a 10-column accounts.tsv, a non-claude row) is unknown: the spell is left as it is.
+// side-loop-host U21: an account's folder on an accepted side host (account_folders, with the `skills` that host's
+// observer read, up the link) gets the same spell and card under `<account>@<host>`, and the card names the host.
 import type { Action, Reconciler, TickCtx } from "../core/plugins.ts";
 import type { Store } from "../core/store.ts";
 import { alertAction } from "./alerts.ts";
@@ -19,19 +21,35 @@ const KIND = "account-skills";
 const keyOf = (account: string) => `account-skills.${account}`;
 const REPAIR = "bin/host/install-skills.sh";
 
-// The skills value of a claude account, or undefined when its row is gone.
+type Login = { name: string; account: string; host: string | null; label: string | null; skills: string | null };
+
+// Each claude account's folder on an accepted side host, as `<account>@<host>`.
+function sideLogins(store: Store): Login[] {
+  return store.db.query(`SELECT f.account || '@' || f.host AS name, f.account, f.host, a.label, o.skills FROM account_folders f
+    JOIN hosts h ON h.name = f.host AND h.status = 'accepted'
+    JOIN observed_account_folders o ON o.dir = f.host || '::' || f.dir AND o.host = f.host AND o.agent = f.agent
+    LEFT JOIN accounts a ON a.agent = f.agent AND a.account = f.account
+    WHERE f.agent = 'claude' ORDER BY f.host, f.account`).all() as Login[];
+}
+
+// The skills value of a claude account (`<account>@<host>`: of its folder on a side host), or undefined when
+// its row is gone.
 export function skillsOf(store: Store, account: string): string | null | undefined {
+  if (account.includes("@")) {
+    const s = sideLogins(store).find((l) => l.name === account);
+    return s ? s.skills : undefined;
+  }
   const r = store.get("observed_accounts", { agent: "claude", account });
   return r ? ((r.skills as string | null) ?? null) : undefined;
 }
 
 export function accountSkills(ctx: TickCtx): Action[] {
   const { store, project, now } = ctx, out: Action[] = [];
-  const rows = store.db.query("SELECT account, label, skills FROM observed_accounts WHERE agent = 'claude' ORDER BY rowid").all() as { account: string; label: string | null; skills: string | null }[];
+  const local = store.db.query("SELECT account AS name, account, NULL AS host, label, skills FROM observed_accounts WHERE agent = 'claude' ORDER BY rowid").all() as Login[];
   const seen = new Set<string>();
-  for (const r of rows) {
-    seen.add(r.account);
-    const key = keyOf(r.account), spell = { project, subject: key, kind: KIND };
+  for (const r of [...local, ...sideLogins(store)]) {
+    seen.add(r.name);
+    const key = keyOf(r.name), spell = { project, subject: key, kind: KIND };
     const ep = store.get("episodes", spell), open = !!ep && ep.ended_at == null;
     if (r.skills == null) continue;
     if (!r.skills.startsWith("broken:")) {
@@ -45,10 +63,11 @@ export function accountSkills(ctx: TickCtx): Action[] {
     }
     const reason = r.skills.slice("broken:".length).trim() || "unknown fault";
     const name = r.label && r.label !== r.account ? `${r.label} (${r.account})` : r.account;
-    const episode = `skills|${r.account}|${started}`;
+    const on = r.host ? ` on host ${r.host}` : "", where = r.host ? `on host ${r.host}` : "on the host";
+    const episode = `skills|${r.name}|${started}`;
     out.push(...alertAction(store, { project, squad: null, key, episode, idEpisode: episode,
-      text: `Claude account ${name} cannot load the role skills: ${reason}. A role started on it stalls (no ce-code-review, no review receipt). Repair: run ${REPAIR} on the host.`,
-      option: "done — I ran bin/host/install-skills.sh", why: `run ${REPAIR} on the host; install-skills.sh --check names the broken path` }));
+      text: `Claude account ${name}${on} cannot load the role skills: ${reason}. A role started on it stalls (no ce-code-review, no review receipt). Repair: run ${REPAIR} ${where}.`,
+      option: `done — I ran ${REPAIR}${on}`, why: `run ${REPAIR} ${where}; install-skills.sh --check names the broken path` }));
   }
   // An account no longer listed ends its spell.
   const spells = store.db.query("SELECT subject FROM episodes WHERE project = ? AND kind = ? AND ended_at IS NULL").all(project, KIND) as { subject: string }[];

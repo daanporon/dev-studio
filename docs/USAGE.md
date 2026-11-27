@@ -267,6 +267,9 @@ bin/ds join <main-host>[:<port>] [--name <name>] [--repo <git-url>]...
 - **It asks main to accept it** and prints this host's key fingerprint. On main, run `bin/ds host list`, check that
   the fingerprint matches, and run `bin/ds host accept <name>`. `join` waits for up to 15 minutes, then starts the
   side loop and prints `join: connected`. The private key stays in `state/link/host.key` (mode 0600).
+- **The role skills** are installed for this host's Claude logins once main accepts it (log `claude` in first). A
+  failed install does not stop the join; the side loop tries again, and while a login that main also knows lacks a
+  skill, main shows a card naming the host. Run `bin/host/install-skills.sh` on that host to repair it.
 - **The network.** `<main-host>` is main's tailnet name or address: the link itself adds no encryption and main
   proves nothing about itself, so a plain connection only goes to loopback or a tailnet address (an `https://` url
   uses TLS).

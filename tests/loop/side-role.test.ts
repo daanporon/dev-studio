@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DIRS, load, loadAll } from "../../bin/loop/core/plugins.ts";
-import { sideActuator } from "../../bin/loop/core/side-actuator.ts";
+import { makeSideActuator } from "../../bin/loop/core/side-actuator.ts";
 import { SIDE_ONLY, SIDE_PLUGINS } from "../../bin/loop/core/side-plugins.ts";
 import { open } from "../../bin/loop/core/store.ts";
 import { Loop } from "../../bin/loop/core/tick.ts";
@@ -23,7 +23,7 @@ afterAll(() => { for (const d of tmps) rmSync(d, { recursive: true, force: true 
 /** What keeps the side observers off this host's own folders, docker and accounts. */
 const pins = (dir: string): Record<string, string> => ({
   HOME: join(dir, "home"), DS_TOKEN_DIR: join(dir, "transcripts"), DS_CLAUDE_TMP_ROOT: join(dir, "claude-tmp"),
-  CODEX_HOME: join(dir, "codex"), DS_LOOP_DISK_S: "0",
+  CODEX_HOME: join(dir, "codex"), DS_ORCA_DATA: join(dir, "orca"), DS_LOOP_DISK_S: "0",
 });
 
 const stems = (dir: string) => readdirSync(dir).filter((f) => f.endsWith(".ts")).sort().map((f) => f.slice(0, -3));
@@ -74,7 +74,9 @@ describe("a side tick", () => {
       store.upsert("squads", { project: "realp", topic: "t" }, { status: "running", backend: "orca", doc: "{}", updated_at: T, observed_at: T });
       store.db.run("INSERT INTO members (project, squad, role, suffix, wt, status, host, updated_at, observed_at) VALUES ('realp', 't', 'builder', '', ?, 'running', 'local', ?, ?)", [`local::${wt}`, T, T]);
 
-      const loop = new Loop(store, await loadAll(DIRS, "side"), sideActuator, { role: "side" });
+      // Never the real install-skills.sh: it installs into whatever login folders the env names.
+      const actuator = makeSideActuator({ skills: async () => ({ ok: true }) });
+      const loop = new Loop(store, await loadAll(DIRS, "side"), actuator, { role: "side" });
       loop.boot(T);
       const report = await loop.tick(T);
 

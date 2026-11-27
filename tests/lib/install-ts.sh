@@ -11,6 +11,7 @@ install_ts_copy() {
   cp "$src/bin/ds" "$src/bin/ds.ts" "$dest/bin/"
   cp "$src/bin/commands/install-ts.ts" "$src/bin/commands/install-skills-ts.ts" "$src/bin/commands/wrap-hooks-ts.ts" "$dest/bin/commands/"
   cp "$src/bin/lib/shared.ts" "$src/bin/lib/install.ts" "$src/bin/lib/account-skills.ts" "$src/bin/lib/loop-unit.ts" "$dest/bin/lib/"
+  cp "$src/bin/lib/accounts-list.ts" "$src/bin/lib/orca-missing.ts" "$dest/bin/lib/"   # account-skills.ts imports them
   mkdir -p "$dest/bin/lib/account-kinds" "$dest/bin/loop/drivers"
   cp "$src/bin/lib/account-dirs.ts" "$dest/bin/lib/"; cp "$src/bin/lib/account-kinds/"*.ts "$dest/bin/lib/account-kinds/"   # the account list
   cp "$src/bin/loop/drivers/claude-launch.ts" "$dest/bin/loop/drivers/"

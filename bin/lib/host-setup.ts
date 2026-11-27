@@ -1,6 +1,6 @@
 // host-setup.ts — the host steps `ds up` and `ds join` share (side-loop-host U12): install dev-studio, then
-// start the loop unless it runs. Tests only: DS_UP_INSTALL_CHECK, DS_UP_INSTALL and DS_UP_LOOP name
-// commands run instead of `install --check`, install and `loop --ensure`.
+// start the loop unless it runs. Tests only: DS_UP_INSTALL_CHECK, DS_UP_INSTALL, DS_JOIN_SKILLS and
+// DS_UP_LOOP name commands run instead of `install --check`, install, install-skills.sh and `loop --ensure`.
 import { join } from "node:path";
 import { ROOT, run as sh, writeErr, writeOut } from "./shared";
 import { inherit } from "./upkeep";
@@ -23,6 +23,13 @@ export async function installHost(who: string, opts: { skills?: boolean; force?:
   const rc = await step("DS_UP_INSTALL", [DS(), "install-ts", ...(opts.skills ? ["--skills"] : [])]);
   if (rc !== 0) writeErr(`${who}: the install failed (exit ${rc}); fix what it says and re-run\n`);
   return rc;
+}
+
+/** side-loop-host U21: the role skills for this host's own logins. A failure is said and nothing stops. */
+export async function installRoleSkills(who: string): Promise<void> {
+  writeOut(`${who}: installing the role skills for this host's logins\n`);
+  const rc = await step("DS_JOIN_SKILLS", [join(ROOT, "bin", "host", "install-skills.sh")]);
+  if (rc !== 0) writeErr(`${who}: the role skills did not install (exit ${rc}); run bin/host/install-skills.sh here. The side loop also tries again, and main shows a card while a login lacks them\n`);
 }
 
 /** `loop --ensure`: the loop is started unless it runs. Its exit code. */
